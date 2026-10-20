@@ -24,7 +24,7 @@ const session: Session = {
   member: false,
   moderator: false,
 };
-const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString();
+const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString() as string;
 
 beforeEach(() =>
   vi.stubGlobal(

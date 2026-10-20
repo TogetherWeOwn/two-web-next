@@ -78,10 +78,35 @@ const fixtures = {
     "application/json",
     '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
   ],
+  // The fixed probe key exists in no database: 404 not_found like the
+  // real handler (src/public-data/routes.ts).
+  "/api/public/events/00000000000000000000000001": [
+    404,
+    "application/json",
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+  ],
   "/openapi.json": [
     200,
     "application/json",
     '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
+  // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
+  // no database, so like the real handler's notFound() the stub answers the
+  // branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
   ],
   "/__smoke_unknown_route__": [
     404,
@@ -115,6 +140,8 @@ async function stub(t, change = () => {}) {
     response.writeHead(result.status, {
       "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
       "x-content-type-options": "nosniff",
+      "referrer-policy": "strict-origin-when-cross-origin",
+      "x-frame-options": "DENY",
       ...(result.type ? { "content-type": `${result.type}; charset=UTF-8` } : {}),
       ...(result.type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
       ...(request.url === "/up"
@@ -223,7 +250,7 @@ for (const id of GATE_IDS) {
     const result = await runGate(gateBlock(action, id), host);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /smoke ok \(attempt 1\)/);
-    assert.equal(requests.length, 20, "the real checker probed every route once");
+    assert.equal(requests.length, 24, "the real checker probed every route once");
     assert.ok(
       requests.every((r) => r.override === QUOTED_OVERRIDE),
       `every probe must carry ${QUOTED_OVERRIDE}`,
@@ -264,8 +291,8 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.equal(requests.length, 0);
   const quoted = await cli(QUOTED_OVERRIDE);
   assert.equal(quoted.status, 0, quoted.stdout + quoted.stderr);
-  assert.match(quoted.stdout, /20 routes, 0 failed assertions/);
-  assert.equal(requests.length, 20);
+  assert.match(quoted.stdout, /24 routes, 0 failed assertions/);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
 });
 

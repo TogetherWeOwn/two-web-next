@@ -3,6 +3,15 @@ import { Hono } from "hono";
 // Keep route discovery separate from browser execution so coverage drift is unit-testable.
 export const WCAG_AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
+// Viewports the ci/a11y.mjs runner iterates. The matrix-count pin asserts this
+// exact list and that the runner loops over this constant, so a spread/variable
+// addition or a dimension change fails the pin. Frozen so a push before the
+// loop throws when the runner executes instead of adding scans silently.
+export const AUDIT_VIEWPORTS = Object.freeze([
+  Object.freeze({ width: 360, height: 780 }),
+  Object.freeze({ width: 1280, height: 900 }),
+]);
+
 export function auditCases(routes, coverage) {
   const registered = [
     ...new Set(routes.filter((route) => route.method === "GET").map((route) => route.path)),

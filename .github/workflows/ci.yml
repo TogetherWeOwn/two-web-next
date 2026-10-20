@@ -425,7 +425,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs
+        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
@@ -481,6 +481,11 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      - name: Catalog-preflight selftest (disposable service Postgres only)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run test:catalog-preflight
+        env:
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
       # report fails the step (fail closed). Docs-only and draft PRs skip via
@@ -561,6 +566,12 @@ jobs:
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
+      - name: Migration snapshot chain (local files, no credentials)
+        shell: bash
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
+        run: |
+          node ci/check-snapshot-chain.mjs
+          node --test ci/check-snapshot-chain-selftest.mjs
       - name: Pre-flip probe selftests (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |

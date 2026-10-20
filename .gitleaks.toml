@@ -78,6 +78,19 @@ paths = ['''^test/agent-replay-corrupt\.test\.ts$''']
 regexes = ['''^corrupt-mismatch-001$''', '''^corrupt-legacy-001$''', '''^corrupt-healthy-001$''', '''^corrupt-fresh-001$''']
 
 [[allowlists]]
+description = "Four synthetic ULID event keys in the local fixture sweep, used only by an in-memory fake API and HTML rows, not credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^e2e/local-fixture-sweep\.test\.mjs$''']
+regexes = [
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FAE$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FAF$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FB0$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FB1$''',
+]
+
+[[allowlists]]
 description = "Synthetic malformed event key with a non-Crockford U in the admin route admission fixture, not a credential"
 targetRules = ["generic-api-key"]
 condition = "AND"

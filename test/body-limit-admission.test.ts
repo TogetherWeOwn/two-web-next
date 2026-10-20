@@ -33,17 +33,41 @@ const sharedRoutes = [
   ),
 ];
 
-// Moderator event writes refuse oversized bodies before the shared throttle
-// (and before any session read): cap-first, not throttle-first. Every other
-// shared-throttle route keeps the throttle-before-buffering order.
-const EVENT_WRITE_CAP_FIRST = new Set([
+// Moderator event writes, admin event forms, admin lifecycle actions, and the
+// staging alert probe refuse oversized bodies before the shared throttle (and
+// before any session read): cap-first, not throttle-first. The probe's QA gate
+// still runs before its cap. Every other shared-throttle route keeps the
+// throttle-before-buffering order.
+const CAP_FIRST_ROUTES = new Set([
   "POST /events",
   "PATCH /events/:key",
   "POST /events/:key/publish",
   "POST /events/:key/cancel",
   "POST /events/:key/rsvp-pause",
   "POST /events/:key/rsvp-reopen",
+  "POST /admin/events",
+  "POST /admin/events/:key",
+  "POST /admin/events/:key/publish",
+  "POST /admin/events/:key/cancel",
+  "POST /admin/events/:key/rsvp-pause",
+  "POST /admin/events/:key/rsvp-reopen",
+  "POST /admin/queue/failed/:id/redispatch",
+  "POST /__probe/alert",
 ]);
+
+// Moderator featured create/update/delete refuse oversized bodies before the
+// shared throttle (the moderator guard still runs first): cap-first, not
+// throttle-first.
+const FEATURED_WRITE_CAP_FIRST = new Set([
+  "POST /admin/featured",
+  "POST /admin/featured/:id",
+  "POST /admin/featured/:id/delete",
+]);
+
+// Logout and QA login refuse oversized bodies before the shared throttle:
+// cap-first, not throttle-first. The QA identity/token gate still runs before
+// the cap.
+const AUTH_CAP_FIRST = new Set(["POST /logout", "POST /auth/qa/:identity"]);
 
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
@@ -123,8 +147,9 @@ function upload(
   const body = new ReadableStream({ pull }, { highWaterMark: 0 });
   const headers: Record<string, string> = { cookie, origin: appUrl, accept: "application/json" };
   if (path === "/__probe/alert") headers[QA_HEADER] = "test-only-qa-token";
-  // Gated QA logins exercise throttle-before-buffering (S4): the seam's
-  // identity/token gate admits this fixture identity before the throttle runs.
+  // Gated QA logins exercise cap-after-gate, throttle-after-cap: the seam's
+  // identity/token gate admits this fixture identity, then the body cap runs
+  // before the throttle (S4 gate-first ordering is unchanged).
   if (path.startsWith("/auth/qa/")) headers[QA_HEADER] = "test-only-qa-token";
   if (advertised) headers["content-length"] = String(max + 1);
   const request = new Request(new URL(path, appUrl), {
@@ -139,7 +164,8 @@ function upload(
 describe("shared throttles admit before buffering", () => {
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst =
+      CAP_FIRST_ROUTES.has(key) || FEATURED_WRITE_CAP_FIRST.has(key) || AUTH_CAP_FIRST.has(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
     const empty = await app.request(
@@ -161,8 +187,10 @@ describe("shared throttles admit before buffering", () => {
       const { request, pull } = upload(path, method, cookie, max, advertised);
       const response = await app.request(request, undefined, env);
       if (capFirst) {
-        // Event writes refuse the oversized body before the throttle runs:
-        // 413 even with a spent budget, spending no throttle row.
+        // Cap-first routes refuse the oversized body before the throttle runs:
+        // 413 even with a spent budget, spending no throttle row. (The probe's
+        // and QA login's gates still run before the cap, so these requests
+        // carry the token.)
         expect(response.status).toBe(413);
         expect(await response.json()).toEqual(ERROR);
         if (advertised) expect(pull).not.toHaveBeenCalled();
@@ -187,7 +215,8 @@ describe("shared throttles admit before buffering", () => {
 
   it.each(sharedRoutes)("%s counts advertised and chunked oversized attempts", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst =
+      CAP_FIRST_ROUTES.has(key) || FEATURED_WRITE_CAP_FIRST.has(key) || AUTH_CAP_FIRST.has(key);
     for (const advertised of [false, true]) {
       const { sql, count } = throttleFixture(budget - 1);
       const { env, cookie } = await sessionEnv(sql as unknown as Sql);

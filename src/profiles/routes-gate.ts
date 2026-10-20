@@ -8,7 +8,7 @@ import { sessionStoreFor } from "../admin/guard";
 import { enableAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
+import { databaseUnavailable, forbidden } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
@@ -31,6 +31,17 @@ export function profileError(error: Error, c: Ctx) {
   // envelope here. Reads are replaced by the boundary either way.
   if (isDatabaseUnavailable(error)) return databaseUnavailable(c);
   return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+}
+
+/** Write bypass: PATCH/POST /members/:user (single segment) enforce the body
+ * cap before any session work. The global gate skips only that exact write
+ * shape here; the write routes run the same gate explicitly after their body
+ * limiter. Deeper (/members/:user/extra), trailing-slash and bare /members/
+ * writes keep the global gate. Reads keep the global gate. */
+export function isProfileWriteRequest(c: Pick<Ctx, "req">): boolean {
+  const method = c.req.method;
+  if (method !== "PATCH" && method !== "POST") return false;
+  return /^\/members\/[^/]+$/.test(c.req.path);
 }
 
 /** Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed). */
@@ -72,7 +83,7 @@ export function memberGate(deps: ProfileDeps) {
     // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
     // intended-page bounce so the round trip lands them back here.
     if (!viewer) return bounceToLogin(c);
-    if (!viewer.member) return c.text("Forbidden", 403);
+    if (!viewer.member) return forbidden(c);
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
     await next();
@@ -93,9 +104,14 @@ export function registerGate(app: ProfileApp, deps: ProfileDeps, { sinkFor }: Pr
   app.get("/members/", (c) => c.notFound());
 
   // Scoped to this slice's paths: the app is mounted at "/", so a "*" here
-  // would gate every route in the worker.
+  // would gate every route in the worker. Profile writes bypass the global
+  // gate so their body cap runs first; registerWriteRoutes runs this same
+  // gate explicitly after its limiter.
   for (const path of ["/profile", "/members/*"]) {
-    app.use(path, gate);
+    app.use(path, async (c, next) => {
+      if (isProfileWriteRequest(c)) return next();
+      return gate(c, next);
+    });
     app.use(path, async (c, next) => {
       if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
       await memberReadBoundary(

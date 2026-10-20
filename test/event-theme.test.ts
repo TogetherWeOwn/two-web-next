@@ -22,6 +22,7 @@ const e: PublicEvent = {
   status: "published",
   rsvpOpen: true,
   goingCount: 3,
+  goingOccupancy: 3,
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
@@ -53,7 +54,7 @@ const session: Session = {
   member: true,
   moderator: false,
 };
-const render = (overrides = {}) => EventPage({ ...props, ...overrides })!.toString();
+const render = (overrides = {}) => EventPage({ ...props, ...overrides })!.toString() as string;
 
 beforeEach(() =>
   vi.stubGlobal(
@@ -160,7 +161,7 @@ describe("event detail theme", () => {
 
   it("gives the cancelled state the same chrome without session, sharing or RSVP actions", () => {
     const jsonLd = '{"eventStatus":"https://schema.org/EventCancelled"}';
-    const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString();
+    const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString() as string;
     expect(html).toContain('href="/event-theme.css"');
     expect(html).toContain('class="event-hero event-gone"');
     expect(html).toContain('data-testid="event-cancelled">Cancelled');

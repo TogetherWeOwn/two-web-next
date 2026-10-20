@@ -75,9 +75,14 @@ are not incident entries; read those sections directly when that work is authori
   Respect existing deployment, receiver/HMAC and isolation holds. A green
   workflow or an always-200 endpoint does not release them.
 - Never test, probe or verify database behavior against staging or production
-  databases. Tests use `agent-testdb`, database `two_web_next`, or local fixtures;
-  CI uses its disposable Postgres service. Do not send synthetic writes or
-  authenticated smoke actions to live services as a substitute for those tests.
+  databases. Full database verification uses a fresh, run-owned disposable
+  database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated
+  schema; follow the canonical setup in
+  [README Database and migrations](../README.md#database-and-migrations).
+  Fixture-only `npm run check:offline` and focused isolated-schema tests remain
+  allowed without the full database; CI uses its disposable Postgres service.
+  Do not send synthetic writes or authenticated smoke actions to live services
+  as a substitute for those tests.
 - On an authentication/ownership/permission failure, **stop**. Do not try a
   credential from another environment, print a URL/password, change identity,
   or bypass a failed check. Use the authorized broker/provisioning principal.
@@ -130,10 +135,13 @@ service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
 
 Full `npm run check`, coverage thresholds and required CI gates are unchanged.
-Full database verification must explicitly use
-`postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
-never a live service. Required CI runs the complete suite on
-its disposable Postgres service.
+Full database verification must use a fresh, run-owned `two_web_next_tog<digits>`
+database on `agent-testdb` with the migrated schema, never the shared
+`two_web_next` database nor a live service; follow the canonical setup in
+[README Database and migrations](../README.md#database-and-migrations).
+Fixture-only `npm run check:offline` is limited evidence, not database
+acceptance, and focused isolated-schema tests remain allowed. Required CI runs
+the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
@@ -282,8 +290,8 @@ Do not add `--env staging` or invent a different Worker target. Verify the
 approved account and binding isolation before any remote mutation.
 
 1. Require independent Code Reviewer approval on the exact head SHA and green
-   `check`, `gitleaks`, `pr-lint`; the approving reviewer squash-merges, not the
-   author. Record the merged SHA and intended target.
+   `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
+   not the author. Record the merged SHA and intended target.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
@@ -326,7 +334,7 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
-   ([smoke checker](../bin/smoke.mjs)), covering 20 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
    healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
    `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
@@ -334,14 +342,20 @@ approved account and binding isolation before any remote mutation.
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
    `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
-   `/openapi.json` (200 JSON discovery document)
+   `/api/public/events/<key>` (404 JSON not_found error envelope: the fixed
+   probe key exists in no database),
+   `/api/public/community` (200 JSON community snapshot),
+   `/api/public/join` (200 JSON join handoff),
+   `/openapi.json` (200 JSON discovery document),
+   `/e/<key>` (404 branded missing-event HTML page: the fixed probe key
+   exists in no database)
    and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
    are DB/schema readiness, not liveness only; with the staging strict flag a literal
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 20-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
@@ -1426,7 +1440,7 @@ below, not its older `/up` row, define these outcomes.
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
 | `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
-| `/join/discord`, `/join/callback` (GET) | A classified DB outage (the throttle runs first on both routes) returns the branded sanitized **503** before any Discord call; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
+| `/join/discord`, `/join/callback` (GET) | A classified DB outage returns the branded sanitized **503** before any Discord call. The throttle detects it on ordinary callbacks and `/join/discord`; non-error oversized callbacks instead use a read-only availability query with zero throttle spend before recovery; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
 | `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
@@ -1626,6 +1640,19 @@ blind replay command. A `failed` snapshot instead means a definitive refusal:
 automatic dispatch of that unchanged revision is suppressed; a meaningful
 subsequent mutation is eligible. Retrying an unchanged refused revision likewise
 requires an explicit reviewed operator action, not deleting history.
+
+A definitive refusal first records its redacted reason as `terminal_reason` on
+the still-`pending` attempt (terminal intent), then settles. If the intent note
+itself cannot commit, the consumer reopens the claim to a due deadline and
+retries released-only, so a healed redelivery re-derives the verdict instead
+of waiting on the nulled claim. If settlement cannot commit, the row stays
+live and redelivery re-runs settlement only — no bot call, no second alert —
+backing off until the store heals. Past the app carrier budget an unsettled
+intent redelivery raises a distinct `queue.failing` line (`terminal settlement
+unavailable; ...`) per delivery — still no `failed` stamp and no ack — until
+the store heals or the transport backstop drops the carrier; the pending row
+then waits for operator recovery. The `failed` stamp and its single
+`queue.failing` alert land only when settlement commits.
 
 Best-effort successor checks/dispatch time out after two seconds. These timers
 do not cancel SQL: ledger and lock traffic use pools separate from the handler,

@@ -10,7 +10,7 @@ import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { serializeSigned } from "hono/utils/cookie";
 import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
-import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { assertNoViolations, auditCases, redactAuditLog, AUDIT_VIEWPORTS, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
 import { assertAuditContent } from "./a11y-content.mjs";
@@ -100,7 +100,7 @@ try {
   // The runner owns SIGINT/SIGTERM; Playwright's default SIGINT handler exits
   // the process independently, before fixture cleanup and evidence can finish.
   browser = await lifecycle.acquire(() => chromium.launch(AUDIT_BROWSER_OPTIONS), (resource) => resource.close());
-  for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 900 }]) {
+  for (const viewport of AUDIT_VIEWPORTS) {
     for (const scenario of scenarios) {
       lifecycle.assertRunning();
       const label = `${scenario.identity} ${scenario.path} ${scenario.state || "default"} ${viewport.width}px`;

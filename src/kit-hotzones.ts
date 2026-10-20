@@ -11,6 +11,7 @@ import {
 } from "./hotzones/aggregates";
 import { recordBoardView } from "./hotzones/board-log";
 import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
+import { kitPublicReadGuard, type KitPublicReadGuard } from "./kit-past-events";
 
 // Framework-free core of the Kit hot-zone loads
 // (web/src/routes/hotzones/+page.server.ts and
@@ -191,4 +192,20 @@ export async function loadHotzoneSignalData(
     estimated: true,
     appUrl: args.env.APP_URL,
   };
+}
+
+/** Apply the shared public-read budget around Kit hot-zone SSR. */
+export async function dispatchHotzonesRequest(
+  request: Request,
+  env: Env,
+  render: () => Promise<Response>,
+  guard: KitPublicReadGuard = kitPublicReadGuard,
+): Promise<Response> {
+  // Season grammar first, mirroring the Hono handlers: a bad season reaches
+  // the load's 400 without spending. Unknown signals never reach this
+  // wrapper: the manifest lists concrete signal paths only, so anything else
+  // falls through to the Hono 404.
+  if (!parseSeasonParam(new URL(request.url).searchParams.get("season"))) return render();
+  const limited = await guard(request, env);
+  return limited ?? render();
 }

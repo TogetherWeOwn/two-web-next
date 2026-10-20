@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
+  AUTOMATIC_PROMOTION_EVENTS,
+  PRODUCTION_HOLD_MAX_MS,
+  PRODUCTION_ORIGIN,
   assertProductionCredentials,
+  assertProductionHold,
   assertProductionProtection,
+  assertProductionRequest,
   assertProductionTarget,
   assertRollbackVersionId,
   checkProductionGate,
+  isAlreadyLive,
+  pendingMigrationTags,
+  pendingProductionMigrations,
+  readLiveProductionCommit,
   stagingQualityJob,
   stagingQualitySteps,
 } from "./production-deploy-gate.mjs";
@@ -1435,4 +1446,426 @@ test("the staging rehearsal requires the elevated-rate verdict, not any non-zero
     rehearsal.includes('grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail"'),
     "rehearsal must require the elevated-rate fail verdict line",
   );
+});
+
+// Native automatic production promotion: triggers, live equality, soak/red,
+// pending migrations and hold with expiry. Each rule below is pinned in this
+// workflow-structure suite (with test/probe-workflows.test.ts) per the card.
+test("automatic promotion accepts dispatch, workflow_run and schedule on main only", () => {
+  assert.deepEqual([...AUTOMATIC_PROMOTION_EVENTS].sort(), [
+    "schedule",
+    "workflow_dispatch",
+    "workflow_run",
+  ]);
+  const base = {
+    PRODUCTION_DEPLOY_ENABLED: "true",
+    GITHUB_REF: "refs/heads/main",
+    PRODUCTION_AUTO_APPROVE: "true",
+  };
+  for (const event of ["workflow_dispatch", "workflow_run", "schedule"]) {
+    assert.doesNotThrow(
+      () =>
+        assertProductionRequest({
+          ...base,
+          GITHUB_EVENT_NAME: event,
+          PRODUCTION_AUTO_APPROVE: event === "workflow_dispatch" ? undefined : "true",
+        }),
+      event,
+    );
+  }
+  // Automatic triggers without auto-approve have no reviewer to approve the
+  // Environment, so they must refuse before any deploy.
+  for (const event of ["workflow_run", "schedule"]) {
+    assert.throws(
+      () =>
+        assertProductionRequest({
+          ...base,
+          GITHUB_EVENT_NAME: event,
+          PRODUCTION_AUTO_APPROVE: "false",
+        }),
+      /PRODUCTION_AUTO_APPROVE/,
+      event,
+    );
+  }
+  for (const env of [
+    { ...base, GITHUB_EVENT_NAME: "push" },
+    { ...base, GITHUB_EVENT_NAME: "pull_request" },
+    { ...base, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/feature" },
+  ]) {
+    assert.throws(() => assertProductionRequest(env), /workflow_dispatch on main/);
+  }
+});
+
+test("production hold: empty passes, active holds, expired passes, far-future and malformed refuse", () => {
+  const now = Date.parse("2026-10-19T14:00:00Z");
+  assert.equal(PRODUCTION_HOLD_MAX_MS, 24 * 60 * 60 * 1000);
+  for (const empty of [undefined, "", "   "]) {
+    assert.doesNotThrow(() =>
+      assertProductionHold({ PRODUCTION_HOLD_UNTIL: empty }, { nowMs: now }),
+    );
+  }
+  // Active hold (now < value, within 24h) refuses.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T15:00:00Z" }, { nowMs: now }),
+    /held until 2026-10-19T15:00:00Z/,
+  );
+  // Expired hold (now >= value) passes.
+  assert.doesNotThrow(() =>
+    assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T13:59:59Z" }, { nowMs: now }),
+  );
+  assert.doesNotThrow(() =>
+    assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T14:00:00Z" }, { nowMs: now }),
+  );
+  // More than 24h ahead refuses even though it is a future hold.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-20T14:00:01Z" }, { nowMs: now }),
+    /more than 24h ahead/,
+  );
+  // Exactly 24h ahead is the boundary and passes the far-future check
+  // (but still holds, since now < value).
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-20T14:00:00Z" }, { nowMs: now }),
+    /held until/,
+  );
+  for (const bad of ["tomorrow", "2026-10-19 15:00:00", "2026-10-19T15:00:00", "not-a-date"]) {
+    assert.throws(
+      () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: bad }, { nowMs: now }),
+      /ISO-8601 UTC/,
+    );
+  }
+  // Impossible calendar dates match the shape but never parse: still refuse.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-13-01T00:00:00Z" }, { nowMs: now }),
+    /valid UTC timestamp/,
+  );
+});
+
+test("production hold blocks the gate before any API call", async () => {
+  const held = {
+    ...enabled,
+    PRODUCTION_HOLD_UNTIL: new Date(Date.now() + 60 * 60 * 1000)
+      .toISOString()
+      .replace(/\.\d+Z$/, "Z"),
+  };
+  await assert.rejects(checkProductionGate(held, noNetwork), /held until/);
+});
+
+test("both production gate steps receive the hold variable", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const gates = workflow.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    assert.match(
+      gate.split("\n      - ")[0],
+      /PRODUCTION_HOLD_UNTIL: \$\{\{ vars\.PRODUCTION_HOLD_UNTIL \}\}/,
+    );
+  }
+});
+
+test("live equality: same commit is already live, different or unknown is not", () => {
+  const deploy = "a".repeat(40);
+  assert.equal(isAlreadyLive(deploy, deploy), true);
+  assert.equal(isAlreadyLive(deploy.toUpperCase(), deploy), true);
+  assert.equal(isAlreadyLive(deploy, "b".repeat(40)), false);
+  assert.equal(isAlreadyLive(deploy, null), false);
+  assert.equal(isAlreadyLive(deploy, ""), false);
+  assert.equal(isAlreadyLive("", deploy), false);
+  assert.equal(PRODUCTION_ORIGIN, "https://togetherweown.com");
+});
+
+test("live commit reads the /up revision marker and fails open to null", async () => {
+  const sha = "c".repeat(40);
+  const ok = await readLiveProductionCommit({
+    fetchImpl: async () => ({ json: async () => ({ revision: { commit: sha } }) }),
+  });
+  assert.equal(ok, sha);
+  for (const body of [
+    {},
+    { revision: null },
+    { revision: {} },
+    { revision: { commit: "not-a-sha" } },
+  ]) {
+    assert.equal(
+      await readLiveProductionCommit({ fetchImpl: async () => ({ json: async () => body }) }),
+      null,
+    );
+  }
+  assert.equal(
+    await readLiveProductionCommit({
+      fetchImpl: async () => {
+        throw new Error("down");
+      },
+    }),
+    null,
+  );
+});
+
+test("pending migrations are target tags the live journal lacks", () => {
+  assert.deepEqual(pendingMigrationTags(["a", "b", "c"], ["a", "b"]), ["c"]);
+  assert.deepEqual(pendingMigrationTags(["a", "b"], ["a", "b"]), []);
+  assert.deepEqual(pendingMigrationTags([], ["a"]), []);
+  assert.deepEqual(pendingMigrationTags(["a"], []), ["a"]);
+});
+
+test("pending migration lookup compares journals at both commits and passes on unknown live", async () => {
+  const journal = (tags) => ({
+    content: Buffer.from(JSON.stringify({ entries: tags.map((tag) => ({ tag })) })).toString(
+      "base64",
+    ),
+    encoding: "base64",
+  });
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const fetchImpl = async (url) => {
+    const ref = new URL(url).searchParams.get("ref");
+    const tags = ref === targetSha ? ["0000_a", "0001_b"] : ["0000_a"];
+    return { ok: true, json: async () => journal(tags) };
+  };
+  assert.deepEqual(
+    await pendingProductionMigrations({
+      repository: "o/r",
+      targetSha,
+      liveSha,
+      token: "t",
+      fetchImpl,
+    }),
+    ["0001_b"],
+  );
+  assert.deepEqual(
+    await pendingProductionMigrations({
+      repository: "o/r",
+      targetSha,
+      liveSha: null,
+      token: "t",
+      fetchImpl,
+    }),
+    [],
+  );
+  await assert.rejects(
+    pendingProductionMigrations({
+      repository: "o/r",
+      targetSha: "short",
+      liveSha,
+      token: "t",
+      fetchImpl,
+    }),
+    /40-hex/,
+  );
+});
+
+test("pending migrations stop the promotion with a migrator-blocked error (CLI)", () => {
+  // The workflow step message must name db-migrate.yml and the blocker.
+  const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
+  assert.match(gate, /run db-migrate\.yml \(target production\) first/);
+  assert.match(gate, /least-privilege migrator/);
+});
+
+// Spawned CLI branch tests: behavior pins, not source greps. Neutralizing the
+// pending-stop, inverting the already_live output, dropping the live retry, or
+// collapsing the auto/manual split must fail here.
+function spawnGateCli(args, env, stub) {
+  const dir = mkdtempSync(join(tmpdir(), "gate-cli-"));
+  const output = join(dir, "output");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
+    {
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        FETCH_STUB_JSON: JSON.stringify(stub),
+        ...env,
+      },
+      encoding: "utf8",
+    },
+  );
+  let written = "";
+  try {
+    written = readFileSync(output, "utf8");
+  } catch {
+    written = "";
+  }
+  return { ...result, written };
+}
+
+const journalBody = (tags) => ({
+  content: Buffer.from(JSON.stringify({ entries: tags.map((tag) => ({ tag })) })).toString(
+    "base64",
+  ),
+  encoding: "base64",
+});
+
+test("already-live CLI reports exact GITHUB_OUTPUT for live, stale and unreadable production", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const origin = "http://stub.invalid";
+  const served = spawnGateCli(
+    ["--already-live"],
+    { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },
+    [{ match: "/up", body: { revision: { commit: target } } }],
+  );
+  assert.equal(served.status, 0);
+  assert.equal(served.written, `already_live=true\nlive_sha=${target}\n`);
+  assert.match(served.stdout, /skipping deploy/);
+  const stale = spawnGateCli(
+    ["--already-live"],
+    { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },
+    [{ match: "/up", body: { revision: { commit: live } } }],
+  );
+  assert.equal(stale.status, 0);
+  assert.equal(stale.written, `already_live=false\nlive_sha=${live}\n`);
+  assert.match(stale.stdout, /promoting/);
+  // An unreadable /up never counts as live: fail open toward deploying.
+  const down = spawnGateCli(["--already-live"], { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin }, [
+    { match: "/up", fail: true },
+  ]);
+  assert.equal(down.status, 0);
+  assert.equal(down.written, "already_live=false\nlive_sha=\n");
+  assert.match(down.stdout, /unreadable/);
+});
+
+test("check-migrations CLI passes a clean journal comparison", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const result = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      LIVE_SHA: live,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    },
+    [
+      { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+      { match: `ref=${live}`, body: journalBody(["0000_a", "0001_b"]) },
+    ],
+  );
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /No pending production migrations/);
+});
+
+test("check-migrations CLI stops manual dispatch until db-migrate plus audited confirmation", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  const base = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: live,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+  };
+  const stopped = spawnGateCli(["--check-migrations"], base, journals);
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /0001_b/);
+  assert.match(stopped.stderr, /run db-migrate\.yml \(target production\) first/);
+  assert.match(stopped.stderr, /migrations_applied=true/);
+  // The workflow renders the boolean input default as the string "false",
+  // so only the exact "true" confirmation releases the stop.
+  const defaulted = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "false" },
+    journals,
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /run db-migrate\.yml \(target production\) first/);
+  // After db-migrate applied the entries, the operator-confirmed re-dispatch
+  // continues with an audited log line naming the pending tags.
+  const continued = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "true" },
+    journals,
+  );
+  assert.equal(continued.status, 0);
+  assert.match(continued.stdout, /Manual continuation/);
+  assert.match(continued.stdout, /0001_b/);
+});
+
+test("check-migrations CLI keeps automatic promotion blocked on pending entries", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  // An operator confirmation must never release an automatic run.
+  for (const event of ["workflow_run", "schedule"]) {
+    const result = spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        LIVE_SHA: live,
+        GITHUB_REPOSITORY: "o/r",
+        GITHUB_TOKEN: "t",
+        GITHUB_EVENT_NAME: event,
+        MIGRATIONS_APPLIED: "true",
+      },
+      journals,
+    );
+    assert.equal(result.status, 1, event);
+    assert.match(result.stderr, /least-privilege migrator/);
+  }
+});
+
+test("check-migrations CLI retries an unreadable live commit, then halts auto and warns manual", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  const halted = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "schedule",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [{ match: "/up", fail: true }],
+  );
+  assert.equal(halted.status, 1);
+  assert.match(halted.stderr, /halting automatic promotion for a later retry/);
+  const warned = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [{ match: "/up", fail: true }],
+  );
+  assert.equal(warned.status, 0);
+  assert.match(warned.stdout, /migration comparison skipped/);
+  // A flapping /up that recovers on the third read proceeds to the journal
+  // comparison: a single-read implementation would warn-skip here instead.
+  const recovered = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [
+      {
+        match: "/up",
+        sequence: [{ fail: true }, { fail: true }, { body: { revision: { commit: live } } }],
+      },
+      ...journals,
+    ],
+  );
+  assert.equal(recovered.status, 0);
+  assert.match(recovered.stdout, /No pending production migrations/);
 });

@@ -62,6 +62,6 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 - Behavior matches the request.
 - Tests pass locally, and `npm run check` is green.
 - A UI change carries the evidence listed under UI changes.
-- CI is green on the exact head SHA that merges: `check`, `gitleaks`, and `pr-lint` are required.
+- CI is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5 on the exact head.
 - A reviewer who did not write the code approved that head SHA.
 - The PR is squash-merged, and the docs it made stale are updated.

@@ -1341,6 +1341,21 @@ export function createTailWorker(
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown> & SpikeAlert;
     if (record.event !== "error.spike" || typeof record.script !== "string") return null;
+    // A verdict built from a non-finite, negative, or mistyped count would
+    // page garbage while the local tracker never counts the burst: every
+    // numeric field the alert is built from must be a finite, non-negative
+    // number, otherwise the observation is malformed and falls back.
+    for (const field of [
+      "requests",
+      "errors",
+      "crashes",
+      "error_rate",
+      "window_seconds",
+    ] as const) {
+      const fieldValue = record[field];
+      if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue < 0)
+        return null;
+    }
     const attemptId = validAttemptId((record as { attemptId?: unknown }).attemptId);
     return {
       ...(record as SpikeAlert),
@@ -1529,7 +1544,12 @@ export function createTailWorker(
         if (typeof data !== "object" || data === null || Array.isArray(data))
           return { fallback: true as const, failure: "wrong-shape" as const };
         const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
-        if (typeof downMs !== "number")
+        // typeof NaN === "number", so a shape check alone waves NaN,
+        // ±Infinity, and negative durations through as authoritative and
+        // pages a garbage down_seconds. Only a finite, non-negative downMs
+        // is well-formed; anything else falls back to the local health
+        // observation.
+        if (typeof downMs !== "number" || !Number.isFinite(downMs) || downMs < 0)
           return { fallback: true as const, failure: "wrong-shape" as const };
         return {
           downMs,
@@ -1586,7 +1606,7 @@ export function createTailWorker(
       try {
         reader.releaseLock();
       } catch {
-        /* A pending stalled read stays with the stream; cancel below settles it. */
+        /* A pending stalled read stays pending with the stream; the caller's independent deadline wins. */
       }
     }
   }
@@ -1753,12 +1773,15 @@ export function createTailWorker(
     async tail(events: readonly TraceLike[], env: TailEnv): Promise<void> {
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
-      // Merge same-script traces so one invocation makes at most one
-      // aggregation call per script; SHA is per-trace version metadata.
-      // The merged batch keeps a SHA only while every counted trace in the
-      // invocation shares one validated SHA. An untagged or invalid trace,
-      // or a second validated build, clears it to unknown: the last tag
-      // must never speak for the whole invocation.
+      // Merge same-script traces by their 30-second event-time bucket, so
+      // one invocation makes at most one aggregation call per script and
+      // bucket; SHA is per-trace version metadata. Merging by script alone
+      // and re-stamping at the newest trace time would collapse minutes-old
+      // crashes into the newest bucket and page without any real in-window
+      // spike. Each bucket batch keeps a SHA only while every counted trace
+      // in that bucket shares one validated SHA. An untagged or invalid
+      // trace, or a second validated build, clears it to unknown: the last
+      // tag must never speak for the whole bucket.
       // Drop traces skewed beyond now plus the documented slack before the
       // merge: keeping one would let Math.max lift the merged batch into
       // the future and wipe in-window buckets. Merely-late traces still
@@ -1776,9 +1799,11 @@ export function createTailWorker(
           skewDropped += 1;
           continue;
         }
-        const prior = batches.get(batch.script);
+        const bucketAt = Math.floor(batch.at / BUCKET_MS) * BUCKET_MS;
+        const key = `${batch.script}\0${bucketAt}`;
+        const prior = batches.get(key);
         if (!prior) {
-          batches.set(batch.script, { ...batch });
+          batches.set(key, { ...batch });
         } else {
           const incomingCounts = batch.requests + batch.errors + batch.crashes;
           if (incomingCounts > 0) {
@@ -1808,7 +1833,11 @@ export function createTailWorker(
       if (skewDropped > 0) {
         sink(JSON.stringify({ event: "tail.skew_drop", dropped: skewDropped }));
       }
-      for (const batch of batches.values()) {
+      // Feed the oldest event-time bucket first, whatever order the
+      // traces arrived in: the rolling window, eviction cutoff and alert
+      // timestamp then match feeding the same traces bucket by bucket.
+      const ordered = [...batches.values()].sort((a, b) => a.at - b.at);
+      for (const batch of ordered) {
         const observed = await observeBatch(env, batch);
         if (!observed) continue;
         // The fencing identity and observation source stay internal: strip

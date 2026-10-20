@@ -216,3 +216,172 @@ describe("missing sync-queue binding warning docs", () => {
     expect(source).toContain("request_id: message.requestId");
   });
 });
+
+describe("analytics write-degradation warning docs", () => {
+  const SEARCH_WARNING = "Event search unavailable for logging; serving results without recording.";
+  const BOARD_WARNING = "Board view unavailable for logging; serving results without recording.";
+  const HEADING = "### Analytics write-degradation warnings";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents both exact warnings at warn severity with the exception field", () => {
+    const section = warningSection();
+    expect(section).toContain(SEARCH_WARNING);
+    expect(section).toContain(BOARD_WARNING);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("`exception`");
+    expect(section).toContain("LogWriteDeadline");
+  });
+
+  it("explains the awaited timing, the deadline race, and the warn-count rule", () => {
+    const section = warningSection();
+    expect(section).toContain("`recordSearch` is awaited before the page");
+    expect(section).toContain("before or after the response");
+    expect(section).toContain("delay the response by up to 500 ms");
+    expect(section).toContain("race, not a cancellation");
+    expect(section).toContain("second warning with the rejection class");
+    expect(section).toContain("Never equate warning count with lost requests");
+  });
+
+  it("distinguishes fail-open analytics from mandatory member-read auditing", () => {
+    const section = warningSection();
+    expect(section).toContain("fail-open anonymous analytics");
+    expect(section).toContain("fail-closed mandatory auditing");
+    expect(section).toContain("member_data_access_logs");
+    expect(section).toContain("normalized_query");
+    expect(section).toContain("normalized_board_key");
+    expect(section).toContain("carry no member identity");
+    expect(section).toContain("Neither line carries a `request_id`");
+  });
+
+  it("gives a read-only aggregate check on the analytics tables", () => {
+    const section = warningSection();
+    expect(section).toContain("event_search_logs");
+    expect(section).toContain("board_view_logs");
+    expect(section).toContain("max(occurred_at)");
+    expect(section).toContain("read-only");
+  });
+
+  it("sources still emit the warnings with only the exception field", () => {
+    const cases = [
+      { file: "src/events/search-log.ts", message: SEARCH_WARNING },
+      { file: "src/hotzones/board-log.ts", message: BOARD_WARNING },
+    ];
+    for (const { file, message } of cases) {
+      const source = readFileSync(file, "utf8");
+      const call = `console.warn("${message}"`;
+      const start = source.indexOf(call);
+      expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
+      // The warn payload carries the exception class only: no request id,
+      // query, board key, or member identity travels with the line.
+      const payload = source.slice(start, source.indexOf("});", start));
+      expect(payload).toContain("exception");
+      expect(payload).not.toContain("request_id");
+      expect(payload).not.toContain("normalized");
+      expect(source).toContain('warn("LogWriteDeadline")');
+      expect(source).toContain("err.constructor.name");
+    }
+  });
+});
+
+describe("queue ledger runbook row cites", () => {
+  const CONSUMER_PATH = "src/jobs/consumer.ts";
+  const HEADING = "### Queue ledger, lock and malformed-carrier warnings";
+
+  /** The queue-ledger table section, up to (not including) the next heading. */
+  function ledgerSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  /** The table row whose first cell is exactly the backticked message. */
+  function rowFor(message: string): string {
+    const row = ledgerSection()
+      .split("\n")
+      .find((l) => l.startsWith(`| \`${message}\` |`));
+    expect(row, `missing row for \`${message}\` in ${HEADING}`).toBeDefined();
+    return row as string;
+  }
+
+  /** 1-based line number of the console.warn emitting the literal message. */
+  function warnLineFor(message: string): number {
+    const lines = readFileSync(CONSUMER_PATH, "utf8").split("\n");
+    const idx = lines.findIndex((l) => l.includes("console.warn") && l.includes(message));
+    expect(idx, `${CONSUMER_PATH} still warns "${message}"`).toBeGreaterThanOrEqual(0);
+    return idx + 1;
+  }
+
+  /** 1-based line number of the templated `queue ledger ${what} failed` warn. */
+  function ledgerWarnLine(): number {
+    const lines = readFileSync(CONSUMER_PATH, "utf8").split("\n");
+    const idx = lines.findIndex(
+      (l) => l.includes("console.warn") && l.includes("queue ledger") && l.includes("failed"),
+    );
+    expect(idx, `${CONSUMER_PATH} still warns the ledger template`).toBeGreaterThanOrEqual(0);
+    return idx + 1;
+  }
+
+  /** The single `src/jobs/consumer.ts:N` cite in the row (not a range or list). */
+  function singleCite(row: string): number {
+    const m = row.match(/src\/jobs\/consumer\.ts:(\d+)(?![\d,-])/);
+    expect(m, `row carries a single ${CONSUMER_PATH}:N cite`).not.toBeNull();
+    const n = (m as RegExpMatchArray)[1];
+    expect(n, `cite has a line number`).toBeDefined();
+    return Number(n as string);
+  }
+
+  it("pins each warn-line cite to the source line emitting that row's message", () => {
+    // Ledger template row: `<op>` documents the `${what}` parameter.
+    expect(singleCite(rowFor("queue ledger <op> failed"))).toBe(ledgerWarnLine());
+    // Lock pair.
+    expect(singleCite(rowFor("queue lock release timed out"))).toBe(
+      warnLineFor("queue lock release timed out"),
+    );
+    expect(singleCite(rowFor("queue lock release failed"))).toBe(
+      warnLineFor("queue lock release failed"),
+    );
+    // Successor pair.
+    expect(singleCite(rowFor("sync successor dispatch timed out; reconcile will retry"))).toBe(
+      warnLineFor("sync successor dispatch timed out; reconcile will retry"),
+    );
+    expect(singleCite(rowFor("sync successor dispatch failed; reconcile will retry"))).toBe(
+      warnLineFor("sync successor dispatch failed; reconcile will retry"),
+    );
+    // Terminal-claim reopen failure (single cite).
+    expect(singleCite(rowFor("sync terminal claim reopen failed"))).toBe(
+      warnLineFor("sync terminal claim reopen failed"),
+    );
+  });
+
+  it("pins the malformed-discard range around its warn line", () => {
+    const row = rowFor("queue malformed message discarded");
+    const m = row.match(/dropped at `src\/jobs\/consumer\.ts:(\d+)-(\d+)`/);
+    expect(m, `malformed row carries a dropped-at range`).not.toBeNull();
+    const start = Number((m as RegExpMatchArray)[1] as string);
+    const end = Number((m as RegExpMatchArray)[2] as string);
+    const warn = warnLineFor("queue malformed message discarded");
+    expect(warn).toBeGreaterThanOrEqual(start);
+    expect(warn).toBeLessThanOrEqual(end);
+  });
+
+  it("pins the reopen-timeout shorthand warn cite to its warn line", () => {
+    const row = rowFor("sync terminal claim reopen timed out");
+    const m = row.match(/warn at `:(\d+)`/);
+    expect(m, `reopen-timeout row carries a warn-at shorthand`).not.toBeNull();
+    expect(Number((m as RegExpMatchArray)[1] as string)).toBe(
+      warnLineFor("sync terminal claim reopen timed out"),
+    );
+  });
+});

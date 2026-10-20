@@ -321,8 +321,17 @@ describe("expiredWriteBanner", () => {
       env,
     );
     const html = await res.text();
-    expect(html).toContain('data-testid="auth-error"');
-    expect(html).toContain('href="/auth/recover?next=%2Fprofile%3Fedit%3D1"');
+    expect(html).toContain('role="status" tabindex="-1" data-testid="auth-error"');
+    expect(html).toContain(
+      "You signed in again. Your earlier changes were not saved. Review and submit them again.",
+    );
+    // A signed-in member must never be sent back to the expired-session page:
+    // the restored banner keeps its copy with no recovery link.
+    expect(html).not.toContain("/auth/recover");
+    expect(html).not.toContain("Try signing in again");
+    const banner = html.match(/<div[^>]*data-testid="auth-error"[^>]*>.*?<\/div>/s)?.[0];
+    expect(banner).toBeDefined();
+    expect(banner).not.toContain("<a ");
     expect(html).toContain("<main>");
     expect(cleared(res)).toBe(true);
     expect(res.headers.get("cache-control")).toBe("no-store, private");

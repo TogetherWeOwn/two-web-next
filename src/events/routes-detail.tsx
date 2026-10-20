@@ -1,7 +1,7 @@
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
-import { databaseUnavailable, NotFoundPage } from "../errors";
+import { databaseUnavailable, forbidden, NotFoundPage } from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
@@ -155,8 +155,7 @@ export function registerDetailRoutes(
               ? await readFragmentSession(c)
               : await readSession(c);
           viewer = session?.id ?? null;
-          if (e.status === "draft" && !session?.moderator)
-            return bufferedMemberText(c, "Forbidden", 403);
+          if (e.status === "draft" && !session?.moderator) return forbidden(c);
           if (e.status === "draft" || e.status === "past")
             c.header("x-robots-tag", "noindex, nofollow");
           // One-shot join confirmation (legacy join_result flash): the event

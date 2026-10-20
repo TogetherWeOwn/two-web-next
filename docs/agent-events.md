@@ -26,7 +26,13 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   deliveries execute once and all get the original answer (`replayed: true`). Rate budgets are rows in
   `agent_event_hits` (per grant 10 mutating / 30 read per minute, service 60 / 300), also lock-serialised. No KV.
 - The outer per-credential route shield (`AGENT_EVENTS_ROUTE_PER_MINUTE`, default 60/min) counts every hit
-  per credential hash (anonymous per IP) before auth and the audit write; refused hits write nothing.
+  per credential hash (anonymous per IP) before auth and the audit write; refused hits write no hit row.
+  Over-budget 429s audit on a ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE`): each sampled row carries the
+  refusal's own request_id, bucket class only (credential sha256 vs anonymous marker, never raw identity),
+  `denied`/`rate_limited`. Every refusal increments an in-memory per-class counter surfaced on the sampled
+  `agent-events.shield.refusal_sampled` warn (`bucket_class`, running `refusals`, `request_id`); to estimate
+  flood volume, multiply sampled rows by ~100 or read the latest warn count. Grantless (missing/unknown
+  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s keep an exact audit.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
   earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.
@@ -67,7 +73,7 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1019_shared-agent-events.sql` is the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorts last)
+`1019_shared-agent-events.sql` landed as the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorted last at the time — later migrations have since landed, and the Drizzle journal is the source of truth for current ordering)
 and copies **every** temporary
 `agent_events` row into `events`, preserving keys, ownership, markers, versions, status and timestamps,
 then drops the temporary table. Audit/replay

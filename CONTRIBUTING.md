@@ -155,7 +155,7 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
-The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
+The `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
 dependencies. The audit reads every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and

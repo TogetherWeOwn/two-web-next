@@ -16,7 +16,7 @@ The app writes ONE single-line JSON object on `console.error`, with
 | --- | --- | --- |
 | `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
-| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone. Exception: a `model:prune` line with exception `PruneBatchCapError` means the pass committed but hit the per-pass batch ceiling with rows possibly pending — a backlog, not an outage | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent. A capped pass likewise pages once per pass, after the flight commits; only `PruneBatchCapError` pages for a committed pass, and a rolled-back pass pages only its real error. On a cap page, check that the next pass drains the remainder; pages on consecutive passes mean inflow above the ceiling |
+| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone. Exception: a `model:prune` line with exception `PruneBatchCapError` means the pass committed but hit the per-pass batch ceiling with rows possibly pending — a backlog, not an outage. Exception: an `events:reconcile` line with exception `ReconcilePartialFailureError` means the pass committed with isolated dispatch failures while healthy keys still dispatched — a poison key, not an outage | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent. A capped pass likewise pages once per pass, after the flight commits; only `PruneBatchCapError` pages for a committed pass, and a rolled-back pass pages only its real error. A resolved partial reconcile pass likewise pages once per pass, after the flight commits, with `ReconcilePartialFailureError`; the pass still resolves and the all-failed throw path keeps exactly its one real-class page. On a cap page, check that the next pass drains the remainder; pages on consecutive passes mean inflow above the ceiling. On a `ReconcilePartialFailureError` page, first check the same pass's `Event reconcile pass completed.` counts in the jobs Worker logs (failed > 0 with resynced/absorbed preserved); pages on consecutive passes mean a persisting poison key |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -150,6 +150,24 @@ either gate crosses, then a 15-minute cooldown applies:
 - **Crash loop:** at least 5 crash outcomes, including queue, cron and
   other non-fetch invocations that produce no `error.alert` line at all.
 
+Counts enter by event time, not by invocation or arrival time. One Tail
+invocation can carry same-script traces minutes apart (a delayed flush, a
+retry batch), and trace arrival order within that invocation is arbitrary:
+each trace is filed into its 30-second event-time bucket from its own
+`eventTimestamp`, and the buckets of one invocation are observed oldest
+first. Four crashes from six minutes ago arriving in the same invocation
+alongside one new crash never form a five-crash window — only traces
+sharing a rolling five-minute event-time window count together, and within
+one invocation the same traces in any arrival order keep the same buckets
+and the same verdict. This is best-effort counting over recent buckets,
+not live delivery: a delayed trace still counts in its event-time bucket
+while that bucket is inside the window, and an expired bucket simply drops
+out. Across invocations the verdict can still depend on arrival order: a
+delayed bucket observed in a later invocation is counted alongside newer
+buckets already retained, so a delayed flush landing after a newer
+observation can page even though the same traces in the opposite order
+would not.
+
 Like the per-fingerprint mute, the cooldown arms only when the page is
 actually delivered; a failed Discord POST leaves the alarm ready to retry on
 the next batch.
@@ -188,6 +206,18 @@ batch logs a skew-rejection line, while a 400 for a structurally invalid or
 unparseable batch logs a malformed-payload line (status stays 400 either
 way). A skew line means a poisoned clock is eating traffic; a malformed
 line means payload corruption. No threshold or slack change.
+
+The three exact rejection lines come from the Tail Worker
+`two-web-next-alerts` (`AlertAggregator.fetch` in `tail/worker.ts`). Each is
+`console.warn` only — no page, no Discord delivery — and the response status
+stays 400; the line names the reason so operators can tell clock skew from
+payload corruption. No line carries payload bytes.
+
+| Exact warn | Emitter / path | Contract and severity | First read-only check |
+| --- | --- | --- | --- |
+| `tail observe rejected malformed batch: invalid body` | `two-web-next-alerts` `AlertAggregator.fetch`, pre-dispatch: any POST to `/observe`, `/health`, `/spike-result`, or `/health-result` (`tail/worker.ts`) | 400; warn only, no page. Unparseable body is malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string (Workers Logs, or `npx wrangler tail two-web-next-alerts --search 'tail observe rejected'`), then check the sender batch shape/version and that the sender posted valid JSON. |
+| `tail observe rejected future-skewed batch: timestamp beyond slack` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Otherwise-valid batch stamped beyond now plus `BATCH_FUTURE_SLACK_MS`; a batch that is both malformed and future-stamped reads as malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then compare the sender clock against `BATCH_FUTURE_SLACK_MS` in `tail/worker.ts`. A skew line means a poisoned clock is eating traffic. |
+| `tail observe rejected malformed batch: invalid payload` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Structurally invalid batch (`script`, `at`, `requests`, `errors`, `crashes` per `validBatch` in `tail/worker.ts`). No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then check the sender batch shape/version against `validBatch` in `tail/worker.ts`. A malformed line means payload corruption. |
 
 Attribution is honest about the whole counted window. `build_sha` is present
 only on a homogeneous page: every counted bucket in the window carries the
@@ -335,12 +365,12 @@ requires `X-TWO-QA-Auth` (constant-time comparison) and the existing global
 same-origin/host guards. It has **no same-origin exemption**. Valid same-origin
 requests with QA disabled (including production configuration), wrong/missing
 token, or GET return 404 without sending a job. Untrusted unsafe requests retain
-the ordinary global 403. Authenticated probes use the shared 10/minute QA
-throttle, checked only after the QA gate (so production/bad tokens cannot turn
-into 429s); an exhausted budget returns the ordinary 429 before reading an upload
-or enqueueing. After authentication/admission, the shared `action` body limit
-counts at most 4,096 bytes; oversized bodies return 413 without enqueueing.
-Disabled or unauthenticated probes never read bodies or consume throttle budget.
+the ordinary global 403. Authenticated probes run the shared `action` body cap
+(at most 4,096 bytes) after the QA gate and before the shared 10/minute QA
+throttle (so production/bad tokens cannot turn into 429s); over-cap probes
+return 413 with no throttle spend and without enqueueing, even when the budget
+is exhausted. Only under-cap probes can return the ordinary 429. Disabled or
+unauthenticated probes never read bodies or consume throttle budget.
 
 An authorized call enqueues `{ kind: "alert-probe", probeId }` on the staging internal
 queue, then throws `AlertProbeError` through the real 500 handler. **500 is the

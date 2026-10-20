@@ -60,16 +60,33 @@ const actor = { id: "100000000000000111", username: "mod" };
 
 describe("Kit admin event-create load: guard and cache wiring", () => {
   it("awaits the layout guard before returning the empty form", async () => {
-    let settled = false;
+    let entered = false;
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
     const parent = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      settled = true;
+      entered = true;
+      await gate;
       return { actor };
     };
     const setHeaders = vi.fn();
-    const data = await load({ parent, setHeaders }, {});
-    expect(settled).toBe(true);
+    let settled = false;
+    const pending = load({ parent, setHeaders }, {}).then((value) => {
+      settled = true;
+      return value;
+    });
+    for (let i = 0; i < 100 && !entered; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(entered).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    release();
+    const data = await pending;
     expect(data).toEqual({ values: {}, errors: {}, hasErrors: false, isDraft: false });
+    expect(data.hasErrors).toBe(false);
+    expect(data.isDraft).toBe(false);
     expect(setHeaders).toHaveBeenCalledOnce();
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });

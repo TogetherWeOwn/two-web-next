@@ -13,9 +13,13 @@ const html = [
   ["/join", /One click with Discord/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
-// and the branded 404 carry their noindex in <meta>, so the deploy smoke
+// and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
-const nonIndexableHtml = new Set(["/events/past", "/__smoke_unknown_route__"]);
+const nonIndexableHtml = new Set([
+  "/events/past",
+  "/e/00000000000000000000000001",
+  "/__smoke_unknown_route__",
+]);
 
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
@@ -29,11 +33,39 @@ const routes = [
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
   // Session-free public read API (anonymous by construction in
-  // src/public-data/routes.ts): the collection envelope and the discovery
+  // src/public-data/routes.ts): the collection envelope, one missing
+  // event, the community snapshot, the join handoff, and the discovery
   // document. No auth, no cookies, no flags; the session-gated /events.json
-  // stays out (staging-only bin/json-smoke.mjs covers it).
+  // stays out (staging-only bin/json-smoke.mjs covers it). The single-event
+  // probe uses an all-digit ULID so no secret scanner trips; the same
+  // literal must appear in the test fixtures. That key is a valid
+  // PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+  // database has it and the real handler answers 404 not_found
+  // (src/public-data/routes.ts): the probe asserts that real contract —
+  // admission, key parsing, cache bypass, the DB lookup and the static
+  // error envelope — instead of a success body no environment serves.
   { path: "/api/public/events", statuses: [200], type: "application/json" },
+  {
+    path: "/api/public/events/00000000000000000000000001",
+    statuses: [404],
+    type: "application/json",
+  },
+  { path: "/api/public/community", statuses: [200], type: "application/json" },
+  { path: "/api/public/join", statuses: [200], type: "application/json" },
   { path: "/openapi.json", statuses: [200], type: "application/json" },
+  // Single-event HTML detail (src/events/routes-detail.tsx GET /e/:key): the
+  // same fixed probe key exists in no database, so the real handler answers
+  // the branded missing-event page (404 text/html via notFound(), the same
+  // NotFoundPage the unknown-route probe asserts). A published-event 200
+  // would depend on seed data no environment guarantees, so the probe pins
+  // the missing-page contract — HTTP 404 plus the branded marker — with no
+  // live Discord data and no fixture seeding.
+  {
+    path: "/e/00000000000000000000000001",
+    statuses: [404],
+    type: "text/html",
+    body: /We cannot find that page[\s\S]*Together We Own/,
+  },
   {
     path: "/__smoke_unknown_route__",
     statuses: [404],
@@ -250,6 +282,19 @@ export async function smoke(
         "X-Content-Type-Options nosniff",
         headers.get("x-content-type-options") ?? "missing",
       );
+      // Static security headers (src/headers.ts SECURITY_HEADERS): every
+      // response carries them, not only HTML, so these run unconditionally
+      // like the CSP/nosniff pair above. Values are case-insensitive.
+      check(
+        headers.get("referrer-policy")?.toLowerCase() === "strict-origin-when-cross-origin",
+        "Referrer-Policy strict-origin-when-cross-origin",
+        headers.get("referrer-policy") ?? "missing",
+      );
+      check(
+        headers.get("x-frame-options")?.toLowerCase() === "deny",
+        "X-Frame-Options DENY",
+        headers.get("x-frame-options") ?? "missing",
+      );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Indexing posture follows the probed origin (src/headers.ts robotsTagFor):
       // staging and other non-apex hosts send X-Robots-Tag noindex on returned
@@ -449,8 +494,25 @@ export async function smoke(
       if (route.path === "/robots.txt") {
         // Per-environment robots (W16b TOG-11942): the Sitemap line must name
         // this environment's own origin, never the apex or another env's host.
+        // Comment parity with ci/cutover-check.mjs: "#" starts a comment, so
+        // strip it before the anchored match. A comment-only Sitemap line
+        // cannot pass, while a trailing comment after a real same-origin
+        // line still passes. Horizontal whitespace only: \s would cross
+        // newlines and let a split-line Sitemap directive pass.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
-        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+        const stripped = String(body)
+          .split(/\r?\n/)
+          .map((robotsLine) => robotsLine.split("#", 1)[0])
+          .join("\n");
+        const sitemaps = [...stripped.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
+          (match) => match[1],
+        );
+        const expectedSitemap = `${base.origin}/sitemap_index.xml`;
+        check(
+          sitemaps.length > 0 && sitemaps.every((url) => url === expectedSitemap),
+          `robots ${line}`,
+          "Sitemap line missing or foreign",
+        );
       }
       if (route.path === "/.well-known/security.txt") {
         // RFC 9116 publication (S8): field-parsed assertions shared with the
@@ -505,6 +567,101 @@ export async function smoke(
           check(
             valid,
             "collection envelope with data array and numeric paging",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path.startsWith("/api/public/events/")) {
+        // Missing-event error envelope (src/public-data/contracts.ts
+        // PublicDataErrorDto): the fixed probe key exists in no database,
+        // so the real handler answers 404 with { error: { code:
+        // "not_found", message } } (src/public-data/routes.ts). The probe
+        // pins the code and a non-empty message, not the message text. A
+        // 200 success body, an empty object, a collection array, a wrong
+        // error code, a missing message, or a non-JSON body fails this
+        // entry only. Do not print response bodies into deploy logs: the
+        // actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const error =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.error
+              : undefined;
+          const valid =
+            error !== null &&
+            typeof error === "object" &&
+            !Array.isArray(error) &&
+            error.code === "not_found" &&
+            typeof error.message === "string" &&
+            error.message.length > 0;
+          check(
+            valid,
+            "missing-event error envelope with not_found code",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/community") {
+        // Community snapshot (src/public-data/contracts.ts
+        // CommunitySnapshotDto): member_count and online_count are null
+        // when the collectors are unavailable (never 0 by default) or
+        // finite numbers, and ranks is an array of key/label/member_count
+        // rows. An error envelope, an empty object, wrong-typed counts,
+        // or a non-JSON body fails this entry only. Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const countsValid = (value) =>
+            typeof value === "number" ? Number.isFinite(value) : value === null;
+          const ranksValid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.ranks) &&
+            data.ranks.every(
+              (rank) =>
+                rank !== null &&
+                typeof rank === "object" &&
+                !Array.isArray(rank) &&
+                typeof rank.key === "string" &&
+                typeof rank.label === "string" &&
+                countsValid(rank.member_count),
+            );
+          const valid =
+            ranksValid && countsValid(data.member_count) && countsValid(data.online_count);
+          check(
+            valid,
+            "community snapshot with nullable counts and ranks array",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/join") {
+        // Join handoff (src/public-data/contracts.ts JoinHandoffDto):
+        // database-free like the /join leaf, a non-empty intro plus the
+        // public HTTPS invite. An error envelope, an empty object,
+        // wrong-typed fields, a non-HTTPS invite, or a non-JSON body
+        // fails this entry only. Do not print response bodies into
+        // deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.intro === "string" &&
+            data.intro.length > 0 &&
+            typeof data.invite_url === "string" &&
+            data.invite_url.startsWith("https://");
+          check(
+            valid,
+            "join handoff with intro and HTTPS invite",
             "valid JSON with unexpected public envelope shape",
           );
         } catch {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Change-scope gate for the required `check` (TOG-11811) and the browser/staging
-# smoke jobs (e2e.yml, e2e-staging.yml, deploy.yml smoke steps). Prints
+# Change-scope gate for `check` (gated by the required `ci-ok`; TOG-11811)
+# and the browser/staging smoke jobs (e2e.yml, e2e-staging.yml, deploy.yml
+# smoke steps). Prints
 # `docs_only=true` only when every path a PR touches is prose that nothing
 # executes or reads; anything else, or any doubt, prints `docs_only=false` and
 # the full suite runs. Also prints `skip_e2e=true` when no changed path can
@@ -93,13 +94,13 @@ if [ -s "$files" ]; then
             worker=true
             ;;
           # Database: migrations, the journal lock, the drizzle config and the
-          # migration tooling under ci/ (history and numbering checks, the
-          # Neon migrate script and its selftest). Observed by `check` (migrate,
+          # migration tooling under ci/ (history, numbering and snapshot checks,
+          # the Neon migrate script and its selftest). Observed by `check` (migrate,
           # history checks, numbering) and `a11y` (the fixtures run the real
           # migrations), not by the perf jobs. Listed before the `ci/*` app
           # arm below, which would otherwise claim these paths.
           drizzle/*|migrations.lock|drizzle.config.ts|\
-          ci/check-migration-*|ci/db-migrate*)
+          ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*)
             db=true
             ;;
           # App: everything the served worker, its assets, the test suites

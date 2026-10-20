@@ -90,6 +90,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       const eventId = row!.id;
       const answers = ["going", "going", "going", "maybe", "not_going", "waitlisted"];
       for (let j = 0; j < answers.length; j += 1) {
+        // Attributable seeds: the going count joins users and counts only
+        // named rows, so every seeded identity carries a stored name.
+        await fixture.client`
+          insert into users (id, username) values (${`${keyPrefix}-user-${i}-${j}`}, ${`${keyPrefix}-user-${i}-${j}`})
+          on conflict (id) do nothing`;
         await fixture.client`
           insert into rsvps (event_id, user_id, status)
           values (${eventId}, ${`${keyPrefix}-user-${i}-${j}`}, ${answers[j]!})`;
@@ -119,7 +124,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     // The teaser aggregates stay exact with non-going answers present.
     for (const row of first.result.teaser) expect(row.goingCount).toBe(3);
     // Each read stays under the legacy bar on its own: teaser
-    // (timeout scope + event rows + one going aggregate), featured
+    // (timeout scope + event rows + two going aggregates), featured
     // (timeout scope + rows). The combined set is pinned below as flat.
     const teaserOnly = await countStatements(() => listHomeUpcoming(countedDb));
     const featuredOnly = await countStatements(() => listVisibleFeatured(countedDb));
@@ -176,6 +181,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       ["show-user-2", "maybe"],
       ["show-user-3", "not_going"],
     ] as const) {
+      // Attributable seeds (see above): the going count only counts named rows.
+      await fixture.client`
+        insert into users (id, username) values (${user}, ${user})
+        on conflict (id) do nothing`;
       await fixture.client`
         insert into rsvps (event_id, user_id, status) values (${row!.id}, ${user}, ${status})`;
     }
@@ -184,7 +193,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     // The single-event read builds no listing aggregate, yet still counts
     // exactly the going answers — the maybe is excluded.
     expect(measured.result?.goingCount).toBe(2);
-    // Event row + one going aggregate.
+    // Event row + two going aggregates.
     expect(measured.count).toBeLessThan(5);
   });
 

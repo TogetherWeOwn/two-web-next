@@ -134,7 +134,9 @@ describe("legacy admin redirects (local fixtures, no DB)", () => {
     for (const path of [alias, target]) {
       const res = await request(path, env, { headers: { cookie } });
       expect(res.status).toBe(403);
-      expect(await res.text()).toBe("Forbidden");
+      const body = await res.text();
+      expect(body, path).toContain("You do not have access to this");
+      expect(body, path).toContain('data-testid="error-home"');
       expect(res.headers.get("location")).toBeNull();
     }
     expect(dbRead).not.toHaveBeenCalled();

@@ -25,7 +25,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   secret-shaped literals. CI installs the pinned CLI into a Python virtual
   environment and runs `ci/semgrep-warn-selftest.mjs` against a planted finding
   before scanning the tree. Setup, selftest, partial-parse errors, scanner
-  failures, and findings block the required `check` job; the scan uses
+  failures, and findings fail the `check` job and therefore the required `ci-ok`;
+  the scan uses
   `--strict --error`. The regression test in `test/workflow-hardening.test.ts`
   pins the fail-closed workflow wiring. The selftest matches the rule id by
   suffix because Semgrep prefixes it with the config path. Full-history leak

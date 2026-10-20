@@ -131,14 +131,19 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    ```sh
    node ci/cutover-check.mjs --phase after --target togetherweown.com --json
    ```
-5. **Public-route smoke on the apex.** Twenty public routes (the
+5. **Public-route smoke on the apex.** Twenty-four public routes (the
    `bin/smoke.mjs` shape: `/up` JSON readiness plus `/`, `/about`, `/faq`,
    `/rules`, `/privacy`, `/events`, `/events/past`, `/join`, `/events.rss`,
    `/events.ics`, `/sitemap_index.xml`, `/robots.txt`,
    `/.well-known/security.txt`, `/discord` (302),
    `/profile` (302), `/admin` (302/403), `/api/public/events` (200 JSON
-   collection envelope), `/openapi.json` (200 JSON discovery document)
-   and `/__smoke_unknown_route__`
+   collection envelope), `/api/public/events/<key>` (404 JSON not_found
+   error envelope: the fixed probe key exists in no database),
+   `/api/public/community` (200 JSON community snapshot),
+   `/api/public/join` (200 JSON join handoff), `/openapi.json` (200 JSON
+   discovery document), `/e/<key>` (404 branded missing-event HTML page:
+   the fixed probe key exists in no database) and
+   `/__smoke_unknown_route__`
    (404), with CSP/nosniff/content-type/indexing/redirect assertions).
    ```sh
    node bin/smoke.mjs https://togetherweown.com --allow-indexable
@@ -150,8 +155,8 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    `node bin/smoke.mjs https://next.togetherweown.com`.
 6. **Lighthouse artifact.** The `lighthouse-<sha>` GitHub artifact (14 days)
    with assertion results; thresholds live in `ci/lighthouserc.cjs`.
-7. **GitHub Actions.** Required `check`, `gitleaks`, `pr-lint` on the exact
-   head; `deploy-production` `/up` smoke; `e2e-staging` journeys for the
+7. **GitHub Actions.** Required `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` on
+   the exact head; `deploy-production` `/up` smoke; `e2e-staging` journeys for the
    staging comparison. Production rollback is the one-click
    `rollback-production` workflow to the recorded version ID.
 8. **Version-settle telemetry (rollback proof only).** The `served_versions`

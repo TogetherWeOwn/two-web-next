@@ -97,5 +97,6 @@ were used; no staging or production service was contacted.
 This proves pure input validation, not staging acceptance, browser integration,
 recurrence, or production readiness. A local `check` without `DATABASE_URL` skips
 live SQL suites; CI's separate disposable Postgres service supplies SQL coverage.
-The exact-head required `check`, `gitleaks` and `pr-lint` results and independent
-review/merge receipt belong on the issue work products before final delivery.
+The exact-head required `ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` results
+and independent review/merge receipt belong on the issue work products before
+final delivery.

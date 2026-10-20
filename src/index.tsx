@@ -629,7 +629,7 @@ app.get("/.well-known/security.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
+app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
 // existing queue signal. A missing required secret, DB/ledger failure or

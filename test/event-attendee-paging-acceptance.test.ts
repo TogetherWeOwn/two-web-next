@@ -19,8 +19,8 @@
 //   keeps a working prev/return link. Kit model/render mirror this via
 //   `attendeesPaging` and the same testids.
 // - The section header no longer labels a partial page as the total; the
-//   aggregate Going count (getPublicEvent.goingCount) is unchanged and
-//   includes unnamed/nonmatching going users.
+//   aggregate Going count (getPublicEvent.goingCount) is named-only and
+//   excludes unnamed/nonmatching going users, so it equals the roster length.
 // - Malformed/missing lookahead attribution or audit failure refuses the
 //   whole response (503, no identities, no partial audit row), including when
 //   the malformed row is only the lookahead. Guest/nonmember exclusion,
@@ -106,7 +106,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       }
       await fixture.db.insert(users).values(userRows);
       await fixture.db.insert(rsvps).values(rsvpRows);
-      // Unnamed + nonmatching going users: counted by the aggregate, never named.
+      // Unnamed + nonmatching going users: excluded from the aggregate, never named.
       await fixture.db.insert(users).values({ id: "400000000000000900", username: "" });
       await fixture.db.insert(rsvps).values([
         { eventId: event!.id, userId: "400000000000000900", status: "going" },
@@ -230,13 +230,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it("keeps the aggregate Going count independent of named paging (includes unnamed/missing)", async () => {
+    it("keeps the aggregate Going count named-only, independent of paging (excludes unnamed/missing)", async () => {
       await seedPaging();
       const pub = await getPublicEvent(fixture.db, EVENT_KEY);
-      expect(pub?.goingCount).toBe(TOTAL_NAMED + 2);
+      expect(pub?.goingCount).toBe(TOTAL_NAMED);
       for (const path of [undefined, withPage("3")]) {
         const html = await (await request(path, { headers: await headers() })).text();
-        expect(html).toContain(`${TOTAL_NAMED + 2} going`);
+        expect(html).toContain(`${TOTAL_NAMED} going`);
       }
     });
 
@@ -313,7 +313,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         });
         expect(res.status).toBe(200);
         const html = await res.text();
-        expect(html).toContain(`${TOTAL_NAMED + 2} going`);
+        expect(html).toContain(`${TOTAL_NAMED} going`);
         for (const value of [
           synthName(0),
           synthName(PAGE),

@@ -83,18 +83,45 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
-  // Session-free public read API: collection envelope and discovery document.
-  // Bodies mirror the acceptance healthy fixtures; the probe asserts the
-  // envelope shape and the OpenAPI marker, not fixture contents.
+  // Session-free public read API: collection envelope, one missing event
+  // (404 not_found, mirroring the real handler), community snapshot, join
+  // handoff, and discovery document. Bodies mirror the acceptance healthy
+  // fixtures; the probe asserts each envelope shape and the OpenAPI marker,
+  // not fixture contents.
   "/api/public/events": [
     200,
     "application/json",
     '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
   ],
+  // The fixed probe key exists in no database, so like the real handler
+  // (src/public-data/routes.ts) the stub answers 404 not_found.
+  "/api/public/events/00000000000000000000000001": [
+    404,
+    "application/json",
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+  ],
   "/openapi.json": [
     200,
     "application/json",
     '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
+  // Single-event HTML detail (GET /e/:key, src/events/routes-detail.tsx):
+  // the fixed probe key exists in no database, so like the real handler's
+  // notFound() the stub answers the branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
   ],
   "/__smoke_unknown_route__": [
     404,
@@ -137,6 +164,8 @@ async function stub(t, change = () => {}) {
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
         // Cutover identity (TOG-12863): the live /up answers as two-web-next
@@ -190,7 +219,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -204,8 +233,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
-  assert.equal(requests.length, 20);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -228,7 +257,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -317,7 +346,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -354,13 +383,17 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 24);
   });
 }
 
 for (const [header, path, expected] of [
   ["content-security-policy", "/events.rss", "nonempty Content-Security-Policy"],
   ["x-content-type-options", "/discord", "X-Content-Type-Options nosniff"],
+  // The static security headers apply to every response, not only HTML:
+  // one non-HTML route and one HTML route pin the unconditional scope.
+  ["referrer-policy", "/events.rss", "Referrer-Policy strict-origin-when-cross-origin"],
+  ["x-frame-options", "/about", "X-Frame-Options DENY"],
   ["x-robots-tag", "/about", "staging X-Robots-Tag noindex/none (unscoped)"],
   ["x-robots-tag", "/__smoke_unknown_route__", "staging X-Robots-Tag noindex/none (unscoped)"],
 ]) {
@@ -372,6 +405,25 @@ for (const [header, path, expected] of [
     assert.equal(result.ok, false);
     assert.ok(
       result.output.includes(`FAIL ${path}: expected ${expected}; actual missing`),
+      result.output,
+    );
+  });
+}
+
+for (const [header, path, wrong, expected] of [
+  ["referrer-policy", "/about", "unsafe-url", "Referrer-Policy strict-origin-when-cross-origin"],
+  // SAMEORIGIN is the wrong value, not an acceptable spelling of DENY; the
+  // redirect response pins the check outside HTML routes like nosniff above.
+  ["x-frame-options", "/discord", "SAMEORIGIN", "X-Frame-Options DENY"],
+]) {
+  test(`rejects wrong ${header} on ${path}`, async (t) => {
+    const { url } = await stub(t, (route, result) => {
+      if (route === path) result.headers[header] = wrong;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.output.includes(`FAIL ${path}: expected ${expected}; actual ${wrong}`),
       result.output,
     );
   });
@@ -389,6 +441,166 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
   });
 }
 
+test("a broken single-event error envelope served with HTTP 404 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // A success envelope where the missing-event error belongs.
+    JSON.stringify({
+      event_key: "00000000000000000000000001",
+      title: "Fixture game night",
+      status: "published",
+      rsvp_open: true,
+      synced_to_discord: false,
+      going_count: 3,
+    }),
+    // Empty object: no envelope at all.
+    "{}",
+    // A collection array instead of the error object.
+    "[]",
+    // Wrong error code.
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    // Missing message.
+    JSON.stringify({ error: { code: "not_found" } }),
+    // Empty message.
+    JSON.stringify({ error: { code: "not_found", message: "" } }),
+    // Not JSON at all.
+    "event is temporarily unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/events/00000000000000000000000001") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(
+      result.output.includes("FAIL /api/public/events/00000000000000000000000001: expected"),
+      result.output,
+    );
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken single-event HTML detail fails only that entry", async (t) => {
+  // GET /e/:key (src/events/routes-detail.tsx) must answer the branded
+  // missing-event page for the fixed probe key: a success body, the JSON
+  // error envelope, an unbranded page, a wrong status, or a wrong
+  // Content-Type fails this entry only while the neighbouring HTML and
+  // JSON probes keep passing.
+  const broken = [
+    ["<h1>Fixture game night</h1>", 200],
+    ['{"error":{"code":"not_found","message":"No published event with that key."}}', 404],
+    ["<h1>Something went wrong</h1>", 404],
+    ["<title>We cannot find that page — Together We Own</title>", 200],
+    // Branded body with the right status but the wrong Content-Type: pins
+    // the probe's type: "text/html" assertion (bin/smoke.mjs), which no
+    // body/status mutation exercises.
+    [
+      "<title>We cannot find that page — Together We Own</title>",
+      404,
+      "application/json",
+      "expected Content-Type text/html",
+    ],
+  ];
+  for (const [body, status, contentType, expectedFragment] of broken) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/e/00000000000000000000000001") {
+        result.body = body;
+        result.status = status;
+        if (contentType) result.headers["content-type"] = `${contentType}; charset=UTF-8`;
+      }
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(
+      result.output.includes("FAIL /e/00000000000000000000000001: expected"),
+      `${body}\n${result.output}`,
+    );
+    if (expectedFragment) {
+      assert.ok(
+        result.output.includes(`FAIL /e/00000000000000000000000001: ${expectedFragment}`),
+        `${body}\n${result.output}`,
+      );
+    }
+    assert.match(result.output, /^PASS \/events$/m, `${body}\n${result.output}`);
+    assert.match(
+      result.output,
+      /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+      `${body}\n${result.output}`,
+    );
+    assert.match(result.output, /^PASS \/__smoke_unknown_route__$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken community snapshot served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // The public error envelope, mis-served as a success.
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    // Empty object: no envelope at all.
+    "{}",
+    // Ranks is not an array.
+    JSON.stringify({ member_count: 123, online_count: 12, ranks: {} }),
+    // Counts with the wrong types (unknown must read as null, never "0").
+    JSON.stringify({ member_count: "123", online_count: 12, ranks: [] }),
+    // Rank row missing its member_count.
+    JSON.stringify({
+      member_count: 123,
+      online_count: 12,
+      ranks: [{ key: "veterans", label: "Veterans" }],
+    }),
+    // Not JSON at all.
+    "community snapshot unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/community") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(result.output.includes("FAIL /api/public/community: expected"), result.output);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken join handoff served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // The public error envelope, mis-served as a success.
+    JSON.stringify({ error: { code: "rate_limited", message: "Too many requests." } }),
+    // Empty object: no envelope at all.
+    "{}",
+    // Missing invite.
+    JSON.stringify({ intro: "Approve once with Discord and we will add you to the server." }),
+    // Non-HTTPS invite.
+    JSON.stringify({
+      intro: "Approve once with Discord and we will add you to the server.",
+      invite_url: "http://discord.gg/fixture",
+    }),
+    // Not JSON at all.
+    "join handoff unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/join") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(result.output.includes("FAIL /api/public/join: expected"), result.output);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("null community counts pass (collectors down reads as unknown, never 0)", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/api/public/community")
+      result.body = '{"member_count":null,"online_count":null,"ranks":[]}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+});
+
 test("rejects a foreign robots Sitemap host without leaking the body", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/robots.txt")
@@ -402,6 +614,57 @@ test("rejects a foreign robots Sitemap host without leaking the body", async (t)
     /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
   );
   assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("rejects a comment-only robots Sitemap line", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "# Sitemap:");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+test("rejects a split-line robots Sitemap directive", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap:\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+test("rejects a split-line robots Sitemap directive with a comment before the URL", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap: # note\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+// Comment parity with the cutover robots gate: comments are stripped
+// before the anchored Sitemap match, so a trailing comment after a real
+// same-origin Sitemap line stays a pass, never a failure.
+test("passes a same-origin robots Sitemap line with a trailing comment", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt")
+      result.body = result.body.replace(
+        "/sitemap_index.xml\n",
+        "/sitemap_index.xml # this environment\n",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
 });
 
 test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
@@ -541,7 +804,12 @@ test("security.txt passes in both indexing modes", async (t) => {
       // Apex posture for the indexable run: strip the staging noindex from
       // indexable HTML leaves; the archive and branded 404 keep theirs.
       // security.txt is text/plain, so neither mode touches its headers.
-      if (allowIndexable && (route === "/events/past" || route === "/__smoke_unknown_route__"))
+      if (
+        allowIndexable &&
+        (route === "/events/past" ||
+          route === "/e/00000000000000000000000001" ||
+          route === "/__smoke_unknown_route__")
+      )
         return;
       if (allowIndexable && result.headers["content-type"]?.startsWith("text/html"))
         delete result.headers["x-robots-tag"];
@@ -693,7 +961,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 24);
     if (!expected) {
       assert.match(
         result.output,
@@ -1548,7 +1816,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 24);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -1633,7 +1901,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 24);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -1679,7 +1947,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /20 routes, 20 failed assertions/);
+  assert.match(result.output, /24 routes, 24 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -1702,12 +1970,17 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   // robotsTagFor); the archive and branded 404 stay meta-noindex, which this
   // header probe skips.
   const { url, requests } = await stub(t, (route, result) => {
-    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    if (
+      route === "/events/past" ||
+      route === "/e/00000000000000000000000001" ||
+      route === "/__smoke_unknown_route__"
+    )
+      return;
     delete result.headers["x-robots-tag"];
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1738,10 +2011,15 @@ test("default mode still requires the staging noindex", async (t) => {
 
 test("CLI --allow-indexable reaches the apex posture", async (t) => {
   const { url } = await stub(t, (route, result) => {
-    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    if (
+      route === "/events/past" ||
+      route === "/e/00000000000000000000000001" ||
+      route === "/__smoke_unknown_route__"
+    )
+      return;
     delete result.headers["x-robots-tag"];
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
 });

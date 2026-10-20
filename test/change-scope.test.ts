@@ -153,6 +153,8 @@ describe("change-scope gate", () => {
       "ci/check-migration-history.mjs",
       "ci/check-migration-history-selftest.mjs",
       "ci/check-migration-numbers.sh",
+      "ci/check-snapshot-chain.mjs",
+      "ci/check-snapshot-chain-selftest.mjs",
       "ci/db-migrate.mjs",
       "ci/db-migrate-selftest.mjs",
     ]) {
@@ -167,6 +169,23 @@ describe("change-scope gate", () => {
     const other = scope([["ci/db-backup-selftest.sh", ""]]);
     expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
   });
+
+  it.each(["ci/check-snapshot-chain.mjs", "ci/check-snapshot-chain-selftest.mjs"])(
+    "keeps snapshot-chain tooling in db on either side of a rename (%s)",
+    (path) => {
+      for (const row of [
+        [path, "docs/guide.md"],
+        ["docs/guide.md", path],
+      ]) {
+        const r = scope([row]);
+        expect({ app: r.app, db: r.db, full: r.full }, row.join(" <- ")).toEqual({
+          app: "false",
+          db: "true",
+          full: "false",
+        });
+      }
+    },
+  );
 
   it("forces a full run on lockfiles, CI, shared config and itself", () => {
     for (const path of [
@@ -540,8 +559,8 @@ describe("e2e scope gate", () => {
     // stability (docs/visual-regression.md); still GitHub-hosted Linux.
     expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
-    // check, gitleaks and pr-lint, so a docs-only or test-only skip never
-    // blocks a merge.
+    // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
+    // never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]
@@ -602,8 +621,8 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
     expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
     // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
-    // names exactly check, gitleaks and pr-lint, so a docs-only or test-only
-    // skip never blocks a merge.
+    // names exactly ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or
+    // test-only skip never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]

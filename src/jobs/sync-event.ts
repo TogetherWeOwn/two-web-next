@@ -14,13 +14,68 @@ import {
 export type Outcome =
   | { done: true }
   | { retryInSeconds: number }
-  | { failed: string; definitive?: true };
+  | {
+      failed: string;
+      definitive?: true;
+      /**
+       * Settlement-only redelivery: the attempt still carries terminal intent,
+       * so the consumer re-runs the bounded settlement without the bot flow.
+       * A still-unsettled store retries after this many seconds instead of
+       * going terminal; only a committed settlement reaches the failed path.
+       */
+      intentRedeliveryBackoffSeconds?: number;
+    };
 
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+/**
+ * Per-op bound for the producer's lock-acquire and queue-send.
+ * Every neighboring op races a deadline; acquire and send were awaited bare,
+ * so one hung Postgres INSERT or one hung queue transport stalled the web
+ * after-commit producer (and the reconcile redispatch) with no recovery.
+ * Past this deadline dispatch rejects as a transport wait — the same
+ * disposition as "queue down", recovered by reconcile — and any acquired
+ * lease is released. Pinned so changes are deliberate.
+ */
+export const PRODUCER_TIMEOUT_MS = 2000;
 
-/** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry. */
+/**
+ * Race `op` against an independent setTimeout deadline. The timer is always
+ * cleared, and a late settle after the deadline wins is ignored: it can never
+ * reclassify the already-disposed outcome (Promise.race stays attached to both
+ * branches, so a late rejection is handled, not unhandled).
+ */
+export async function withProducerDeadline<T>(
+  op: Promise<T>,
+  ms: number = PRODUCER_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new BotTransportError(`sync producer timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([op, deadline]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+/** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry.
+ *
+ * Late settlement is best-effort: past the deadline dispatch rejects while the
+ * underlying acquire/send may still be in flight. Callers that need Workers
+ * lifetime for that tail (the successor path) pass `onLateSettlement` and hold
+ * the received promises in their own waitUntil; callers without lifetime
+ * (the web after-commit path, whose pool ends in its finally) accept that a
+ * late token lingers until its TTL and a late ledger compensation stays as
+ * visible phantom backlog until manual cleanup: TTL recovers the lease and
+ * reconcile redispatches the sync, but neither removes an orphaned queue_jobs
+ * row.
+ */
 export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
@@ -31,15 +86,58 @@ export async function dispatchSyncEvent(
   // Originating HTTP request for queue.failing correlation; optional for
   // scheduled/reconcile/legacy dispatches. Never a job or idempotency key.
   requestId?: string,
+  // Lifetime hook: receives each detached late-settlement promise (a late
+  // acquire-token release, a raced-away send including its ledger
+  // compensation). Never affects the dispatch outcome; the caller decides
+  // whether to hold it in waitUntil.
+  onLateSettlement?: (work: Promise<unknown>) => void,
 ): Promise<boolean> {
   signal?.throwIfAborted();
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
   const key = uniqueKey(eventKey);
-  const leaseToken = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+  // Failed send: compensate only this acquisition, never a newer holder.
+  // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
+  // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
+  const releaseOwnLease = async (lease: string): Promise<void> => {
+    let t: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<void>((resolve) => {
+      t = setTimeout(resolve, LOCK_TIMEOUT_MS);
+    });
+    await Promise.race([
+      Promise.resolve()
+        .then(() => lock.release(key, lease))
+        .catch(() => {}),
+      timeout,
+    ]).finally(() => clearTimeout(t));
+  };
+  const acquireOp = lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+  let leaseToken: string | null;
+  try {
+    leaseToken = await withProducerDeadline(acquireOp);
+  } catch (err) {
+    // A token arriving after the deadline wins is a live row again: attempt to
+    // free it (bounded, never throwing). Best-effort only — without Workers
+    // lifetime (web path) it can still linger until its TTL, so callers that
+    // need the tail to run hold the exposed promise in their own waitUntil.
+    // A real acquire rejection carries no token, so the handler is a no-op.
+    const lateRelease = acquireOp.then(
+      (late) => {
+        if (typeof late === "string" && late) return releaseOwnLease(late);
+      },
+      () => {},
+    );
+    onLateSettlement?.(lateRelease);
+    throw err;
+  }
   if (!leaseToken) return false;
+  // Hoisted so a deadline rejection can expose the still-in-flight send
+  // (including its exact-jobId ledger compensation) to the caller's lifetime.
+  // The abort check stays before any send is attempted, inside the try so an
+  // abort after acquisition still compensates this token.
+  let sendOp: Promise<unknown> | undefined;
   try {
     signal?.throwIfAborted();
-    await queue.send(
+    sendOp = queue.send(
       // Idempotency stays build-time; correlation rides alongside, never as the key.
       {
         kind: "sync-event",
@@ -50,20 +148,20 @@ export async function dispatchSyncEvent(
       },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
+    await withProducerDeadline(sendOp);
   } catch (err) {
-    // Failed send: compensate only this acquisition, never a newer holder.
-    // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
-    // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
-    let t: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<void>((resolve) => {
-      t = setTimeout(resolve, LOCK_TIMEOUT_MS);
-    });
-    await Promise.race([
-      Promise.resolve()
-        .then(() => lock.release(key, leaseToken))
-        .catch(() => {}),
-      timeout,
-    ]).finally(() => clearTimeout(t));
+    // The raced-away send still owns its ledger compensation: expose its
+    // settlement so a waitUntil holder can cover it. The lease release below
+    // stays awaited inside dispatch (bounded), so it needs no hook.
+    if (sendOp) {
+      onLateSettlement?.(
+        sendOp.then(
+          () => {},
+          () => {},
+        ),
+      );
+    }
+    await releaseOwnLease(leaseToken);
     throw err;
   }
   return true;
@@ -89,7 +187,39 @@ export async function handleSyncEvent(
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
   if ("waiting" in prepared) return waiting();
+  // Settlement-only redelivery: a definitive outcome already recorded its
+  // terminal intent on this attempt. Never re-run the bot flow or re-derive
+  // the verdict; return the stored reason so the consumer re-runs the
+  // bounded settlement. The carried backoff keeps a still-unsettled store
+  // on delayed retry instead of going terminal.
+  const terminalIntent =
+    prepared.terminalReason ??
+    (prepared as unknown as { terminal_reason?: string | null }).terminal_reason ??
+    null;
+  if (prepared.state === "failed" && terminalIntent) {
+    // Late settlement commit: the UPDATE landed after the client's race gave
+    // up, so the alert and the failed row were never written. Settle again —
+    // the UPDATE matches zero rows and resolves — and reach the terminal path.
+    return {
+      failed: terminalIntent,
+      definitive: true,
+      intentRedeliveryBackoffSeconds: backoffFor(
+        SYNC_EVENT.backoffSeconds,
+        Math.max(attempts, prepared.requestAttempts),
+      ),
+    };
+  }
   if (prepared.state !== "pending") return { done: true };
+  if (terminalIntent) {
+    return {
+      failed: terminalIntent,
+      definitive: true,
+      intentRedeliveryBackoffSeconds: backoffFor(
+        SYNC_EVENT.backoffSeconds,
+        Math.max(attempts, prepared.requestAttempts),
+      ),
+    };
+  }
   if (prepared.requestAttempts >= SYNC_EVENT.tries) {
     return { failed: "request retry budget exhausted; unresolved identity retained" };
   }
