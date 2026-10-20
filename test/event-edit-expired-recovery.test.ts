@@ -128,7 +128,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({
         error: "Unauthorized",
-        recovery: "/auth/recover?next=%2Fevents",
+        recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
       });
       expect(res.headers.getSetCookie()).toEqual([]);
       expect(await titles()).toEqual(before);
@@ -143,11 +143,18 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     // JSON-only routes never negotiate: a header-less fetch must not follow a
     // 303 to a 200 page and read a dropped write as success.
-    const recoveryBody = { error: "Unauthorized", recovery: "/auth/recover?next=%2Fevents" };
-    const expectJsonRecovery = async (res: Response) => {
+    const keyedRecoveryBody = {
+      error: "Unauthorized",
+      recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
+    };
+    const unkeyedRecoveryBody = {
+      error: "Unauthorized",
+      recovery: "/auth/recover?next=%2Fevents",
+    };
+    const expectJsonRecovery = async (res: Response, expected = keyedRecoveryBody) => {
       expect(res.status).toBe(401);
       expect(res.headers.get("location")).toBeNull();
-      expect(await res.json()).toEqual(recoveryBody);
+      expect(await res.json()).toEqual(expected);
     };
     const rows = async () =>
       (await fixture.db.select().from(events)).map(({ title, status, rsvpOpen }) => ({
@@ -186,7 +193,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         },
         body: new URLSearchParams({ title: "Unsaved edit" }).toString(),
       });
-      await expectJsonRecovery(res);
+      // Unkeyed POST keeps the listing fallback; keyed PATCH returns to the event.
+      await expectJsonRecovery(res, path === "/events" ? unkeyedRecoveryBody : keyedRecoveryBody);
       expect(await rows()).toEqual(before);
       expect(sent).toEqual([]);
     });
@@ -220,7 +228,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
         let jar = mergeCookies("", await req(recovery.recovery));
         expect(jar).not.toContain("Unsaved");
-        const start = await req(`/auth/discord?next=${encodeURIComponent("/events")}`, {
+        const start = await req(`/auth/discord?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`, {
           headers: { cookie: jar },
         });
         jar = mergeCookies(jar, start);
@@ -228,7 +236,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const callback = await req(`/auth/discord/callback?state=${state}&code=fixture`, {
           headers: { cookie: jar },
         });
-        expect(callback.headers.get("location")).toBe("/events");
+        expect(callback.headers.get("location")).toBe(`/e/${EVENT_KEY}`);
         jar = mergeCookies(jar, callback);
         expect(jar.split("; ").find((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toContain(
           "restored",
@@ -241,13 +249,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await titles()).toEqual(["Recovered edit"]);
 
         // The one-shot banner lands on the return page, then is gone.
-        const page = await req("/events", { headers: { cookie: jar } });
+        const page = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
         expect(page.status).toBe(200);
         expect(await page.text()).toContain('data-testid="auth-error"');
         jar = mergeCookies(jar, page);
-        expect(await (await req("/events", { headers: { cookie: jar } })).text()).not.toContain(
-          'data-testid="auth-error"',
-        );
+        expect(
+          await (await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } })).text(),
+        ).not.toContain('data-testid="auth-error"');
       } finally {
         vi.unstubAllGlobals();
       }
