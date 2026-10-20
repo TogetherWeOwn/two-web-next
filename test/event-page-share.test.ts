@@ -227,4 +227,25 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).toContain('data-testid="waitlist-join"');
     expect(html).not.toContain('data-testid="rsvp-going"');
   });
+
+  it.each([
+    ["expanded endsAt only", "2030-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
+    ["negative startsAt only", "-000001-01-10T20:00:00Z", "2030-01-10T22:00:00Z"],
+    ["expanded", "+010000-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
+    ["negative", "-000001-01-10T20:00:00Z", "-000001-01-10T22:00:00Z"],
+  ])(
+    "keeps the page 200 with the other share links for %s-year boundaries",
+    async (_label, startsAt, endsAt) => {
+      // Read-eligible (finite) but not ICS-wire-formattable: the page must
+      // survive by omitting only the Google Calendar deep link.
+      const source = fixture({ startsAt: new Date(startsAt), endsAt: new Date(endsAt) });
+      const response = await source.request();
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('data-testid="event-ics"');
+      expect(html).toContain('data-testid="event-copy-link"');
+      expect(html).not.toContain('data-testid="event-google-calendar"');
+      expect(html).not.toContain("calendar.google.com");
+    },
+  );
 });

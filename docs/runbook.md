@@ -44,8 +44,8 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
 | Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
-| Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
-| Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
+| Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
+| Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
 | `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
@@ -148,11 +148,11 @@ the complete suite on its disposable Postgres service.
 Moderator status is stored on each session at sign-in and read live from that row; role removal does not update existing sessions. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
 
 ```sh
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging --apply
 ```
 
-`DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
+The commands above target staging; first confirm `DATABASE_URL` is the authorized staging database. For an authorized production incident, confirm the production database and replace `--target staging` with `--target production` in both commands. `DATABASE_URL` is supplied through the environment only. Remote non-production URLs require `--target staging` or `--target production`; production-looking URLs require exactly `--target production` and refuse `--target staging`, even on a local host. Local hosts otherwise need no target. The flag is an operator assertion, not environment discovery; do not use the production assertion for a staging operation. Do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
 Bounded waits: the command sets its own session `statement_timeout` (10s) and `lock_timeout` (5s) on its single connection only; global database policy is unchanged. If a target row or table is locked, the run fails bounded with exit 1 and a redacted count-only error; the transaction rolls back, so a timed-out run revokes nothing and the target sessions remain active. Verify with a dry-run to read the active-session count, then retry (re-run) the apply once the lock clears. If timeouts repeat, escalate to the DevOps & Reliability Engineer with the redacted error and the dry-run count; do not retry in a loop and do not revoke by another path.
 
@@ -184,11 +184,11 @@ Bounded waits: the command sets its own session `statement_timeout` (10s) and `l
   3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
      ```sh
-     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
-     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
+     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging --apply
      ```
 
-     `DATABASE_URL` is supplied through the environment only, as in the procedure above.
+     These commands target staging. Confirm the authorized database first; for a production review, replace `--target staging` with `--target production` in both commands. `DATABASE_URL` is supplied through the environment only, as in the procedure above.
   4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
 
@@ -282,12 +282,17 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 
 ## Deploy and record the rollback pointer
 
-The authoritative target is [wrangler.jsonc](../wrangler.jsonc): Worker
-`two-web-next`, custom domain `next.togetherweown.com`, Hyperdrive binding `DB`.
-`two-web-next-staging` is a Hyperdrive resource description, **not** a Worker
-name or a Wrangler environment. There is no `[env.staging]` configuration.
-Do not add `--env staging` or invent a different Worker target. Verify the
-approved account and binding isolation before any remote mutation.
+The staging target is the reviewed Kit config
+[`web/wrangler.staging.jsonc`](../web/wrangler.staging.jsonc): Worker
+`two-web-next`, custom domain `next.togetherweown.com`, Hyperdrive bindings
+`DB` and `BOT_DB`, Tail consumer and worker-first assets. It is distinct from
+the Kit preview config [`web/wrangler.jsonc`](../web/wrangler.jsonc), which is
+never the staging deploy target. The root [wrangler.jsonc](../wrangler.jsonc)
+remains the Hono config and production cutover template. `two-web-next-staging`
+is a Hyperdrive resource description, **not** a Worker name or a Wrangler
+environment. There is no `[env.staging]` configuration. Do not add `--env
+staging` or invent a different Worker target. Verify the approved account and
+binding isolation before any remote mutation.
 
 1. Require independent Code Reviewer approval on the exact head SHA and green
    `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
@@ -306,7 +311,8 @@ approved account and binding isolation before any remote mutation.
    ```
 
    Both staging (`two-web-next`) and production (`two-web-next-production`)
-   declare `version_metadata` bindings (`wrangler.jsonc` top level and
+   declare `version_metadata` bindings (staging in
+   `web/wrangler.staging.jsonc`, production in `wrangler.jsonc`'s
    `env.production`): `GET /up` on `https://next.togetherweown.com/up` and
    on the apex carries `revision: { version_id, commit }` once the live
    Version was uploaded after that binding landed. `version_id` is
@@ -322,17 +328,30 @@ approved account and binding isolation before any remote mutation.
    deployments` wins. Record the production app `revision.version_id` and
    `revision.commit` separately from the Tail Worker version.
 
-3. Normal path: merge to `main` invokes
-   [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
-   GitHub Environment `staging` gate. It installs dependencies, applies
-   migrations to its disposable Postgres, runs `npm run check`, then plans,
+3. Normal path: successful full CI on `main` invokes
+   [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), with the exact CI-verified SHA. The `staging` Environment supplies scoped
+   secrets and has no required reviewers; there is no human approval gate.
+   Full CI includes `npm run check` against its disposable Postgres; the deploy
+   job then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
    against the staging database — the pinned PlanetScale staging branch
    (retired Neon endpoints are refused; `ci/db-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
-   ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
+   ensures `two-sync-event` and `two-internal-action` exist, builds the Kit
+   Worker, deploys the Tail first, deploys
+   `web/wrangler.staging.jsonc`, explicitly detaches the web queue consumers,
+   then deploys the jobs Worker. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
+   The automatic `workflow_run` path always deploys with `hono`, so every route
+   starts and returns to Hono on an ordinary main-CI deploy. To opt into the
+   archive route, dispatch the same workflow from `main` with
+   `kit_route_family=archive` (only `GET /events/past`); choose
+   `kit_route_family=archive-static` to cumulatively add `GET /about` and
+   `GET /faq`. `hono` disables every Kit route family, and missing or
+   unrecognized runtime flags fail closed to Hono. The next automatic main-CI
+   deployment resets the selection to `hono`.
+
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
@@ -358,23 +377,16 @@ approved account and binding isolation before any remote mutation.
    smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
-4. An explicitly authorized manual deployment of the reviewed release uses:
-
-   ```bash
-   # REMOTE MUTATION: approved target and release only; not a test.
-   npm run deploy -- --tag "$(git rev-parse HEAD)"
-   ```
-
-   `--tag` is what lets `/up` name the commit (`revision.commit`); without it
-   the Version is untagged and `commit` is `null`.
-
-   This deploys the current checkout. Do not run it from an unmerged working
-   branch, and do not bypass the Environment gate to clear a blocked CI release.
-   A manual `npm run deploy` does not migrate any database, and neither deploy
-   path ever migrates production. Before a manual deploy of a schema-dependent
-   Worker, run the [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
-   for the matching target; coordinate with both bot and web owners using
-   `docs/db-migrations.md`.
+4. To select a route family explicitly, use Actions → `deploy` → Run workflow
+   on branch `main`, then choose `hono`, `archive`, or `archive-static`.
+   `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
+   Kit build, Tail-first deployment, queue handoff, revision verification and
+   smoke path as the automatic workflow. This is the supported route-selection
+   path; `hono` is the default and disables all Kit routes. The next automatic
+   main-CI deployment resets the selection to `hono`. Do not use local
+   `npm run deploy` or direct `wrangler deploy` for the Kit staging Worker:
+   those commands do not select the reviewed Kit staging config or preserve
+   its exact-SHA workflow gates.
 5. Capture the resulting deployment/version IDs and workflow URL. On staging
    the `Verify deployed revision` step has already proved the live Worker
    reports the commit this job deployed and logged its Version ID (it runs on
@@ -547,12 +559,21 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 is the one-click production rollback: Actions → `rollback-production` → Run
 workflow, branch `main`, `version_id` set to the recorded known-good Worker
 Version ID. It reuses the same request gate
-(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`),
-the same `production` Environment approval (required reviewers, no
-self-review) and the same production-only Cloudflare credentials as a deploy,
-then runs `wrangler rollback <version_id> --name two-web-next-production`
-followed by the same `/up` smoke. The `version_id` input must be a lowercase
-Worker Version UUID and travels inputs → `env:` only, never through
+(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`)
+and the same `production` Environment gate as a deploy. Both preflight and
+the mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
+exactly `true` selects automated approval, requiring the main-only Environment
+branch policy, green exact-SHA CI, and successful exact-SHA staging deploy and
+e2e-staging evidence with executed journeys and staging quality checks.
+An absent, false or otherwise non-`true` value selects reviewer mode, which
+requires reviewers with self-review prevented; a reviewer-less Environment is
+refused. Exact-SHA CI remains required in either mode. The workflow uses the
+same production-only Cloudflare credentials as a deploy, then runs
+`wrangler rollback <version_id> --name two-web-next-production` followed by
+the same `/up` smoke. This approval-mode selection applies only to the Worker
+rollback; it does not change database migration or backup policy. The
+`version_id` input must be a lowercase Worker Version UUID and travels
+inputs → `env:` only, never through
 expression interpolation in a shell block. Before the rollback moves traffic,
 the workflow refuses when the recorded target version's `secret_text`
 bindings lack a required secret name (names only; values are never read, and
@@ -1440,7 +1461,7 @@ below, not its older `/up` row, define these outcomes.
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
 | `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
-| `/join/discord`, `/join/callback` (GET) | A classified DB outage (the throttle runs first on both routes) returns the branded sanitized **503** before any Discord call; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
+| `/join/discord`, `/join/callback` (GET) | A classified DB outage returns the branded sanitized **503** before any Discord call. The throttle detects it on ordinary callbacks and `/join/discord`; non-error oversized callbacks instead use a read-only availability query with zero throttle spend before recovery; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
 | `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |

@@ -3,7 +3,15 @@
 import { dbFor } from "../admin/db";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, notFoundHandler } from "../errors";
-import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import {
+  IcsSequenceRangeError,
+  IcsTimestampRangeError,
+  eventIcs,
+  eventsIcsCollection,
+  eventsRss,
+  isWireInstant,
+  latestWireUpdatedAt,
+} from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
 import {
@@ -41,6 +49,9 @@ async function calendarFeedResponse(
   try {
     return feedResponse(c, build(), headers);
   } catch (error) {
+    if (error instanceof IcsTimestampRangeError) {
+      return c.text("Calendar timestamp unavailable", 503, { "cache-control": "no-store" });
+    }
     if (!(error instanceof IcsSequenceRangeError)) throw error;
     return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
   }
@@ -53,7 +64,13 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
     const rows = await listFeed(db, ["published"]);
-    const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
+    const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
+    if (skippedUpdatedAt > 0) {
+      console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
+        skipped: skippedUpdatedAt,
+      });
+    }
+    const built = latestWireUpdatedAt(rows);
     return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
@@ -119,8 +136,8 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
     // A single-event download has no other rows to protect: a
-    // sequence-poison row answers the honest 503 with no-store (no ETag, no
-    // attachment) instead of an event-less 200 calendar.
+    // sequence- or timestamp-poison row answers the honest 503 with no-store
+    // (no ETag, no attachment) instead of an event-less 200 calendar.
     return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,

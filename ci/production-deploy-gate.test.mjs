@@ -575,9 +575,24 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
   // The post-deploy `release` call (release.yml) is the only job override: it
-  // runs after both gate jobs and needs only contents: write to tag the commit.
+  // needs only Actions read for promotion proof and contents write to tag/release.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
-  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+  const releaseLines = release
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, "").trimEnd())
+    .filter((line) => line.trim());
+  const permissionsAt = releaseLines.indexOf("    permissions:");
+  assert.notEqual(permissionsAt, -1, "release caller must declare its permissions");
+  const permissions = releaseLines.slice(permissionsAt + 1);
+  const nextField = permissions.findIndex((line) => /^ {0,4}\S/.test(line));
+  assert.deepEqual(
+    permissions
+      .slice(0, nextField === -1 ? undefined : nextField)
+      .map((line) => line.trim())
+      .sort(),
+    ["actions: read", "contents: write"],
+    "release caller must grant exactly Actions read and contents write",
+  );
   assert.ok(
     !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
@@ -840,7 +855,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  rollback-production:/m);
-  // Production Environment approval with required reviewers; never cancelled.
+  // Production Environment gate in either approval mode; never cancelled.
   assert.match(workflow, /environment:\n      name: production\n/);
   assert.match(workflow, /cancel-in-progress: false/);
   // Same request gate as a deploy, in both jobs.
@@ -1292,6 +1307,24 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
     assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
   }
 });
+
+for (const job of ["preflight", "rollback-production"]) {
+  test(`rollback ${job} gate receives the repository approval mode and dispatch SHA`, () => {
+    const workflow = readFileSync(
+      new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+      "utf8",
+    );
+    const block = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
+    assert.ok(block, `${job} job must exist`);
+    const gates = block.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    assert.equal(gates.length, 1, `${job} must run the shared gate`);
+    const gate = gates[0].split("\n      - ")[0];
+    assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
+    assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  });
+}
 
 test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
   // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
@@ -1814,13 +1847,62 @@ test("check-migrations CLI keeps automatic promotion blocked on pending entries"
   }
 });
 
-test("check-migrations CLI retries an unreadable live commit, then halts auto and warns manual", () => {
+test("check-migrations CLI refuses unknown-live manual promotion without audited continuation", () => {
   const target = "a".repeat(40);
-  const live = "b".repeat(40);
-  const journals = [
-    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
-    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
-  ];
+  const down = [{ match: "/up", fail: true }];
+  const base = {
+    DEPLOY_SHA: target,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+    MIGRATIONS_APPLIED: "",
+  };
+  // The live commit stays unreadable after every retry: a manual dispatch
+  // must not promote past an unknown live state on a warning alone. The
+  // refusal names the audited continuation that releases it.
+  const refused = spawnGateCli(["--check-migrations"], base, down);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /unknown/i);
+  assert.match(refused.stderr, /migrations_applied=true/);
+  // The workflow renders the boolean input default as the string "false",
+  // so only the exact "true" confirmation releases the refusal.
+  const defaulted = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "false" },
+    down,
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /migrations_applied=true/);
+});
+
+test("check-migrations CLI continues unknown-live manual promotion only with audited confirmation", () => {
+  const target = "a".repeat(40);
+  const continued = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+      MIGRATIONS_APPLIED: "true",
+    },
+    [{ match: "/up", fail: true }],
+  );
+  assert.equal(continued.status, 0);
+  // The continuation is auditable from the log alone: it is a manual
+  // continuation, against an unknown live commit, for this target, on the
+  // operator's named confirmation.
+  assert.match(continued.stdout, /Manual continuation/);
+  assert.match(continued.stdout, /unknown/i);
+  assert.ok(continued.stdout.includes(target));
+  assert.match(continued.stdout, /migrations_applied=true/);
+});
+
+test("check-migrations CLI keeps automatic promotion halted on unknown live", () => {
+  const target = "a".repeat(40);
+  const down = [{ match: "/up", fail: true }];
   const halted = spawnGateCli(
     ["--check-migrations"],
     {
@@ -1830,25 +1912,40 @@ test("check-migrations CLI retries an unreadable live commit, then halts auto an
       GITHUB_EVENT_NAME: "schedule",
       PRODUCTION_ORIGIN: "http://stub.invalid",
     },
-    [{ match: "/up", fail: true }],
+    down,
   );
   assert.equal(halted.status, 1);
   assert.match(halted.stderr, /halting automatic promotion for a later retry/);
-  const warned = spawnGateCli(
-    ["--check-migrations"],
-    {
-      DEPLOY_SHA: target,
-      GITHUB_REPOSITORY: "o/r",
-      GITHUB_TOKEN: "t",
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      PRODUCTION_ORIGIN: "http://stub.invalid",
-    },
-    [{ match: "/up", fail: true }],
-  );
-  assert.equal(warned.status, 0);
-  assert.match(warned.stdout, /migration comparison skipped/);
+  // An operator confirmation must never release an automatic run: the
+  // audited continuation is manual-only, automatic runs wait for a retry.
+  for (const event of ["workflow_run", "schedule"]) {
+    const confirmed = spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        GITHUB_REPOSITORY: "o/r",
+        GITHUB_TOKEN: "t",
+        GITHUB_EVENT_NAME: event,
+        PRODUCTION_ORIGIN: "http://stub.invalid",
+        MIGRATIONS_APPLIED: "true",
+      },
+      down,
+    );
+    assert.equal(confirmed.status, 1, event);
+    assert.match(confirmed.stderr, /halting automatic promotion for a later retry/);
+  }
+});
+
+test("check-migrations CLI recovers when an unreadable live commit succeeds on retry", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
   // A flapping /up that recovers on the third read proceeds to the journal
-  // comparison: a single-read implementation would warn-skip here instead.
+  // comparison: a single-read implementation would treat live as unknown
+  // and refuse here instead.
   const recovered = spawnGateCli(
     ["--check-migrations"],
     {

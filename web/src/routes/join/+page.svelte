@@ -9,10 +9,8 @@ import type { PageProps } from "./$types";
 // importing the Hono screen would bundle the JSX runtime into the Kit worker.
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
-const { inviteUrl, widgetUrl, widgetSnapshot, next, appUrl, joinResult } = $derived(data);
-const oneClickHref = $derived(
-  next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord",
-);
+// The server load builds /join/discord from the sanitized query inputs.
+const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult } = $derived(data);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
 const island = '<script src="/islands/join-widget.js" defer></' + "script>";

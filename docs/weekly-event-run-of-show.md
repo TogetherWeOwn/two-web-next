@@ -1,6 +1,6 @@
 # Weekly TWO Community event run-of-show
 
-Use this as a repeatable 55-minute session template, plus preparation and closeout, for the TWO Community goal's target of one weekly event held for four consecutive weeks. This is an operating checklist for the already-authorized event owner/operator; it does not grant permission, change policy, or claim a goal result. Use the goal's existing reporting-week and metric definitions. This guide does not define an attendance-counting rule.
+Use this as a repeatable 55-minute session template, plus preparation and closeout, for the TWO Community goal's target of one weekly event held for four consecutive weeks. This is an operating checklist for the already-authorized event owner/operator; it does not grant permission, change policy, or claim a goal result. Use the goal's existing metric definitions and the [weekly reporting convention](community-participation-metrics.md#weekly-reporting-convention) adopted 2026-10-20. The latter settles reporting periods only; it changes no goal target or policy. This guide does not define an attendance-counting rule.
 
 A scheduled or published event is not proof that a session happened. An RSVP is not attendance evidence. Record a session as **unverified** unless the closeout has evidence that it actually took place; do not claim a four-week run is complete while any required week is missing, cancelled, or unverified under the approved metric definition.
 
@@ -67,7 +67,7 @@ If a new spend, monetization, production change, or public announcement is neede
 
 The recorder gives the lead a short, non-sensitive record by T+65 minutes:
 
-- Reporting-week bucket as defined by the existing goal scorecard; event key or event-page reference.
+- ISO reporting-week label `YYYY-Www` and exact UTC `[start, end)` interval from the [scorecard](community-weekly-scorecard.md#reporting-period), assigned by the event's actual start instant in UTC; event key or event-page reference. Note: “counted by UTC instant, displayed in host zone”.
 - Scheduled start/end and timezone, plus actual start/end only when observed.
 - Event-record state as shown by the existing interface (for example, published or cancelled), kept separate from whether the session's occurrence was evidenced.
 - Occurrence evidence reference and timestamp, such as a contemporaneous recorder/host closeout note that confirms the session began and ended. Do not use the event listing, publish status, agenda, or RSVP list alone as proof.

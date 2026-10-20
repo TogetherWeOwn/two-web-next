@@ -203,8 +203,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       send: async (m: Extract<QueueMessage, { kind: "sync-event" }>) => void sent.push(m),
     },
   } as unknown as Env;
-  // Sessions rotate on every authenticated view (a replayed cookie is a guest), so each
-  // request mints a fresh cookie.
+  // Independent sessions keep these requests isolated from page rotation and
+  // its bounded predecessor grace.
   const MOD = "mod" as const;
   const MEMBER = "member" as const;
   const fresh = (who: typeof MOD | typeof MEMBER) =>

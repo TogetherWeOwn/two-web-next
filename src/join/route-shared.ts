@@ -111,6 +111,9 @@ export type JoinPageProps = {
   widgetUrl: string | null;
   widgetSnapshot?: import("../discord-widget").DiscordWidgetSnapshot | null;
   next?: string | null;
+  // Already passed sanitizeSource. Absent means the one-click link carries no
+  // attribution, the same as a request that arrived without ?source=.
+  source?: string | null;
   appUrl: string;
 };
 export type RecoveryProps = {

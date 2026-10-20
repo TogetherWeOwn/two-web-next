@@ -658,6 +658,32 @@ it("member event show fails closed to the outage envelope during an outage", asy
   }
 });
 
+it.each(["code", "state"])(
+  "oversized join %s keeps the classified outage envelope before recovery",
+  async (param) => {
+    const query = new URLSearchParams({ code: "local-code", state: "local-state" });
+    query.set(param, "x".repeat(8192));
+    const res = await testApp.request(`/join/callback?${query}`, {}, outageEnv());
+    await assertResponse(res.clone(), {
+      method: "GET",
+      route: "/join/callback",
+      status: 503,
+      format: "html",
+    });
+    expect(await res.text()).not.toContain("Join link expired");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    // A constructed postgres client is lazy: the query, not construction,
+    // must observe the refused socket before the recovery can return.
+    expect(clients).toHaveLength(1);
+    expect(console.warn).not.toHaveBeenCalledWith(
+      "discord token exchange failed on the join journey",
+      expect.objectContaining({ exception: "OversizedOAuthParams" }),
+    );
+  },
+);
+
 it("valid login callback fails closed at admission, before any Discord call", async () => {
   const state = "local-outage-oauth-state";
   const cookie = (

@@ -11,6 +11,10 @@
   var initial = snapshot();
   // A rejected Save re-renders the draft, not a new persisted baseline.
   var draft = editor.hasAttribute("data-event-draft");
+  // One synchronous starting point for a rejected document, not a pageshow
+  // reset or an async validation result that could overwrite a newer draft.
+  var summary = draft && document.querySelector("[data-admin-validation-summary]");
+  if (summary) summary.focus();
   var saving = false;
   // An expired session vetoes the probe reload (the unsaved draft only exists
   // in this document). Departure protection stays armed; only a normal,

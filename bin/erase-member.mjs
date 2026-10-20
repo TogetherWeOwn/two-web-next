@@ -2,7 +2,8 @@
 // Operator member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): for ONE Discord id, remove that
 // member's rows in one transaction across users, profiles, rsvps,
-// web_sessions (signs them out everywhere) and join_attempts.
+// web_sessions (signs them out everywhere), web_session_grace (retired
+// predecessor records) and join_attempts.
 //
 //   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]
 //

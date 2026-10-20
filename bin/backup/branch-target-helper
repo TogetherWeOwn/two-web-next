@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Resolve the backup prefix without allowing a declared target to be mislabeled."""
+
+import sys
+
+
+def main():
+    if len(sys.argv) != 3:
+        print("db-backup: branch-target helper requires target and branch", file=sys.stderr)
+        return 2
+    target, branch = sys.argv[1:]
+    # Existing local callers (including synthetic restore proofs) may omit the
+    # declaration. A declared target is staging or production, never inferred
+    # from DATABASE_URL, which may contain credentials.
+    if target and (target not in ("staging", "production") or
+                   (branch and branch != target and not branch.startswith("test-"))):
+        print(f"db-backup: refusing branch '{branch}' for target '{target}'; "
+              "use an empty branch, the target name, or test-*", file=sys.stderr)
+        return 1
+    print(branch or target or "staging")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

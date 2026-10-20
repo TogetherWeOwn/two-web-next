@@ -51,21 +51,45 @@ vi.mock("postgres", () => {
     const record = { ended: false };
     state.clients.push(record);
     const fullBatch = Array.from({ length: PRUNE_DELETE_BATCH_SIZE }, () => ({}));
-    const tag = async (
-      parts: TemplateStringsArray,
-      ..._values: unknown[]
-    ): Promise<Record<string, unknown>[]> => {
-      // The advisory-lock probe succeeds; every prune delete fills its batch,
-      // so each of the seven drains always hits the per-table cap.
-      if (parts[0]?.includes("pg_try_advisory_xact_lock")) return [{ got: true }];
-      return fullBatch;
-    };
-    const client = Object.assign(tag, {
+    type Settings = { lock: string; statement: string };
+    const makeTag =
+      (settings: Settings) =>
+      async (
+        parts: TemplateStringsArray,
+        ...values: unknown[]
+      ): Promise<Record<string, unknown>[]> => {
+        const text = parts.join(" ").toLowerCase();
+        if (text.includes("pg_try_advisory_xact_lock")) return [{ got: true }];
+        if (text.includes("current_setting(")) return [{ ...settings }];
+        if (text.includes("set_config(")) {
+          settings.lock = values[0] as string;
+          settings.statement = values[1] as string;
+          return [{ set_config: settings.statement }];
+        }
+        // Only deletes fill a batch; settings reads are not prune results.
+        return text.trimStart().startsWith("delete from ") ? fullBatch : [];
+      };
+    // Table savepoints are not commits. Give each scope its own function and
+    // roll back its local settings on failure without poisoning the flight.
+    const makeTransaction = (settings: Settings) =>
+      Object.assign(makeTag(settings), {
+        savepoint: async (...args: unknown[]): Promise<unknown> => {
+          const run = args.find((arg) => typeof arg === "function") as (
+            tx: unknown,
+          ) => Promise<unknown>;
+          const local = { ...settings };
+          const out = await run(makeTransaction(local));
+          Object.assign(settings, local);
+          return out;
+        },
+      });
+    const settings: Settings = { lock: "0", statement: "0" };
+    const client = Object.assign(makeTag(settings), {
       begin: async (...args: unknown[]) => {
         const run = args.find((arg) => typeof arg === "function") as (
           tx: unknown,
         ) => Promise<unknown>;
-        const out = await run(client);
+        const out = await run(makeTransaction({ ...settings }));
         // Commit happens after the body resolves: a capped drain followed by
         // a failing commit is exactly the masking scenario under test.
         if (state.throwOnCommit) throw new state.CommitFailedError();

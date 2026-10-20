@@ -87,10 +87,23 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
+  // staging APP_URL activates a fail-closed route manifest: unset or malformed
+  // values keep archive and static families on Hono. Preview fixture workers
+  // and production do not set these flags.
+  KIT_ROUTE_ARCHIVE?: string;
+  KIT_ROUTE_STATIC?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.
   WEBMCP_PILOT_ENABLED?: string;
+  // CI loopback workers only (e2e/wrangler.jsonc and the generated Kit
+  // fixture in ci/kit-worker-dev.mjs set it, never a deployed config):
+  // overrides the shared public-read admission budget for those workers,
+  // whose sequential suites present one `anon` client key off-edge. Positive
+  // integers only; unset or anything else keeps the production 60
+  // (src/events/routes-shared.ts publicReadBudget).
+  E2E_PUBLIC_READ_BUDGET?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.

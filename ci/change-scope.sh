@@ -6,9 +6,14 @@
 # executes or reads; anything else, or any doubt, prints `docs_only=false` and
 # the full suite runs. Also prints `skip_e2e=true` when no changed path can
 # alter what a browser or the staging Worker observes — docs prose plus the
-# `test/` unit tree, which the journeys never execute (Playwright `testDir` is
-# `./e2e`, the deploy smoke drives `bin/`); every other path prints
-# `skip_e2e=false`. The `skip_e2e` verdict is pure path matching on purpose: a
+# `test/` unit tree the journeys never execute (Playwright `testDir` is
+# `./e2e`, the deploy smoke drives `bin/`), except `test/` helpers the `e2e/`
+# tree imports, directly or through other test helpers: changing one runs
+# the smoke. The imported set is derived from the checked-out tree, never a
+# hardcoded list. Relative path literals are conservative dependencies; an
+# import-like comment may run extra smoke. Every other path prints
+# `skip_e2e=false`. The
+# `skip_e2e` verdict is pure path matching on purpose: a
 # doc that a gate reads (docs/config.md) is an input to `check` but proves
 # nothing about browser journeys, so it still skips them. `check` ignores
 # `skip_e2e`; only the e2e workflows consume it.
@@ -37,6 +42,34 @@ expected=$2
 # alter what a browser or the Worker observes. It must not share the docs_only
 # early exit below — a `test/` path trips that exit while still skipping e2e.
 # A truncated list proves nothing for either verdict, so it fails both closed.
+#
+# Cache the derived dependency closure once per invocation, not per changed
+# path. The Node helper uses only built-ins (scope runs before npm ci) and
+# handles source extensions, directory indexes and transitive helper cycles.
+# Missing e2e/ means no journeys; search/read/resolution errors run the smoke.
+e2e_helpers_loaded=false
+e2e_helpers_failed=false
+e2e_helpers=
+is_e2e_imported_helper() {
+  [ -d e2e ] || return 1
+  local helper=$1
+  case $helper in
+    *[!A-Za-z0-9_./-]*) return 0 ;;
+  esac
+  if [ "$e2e_helpers_loaded" = false ]; then
+    e2e_helpers_loaded=true
+    local script_dir
+    script_dir=$(dirname -- "${BASH_SOURCE[0]}")
+    if ! e2e_helpers=$(node "$script_dir/e2e-test-helpers.mjs" 2>/dev/null); then
+      e2e_helpers_failed=true
+    fi
+  fi
+  [ "$e2e_helpers_failed" = false ] || return 0
+  case $'\n'"$e2e_helpers"$'\n' in
+    *$'\n'"$helper"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 skip_e2e=false
 if [ -s "$files" ]; then
   listed_e2e=$(wc -l < "$files")
@@ -47,7 +80,12 @@ if [ -s "$files" ]; then
       # observing it, and moving code out of test/ starts observing it.
       for path in "$name" ${previous:+"$previous"}; do
         case "$path" in
-          docs/*|test/*|tier0/*) ;;
+          docs/*|tier0/*) ;;
+          test/*)
+            if is_e2e_imported_helper "$path"; then
+              skip_e2e=false
+            fi
+            ;;
           # Markdown elsewhere (content/, src/, fixtures outside test/) may
           # be shipped or read, so only root-level prose skips.
           */*) skip_e2e=false ;;
@@ -80,7 +118,7 @@ if [ -s "$files" ]; then
           package.json|web/package.json|\
           biome.json|tsconfig.json|ci/tsconfig.json|e2e/tsconfig.json|\
           vitest.config.ts|playwright.config.ts|playwright.staging.config.ts|\
-          .github/*|ci/change-scope.sh)
+          .github/*|ci/change-scope.sh|ci/e2e-test-helpers.mjs)
             full=true
             ;;
           # Worker deploy surface: dispatch configs, the Tail worker and the
@@ -94,13 +132,13 @@ if [ -s "$files" ]; then
             worker=true
             ;;
           # Database: migrations, the journal lock, the drizzle config and the
-          # migration tooling under ci/ (history and numbering checks, the
-          # Neon migrate script and its selftest). Observed by `check` (migrate,
+          # migration tooling under ci/ (history, numbering and snapshot checks,
+          # the Neon migrate script and its selftest). Observed by `check` (migrate,
           # history checks, numbering) and `a11y` (the fixtures run the real
           # migrations), not by the perf jobs. Listed before the `ci/*` app
           # arm below, which would otherwise claim these paths.
           drizzle/*|migrations.lock|drizzle.config.ts|\
-          ci/check-migration-*|ci/db-migrate*)
+          ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*)
             db=true
             ;;
           # App: everything the served worker, its assets, the test suites

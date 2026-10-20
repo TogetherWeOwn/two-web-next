@@ -62,6 +62,8 @@ jobs:
         run: npm run standards -- --origin "$ORIGIN"
       - name: Quality summary (what to fix)
         if: ${{ !cancelled() }}
+        env:
+          QUALITY_ORIGIN: ${{ env.ORIGIN }}
         run: |
           rc=0
           node ci/lighthouse-summary.mjs >> "$GITHUB_STEP_SUMMARY" || rc=$?

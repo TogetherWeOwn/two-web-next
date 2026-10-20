@@ -59,8 +59,8 @@ function mockDiscord({ joinStatus = 201, memberRoles = [] }: DiscordStubOpts = {
 }
 
 /** Fresh memory store + env carrying it, per test. No cross-test sessions. */
-function isolated() {
-  const store = createMemorySessionStore();
+function isolated(clock: () => number = Date.now) {
+  const store = createMemorySessionStore(clock);
   const e = { ...env, SESSION_STORE: store } as Env;
   return { store, env: e };
 }
@@ -222,8 +222,9 @@ describe("DB-backed sessions and rotation", () => {
     },
   );
 
-  it("rotates the session id on every authenticated view; the old cookie becomes a guest", async () => {
-    const { store, env: e } = isolated();
+  it("rotates active views but gives the predecessor only a fixed 10-second grace", async () => {
+    let now = Date.now();
+    const { store, env: e } = isolated(() => now);
     mockDiscord();
     const { state, cookie } = await startSignIn(e);
     const first = cookiesFrom(await signIn(e, state, cookie));
@@ -233,9 +234,18 @@ describe("DB-backed sessions and rotation", () => {
     const second = cookiesFrom(view1);
     expect(second).not.toBe(first);
 
-    // Replayed first cookie: the old row is gone, so this is a guest.
+    // The immediate predecessor authenticates without rotating or renewing grace.
     const replay = await app.request("/", { headers: { cookie: first } }, e);
-    expect(await replay.text()).toContain("Sign in with Discord");
+    expect(await replay.text()).toContain("Rick");
+    expect(replay.headers.getSetCookie()).toHaveLength(0);
+    now += 9999;
+    const withinGrace = await app.request("/", { headers: { cookie: first } }, e);
+    expect(await withinGrace.text()).toContain("Rick");
+    expect(withinGrace.headers.getSetCookie()).toHaveLength(0);
+    now += 1;
+    const expired = await app.request("/", { headers: { cookie: first } }, e);
+    expect(await expired.text()).toContain("Sign in with Discord");
+    expect(expired.headers.getSetCookie()).toHaveLength(0);
 
     // Fresh cookie keeps working.
     const view2 = await app.request("/", { headers: { cookie: second } }, e);
@@ -425,9 +435,8 @@ describe("staging-only QA seam", () => {
           .split(";")[0]!
           .split("=")[1]!,
       );
-      // QA login mints the row; the first authenticated view rotates it, so the
-      // original bearer hash resolves to null afterwards. Capture the flags from
-      // the rotated row via the fresh cookie instead.
+      // QA login mints the row; the first authenticated view rotates it.
+      // Capture flags from the active successor rather than its grace predecessor.
       const rotatedCookie = cookiesFrom(home);
       const rotatedSigned = decodeURIComponent(
         home.headers

@@ -195,7 +195,7 @@ describe.skipIf(!process.env.DATABASE_URL)("inner limiter prune (test database)"
       connection: { search_path: fixture.schemaName },
       onnotice: () => {},
     });
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let call: Promise<unknown> | undefined;
     try {
       await holder.unsafe("BEGIN");
@@ -204,20 +204,29 @@ describe.skipIf(!process.env.DATABASE_URL)("inner limiter prune (test database)"
       call = rateLimit(sql, cfg(), g, "read");
       const settled = await Promise.race([
         call.then(() => "call" as const),
-        sleep(2500).then(() => "timeout" as const),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), 2500);
+        }),
       ]);
-      // The prune skips the locked row (left for a later pass) instead of
-      // waiting on it: admission answers while the holder still holds.
+      // No SKIP LOCKED on this table: lock_timeout defers the entire batch,
+      // including the two unlocked rows. Admission already committed.
       expect(settled).toBe("call");
       expect(await call).toBeNull();
       expect(await bucketCount(`read:${g.id}`)).toBe(1);
-      expect(await bucketCount("prune:stale-free")).toBe(0);
+      expect(await bucketCount("service-read")).toBe(1);
+      expect(await bucketCount("prune:stale-free")).toBe(2);
       expect(await bucketCount("prune:stale-locked")).toBe(1);
     } finally {
+      if (timer) clearTimeout(timer);
       await holder.unsafe("ROLLBACK");
       await holder.end();
       // Let a blocked call settle after the lock release so no work dangles.
       await call?.catch(() => null);
     }
+    // Recovery is a real later admission pass, not a test-side DELETE.
+    expect(await rateLimit(sql, cfg(), g, "read")).toBeNull();
+    expect(await expiredCount()).toBe(0);
+    expect(await bucketCount(`read:${g.id}`)).toBe(2);
+    expect(await bucketCount("service-read")).toBe(2);
   });
 });

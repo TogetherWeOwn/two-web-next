@@ -16,6 +16,7 @@ import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import { declareMemberResult, keyedMemberRead, nonSensitiveRead } from "../member-reads";
+import { boundInventoryRead } from "./store-shared";
 
 /** config/join.php retention: attempts older than this are pruned (W13 cron). Canonical value lives in jobs/constants (legacy parity pin). */
 export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
@@ -192,27 +193,35 @@ export async function listActivityLog(
     causer: opts.causer,
     page: String(opts.page ?? 1),
   });
-  const conds: SQL[] = [];
-  if (parsed.subject) {
-    const term = `%${escapeLikeTerm(parsed.subject)}%`;
-    conds.push(
-      or(
-        ilike(activityLog.subjectType, term),
-        ilike(activityLog.subjectId, term),
-        ilike(activityLog.description, term),
-      )!,
+  // One transaction behind the shared transaction-local lock/statement
+  // bound, so a stalled table cancels server-side and the caller refuses
+  // only after the transaction settles. Causers are declared from the
+  // retrieved rows after the transaction commits, never from a refusal.
+  const rows = await db.transaction(async (tx) => {
+    await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    const conds: SQL[] = [];
+    if (parsed.subject) {
+      const term = `%${escapeLikeTerm(parsed.subject)}%`;
+      conds.push(
+        or(
+          ilike(activityLog.subjectType, term),
+          ilike(activityLog.subjectId, term),
+          ilike(activityLog.description, term),
+        )!,
+      );
+    }
+    if (parsed.causer)
+      conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
+    return nonSensitiveRead("activity-log", () =>
+      tx
+        .select(activityLogColumns)
+        .from(activityLog)
+        .where(and(...conds))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
+        .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
     );
-  }
-  if (parsed.causer) conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
-  const rows = await nonSensitiveRead("activity-log", () =>
-    db
-      .select(activityLogColumns)
-      .from(activityLog)
-      .where(and(...conds))
-      .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
-      .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
-      .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
-  );
+  });
   // Only well-formed snowflakes become subjects; nulls (cron) and malformed
   // values never reach the access log as invented members.
   declareMemberResult(
