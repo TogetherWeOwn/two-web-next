@@ -463,6 +463,13 @@ export interface HookDispatchDeps {
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
   // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
   authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
+  // Optional sliding-session renewal for the native Kit event detail. Runs
+  // only after the member-read boundary releases a successful GET (see
+  // releasedEventDetailRenewsSession): a refused, failed, throttled or
+  // redirected read never reaches it, so the bearer stays live for the
+  // retry. Absent by default: without it the dispatch behaves exactly as
+  // before.
+  eventDetailRotationFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -642,6 +649,32 @@ function releasedProfileConsumesJoinFlash(
   return flash === "added" || flash === "already_member";
 }
 
+// Sliding renewal for the native Kit event detail: the post-release twin of
+// Hono's readSession rotation (src/index.tsx re-stamps the 120-minute window
+// on every authenticated page view). Only a released successful HTML GET with
+// an authenticated bridge decision renews: the 200 page and the draft 403
+// (Hono reads the session before the draft check, so it rotates there too).
+// Redirects, 404s, the viewer-independent 410, throttles and outages return
+// in Hono before any session read, so they never renew here either. The
+// attendees-live fragment is excluded like Hono's non-rotating fragment read
+// (src/events/routes-detail.tsx): a rotating fragment racing the reload would
+// leave exactly one winner and render the loser as a guest. Not in the
+// loader: that would rotate before the audit can refuse, stranding the
+// session when the refusal throws the rendered response away.
+function releasedEventDetailRenewsSession(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/e/:key") return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200 && response.status !== 403) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  if (event.request.headers.get("x-two-island") === "attendees-live") return false;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  return locals?.status === "authenticated";
+}
+
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
 // renderer runs, decided before resolve and before any auth/body read. A
 // resolve() failure propagates and is never replayed through Hono. The
@@ -776,6 +809,30 @@ export async function dispatchHookRequest(
       }
     } catch (err) {
       console.warn("kit auth-status probe unavailable; rendering without probe cookie.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
+  // Sliding renewal for the released Kit event detail, at the same
+  // post-response position as the probe append above. A rotation that loses
+  // its race resolves to no cookie (the next read retries with a live
+  // bearer); a rotation store failure warns and likewise renews nothing —
+  // the already-rendered member page still stands, and the old row stays
+  // live because rotate is one atomic statement.
+  if (deps.eventDetailRotationFor && releasedEventDetailRenewsSession(route, event, response)) {
+    try {
+      const cookie = await deps.eventDetailRotationFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
