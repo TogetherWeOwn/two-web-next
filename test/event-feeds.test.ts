@@ -143,6 +143,18 @@ describe("feed builders (byte fixtures)", () => {
     );
   });
 
+  it("keeps purpose out of legacy calendar and RSS exports", () => {
+    const purpose = "Invite-only strategy notes";
+    const event = row({ purpose });
+    const exports = [
+      eventIcs(event, APP_URL),
+      eventsIcsCollection([event], APP_URL),
+      eventsRss([event], APP_URL, new Date("2026-07-01T12:00:00Z")),
+    ];
+    for (const output of exports) expect(output).not.toContain(purpose);
+    expect(googleCalendarUrl(event)).toBe(googleCalendarUrl(row()));
+  });
+
   it("Google Calendar link is RFC3986-encoded UTC", () => {
     expect(googleCalendarUrl(row())).toBe(
       "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Friday%20night%20Helldivers&dates=20260715T180000Z%2F20260715T200000Z&details=Bring%20stims.&location=Voice%3A%20General",
