@@ -144,22 +144,32 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         const statusKey = await resolved.statusHash(tokenHash);
         if (statusKey) {
           // Slide while the row is live, before rendering/audit can cross its expiry.
-          if (!(await resolved.renew(tokenHash, expiresAt))) return bounceToLogin(c);
-          attachStatus = await prepareAuthStatus(c, resolved, tokenHash, statusKey);
-          // Sign before the dashboard deadline; the post-handler read gates attachment.
-          const sessionCookie = await generateSignedCookie(
-            SESSION_COOKIE,
-            token,
-            c.env.SESSION_SECRET,
-            {
-              path: "/",
-              secure: true,
-              httpOnly: true,
-              sameSite: "Lax",
-              maxAge: SESSION_TTL_SECONDS,
-            },
-          );
-          renewedSession = { store: resolved, tokenHash, sessionCookie };
+          if (!(await resolved.renew(tokenHash, expiresAt))) {
+            // Rotation may have won between statusHash and renew: re-read
+            // once, mirroring readSession's lost-race fallback. A grace-valid
+            // moderator serves without renewal or cookies (a thrown re-read
+            // fails closed below); revoked/expired still bounces.
+            const graceRow = await resolved.get(tokenHash);
+            if (!graceRow) return bounceToLogin(c);
+            if (graceRow.moderator) actor = { id: graceRow.userId, username: graceRow.username };
+            else actor = null;
+          } else {
+            attachStatus = await prepareAuthStatus(c, resolved, tokenHash, statusKey);
+            // Sign before the dashboard deadline; the post-handler read gates attachment.
+            const sessionCookie = await generateSignedCookie(
+              SESSION_COOKIE,
+              token,
+              c.env.SESSION_SECRET,
+              {
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "Lax",
+                maxAge: SESSION_TTL_SECONDS,
+              },
+            );
+            renewedSession = { store: resolved, tokenHash, sessionCookie };
+          }
         }
       }
     } catch (err) {

@@ -71,29 +71,38 @@ export function memberGate(deps: ProfileDeps) {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
       const tokenHash = await hashToken(token);
-      const row = await sessions.get(tokenHash);
+      let row = await sessions.get(tokenHash);
       if (row) {
         if (row.member && c.req.method === "GET") {
           // get() also admits short predecessor grace; only a current bearer
           // has a status key and can renew. Grace reads never refresh cookies.
           const statusKey = await sessions.statusHash(tokenHash);
           if (statusKey) {
-            if (!(await sessions.renew(tokenHash, expiresAt))) return bounceToLogin(c);
-            const attachStatus = await prepareAuthStatus(c, sessions, tokenHash, statusKey);
-            // Sign before the route's read deadline; attach only after revalidating below.
-            const sessionCookie = await generateSignedCookie(
-              SESSION_COOKIE,
-              token,
-              c.env.SESSION_SECRET,
-              {
-                path: "/",
-                secure: true,
-                httpOnly: true,
-                sameSite: "Lax",
-                maxAge: SESSION_TTL_SECONDS,
-              },
-            );
-            renewedSession = { sessions, tokenHash, sessionCookie, attachStatus };
+            if (!(await sessions.renew(tokenHash, expiresAt))) {
+              // Rotation may have won between statusHash and renew: re-read
+              // once, mirroring readSession's lost-race fallback. A
+              // grace-valid bearer serves without renewal or cookies (a thrown
+              // re-read fails closed below); revoked/expired still bounces.
+              const graceRow = await sessions.get(tokenHash);
+              if (!graceRow) return bounceToLogin(c);
+              row = graceRow;
+            } else {
+              const attachStatus = await prepareAuthStatus(c, sessions, tokenHash, statusKey);
+              // Sign before the route's read deadline; attach only after revalidating below.
+              const sessionCookie = await generateSignedCookie(
+                SESSION_COOKIE,
+                token,
+                c.env.SESSION_SECRET,
+                {
+                  path: "/",
+                  secure: true,
+                  httpOnly: true,
+                  sameSite: "Lax",
+                  maxAge: SESSION_TTL_SECONDS,
+                },
+              );
+              renewedSession = { sessions, tokenHash, sessionCookie, attachStatus };
+            }
           }
         }
         viewer = {

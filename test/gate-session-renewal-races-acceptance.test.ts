@@ -330,6 +330,158 @@ describe.each(GATES)("$name gate session renewal races", (gate) => {
     expect(body).not.toContain(marker);
     expect(body).not.toContain(gate.viewer.userId);
     expect(sessionCookies(response)).toHaveLength(0);
+    expect(await realStore.get(tokenHash)).toBeNull();
+    expect(await realStore.statusHash(tokenHash)).toBeNull();
+  });
+
+  it.each([
+    { bound: "fixed grace deadline", requestAfter: 60_000, window: GRACE_MS },
+    { bound: "original expiry", requestAfter: TTL_MS - 5000, window: 5000 },
+  ])(
+    "preserves grace when rotation wins before renewal without extending its $bound",
+    async ({ requestAfter, window }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(START);
+      const realStore = createMemorySessionStore(() => Date.now());
+      const { cookie, tokenHash: oldHash } = await sessionFor(realStore, gate.viewer);
+      const originalExpiry = START + TTL_MS;
+      expect(await realStore.statusHash(oldHash)).toBe(oldHash);
+      expect(await realStore.get(oldHash)).toEqual(gate.viewer);
+
+      const requestTime = START + requestAfter;
+      vi.setSystemTime(requestTime);
+      const successorHash = await hashToken(newSessionToken());
+      const successorExpiry = requestTime + TTL_MS;
+      let rotated = false;
+      let renewResult: boolean | null = null;
+      const renew = vi.fn(async (hash: string, expiresAt: Date) => {
+        rotated = await realStore.rotate(oldHash, {
+          ...gate.viewer,
+          tokenHash: successorHash,
+          expiresAt: new Date(successorExpiry),
+        });
+        renewResult = await realStore.renew(hash, expiresAt);
+        return renewResult;
+      });
+      const store: SessionStore = { ...realStore, renew };
+      const rotateSpy = vi.spyOn(store, "rotate");
+      const replaceSpy = vi.spyOn(store, "replace");
+      const createSpy = vi.spyOn(store, "create");
+
+      const renders: string[] = [];
+      const marker = `protected-${gate.name}-rotation-before-renew`;
+      const app = protectedApp(gate, store, async (id) => {
+        renders.push(id);
+        return `<p>${marker}:${id}</p>`;
+      });
+
+      const response = await app.request(gate.path, { headers: { cookie } }, env);
+      const body = await response.text();
+
+      expect(renew).toHaveBeenCalledTimes(1);
+      expect(renew).toHaveBeenCalledWith(oldHash, new Date(requestTime + TTL_MS));
+      expect(rotated).toBe(true);
+      expect(renewResult).toBe(false);
+      expect(await renew.mock.results[0]!.value).toBe(false);
+
+      expect(response.status).toBe(200);
+      expect(body).toContain(`${marker}:${gate.viewer.userId}`);
+      expect(renders).toEqual([gate.viewer.userId]);
+      expect(response.headers.get("location")).toBeNull();
+      expect(response.headers.getSetCookie()).toHaveLength(0);
+      expect(sessionCookies(response)).toHaveLength(0);
+      expect(response.headers.get("cache-control") ?? "").toMatch(/private/);
+      expect(response.headers.get("cache-control") ?? "").toMatch(/(?:^|,\s*)no-store(?:,|$)/);
+
+      expect(rotateSpy).not.toHaveBeenCalled();
+      expect(replaceSpy).not.toHaveBeenCalled();
+      expect(createSpy).not.toHaveBeenCalled();
+
+      expect(await realStore.statusHash(oldHash)).toBeNull();
+      expect(await realStore.get(oldHash)).toEqual(gate.viewer);
+      expect(await realStore.statusHash(successorHash)).toBe(oldHash);
+      expect(await realStore.get(successorHash)).toEqual(gate.viewer);
+
+      // A second grace read just before the ORIGINAL bound detects sliding grace.
+      vi.setSystemTime(requestTime + window - 1);
+      expect(await realStore.get(oldHash)).toEqual(gate.viewer);
+      const second = await app.request(gate.path, { headers: { cookie } }, env);
+      const secondBody = await second.text();
+      expect(second.status).toBe(200);
+      expect(secondBody).toContain(`${marker}:${gate.viewer.userId}`);
+      expect(renders).toEqual([gate.viewer.userId, gate.viewer.userId]);
+      expect(second.headers.get("location")).toBeNull();
+      expect(second.headers.getSetCookie()).toHaveLength(0);
+      expect(renew).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(requestTime + window);
+      expect(await realStore.get(oldHash), "original bound is exclusive").toBeNull();
+      const refused = await app.request(gate.path, { headers: { cookie } }, env);
+      expect(refused.status).toBe(302);
+      expect(refused.headers.get("location")).toBe("/auth/discord");
+      expect(await refused.text()).not.toContain(marker);
+      expect(sessionCookies(refused)).toHaveLength(0);
+      expect(renders).toEqual([gate.viewer.userId, gate.viewer.userId]);
+      expect(renew).toHaveBeenCalledTimes(1);
+
+      // The losing renewal must not extend the winner's lineage.
+      expect(originalExpiry).toBe(START + TTL_MS);
+      vi.setSystemTime(successorExpiry - 1);
+      expect(await realStore.get(successorHash)).toEqual(gate.viewer);
+      vi.setSystemTime(successorExpiry);
+      expect(await realStore.get(successorHash)).toBeNull();
+    },
+  );
+
+  it("returns 503 without contents when the renewal fallback re-read fails", async () => {
+    const realStore = createMemorySessionStore();
+    const { cookie, tokenHash: oldHash } = await sessionFor(realStore, gate.viewer);
+    expect(await realStore.statusHash(oldHash)).not.toBeNull();
+    const successorHash = await hashToken(newSessionToken());
+    const detail = `private-${gate.name}-renewal-fallback-error`;
+    let getCalls = 0;
+    let renewCalls = 0;
+    let rotated = false;
+    const store: SessionStore = {
+      ...realStore,
+      get: async (hash) => {
+        getCalls++;
+        if (getCalls === 1) return realStore.get(hash);
+        throw new Error(detail);
+      },
+      renew: async (hash, expiresAt) => {
+        renewCalls++;
+        rotated = await realStore.rotate(oldHash, {
+          ...gate.viewer,
+          tokenHash: successorHash,
+          expiresAt,
+        });
+        return realStore.renew(hash, expiresAt);
+      },
+    };
+    const renders: string[] = [];
+    const marker = `protected-${gate.name}-renewal-fallback-error`;
+    const app = protectedApp(gate, store, async (id) => {
+      renders.push(id);
+      return `<p>${marker}:${id}</p>`;
+    });
+
+    const response = await app.request(gate.path, { headers: { cookie } }, env);
+    const body = await response.text();
+
+    expect(renewCalls).toBe(1);
+    expect(rotated).toBe(true);
+    expect(getCalls).toBe(2);
+    expect(renders).toEqual([]);
+    expect(response.status).toBe(503);
+    expect(body).not.toContain(marker);
+    expect(body).not.toContain(gate.viewer.userId);
+    expect(body).not.toContain(detail);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.getSetCookie()).toHaveLength(0);
+    expect(sessionCookies(response)).toHaveLength(0);
+    expect(response.headers.get("cache-control") ?? "").toMatch(/private/);
+    expect(response.headers.get("cache-control") ?? "").toMatch(/(?:^|,\s*)no-store(?:,|$)/);
   });
 
   it("discards private HTML when strict post-handler status fails despite permissive get succeeding", async () => {

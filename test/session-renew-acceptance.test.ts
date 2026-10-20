@@ -349,8 +349,14 @@ describe.each(gates)("$name renewal decisions (hermetic)", (gate) => {
 
   it("redirects as expired when the renewal loses a race, with no bearer or contents", async () => {
     // get() saw a live row; by the renewal it was revoked, rotated or expired.
-    const renew = vi.fn<Renew>(async () => false);
-    const store = storeWithRenew(renew);
+    // Model real revocation before the losing renewal so the renewal fallback
+    // re-read finds no row and the 302 stays valid after grace preservation.
+    let store!: RenewableStore;
+    const renew = vi.fn<Renew>(async (hash) => {
+      await store.revoke(hash);
+      return false;
+    });
+    store = storeWithRenew(renew);
     const { cookie, tokenHash } = await sessionFor(store, gate.viewer);
     vi.setSystemTime(REQUEST_AT);
     const response = await gate.app(store).request(gate.path, { headers: { cookie } }, env);
