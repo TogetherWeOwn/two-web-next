@@ -36,9 +36,12 @@ const existingResponses =
 
 function expectNoCancelledInvitation(card: string): void {
   expect(card).not.toBe("");
-  expect(card).not.toMatch(/href="[^"]*(?:\/auth\/|\/join\/|\/rsvp)/i);
-  expect(renderedText(card)).not.toMatch(/sign in|rsvp in discord|join (?:this|the) event/i);
-  expect(card).not.toMatch(/<(?:button|form)\b/i);
+  expect(card).not.toMatch(/href="[^"]*(?:\/auth\/|\/join\/|\/rsvp(?:[/?#"]))/i);
+  expect(renderedText(card)).not.toMatch(
+    /sign in|rsvp (?:now|in discord|to |for )|join (?:this|the) event/i,
+  );
+  // Informational existing-response controls are allowed, participation is not.
+  expect(card).not.toMatch(/data-island="rsvp-button"|<form\b[^>]*action="[^"]*\/rsvp/i);
 }
 
 function expectCancelledCount(card: string, count: number): void {

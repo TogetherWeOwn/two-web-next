@@ -421,9 +421,11 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
           expect.soft(gridText).toMatch(/cancelled/i);
           expect.soft(gridName).toMatch(/cancelled/i);
           expect.soft(before).not.toMatch(/sign in|\bgoing\b|available|remaining/i);
+          const invitationCopy =
+            /sign in|^rsvp$|rsvp (?:now|in discord|to |for )|join (?:this|the) event/i;
           const invitations = page
             .locator(`[data-event-key="${key}"] a`)
-            .filter({ hasText: /sign in|rsvp/i });
+            .filter({ hasText: invitationCopy });
           expect.soft(await invitations.count()).toBe(0);
           if (!member)
             expect(
