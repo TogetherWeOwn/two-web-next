@@ -120,15 +120,15 @@ describe("w15 acceptance-ledger lifecycle row", () => {
     expect(row!, "no lifecycle citation may dangle past the store barrel").not.toMatch(
       /src\/admin\/store\.ts:\d+/,
     );
-    expect(row!).toContain("src/admin/store-event-writes.ts:426-483");
-    expect(row!).toContain("src/admin/store-event-writes.ts:486-537");
+    expect(row!).toContain("src/admin/store-event-writes.ts:430-487");
+    expect(row!).toContain("src/admin/store-event-writes.ts:490-541");
     const writes = read("src/admin/store-event-writes.ts").split("\n");
     // transitionEvent (cancelled-terminal guard via nextStatus) ...
-    expect(writes[425]).toContain("export async function transitionEvent");
-    expect(writes.slice(425, 483).join("\n")).toContain("nextStatus(from, to)");
+    expect(writes[429]).toContain("export async function transitionEvent");
+    expect(writes.slice(429, 487).join("\n")).toContain("nextStatus(from, to)");
     // ... and setRsvpOpen (draft/ended reopen refusal).
-    expect(writes[485]).toContain("export async function setRsvpOpen");
-    expect(writes.slice(485, 537).join("\n")).toContain(
+    expect(writes[489]).toContain("export async function setRsvpOpen");
+    expect(writes.slice(489, 541).join("\n")).toContain(
       "Only published events that have not ended can pause or reopen RSVPs.",
     );
   });

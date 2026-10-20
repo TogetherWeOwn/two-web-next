@@ -101,3 +101,11 @@ regexes = [
   '''^01ARZ3NDEKTSV4RRFFQ69G5FCV$''',
   '''^01ARZ3NDEKTSV4RRFFQ69G5FZV$''',
 ]
+
+[[allowlists]]
+description = "Synthetic malformed event key with a non-Crockford U in the admin route admission fixture, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/admin-event-route-key-admission\.test\.ts$''']
+regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FAU$''']

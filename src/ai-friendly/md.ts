@@ -5,6 +5,7 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
+import { isValidZone } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
@@ -181,6 +182,26 @@ function mdEventWhen(e: MdEvent): string {
   return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
 }
 
+/** Detail instant: mirror the HTML Starts/Ends cells (full date + endpoint offset, ISO on a bad zone). */
+function mdDetailInstant(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: tz,
+      timeZoneName: "longOffset",
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+}
+
+const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
+
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
     `## [${mdInlineText(e.title)}](${canonicalUrl(appUrl, `/e/${e.eventKey}`)})`,
@@ -226,7 +247,8 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
     `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
-    `- When: ${mdEventWhen(e)}`,
+    `- Starts: ${mdDetailInstant(e.startsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
+    `- Ends: ${mdDetailInstant(e.endsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
     ...(lineup ? [lineup] : []),

@@ -140,6 +140,28 @@ is not confirmation that your changes saved. Validation errors still use their
 normal field errors. If the outage continues, use the response's support reference
 when contacting the maintainers.
 
+## Correct a rejected draft
+
+Event and featured-content create/edit forms show the actual validation errors
+above the editor after a rejected save (HTTP 422). Submitted values remain in
+the form; a rejection is not a successful save. With JavaScript enabled, focus
+starts at this error summary. Press Tab to reach an error link and Enter to move
+to its control, then correct the value using the message beside that field.
+The links also work by keyboard without JavaScript. General errors with no
+editable control remain plain text in the summary; read and resolve those too.
+
+For event schedules, check the local wall time and IANA timezone together: a
+clock-change gap is not a valid time. Check capacity and create-only repeat
+settings when listed. For featured images, correct the approved HTTPS image URL
+and its image description. Explicitly choose **Create draft**, **Create** or
+**Save** again after correcting the errors. The summary is from the last rejected
+submission, not live validation, and does not disappear merely because you type.
+
+Ordinary form loads do not move focus. The existing unsaved-draft departure
+warning stays armed after rejection and while you correct the draft; navigating
+away can still discard it. Kit presentations use the same form actions: rejected
+POSTs are rendered by Hono, not a second Kit save or error endpoint.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.

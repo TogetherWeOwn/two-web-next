@@ -227,6 +227,9 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
+      - name: Install Kit workspace dependencies (profile and error shell render)
+        # Both browser fixtures SSR-compile Svelte from the Kit workspace.
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Profile native 422 baseline regressions (memory fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -251,8 +254,6 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
-      - name: Install Kit workspace dependencies (Kit error shell render)
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
@@ -481,6 +482,9 @@ jobs:
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+      - name: Kit staging Worker config dry run (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
       - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-worker-e2e.mjs

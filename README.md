@@ -467,20 +467,23 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-and `vars.DISCORD_GUILD_ID` in `wrangler.jsonc` and requires exactly the
-guild-bound Owner+Moderator pair (staging guild `1545644954272137297`:
+`npm run check:worker-moderators` parses the top-level
+`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
+`env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
+Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
-`326474832151838730`: `1546777855801954408,1546777856984481792`), before any queue
-creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
-same source value, without `--env`/`--var` overrides; a separate GitHub moderator
-secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
-vars, and Wrangler retains remote secrets. No binding values are read back or
-copied. The preflight proves source configuration, **not live isolation or a
-successful deployment**. Blank config remains a valid local revocation state,
-but unapproved extra roles (including duplicates) fail the probe, as does a
-pair that belongs to the other guild — role IDs are guild-scoped, so a
-production pair in the staging config matches nobody while looking configured.
+`326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
+The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
+validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+it does not override either moderator var. A separate GitHub moderator secret
+cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
+and Wrangler retains remote secrets. No binding values are read back or copied.
+The preflight proves source configuration, **not live isolation or a successful
+deployment**. Blank config remains a valid local revocation state, but
+unapproved extra roles (including duplicates) fail the probe, as does a pair
+that belongs to the other guild — role IDs are guild-scoped, so a production
+pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
 (`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while

@@ -121,9 +121,15 @@ const lineup = $derived(
   {/if}
   <dl class="event-meta" aria-label="Event details">
     <div>
-      <dt>When</dt>
+      <dt>Starts</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+      </dd>
+    </div>
+    <div>
+      <dt>Ends</dt>
+      <dd>
+        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
     </div>
     {#if model.location}
@@ -225,10 +231,12 @@ const lineup = $derived(
       <h2 id="event-share-heading">Save the date</h2>
       <p>
         <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {" · "}
-        <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-          Google Calendar
-        </a>
+        {#if model.googleCalendarUrl}
+          {" · "}
+          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+            Google Calendar
+          </a>
+        {/if}
         {" · "}
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link

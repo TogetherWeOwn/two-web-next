@@ -6,6 +6,7 @@
 import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
+import { ValidationSummary } from "./validation-summary";
 
 export const EventFormFields: FC<{
   mode: "new" | "edit";
@@ -16,11 +17,7 @@ export const EventFormFields: FC<{
 }> = ({ mode, row, values, errors, action }) => {
   return (
     <>
-      {Object.keys(errors).length > 0 ? (
-        <p class="notice" role="alert" data-testid="form-errors">
-          Check the highlighted fields and try again.
-        </p>
-      ) : null}
+      <ValidationSummary errors={errors} kind="event" mode={mode} />
       <form
         method="post"
         action={action}
