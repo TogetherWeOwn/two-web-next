@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
 import { renderHtmlOutcome } from "./html-outcome";
@@ -22,8 +23,11 @@ export const recoveryUrl = (next: string) =>
   `/auth/recover?next=${encodeURIComponent(safeNext(next) ?? "/profile")}`;
 
 function writeReturn(c: Ctx): string {
+  const key = c.req.path.match(/^\/(?:events|e)\/([^/]+)(?:\/|$)/)?.[1];
+  const eventReturn =
+    key && eventKeyAllowed(key, c.env.APP_URL) ? `/e/${canonicalEventKey(key) ?? key}` : "/events";
   const fallback =
-    adminWriteReturn(c.req.path) ?? (c.req.path.startsWith("/members/") ? "/profile" : "/events");
+    adminWriteReturn(c.req.path) ?? (c.req.path.startsWith("/members/") ? "/profile" : eventReturn);
   try {
     const ref = new URL(c.req.header("referer") ?? "");
     if (ref.origin === new URL(c.env.APP_URL).origin)
