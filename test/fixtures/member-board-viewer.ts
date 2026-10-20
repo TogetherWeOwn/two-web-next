@@ -141,7 +141,101 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const bodyMatch = html.match(/<body([^>]*)>([\s\S]*?)<\/body>/);
   const bodyAttrs = bodyMatch?.[1] ?? "";
   const body = bodyMatch?.[2] ?? html;
-  const inert = (value: string) =>
-    value.replace(/<link\b[^>]*>/g, "").replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "");
+  // Strip link/script chrome by walking angle-bracket tokens instead of tag
+  // regexes (CodeQL js/bad-tag-filter): drop link tokens and lone script
+  // closers case-insensitively, and skip raw script bodies through </script>.
+  const inert = (value: string): string => {
+    const lower = value.toLowerCase();
+    let out = "";
+    let cursor = 0;
+    while (cursor < value.length) {
+      const open = value.indexOf("<", cursor);
+      if (open === -1) {
+        out += value.slice(cursor);
+        break;
+      }
+      out += value.slice(cursor, open);
+      let pos = open + 1;
+      const closing = value[pos] === "/";
+      if (closing) pos += 1;
+      const nameStart = pos;
+      while (pos < value.length) {
+        const code = value.charCodeAt(pos);
+        const word =
+          (code >= 48 && code <= 57) || // 0-9
+          (code >= 65 && code <= 90) || // A-Z
+          (code >= 97 && code <= 122); // a-z
+        if (!word) break;
+        pos += 1;
+      }
+      const tag = value.slice(nameStart, pos).toLowerCase();
+      if (tag.length === 0) {
+        out += "<";
+        cursor = open + 1;
+        continue;
+      }
+      let end = pos;
+      let quote = 0;
+      while (end < value.length) {
+        const code = value.charCodeAt(end);
+        if (quote !== 0) {
+          if (code === quote) quote = 0;
+        } else if (code === 34 || code === 39) {
+          quote = code;
+        } else if (code === 62) {
+          break;
+        }
+        end += 1;
+      }
+      if (end >= value.length) {
+        out += value.slice(open);
+        break;
+      }
+      const tagEnd = end + 1;
+      const next = value.charCodeAt(pos);
+      const delimited =
+        next === 62 || // ">"
+        next === 47 || // "/"
+        next === 32 || // " "
+        next === 9 ||
+        next === 10 ||
+        next === 13 ||
+        next === 12;
+      if (tag === "link" && delimited) {
+        cursor = tagEnd;
+        continue;
+      }
+      if (tag === "script" && delimited) {
+        if (closing || value.charCodeAt(end - 1) === 47) {
+          cursor = tagEnd;
+          continue;
+        }
+        let skipped = -1;
+        let found = lower.indexOf("</script", tagEnd);
+        while (found !== -1) {
+          const gt = value.indexOf(">", found + 8);
+          if (gt === -1) break;
+          let wellFormed = true;
+          for (let k = found + 8; k < gt; k += 1) {
+            const c = value.charCodeAt(k);
+            if (c !== 32 && c !== 9 && c !== 10 && c !== 13 && c !== 12 && c !== 47) {
+              wellFormed = false;
+              break;
+            }
+          }
+          if (wellFormed) {
+            skipped = gt + 1;
+            break;
+          }
+          found = lower.indexOf("</script", found + 8);
+        }
+        cursor = skipped === -1 ? tagEnd : skipped;
+        continue;
+      }
+      out += value.slice(open, tagEnd);
+      cursor = tagEnd;
+    }
+    return out;
+  };
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${inert(body)}</body></html>`;
 }
