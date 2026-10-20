@@ -140,6 +140,21 @@ is not confirmation that your changes saved. Validation errors still use their
 normal field errors. If the outage continues, use the response's support reference
 when contacting the maintainers.
 
+## Busy inventory reads and retrying
+
+The event, featured-content and activity-log inventory lists each run inside
+one transaction with transaction-local `lock_timeout` and `statement_timeout`
+database bounds of two seconds each, covering the event list's second
+Going-count statement as well. These are per-statement bounds, not a
+whole-request deadline: each inventory statement gets its own budget, and the
+bounds expire with the transaction without changing pooled connection defaults.
+
+If an inventory statement times out, the read transaction rolls back before
+the existing private, no-store 503 outage response is returned. A refused
+inventory never renders as an empty list: wait briefly, then reload the page.
+If the outage continues, use the response's support reference when contacting
+the maintainers.
+
 ## Correct a rejected draft
 
 Event and featured-content create/edit forms show the actual validation errors
@@ -579,6 +594,10 @@ these diagnostic sections when their data is available:
   and capped at 255 characters; there is no searcher identity/IP attribution.
   The widget query does not itself apply a 90-day cutoff. Treat repeated misses
   as content-planning hints, not promises of demand or a way to identify someone.
+  Only complete reads are recorded here: a search run while `/events` warns that
+  Discord events may be missing is skipped, because a partial read cannot prove a
+  genuine no-match. A query absent from this list may still have been tried during
+  a Discord outage, so never read a missing row as proof nobody searched for it.
 
 A missing section is not proof of zero incidents: failing/slow optional funnel
 or missed-search reads can omit their section while the dashboard remains
