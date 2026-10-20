@@ -179,12 +179,34 @@ export async function renderPeriodRequest(
   }
 }
 
+// Strip comments by walking the markup token by token. A comment ends at
+// the first `-->`, so skipping comment tokens ignores Svelte hydration
+// markers without ever building a rewritten copy of the markup. Tags
+// become a single space, matching the previous tag-strip, then whitespace
+// collapses as before.
 function text(html: string) {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const parts: string[] = [];
+  let index = 0;
+  while (index < html.length) {
+    if (html.startsWith("<!--", index)) {
+      const end = html.indexOf("-->", index + 4);
+      index = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    if (html[index] === "<") {
+      const close = html.indexOf(">", index);
+      if (close === -1) {
+        parts.push(html.slice(index));
+        break;
+      }
+      parts.push(" ");
+      index = close + 1;
+      continue;
+    }
+    parts.push(html.slice(index, index + 1));
+    index += 1;
+  }
+  return parts.join("").replace(/\s+/g, " ").trim();
 }
 function attribute(tag: string, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
