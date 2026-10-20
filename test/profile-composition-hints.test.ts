@@ -59,9 +59,11 @@ const honoMember: MemberView = {
   timezone: "UTC",
 } as MemberView;
 
+type HonoFormDraft = { bio: string; games_text: string; timezone: string };
+
 const renderHono = (
   errors?: Record<string, string>,
-  values = { bio: "Original bio", games_text: "Chess", timezone: "UTC" },
+  values?: HonoFormDraft,
   member: MemberView = honoMember,
 ): string =>
   String(
@@ -70,7 +72,11 @@ const renderHono = (
       isOwner: true,
       appUrl: APP_URL,
       ...(errors ? { errors } : {}),
-      values: { ...values, leaderboard_opt_out: false },
+      // Omit `values` unless the case passes one: ProfilePage renders
+      // `values ?? member`, so the fresh-member case exercises the stored
+      // record (like the Kit twin) instead of contradicting the
+      // values-precedence rule.
+      ...(values ? { values: { ...values, leaderboard_opt_out: false } } : {}),
     }),
   );
 
@@ -408,8 +414,10 @@ describe("Kit profile editor: composition hints and counts", () => {
     expect(describedBy(html, "profile-timezone")).toBe("profile-timezone-error");
     expect(nodeText(html, BIO_COUNT_ID)).toBe("4 of 1000 characters");
     expect(nodeText(html, GAMES_COUNT_ID)).toBe("2 of 20 games, 12 of 1700 characters");
-    expect(html).toMatch(/<\/label>\s*<p[^>]*id="profile-bio-error"/);
-    expect(html).toMatch(/<\/label>\s*<p[^>]*id="profile-games-text-error"/);
+    // Svelte 5 SSR wraps the conditional error block in hydration markers
+    // (`<!--[0-->`), so tolerate comments between the label and the error node.
+    expect(html).toMatch(/<\/label>(?:\s|<!--.*?-->)*<p[^>]*id="profile-bio-error"/);
+    expect(html).toMatch(/<\/label>(?:\s|<!--.*?-->)*<p[^>]*id="profile-games-text-error"/);
   });
 
   it("unknown errors keep hints with no fabricated error association", () => {
