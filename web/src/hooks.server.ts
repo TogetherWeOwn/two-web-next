@@ -31,6 +31,8 @@ import { honoFetch } from "#lib/server/hono.ts";
 export const handle: Handle = async ({ event, resolve }) =>
   dispatchHookRequest(event, {
     appUrl: env.APP_URL,
+    kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
+    kitRouteStatic: env.KIT_ROUTE_STATIC,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
     // Forwards the core's resolve options untouched: content-leaf renders

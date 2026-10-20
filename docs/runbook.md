@@ -282,12 +282,17 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 
 ## Deploy and record the rollback pointer
 
-The authoritative target is [wrangler.jsonc](../wrangler.jsonc): Worker
-`two-web-next`, custom domain `next.togetherweown.com`, Hyperdrive binding `DB`.
-`two-web-next-staging` is a Hyperdrive resource description, **not** a Worker
-name or a Wrangler environment. There is no `[env.staging]` configuration.
-Do not add `--env staging` or invent a different Worker target. Verify the
-approved account and binding isolation before any remote mutation.
+The staging target is the reviewed Kit config
+[`web/wrangler.staging.jsonc`](../web/wrangler.staging.jsonc): Worker
+`two-web-next`, custom domain `next.togetherweown.com`, Hyperdrive bindings
+`DB` and `BOT_DB`, Tail consumer and worker-first assets. It is distinct from
+the Kit preview config [`web/wrangler.jsonc`](../web/wrangler.jsonc), which is
+never the staging deploy target. The root [wrangler.jsonc](../wrangler.jsonc)
+remains the Hono config and production cutover template. `two-web-next-staging`
+is a Hyperdrive resource description, **not** a Worker name or a Wrangler
+environment. There is no `[env.staging]` configuration. Do not add `--env
+staging` or invent a different Worker target. Verify the approved account and
+binding isolation before any remote mutation.
 
 1. Require independent Code Reviewer approval on the exact head SHA and green
    `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
@@ -306,7 +311,8 @@ approved account and binding isolation before any remote mutation.
    ```
 
    Both staging (`two-web-next`) and production (`two-web-next-production`)
-   declare `version_metadata` bindings (`wrangler.jsonc` top level and
+   declare `version_metadata` bindings (staging in
+   `web/wrangler.staging.jsonc`, production in `wrangler.jsonc`'s
    `env.production`): `GET /up` on `https://next.togetherweown.com/up` and
    on the apex carries `revision: { version_id, commit }` once the live
    Version was uploaded after that binding landed. `version_id` is
@@ -322,17 +328,30 @@ approved account and binding isolation before any remote mutation.
    deployments` wins. Record the production app `revision.version_id` and
    `revision.commit` separately from the Tail Worker version.
 
-3. Normal path: merge to `main` invokes
-   [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
-   GitHub Environment `staging` gate. It installs dependencies, applies
-   migrations to its disposable Postgres, runs `npm run check`, then plans,
+3. Normal path: successful full CI on `main` invokes
+   [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), with the exact CI-verified SHA. The `staging` Environment supplies scoped
+   secrets and has no required reviewers; there is no human approval gate.
+   Full CI includes `npm run check` against its disposable Postgres; the deploy
+   job then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
    against the staging database — the pinned PlanetScale staging branch
    (retired Neon endpoints are refused; `ci/db-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
-   ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
+   ensures `two-sync-event` and `two-internal-action` exist, builds the Kit
+   Worker, deploys the Tail first, deploys
+   `web/wrangler.staging.jsonc`, explicitly detaches the web queue consumers,
+   then deploys the jobs Worker. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
+   The automatic `workflow_run` path always deploys with `hono`, so every route
+   starts and returns to Hono on an ordinary main-CI deploy. To opt into the
+   archive route, dispatch the same workflow from `main` with
+   `kit_route_family=archive` (only `GET /events/past`); choose
+   `kit_route_family=archive-static` to cumulatively add `GET /about` and
+   `GET /faq`. `hono` disables every Kit route family, and missing or
+   unrecognized runtime flags fail closed to Hono. The next automatic main-CI
+   deployment resets the selection to `hono`.
+
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
@@ -358,23 +377,16 @@ approved account and binding isolation before any remote mutation.
    smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
-4. An explicitly authorized manual deployment of the reviewed release uses:
-
-   ```bash
-   # REMOTE MUTATION: approved target and release only; not a test.
-   npm run deploy -- --tag "$(git rev-parse HEAD)"
-   ```
-
-   `--tag` is what lets `/up` name the commit (`revision.commit`); without it
-   the Version is untagged and `commit` is `null`.
-
-   This deploys the current checkout. Do not run it from an unmerged working
-   branch, and do not bypass the Environment gate to clear a blocked CI release.
-   A manual `npm run deploy` does not migrate any database, and neither deploy
-   path ever migrates production. Before a manual deploy of a schema-dependent
-   Worker, run the [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
-   for the matching target; coordinate with both bot and web owners using
-   `docs/db-migrations.md`.
+4. To select a route family explicitly, use Actions → `deploy` → Run workflow
+   on branch `main`, then choose `hono`, `archive`, or `archive-static`.
+   `workflow_dispatch` uses the same exact-SHA CI gate, staging migration,
+   Kit build, Tail-first deployment, queue handoff, revision verification and
+   smoke path as the automatic workflow. This is the supported route-selection
+   path; `hono` is the default and disables all Kit routes. The next automatic
+   main-CI deployment resets the selection to `hono`. Do not use local
+   `npm run deploy` or direct `wrangler deploy` for the Kit staging Worker:
+   those commands do not select the reviewed Kit staging config or preserve
+   its exact-SHA workflow gates.
 5. Capture the resulting deployment/version IDs and workflow URL. On staging
    the `Verify deployed revision` step has already proved the live Worker
    reports the commit this job deployed and logged its Version ID (it runs on
