@@ -33,7 +33,6 @@ describe("revoke-sessions CLI safety", () => {
       ["--discord-id=bad"],
       [`--discord-id=${MEMBER_A}`, "--apply", "--dry-run"],
       ["--discord-id=", `--discord-id=${MEMBER_A}`],
-      [`--discord-id=${MEMBER_A}`, "--target=staging"],
       [`--discord-id=${MEMBER_A}`, "--target", "production", "--target=production"],
     ])
       expect(() => parseRevokeArgs(args)).toThrow();
@@ -151,16 +150,116 @@ describe("revoke-sessions CLI safety", () => {
     expect(validateRevokeEnvironment({ DATABASE_URL: production }, "production").databaseUrl).toBe(
       production,
     );
-    expect(() =>
-      validateRevokeEnvironment(
-        { DATABASE_URL: "postgres://fixture@ep-staging.example.neon.tech/neondb" },
-        undefined,
-      ),
-    ).toThrow("--target production");
     const result = run([`--discord-id=${MEMBER_A}`], { DATABASE_URL: production });
     expect(result.status).toBe(2);
     expect(result.stdout + result.stderr).not.toContain("synthetic-password");
     expect(result.stdout + result.stderr).not.toContain("postgres://");
+  });
+
+  it("accepts --target staging in argv and still refuses unknown or repeated targets", () => {
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--target=staging"])).toEqual({
+      discordId: MEMBER_A,
+      mode: "dry-run",
+      target: "staging",
+    });
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--apply", "--target", "staging"])).toEqual(
+      {
+        discordId: MEMBER_A,
+        mode: "apply",
+        target: "staging",
+      },
+    );
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--target", "production"]).target).toBe(
+      "production",
+    );
+    for (const args of [
+      [`--discord-id=${MEMBER_A}`, "--target", "sideways"],
+      [`--discord-id=${MEMBER_A}`, "--target=dev"],
+      [`--discord-id=${MEMBER_A}`, "--target=STAGING"],
+      [`--discord-id=${MEMBER_A}`, "--target="],
+      [`--discord-id=${MEMBER_A}`, "--target"],
+      [`--discord-id=${MEMBER_A}`, "--target=staging", "--target=staging"],
+      [`--discord-id=${MEMBER_A}`, "--target", "staging", "--target=production"],
+    ])
+      expect(() => parseRevokeArgs(args), JSON.stringify(args)).toThrow();
+    const refused = run([`--discord-id=${MEMBER_A}`, "--target", "sideways"], {
+      DATABASE_URL: "postgres://agent_test@127.0.0.1:1/test",
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("accepts --target staging on remote non-production URLs and requires a target there", () => {
+    const stagingRemote =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb?sslmode=verify-full";
+    const genericRemote =
+      "postgres://fixture:synthetic-password@db.example.test/neondb?sslmode=verify-full";
+    for (const remote of [stagingRemote, genericRemote]) {
+      expect(
+        validateRevokeEnvironment({ DATABASE_URL: remote }, "staging").databaseUrl,
+        remote,
+      ).toBe(remote);
+      expect(
+        validateRevokeEnvironment({ DATABASE_URL: remote }, "production").databaseUrl,
+        remote,
+      ).toBe(remote);
+      // No target on a remote database: the refusal must offer staging too,
+      // not train the production assertion as the only incantation.
+      expect(() => validateRevokeEnvironment({ DATABASE_URL: remote }, undefined), remote).toThrow(
+        "--target staging",
+      );
+      for (const bad of ["sideways", "dev", "STAGING", ""])
+        expect(
+          () => validateRevokeEnvironment({ DATABASE_URL: remote }, bad),
+          `${remote} target=${bad}`,
+        ).toThrow();
+    }
+    const refused = run([`--discord-id=${MEMBER_A}`], { DATABASE_URL: stagingRemote });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("--target staging");
+    expect(refused.stdout + refused.stderr).not.toContain("synthetic-password");
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("refuses --target staging on production-looking URLs", () => {
+    const production =
+      "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
+    expect(isProductionDatabaseUrl(production)).toBe(true);
+    expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, "staging")).toThrow(
+      "--target production",
+    );
+    expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, undefined)).toThrow(
+      "--target production",
+    );
+    expect(validateRevokeEnvironment({ DATABASE_URL: production }, "production").databaseUrl).toBe(
+      production,
+    );
+    const refused = run([`--discord-id=${MEMBER_A}`, "--target", "staging"], {
+      DATABASE_URL: production,
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("--target production");
+    // A target refusal, not an argv usage error: --target staging is valid
+    // argv that this URL class rejects.
+    expect(refused.stderr).not.toContain("Usage:");
+    expect(refused.stdout + refused.stderr).not.toContain("synthetic-password");
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("keeps local URLs exempt from the target requirement", () => {
+    for (const local of [
+      "postgres://agent_test@agent-testdb:5432/test",
+      "postgres://fixture@localhost:5432/test",
+      "postgres://fixture@127.0.0.1:5432/test",
+      "postgres://fixture@[::1]:5432/test",
+    ]) {
+      expect(validateRevokeEnvironment({ DATABASE_URL: local }, undefined).databaseUrl, local).toBe(
+        local,
+      );
+      expect(validateRevokeEnvironment({ DATABASE_URL: local }, "staging").databaseUrl, local).toBe(
+        local,
+      );
+    }
   });
 });
 
