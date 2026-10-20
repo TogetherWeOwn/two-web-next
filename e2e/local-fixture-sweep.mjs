@@ -9,6 +9,7 @@ export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze([
   "E2E Promotion ",
   "E2E Pause ",
   "E2E Moderator ",
+  "E2E Filter ",
 ]);
 export const LOCAL_SWEEP_STATUSES = Object.freeze(["published", "draft"]);
 export const LOCAL_SWEEP_MAX_PASSES = 4;

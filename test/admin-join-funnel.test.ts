@@ -243,6 +243,47 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     },
   );
 
+  it.each([false, true])("503s a zero-search outage with funnel cache warm=%s", async (warm) => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db, session, aggregate } = aggregateDb(7);
+    const app = adminApp({ sessionStore: store });
+    const bindings = { ...env, ADMIN_DB: db } as Env;
+    if (warm) expect((await app.request("/", { headers: { cookie } }, bindings)).status).toBe(200);
+    let calls = 0;
+    session.transaction = async (work) => {
+      if (!warm && ++calls === 1) return work(db);
+      throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+    };
+    const res = await app.request("/", { headers: { cookie } }, bindings);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("We will be right back");
+    expect(aggregate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    Object.assign(new Error("missing table"), { code: "42P01", name: "PostgresError" }),
+    new TypeError("programming error"),
+    Object.assign(new Error("statement timeout"), { code: "57014", name: "PostgresError" }),
+  ])("omits only zero-search on an ordinary read failure: %s", async (error) => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db, session } = aggregateDb(7);
+    let calls = 0;
+    session.transaction = async (work) => {
+      if (++calls === 1) return work(db);
+      throw error;
+    };
+    const res = await adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
+      ...env,
+      ADMIN_DB: db,
+    } as Env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).not.toContain('data-testid="top-zero-searches"');
+  });
+
   it("omits the funnel widget and still answers 200", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store);

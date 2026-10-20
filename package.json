@@ -40,6 +40,7 @@
     "test:inventory:selftest": "node ci/test-inventory.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
+    "test:auth-signin-browser": "node ci/auth-browser.mjs",
     "budget": "node ci/check-bundle-budget.mjs",
     "budget:selftest": "node ci/check-bundle-budget.mjs --selftest",
     "worker-budget": "node ci/check-worker-bundle.mjs",
@@ -72,7 +73,7 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {

@@ -3,8 +3,8 @@
 // legs — guest bounces to session recovery, member 403s on the moderator bit,
 // moderator reads the dashboard. Mirrors bin/alert-probe.mjs conventions:
 // staging-only target, QA_AUTH_TOKEN from env only (never argv), redacted
-// JSON result (statuses, locations, body lengths — never tokens, cookies or
-// bodies), nonzero exit claims nothing.
+// JSON result (statuses and fixed redirect classes — never raw locations,
+// tokens, cookies or bodies), nonzero exit claims nothing.
 //
 // Throttle budget: 2 qa-login hits (10/min shared) + 18 admin-write hits
 // (30/min) per run. POST bodies are empty: every expectation is decided by
@@ -38,13 +38,33 @@ export function sessionCookieValue(res) {
   return null;
 }
 
-async function discard(res) {
-  await res.body?.cancel();
+function discard(res) {
+  // Disposal is best-effort: never wait for it or expose its exception text.
+  try {
+    void Promise.resolve(res.body?.cancel()).catch(() => undefined);
+  } catch {
+    // A synchronous cancellation failure must not decide the auth-wall verdict.
+    return;
+  }
 }
 
 function check(label, actual, expected) {
   const pass = actual === expected;
   return { label, actual, expected, pass };
+}
+
+function locationShape(location) {
+  // Fixed vocabulary only: no provider-controlled bytes enter the report.
+  if (location === null) return null;
+  if (location === "") return "empty";
+  if (location.startsWith("//")) return "network-path";
+  if (location.startsWith("/")) return "root-relative";
+  return "other-location";
+}
+
+function checkLocation(label, actual, expected) {
+  const result = check(label, actual, expected);
+  return { ...result, actual: result.pass ? expected : locationShape(actual) };
 }
 
 export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fetch }) {
@@ -63,14 +83,15 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   // Guest leg: every mutation POST bounces to session recovery with an empty body.
   for (const path of ADMIN_POST_PATHS) {
     const res = await unsafe(path);
-    const location = res.headers.get("location") ?? "";
-    await discard(res);
+    const location = res.headers.get("location");
+    const recovery = location?.startsWith("/auth/recover?next=") ?? false;
+    discard(res);
     checks.push(check(`guest POST ${path} status`, res.status, 303));
     checks.push({
       label: `guest POST ${path} recovery target`,
-      actual: location.startsWith("/auth/recover?next=") ? "recovery" : location,
+      actual: recovery ? "recovery" : locationShape(location),
       expected: "recovery",
-      pass: location.startsWith("/auth/recover?next="),
+      pass: recovery,
     });
   }
   // Guest control A: forged cross-origin write keeps the 403, never a bounce.
@@ -85,7 +106,7 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
-    await discard(res);
+    discard(res);
     checks.push(check("guest POST without trusted origin status", res.status, 403));
   }
   // Guest control B: the dashboard has no login page; guests fall into OAuth.
@@ -94,9 +115,11 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
-    await discard(res);
+    discard(res);
     checks.push(check("guest GET /admin status", res.status, 302));
-    checks.push(check("guest GET /admin location", res.headers.get("location"), "/auth/discord"));
+    checks.push(
+      checkLocation("guest GET /admin location", res.headers.get("location"), "/auth/discord"),
+    );
   }
 
   // Member leg: qa-member signs in, then every mutation POST 403s on the
@@ -109,7 +132,7 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
       signal: AbortSignal.timeout(10_000),
     });
     const cookie = sessionCookieValue(res);
-    await discard(res);
+    discard(res);
     if (res.status !== 204 || !cookie)
       throw new Error(`QA login as ${identity} refused (HTTP ${res.status}); no session claimed`);
     return cookie;
@@ -117,9 +140,9 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   const memberCookie = await login("qa-member");
   for (const path of ADMIN_POST_PATHS) {
     const res = await unsafe(path, { Cookie: memberCookie });
-    await discard(res);
+    discard(res);
     checks.push(check(`member POST ${path} status`, res.status, 403));
-    checks.push(check(`member POST ${path} location`, res.headers.get("location"), null));
+    checks.push(checkLocation(`member POST ${path} location`, res.headers.get("location"), null));
   }
 
   // Moderator control: the same wall admits qa-moderator to the dashboard.
@@ -130,7 +153,7 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
-    await discard(res);
+    discard(res);
     checks.push(check("moderator GET /admin status", res.status, 200));
   }
 
