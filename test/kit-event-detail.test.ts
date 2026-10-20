@@ -55,6 +55,7 @@ function row(over: Partial<typeof events.$inferSelect> = {}): typeof events.$inf
     title: "Chess night",
     game: "Chess",
     description: "Bring a friend & a board.",
+    purpose: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",
@@ -717,6 +718,44 @@ describe("Kit detail presentation", () => {
     expect(guest[0]!.payload["@type"]).toBe("Event");
     expect(guest[1]!.payload["@graph"]).toHaveLength(2);
     expect(jsonLdBlocks(await memberHtml())).toEqual(guest);
+  });
+
+  it("renders optional purpose separately from description for guests and members", async () => {
+    const purpose = `A welcoming intro & \"practice\" <script>alert('x')</script>`;
+    const store = fakeStore({ event: { ...row({ purpose }), goingCount: 3 } as PublicEvent });
+    const { outcome } = await resolve(KEY, store, GUEST);
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect((outcome.model as unknown as { purpose?: string | null }).purpose).toBe(purpose);
+
+    const { renderDetail } = await buildKitEventDetailBundle();
+    for (const session of [GUEST, memberSession()]) {
+      const resolved = await resolve(KEY, store, session);
+      if (resolved.outcome.kind !== "ok") throw new Error("unreachable");
+      const html = renderDetail(resolved.outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain("Purpose");
+      expect(html).toContain(
+        "A welcoming intro &amp; \"practice\" &lt;script>alert('x')&lt;/script>",
+      );
+      expect(html).not.toContain("<script>alert('x')</script>");
+      const eventJsonLd = html.match(
+        /<script type="application\/ld\+json" data-testid="event-jsonld">([\s\S]*?)<\/script>/,
+      )?.[1];
+      expect(eventJsonLd).toBeDefined();
+      expect(eventJsonLd).not.toContain(purpose);
+      expect(html).toContain("Bring a friend &amp; a board.");
+    }
+  });
+
+  it.each([null, "", " \t\n "])("omits legacy or blank purpose %s", async (purpose) => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ purpose }), goingCount: 3 } as PublicEvent }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).not.toContain("Purpose");
+    expect(html).toContain("Bring a friend &amp; a board.");
   });
 
   it("renders the guest contract: pitch, share, discovery, metadata, never attendees", async () => {

@@ -22,6 +22,7 @@ function fixture(status: "draft" | "published" = "published") {
     title: "Friday night Helldivers",
     game: null,
     description: "Bring stims.",
+    purpose: null,
     startsAt: new Date("2099-01-10T20:00:00Z"),
     endsAt: new Date("2099-01-10T22:00:00Z"),
     timezone: "UTC",

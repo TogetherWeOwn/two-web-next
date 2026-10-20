@@ -49,6 +49,7 @@ function eventRow(): EventRow {
     title: EVENT_TITLE,
     game: "Chess",
     description: EVENT_DESCRIPTION,
+    purpose: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",

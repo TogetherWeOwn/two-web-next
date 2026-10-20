@@ -96,6 +96,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       title: "Game night",
       game: "Chess",
       description: "Bring a board",
+      purpose: null,
       startsAt: new Date("2026-10-25T01:30:17Z"),
       endsAt: new Date("2026-10-25T01:50:29Z"),
       timezone: "Europe/London",
@@ -218,6 +219,36 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     });
     await expectUnchanged(before);
   });
+
+  it("an omitted purpose survives a JSON PATCH and is not rewritten in its audit diff", async () => {
+    const purpose = "Purpose must survive omitted JSON PATCH";
+    await fixture.db.update(events).set({ purpose });
+    const before = await snapshot();
+    const res = await patch({ title: "Renamed without purpose" });
+    expect(res.status).toBe(200);
+    const after = await snapshot();
+    expect(after.events[0]!.purpose).toBe(purpose);
+    expect(after.audit).toHaveLength(before.audit.length + 1);
+    expect(after.audit.at(-1)!.properties).not.toHaveProperty("purpose");
+    expect(sent).toHaveLength(1);
+  });
+
+  it.each([null, "", " \t\n "])(
+    "null or blank JSON purpose clears the field (%s)",
+    async (purpose) => {
+      await fixture.db.update(events).set({ purpose: "Existing purpose" });
+      const before = await snapshot();
+      const res = await patch({ purpose });
+      expect(res.status).toBe(200);
+      const after = await snapshot();
+      expect(after.events[0]!.purpose).toBeNull();
+      expect(after.audit).toHaveLength(before.audit.length + 1);
+      expect(after.audit.at(-1)!.properties).toMatchObject({
+        purpose: { before: "Existing purpose", after: null },
+      });
+      expect(sent).toHaveLength(1);
+    },
+  );
 
   it("a title-only PATCH preserves omitted fields and the second fold occurrence", async () => {
     const before = await snapshot();

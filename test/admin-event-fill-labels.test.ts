@@ -61,6 +61,7 @@ function row(over: Partial<EventListRow> & { eventKey: string }): EventListRow {
     title: eventKey,
     game: null,
     description: null,
+    purpose: null,
     startsAt: at,
     endsAt: new Date("2026-06-15T02:30:00Z"),
     timezone: "UTC",

@@ -19,6 +19,7 @@ const row = (icsSequence: bigint) =>
     title: "Friday night Helldivers",
     game: null,
     description: "Bring stims.",
+    purpose: null,
     startsAt: new Date("2026-07-15T18:00:00Z"),
     endsAt: new Date("2026-07-15T20:00:00Z"),
     timezone: "Europe/London",

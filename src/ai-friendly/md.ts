@@ -25,6 +25,8 @@ export interface MdEvent {
   title: string;
   game: string | null;
   description: string | null;
+  /** Optional organizer-entered purpose; absent on pre-purpose fixtures. */
+  purpose?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
@@ -227,6 +229,9 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
     ...(lineup ? [lineup] : []),
+    ...(e.purpose?.trim()
+      ? ["", "## Purpose", "", mdText(e.purpose.trim().replace(/</g, "&lt;").replace(/>/g, "&gt;"))]
+      : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",
     `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,

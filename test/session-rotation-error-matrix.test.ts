@@ -30,6 +30,7 @@ function draftDb() {
     title: DRAFT_TITLE,
     game: "Chess",
     description: "Moderator-only planning details",
+    purpose: null,
     startsAt: new Date("2099-01-10T20:00:00Z"),
     endsAt: new Date("2099-01-10T22:00:00Z"),
     timezone: "UTC",

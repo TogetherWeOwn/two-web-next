@@ -78,6 +78,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         eventKey: KEY,
         title: TITLE,
         description: DESCRIPTION,
+        purpose: null,
         startsAt: new Date("2099-01-10T20:00:00Z"),
         endsAt: new Date("2099-01-10T22:00:00Z"),
         timezone: "UTC",

@@ -25,6 +25,7 @@ export type EventFormInput = {
   title: string;
   game: string | null;
   description: string | null;
+  purpose?: string | null;
   startsAtUtc: Date;
   endsAtUtc: Date;
   timezone: string;
@@ -51,7 +52,7 @@ export function parseEventForm(
   // and omitted stay empty (timezone keeps its Europe/London default), but
   // objects, arrays, booleans and numbers are refused with the existing
   // field-specific 422 shape.
-  for (const field of ["game", "description", "location", "timezone"] as const) {
+  for (const field of ["game", "description", "purpose", "location", "timezone"] as const) {
     const raw = data[field];
     if (raw !== undefined && raw !== null && typeof raw !== "string") {
       fields[field] = `The ${field} must be text.`;
@@ -62,13 +63,16 @@ export function parseEventForm(
   const description = str(data.description);
   if (description && [...description].length > 1000)
     fields.description = "Keep the description to 1000 characters.";
+  const purpose = str(data.purpose);
+  if (purpose && [...purpose].length > 1000)
+    fields.purpose = "Keep the purpose to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
   if (location && [...location].length > 255)
     fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
-  for (const field of ["title", "game", "description", "location"] as const) {
+  for (const field of ["title", "game", "description", "purpose", "location"] as const) {
     const raw = data[field];
     if (typeof raw === "string" && containsControlCharacters(raw)) {
       fields[field] = "Remove control or invisible characters.";
@@ -130,6 +134,7 @@ export function parseEventForm(
     title: title!,
     game,
     description,
+    purpose,
     startsAtUtc: startsAtUtc!,
     endsAtUtc: endsAtUtc!,
     timezone,

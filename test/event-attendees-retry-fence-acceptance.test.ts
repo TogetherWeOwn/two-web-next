@@ -348,6 +348,7 @@ const baseEvent: PublicEvent = {
   title: "Spring social",
   game: null,
   description: null,
+  purpose: null,
   startsAt: new Date("2030-01-01T20:00:00Z"),
   endsAt: new Date("2030-01-01T22:00:00Z"),
   timezone: "Europe/London",

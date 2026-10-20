@@ -14,6 +14,7 @@ function row(key: string, overrides: Partial<EventListRow> = {}): EventListRow {
     title: `Game night ${key}`,
     game: null,
     description: null,
+    purpose: null,
     startsAt: new Date("2026-11-01T18:00:00.000Z"),
     endsAt: new Date("2026-11-01T21:00:00.000Z"),
     timezone: "UTC",

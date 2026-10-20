@@ -56,6 +56,7 @@ const sampleRow = () => ({
   title: "Game night parity",
   description: null,
   location: null,
+  purpose: null,
   startsAt: new Date("2026-10-15T19:00:00Z"),
   endsAt: new Date("2026-10-15T21:00:00Z"),
 });

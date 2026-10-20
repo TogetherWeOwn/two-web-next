@@ -90,6 +90,7 @@ const eventRow: EventRow = {
   title: "Friday games",
   game: null,
   description: null,
+  purpose: null,
   startsAt: at,
   endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC",

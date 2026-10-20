@@ -314,7 +314,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const humanRows = await sql<{ row: Record<string, unknown> }[]>`SELECT
       to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' AS row
       FROM events e WHERE agent_grant_id IS NULL ORDER BY event_key`;
-      expect(humanRows.map(({ row }) => row)).toEqual(humansBefore);
+      // The later nullable-purpose migration adds exactly one NULL column to
+      // historical human rows; all pre-existing values remain byte-for-byte equal.
+      expect(humanRows.map(({ row }) => row)).toEqual(
+        humansBefore.map((row) => ({ ...row, purpose: null })),
+      );
       expect(
         (await sql`SELECT count(*)::int AS n, count(DISTINCT id)::int AS ids FROM events`)[0],
       ).toEqual({

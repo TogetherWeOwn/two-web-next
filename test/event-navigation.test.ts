@@ -28,6 +28,7 @@ const row = (id: number, over: Partial<EventRow> = {}): EventRow => ({
   title: `Game night ${id}`,
   game: "Chess",
   description: null,
+  purpose: null,
   startsAt: NOW,
   endsAt: new Date("2030-01-10T22:00:00Z"),
   timezone: "Europe/London",

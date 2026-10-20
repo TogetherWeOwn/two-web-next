@@ -55,7 +55,10 @@ const past = {
   capacity: null as number | null,
 };
 
-const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
+type MdEventWithPurpose = MdEvent & { purpose?: string | null };
+
+const mdRow = (o: Partial<MdEventWithPurpose> = {}): MdEventWithPurpose => ({
+  purpose: null,
   eventKey: "01J0000000000000000000ABCD",
   title: "Friday night Helldivers",
   game: past.game,
@@ -179,15 +182,33 @@ describe("md builders (pure, DB-free)", () => {
     expect(unknown).not.toContain("(full)");
   });
 
-  it("event collection lists published rows with canonical links", () => {
+  it("event collection lists published rows with canonical links but omits detail purpose", () => {
     const body = mdEvents(APP_URL, [
-      mdRow(),
+      mdRow({ purpose: "Detail-only planning note" }),
       mdRow({ eventKey: "01J0000000000000000000WXYZ", title: "Renamed raid" }),
     ]);
     expect(body).toContain("Friday night Helldivers");
     expect(body).toContain("Renamed raid");
     expect(body).toContain(`${APP_URL}/e/01J0000000000000000000ABCD.md`);
     expect(body).toContain(`${APP_URL}/events`);
+    expect(body).not.toContain("Detail-only planning note");
+  });
+
+  it("renders optional purpose in detail separately from description", () => {
+    const purpose = `A welcoming intro & [practice] <script>alert('x')</script>`;
+    const body = mdEvent(APP_URL, mdRow({ purpose }));
+    expect(body).toContain("## Purpose");
+    expect(body).toContain(
+      "A welcoming intro & \\[practice\\] &lt;script&gt;alert('x')&lt;/script&gt;",
+    );
+    expect(body).toContain("## About this event\n\nBring stims.");
+    expect(body.indexOf("## Purpose")).toBeLessThan(body.indexOf("## About this event"));
+  });
+
+  it.each([null, "", " \t\n "])("omits blank or legacy detail purpose %s", (purpose) => {
+    const body = mdEvent(APP_URL, mdRow({ purpose }));
+    expect(body).not.toContain("## Purpose");
+    expect(body).toContain("## About this event\n\nBring stims.");
   });
 
   it("gone body names the cancellation and the way back", () => {
@@ -407,6 +428,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
       eventKey: key,
       title: `t-${key}`,
       description: "Bring stims.",
+      purpose: null,
       startsAt: new Date("2099-01-01T00:00:00Z"),
       endsAt: new Date("2099-01-02T00:00:00Z"),
       timezone: "UTC",
@@ -420,7 +442,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
   });
 
   it("events.md lists published upcoming only, never drafts or member data", async () => {
-    await ins("01J0000000000000000000PXB1", "published");
+    await ins("01J0000000000000000000PXB1", "published", {
+      purpose: "Detail-only purpose must not appear in the collection",
+    });
     await ins("01J0000000000000000000DRF1", "draft");
     await ins("01J0000000000000000000CAN1", "cancelled");
     const res = await tReq("/events.md");
@@ -431,11 +455,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
     const body = await res.text();
     expect(body).toContain("PXB1");
     for (const k of ["DRF1", "CAN1"]) expect(body).not.toContain(k);
+    expect(body).not.toContain("Detail-only purpose must not appear in the collection");
     expect(body.toLowerCase()).not.toContain("attendee");
   });
 
-  it("event .md mirrors the published page, and the HTML links to it", async () => {
-    await ins("01J0000000000000000000PXB1", "published");
+  it("event .md mirrors the published page, including purpose separately from description", async () => {
+    await ins("01J0000000000000000000PXB1", "published", {
+      purpose: "Welcome new players and explain the first round.",
+    });
     const [md, html] = await Promise.all([
       tReq("/e/01J0000000000000000000PXB1.md"),
       tReq("/e/01J0000000000000000000PXB1"),
@@ -443,8 +470,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
     expect(md.status).toBe(200);
     expect(md.headers.get("content-type")).toBe(MARKDOWN_MIME);
     const [mb, hb] = await Promise.all([md.text(), html.text()]);
-    for (const phrase of ["t-01J0000000000000000000PXB1", "Bring stims.", "Voice: General"])
+    for (const phrase of [
+      "t-01J0000000000000000000PXB1",
+      "Welcome new players and explain the first round.",
+      "Bring stims.",
+      "Voice: General",
+    ])
       expect(mb).toContain(phrase);
+    expect(mb.indexOf("## Purpose")).toBeLessThan(mb.indexOf("## About this event"));
     expect(hb).toContain('rel="alternate" type="text/markdown"');
     expect(hb).toContain("/e/01J0000000000000000000PXB1.md");
   });

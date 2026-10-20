@@ -39,6 +39,7 @@ function canonical(
     title: `Game night ${id}`,
     game: null,
     description: "Private host notes",
+    purpose: null,
     startsAt,
     endsAt: new Date(startsAt.getTime() + 7200_000),
     timezone: "Europe/London",

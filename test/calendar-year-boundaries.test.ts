@@ -44,6 +44,7 @@ function calendarFixture(startsAt: Date, zone?: string) {
     title: "Past zone fixture",
     game: null,
     description: null,
+    purpose: null,
     startsAt: pastStart,
     endsAt: new Date("2025-01-15T13:00:00Z"),
     timezone: zone ?? "UTC",

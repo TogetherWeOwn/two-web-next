@@ -78,6 +78,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const purpose = e.purpose?.trim() || null;
   return (
     <EventDetailShell
       title={e.title}
@@ -157,6 +158,12 @@ export const EventPage: FC<{
       </div>
       <div class="event-detail-grid">
         <div>
+          {purpose ? (
+            <section class="event-purpose" aria-labelledby="event-purpose-heading">
+              <h2 id="event-purpose-heading">Purpose</h2>
+              <p>{purpose}</p>
+            </section>
+          ) : null}
           {e.description ? (
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>

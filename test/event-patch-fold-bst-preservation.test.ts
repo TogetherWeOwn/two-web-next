@@ -13,6 +13,7 @@ const BASE: Omit<PatchBase, "startsAt" | "endsAt"> = {
   title: "Original title",
   game: null,
   description: null,
+  purpose: null,
   timezone: "Europe/London",
   location: "Original hall",
   capacity: 5,

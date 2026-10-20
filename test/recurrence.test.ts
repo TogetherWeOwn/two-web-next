@@ -191,6 +191,27 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
     expect(await db.select().from(activityLog)).toEqual(audits);
   });
 
+  it("copies parent purpose to every recurring occurrence", async () => {
+    const eventPurpose = "A relaxed intro for new Go players.";
+    const { row } = await createEvent(
+      db,
+      actor,
+      { ...input, purpose: eventPurpose },
+      {
+        frequency: "weekly",
+        count: 4,
+        endsOn: null,
+      },
+    );
+    const rows = await db
+      .select({ purpose: events.purpose })
+      .from(events)
+      .orderBy(events.recurrenceIndex);
+    expect(rows).toHaveLength(4);
+    expect(rows.map((event) => event.purpose)).toEqual(Array(4).fill(eventPurpose));
+    expect(await materializeMissingInstances(db, row)).toBe(0);
+  });
+
   it("reconcile tops up a missing index and never resurrects a cancelled skipped week", async () => {
     const { row } = await createEvent(db, actor, input, {
       frequency: "weekly",

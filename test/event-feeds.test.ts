@@ -28,6 +28,7 @@ const row = (o: Partial<typeof events.$inferSelect> = {}) =>
     title: "Friday night Helldivers",
     game: null,
     description: "Bring stims.",
+    purpose: null,
     startsAt: new Date("2026-07-15T18:00:00Z"),
     endsAt: new Date("2026-07-15T20:00:00Z"),
     timezone: "Europe/London",
@@ -140,6 +141,18 @@ describe("feed builders (byte fixtures)", () => {
         `<guid isPermaLink="true">${APP_URL}/e/${KEY}</guid><pubDate>Wed, 15 Jul 2026 18:00:00 +0000</pubDate>` +
         "<description>it&#039;s</description></item></channel></rss>",
     );
+  });
+
+  it("keeps purpose out of legacy calendar and RSS exports", () => {
+    const purpose = "Invite-only strategy notes";
+    const event = row({ purpose });
+    const exports = [
+      eventIcs(event, APP_URL),
+      eventsIcsCollection([event], APP_URL),
+      eventsRss([event], APP_URL, new Date("2026-07-01T12:00:00Z")),
+    ];
+    for (const output of exports) expect(output).not.toContain(purpose);
+    expect(googleCalendarUrl(event)).toBe(googleCalendarUrl(row()));
   });
 
   it("Google Calendar link is RFC3986-encoded UTC", () => {

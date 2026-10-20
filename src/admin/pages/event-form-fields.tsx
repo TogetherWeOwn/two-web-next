@@ -1,5 +1,5 @@
 // Admin event-form fields and validation notice (split from event-form.tsx; zero behavior change).
-// The <form> element: title/game/description/schedule/location/capacity fields,
+// The <form> element: title/game/description/purpose/schedule/location/capacity fields,
 // the create-only recurrence fieldset or the edit-only series note, and the
 // save/cancel actions. Field errors render through the shared Field helper.
 
@@ -54,6 +54,18 @@ export const EventFormFields: FC<{
           {(id) => (
             <textarea id={id} name="description" rows={4} data-event-text-limit={1000}>
               {val(values, "description")}
+            </textarea>
+          )}
+        </Field>
+        <Field
+          name="purpose"
+          label="Purpose"
+          errors={errors}
+          hint="What participants will do, who it's for, and anything to prepare."
+        >
+          {(id) => (
+            <textarea id={id} name="purpose" rows={4} data-event-text-limit={1000}>
+              {val(values, "purpose")}
             </textarea>
           )}
         </Field>

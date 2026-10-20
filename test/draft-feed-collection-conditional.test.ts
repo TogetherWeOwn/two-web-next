@@ -103,6 +103,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           eventKey: DRAFT_KEY,
           title: DRAFT_TITLE,
           description: DRAFT_DESCRIPTION,
+          purpose: null,
           startsAt: new Date("2099-01-11T20:00:00Z"),
           endsAt: new Date("2099-01-11T22:00:00Z"),
           timezone: "UTC",

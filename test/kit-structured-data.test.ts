@@ -86,6 +86,7 @@ const hostileEvent = {
   eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
   title: hostileTitle,
   description: "<img src=x onerror=alert(1)>",
+  purpose: null,
   startsAt: new Date("2026-11-01T19:00:00Z"),
   endsAt: new Date("2026-11-01T21:00:00Z"),
   location: null,
