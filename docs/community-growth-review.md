@@ -45,4 +45,4 @@ The Community Manager, recorded as owner of the TWO Community goal, owns the eig
 
 ## Source and scope
 
-Sources: the active Paperclip goal “The TWO Community” and the TWO Web Next roadmap refresh dated 2026-10-20. The goal defines the human-participation metric, the target, the eight-week review threshold, and the kill scope. The roadmap calls for attributable evidence and a goal-review runbook. This document does not change product policy.
+Sources: the active Paperclip goal “The TWO Community” and the “TWO Web Next roadmap refresh” dated 2026-10-17. The goal defines the human-participation metric, the target, the eight-week review threshold, and the kill scope. The roadmap calls for attributable evidence and a goal-review runbook. This document does not change product policy.
