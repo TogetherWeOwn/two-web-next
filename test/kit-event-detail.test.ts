@@ -444,6 +444,51 @@ describe("event-detail guest reads", () => {
     expect(outcome.model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
   });
 
+  it("nulls the Google Calendar model link for non-wire years but keeps the Kit page contract", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            startsAt: new Date("+010000-01-10T20:00:00Z"),
+            endsAt: new Date("+010000-01-10T22:00:00Z"),
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.googleCalendarUrl).toBeNull();
+    expect(outcome.model.icsUrl).toBe(`/events/${KEY}.ics`);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-ics"');
+    expect(html).not.toContain('data-testid="event-google-calendar"');
+  });
+
+  it.each([
+    ["expanded endsAt only", "2030-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
+    ["negative startsAt only", "-000001-01-10T20:00:00Z", "2030-01-10T22:00:00Z"],
+  ])("omits only the Google Calendar link for %s", async (_label, startsAt, endsAt) => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({ startsAt: new Date(startsAt), endsAt: new Date(endsAt) }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.googleCalendarUrl).toBeNull();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-ics"');
+    expect(html).not.toContain('data-testid="event-google-calendar"');
+  });
+
   it("renders a moderator draft with noindex and no Markdown alternate", async () => {
     const { outcome } = await resolve(
       KEY,
