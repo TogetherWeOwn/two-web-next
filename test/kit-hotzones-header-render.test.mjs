@@ -95,9 +95,7 @@ for (const renderer of ["Hono", "Kit"]) {
         renderer === "Kit"
           ? renderKit(signal, data)
           : await (signal ? HotzoneSignalPage(data) : HotzonesIndexPage(data)).toString();
-      const header = html
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
+      const header = html.replace(/<!---->/g, "").match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
       expect(header).toBeDefined();
       expect(header).toContain('aria-label="Account"');
       expect(
