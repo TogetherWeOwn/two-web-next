@@ -12,20 +12,25 @@ export type SavedEventReviewRow = {
 
 export function savedEventReview(row: SavedEventReviewRow, now: Date) {
   const corrections: { message: string; href: string; label: string }[] = [];
-  if (!row.location?.trim()) {
-    corrections.push({
-      message: "The saved location is blank. Add a location before publishing.",
-      href: "#f-location",
-      label: "Edit location",
-    });
-  }
-  // Equality is allowed by the publication guard, unlike the live-RSVP boundary.
-  if (row.endsAt.getTime() < now.getTime()) {
-    corrections.push({
-      message: "The saved event has already ended. Update its dates before publishing.",
-      href: "#f-ends-at",
-      label: "Edit end time",
-    });
+  // Corrections are publication advice, so only drafts get them: a published
+  // event that legitimately ended, or a terminally cancelled one, must not be
+  // told to fix fields in order to publish.
+  if (row.status === "draft") {
+    if (!row.location?.trim()) {
+      corrections.push({
+        message: "The saved location is blank. Add a location before publishing.",
+        href: "#f-location",
+        label: "Edit location",
+      });
+    }
+    // Equality is allowed by the publication guard, unlike the live-RSVP boundary.
+    if (row.endsAt.getTime() < now.getTime()) {
+      corrections.push({
+        message: "The saved event has already ended. Update its dates before publishing.",
+        href: "#f-ends-at",
+        label: "Edit end time",
+      });
+    }
   }
   return {
     href: `/events/${encodeURIComponent(row.eventKey)}`,
