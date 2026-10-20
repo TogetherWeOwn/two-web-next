@@ -76,7 +76,17 @@ writeFileSync(
     "  }",
     '  throw new Error("E2E blocked unmocked Discord fetch: " + request.method + " " + url.pathname);',
     "};",
-    "export default worker;",
+    "// Mirror the Hono e2e entry's healthy-empty Discord seam (e2e/worker.ts):",
+    "// both loopback targets simulate the same Discord state, so cross-target",
+    "// renders agree and no run ever attempts a live Discord read.",
+    "const entry = { ...worker };",
+    "entry.fetch = (request, env, ctx) =>",
+    "  worker.fetch(",
+    "    request,",
+    "    { ...env, DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false } },",
+    "    ctx,",
+    "  );",
+    "export default entry;",
   ].join("\n"),
 );
 writeFileSync(

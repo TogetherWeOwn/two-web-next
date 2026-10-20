@@ -48,9 +48,11 @@ duplicated here.
 
 ## Reviewed CI baselines
 
-The pinned-runner visual suites compare only in CI. This change is expected to
-shift exactly four baselines, each by the notice block above otherwise
-unchanged rows: `events-desktop`, `events-mobile`, `kit-events-index-desktop`,
-`kit-events-index-mobile`. Accept only through the failure artifact and
-`node ci/visual-accept.mjs` after opening every expected/actual/diff image.
-No threshold, mask, or spec change is part of this work.
+The pinned-runner visual suites compare only in CI. Both loopback targets
+simulate the same healthy-empty Discord state (the Hono e2e entry and the
+Kit fixture wrapper inject the same seam), so no baseline shifts: the
+failure path above is proven by these fixtures and the acceptance suites,
+not by the seeded visual pages. If a baseline diffs, accept only through
+the failure artifact and `node ci/visual-accept.mjs` after opening every
+expected/actual/diff image. No threshold, mask, or spec change is part of
+this work.
