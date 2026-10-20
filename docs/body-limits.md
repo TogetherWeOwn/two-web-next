@@ -90,7 +90,7 @@ support for file uploads.
 
 ## Response and exception
 
-Every shared-limit refusal is 413, `Cache-Control: no-store, private`, with no
+Every shared-limit overflow refusal is 413, `Cache-Control: no-store, private`, with no
 submitted content, field names, limit internals or exception details. API routes
 and callers accepting `application/json` get exactly:
 
@@ -100,6 +100,16 @@ and callers accepting `application/json` get exactly:
 
 Browsers receive the corresponding branded 413 page, following the existing
 shared 429 content-negotiation convention.
+
+A failed source read instead returns 400 through the shared `badRequest`
+helper. API routes and JSON-only event writes always receive
+`{"error":"bad_request","message":"Check your request and try again."}`;
+other routes negotiate JSON or the branded “Check your request” page using
+Accept quality and specificity. Feed paths (`.ics`, `.rss`, `.md`, `/llms.txt`)
+retain the exact plaintext `Bad request`. These refusals send
+`Cache-Control: no-store, private` and merge `Accept` into `Vary`. No source
+exception or submitted bytes enter the response, and the route is not called.
+Malformed profile and admin form bodies use this same 400 contract.
 
 `POST /csp-reports` deliberately retains its existing 8,192-byte capped reader
 and always-204/drop behavior to avoid browser report retries. Its capped handler

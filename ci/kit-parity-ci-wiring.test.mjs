@@ -83,6 +83,27 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("both loopback parity workers inject the same healthy-empty Discord seam", () => {
+  // The cross-target events-calendar comparison renders the partial-source
+  // notice only when a target reports a Discord failure, so both loopback
+  // workers must simulate the same healthy-empty state or the sections
+  // diverge. The Kit wrapper MUST assign onto the incoming env object: Kit
+  // reads the ambient `cloudflare:workers` env (the entrypoint's original
+  // object), so a spread copy passed to worker.fetch is invisible to it and
+  // Kit falls back to a live read the fixture fetch stub refuses.
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(
+    worker,
+    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
+  );
+  assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
+  assert.match(
+    hono,
+    /DISCORD_EVENTS: \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \}/,
+  );
+});
+
 test("both loopback parity workers share the raised read budget", () => {
   // The Kit fixture enforces the same `events-read:anon` bucket as the Hono
   // loopback worker (same disposable Postgres, no forwarded client headers),

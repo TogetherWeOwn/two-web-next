@@ -1,7 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Env } from "./env";
-import { payloadTooLarge } from "./errors";
+import { badRequest, payloadTooLarge } from "./errors";
 
 // Wire-size budgets (including encoding overhead); field validation still runs
 // independently. See docs/body-limits.md for the legacy-maxima derivation.
@@ -72,7 +72,7 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
       refused = await limit(c, async () => {});
     } catch (err) {
       if (!readFailed) throw err;
-      return c.text("Bad request", 400);
+      return badRequest(c);
     } finally {
       reader.releaseLock();
     }

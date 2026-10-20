@@ -337,6 +337,21 @@ describe("performance CI", () => {
       (html: string) => html.replace("3 of 20 going", "0 of 20 going"),
     ],
     [
+      "Detail missing end",
+      `/e/${fixtureKey}`,
+      (html: string) => {
+        // Pin the production count guard via assertFixtureContent: stripping
+        // the Ends cell must throw here. Without the count, one in-window
+        // start satisfies the remaining checks and a regressed page would be
+        // admitted. Complements the owned helper's unit negatives, which run
+        // outside the production admission function.
+        let seen = 0;
+        return html.replace(/<time\b[^>]*datetime="[^"]+"[^>]*>[\s\S]*?<\/time>/g, (match) =>
+          ++seen === 2 ? "" : match,
+        );
+      },
+    ],
+    [
       "epoch fixture dates",
       "/",
       (html: string) => html.replace(/datetime="[^"]+"/g, 'datetime="1970-01-08T00:00:00.000Z"'),

@@ -575,9 +575,24 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
   // The post-deploy `release` call (release.yml) is the only job override: it
-  // runs after both gate jobs and needs only contents: write to tag the commit.
+  // needs only Actions read for promotion proof and contents write to tag/release.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
-  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+  const releaseLines = release
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, "").trimEnd())
+    .filter((line) => line.trim());
+  const permissionsAt = releaseLines.indexOf("    permissions:");
+  assert.notEqual(permissionsAt, -1, "release caller must declare its permissions");
+  const permissions = releaseLines.slice(permissionsAt + 1);
+  const nextField = permissions.findIndex((line) => /^ {0,4}\S/.test(line));
+  assert.deepEqual(
+    permissions
+      .slice(0, nextField === -1 ? undefined : nextField)
+      .map((line) => line.trim())
+      .sort(),
+    ["actions: read", "contents: write"],
+    "release caller must grant exactly Actions read and contents write",
+  );
   assert.ok(
     !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
@@ -840,7 +855,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  rollback-production:/m);
-  // Production Environment approval with required reviewers; never cancelled.
+  // Production Environment gate in either approval mode; never cancelled.
   assert.match(workflow, /environment:\n      name: production\n/);
   assert.match(workflow, /cancel-in-progress: false/);
   // Same request gate as a deploy, in both jobs.
@@ -1292,6 +1307,24 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
     assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
   }
 });
+
+for (const job of ["preflight", "rollback-production"]) {
+  test(`rollback ${job} gate receives the repository approval mode and dispatch SHA`, () => {
+    const workflow = readFileSync(
+      new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+      "utf8",
+    );
+    const block = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
+    assert.ok(block, `${job} job must exist`);
+    const gates = block.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    assert.equal(gates.length, 1, `${job} must run the shared gate`);
+    const gate = gates[0].split("\n      - ")[0];
+    assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
+    assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  });
+}
 
 test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
   // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
