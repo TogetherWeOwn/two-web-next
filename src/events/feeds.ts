@@ -10,9 +10,25 @@ export const SITE_NAME = "Together We Own";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** PHP `Ymd\THis\Z` for a UTC instant. */
+/** True when `d` formats on the RFC 5545 wire: a finite instant in years 0000-9999. */
+export function isWireInstant(d: Date): boolean {
+  // getUTCFullYear is NaN exactly when the time is NaN, so the finite
+  // check subsumes it: what remains is an integer year to range-check.
+  const year = d.getUTCFullYear();
+  return Number.isFinite(d.getTime()) && year >= 0 && year <= 9999;
+}
+
+/** PHP `Ymd\THis\Z` for a UTC instant.
+ *
+ * RFC 5545 wire form needs exactly four year digits: finite instants in
+ * years 0000-9999 format with a zero-padded year, while anything else
+ * (non-finite, negative or expanded years) refuses instead of emitting
+ * corrupt `NaN` or invalid-width bytes.
+ */
 export function icsInstant(d: Date): string {
-  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+  if (!isWireInstant(d)) throw new IcsTimestampRangeError();
+  const year = d.getUTCFullYear();
+  return `${String(year).padStart(4, "0")}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
 }
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -20,7 +36,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 /** PHP `DATE_RSS` (`D, d M Y H:i:s O`) in UTC, i.e. `+0000`. */
 export function rssDate(d: Date): string {
-  return `${DAYS[d.getUTCDay()]}, ${pad(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000`;
+  if (!isWireInstant(d)) throw new RangeError("RSS timestamp is outside the four-digit year range");
+  return `${DAYS[d.getUTCDay()]}, ${pad(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).padStart(4, "0")} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000`;
 }
 
 /** RFC 5545 §3.3.11 escaping: backslash, semicolon, comma, newlines. */
@@ -63,6 +80,12 @@ const pageUrl = (e: EventRow, appUrl: string) => `${feedBase(appUrl)}/e/${e.even
 export class IcsSequenceRangeError extends RangeError {
   constructor() {
     super("Calendar revision is outside the RFC 5545 SEQUENCE range");
+  }
+}
+
+export class IcsTimestampRangeError extends RangeError {
+  constructor() {
+    super("Calendar timestamp is outside the RFC 5545 wire range");
   }
 }
 
@@ -145,14 +168,19 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
   // One out-of-range stored revision must not fail the whole export: skip
   // that row and log the count plus the skipped event keys, so the stranded
   // subscriber-visible event can be found and the identity migration started.
-  // Only the sequence-range failure is skippable; any other builder error
-  // still throws for the collection.
+  // Only the sequence-range and timestamp-range failures are skippable; any
+  // other builder error still throws for the collection.
   let skipped = 0;
   const skippedEventKeys: string[] = [];
+  let skippedTimestamps = 0;
   const inner = rows.flatMap((e) => {
     try {
       return vevent(e, appUrl);
     } catch (error) {
+      if (error instanceof IcsTimestampRangeError) {
+        skippedTimestamps += 1;
+        return [];
+      }
       if (!(error instanceof IcsSequenceRangeError)) throw error;
       skipped += 1;
       skippedEventKeys.push(e.eventKey);
@@ -165,12 +193,35 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
       skippedEventKeys,
     });
   }
+  if (skippedTimestamps > 0) {
+    // Bounded by reason, not by row: one line carries the count however many
+    // rows were poisoned, and no event key, title or description may leak.
+    console.warn("eventsIcsCollection skipped rows with non-wire timestamps.", {
+      skipped: skippedTimestamps,
+    });
+  }
   return calendar(inner);
 };
 
+export function latestWireUpdatedAt(rows: EventRow[]): Date {
+  const latest = rows.reduce<Date | undefined>(
+    (selected, row) =>
+      isWireInstant(row.updatedAt) && (!selected || row.updatedAt > selected)
+        ? row.updatedAt
+        : selected,
+    undefined,
+  );
+  return latest ?? new Date(0);
+}
+
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);
-  const items = rows
+  const renderable = rows.filter((e) => isWireInstant(e.startsAt) && isWireInstant(e.endsAt));
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("eventsRss skipped rows with non-wire timestamps.", { skipped });
+  }
+  const items = renderable
     .map((e) => {
       const url = xml(pageUrl(e, appUrl));
       return (

@@ -19,6 +19,7 @@
 // stay in the caller's environment; nothing here logs bodies or secrets —
 // check details carry outcomes and a single-use carrier UUID only.
 
+import { validateAnnouncement, validateRoleAssign } from "../bot/client-validation";
 import {
   dispatchAnnouncement,
   dispatchRoleAssign,
@@ -144,15 +145,21 @@ export async function runInternalActionDrill(
     }
   };
 
+  // Preflight both payloads before dispatching either carrier.
+  const roleAssignment = { userId: args.discordId, roleKey: args.roleKey };
+  const announcement = {
+    channelKey: args.channelKey,
+    body: `TOG-11706 drill run. Ignore. ${now().toISOString()}`,
+  };
+  validateRoleAssign(roleAssignment);
+  validateAnnouncement(announcement);
+
   // Dispatch through the real producers into a capturing queue: the carriers
   // below are exactly what the queue would deliver to the consumer.
   const sent: QueueMessage[] = [];
   const queue = { send: async (b: unknown): Promise<unknown> => void sent.push(b as QueueMessage) };
-  await dispatchRoleAssign(queue, { userId: args.discordId, roleKey: args.roleKey });
-  await dispatchAnnouncement(queue, {
-    channelKey: args.channelKey,
-    body: `TOG-11706 drill run. Ignore. ${now().toISOString()}`,
-  });
+  await dispatchRoleAssign(queue, roleAssignment);
+  await dispatchAnnouncement(queue, announcement);
 
   const [roleMsg, annMsg] = sent;
   if (roleMsg?.kind !== "role-assign" || annMsg?.kind !== "announcement") {
