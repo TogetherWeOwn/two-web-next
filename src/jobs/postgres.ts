@@ -12,6 +12,10 @@ import type {
 
 type Sql = ReturnType<typeof postgres>;
 
+// Match the scheduled reconcile prepare budget: Postgres cancels a blocked
+// lock or slow statement, rather than leaving SQL running after a JS timeout.
+const PRUNE_DB_TIMEOUT_MS = 5000;
+
 /**
  * Transaction-scoped advisory lock: released on commit/rollback/disconnect,
  * so a crashed run never wedges the job. The body runs INSIDE the reserved
@@ -63,31 +67,51 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // uses the savepoint's client, so a late failure rolls back every batch of
   // that table and postgres.js does not mark the outer flight as failed.
   // Direct single-statement callers still get their own isolation boundary.
-  // Pool clients have no savepoint surface: their statements stay autocommit,
-  // including the dispatch-pool unique-lock sweep.
+  // Pool callers use a short transaction PER statement, including the separate
+  // unique-lock sweep: each batch commits and releases lease rows before the
+  // flight ends. Never wrap a pool's whole drain in one transaction.
   const candidate = sql as unknown as {
     savepoint?: <T>(fn: (client: TxClient | Sql) => Promise<T>) => Promise<T>;
+    begin: <T>(fn: (client: TxClient | Sql) => Promise<T>) => Promise<T>;
   };
-  const withSavepoint = <T>(work: (client: TxClient | Sql) => Promise<T>): Promise<T> => {
-    if (typeof candidate.savepoint === "function") return candidate.savepoint((c) => work(c));
-    return work(sql);
+  const bounded = async <T>(
+    client: TxClient | Sql,
+    work: (client: TxClient | Sql) => Promise<T>,
+  ): Promise<T> => {
+    const [previous] = await client`select current_setting('lock_timeout') as lock,
+      current_setting('statement_timeout') as statement`;
+    await client`select set_config('lock_timeout', ${`${PRUNE_DB_TIMEOUT_MS}ms`}, true),
+      set_config('statement_timeout', ${`${PRUNE_DB_TIMEOUT_MS}ms`}, true)`;
+    const result = await work(client);
+    // Successful savepoints do not undo SET LOCAL. Restore the enclosing
+    // transaction's settings before yielding to siblings. On failure, let the
+    // savepoint/transaction rollback restore them; SQL in an aborted scope
+    // would only mask the original cancellation with 25P02.
+    await client`select set_config('lock_timeout', ${previous.lock}, true),
+      set_config('statement_timeout', ${previous.statement}, true)`;
+    return result;
+  };
+  const withBoundary = <T>(work: (client: TxClient | Sql) => Promise<T>): Promise<T> => {
+    if (typeof candidate.savepoint === "function")
+      return candidate.savepoint((client) => bounded(client, work));
+    return candidate.begin((client) => bounded(client, work));
   };
   const ageTable = (
     statement: (client: TxClient | Sql, at: Date) => Promise<number>,
   ): AgePrunedTable => ({
-    pruneOlderThan: (at) => withSavepoint((client) => statement(client, at)),
+    pruneOlderThan: (at) => withBoundary((client) => statement(client, at)),
     isolate:
       typeof candidate.savepoint === "function"
-        ? (work) => withSavepoint((client) => work((at) => statement(client, at)))
+        ? (work) => withBoundary((client) => work((at) => statement(client, at)))
         : undefined,
   });
   const expiryTable = (
     statement: (client: TxClient | Sql, at: Date) => Promise<number>,
   ): SessionSweeper => ({
-    sweepExpired: (at) => withSavepoint((client) => statement(client, at)),
+    sweepExpired: (at) => withBoundary((client) => statement(client, at)),
     isolate:
       typeof candidate.savepoint === "function"
-        ? (work) => withSavepoint((client) => work((at) => statement(client, at)))
+        ? (work) => withBoundary((client) => work((at) => statement(client, at)))
         : undefined,
   });
   const agentEventAudits = ageTable(
