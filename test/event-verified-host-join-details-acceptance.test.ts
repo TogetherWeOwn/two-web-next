@@ -53,8 +53,6 @@ function fixture(over: Record<string, unknown> = {}) {
     organizer_name: null,
     join_url: null,
     join_instructions: null,
-    purpose: "Learn the opening",
-    accessibility_notes: "Step-free entrance",
     ...over,
   };
   const row: typeof events.$inferSelect = values as typeof events.$inferSelect;
@@ -143,8 +141,6 @@ describe("event public host and join-details acceptance", () => {
     expect(html).not.toContain('<img src=x onerror="alert(1)">');
     expect(html).toContain('href="https://meet.example.test/room-42"');
     expect(html).toContain("Use the public lobby; do not share attendee links.");
-    expect(html).toContain("Learn the opening");
-    expect(html).toContain("Step-free entrance");
     expect(html).toContain('data-testid="event-ics"');
     expect(html).toContain("3 of 10 going");
     expect(html).not.toContain("private-attendee");
@@ -154,8 +150,6 @@ describe("event public host and join-details acceptance", () => {
     const html = await (await fixture().request()).text();
     expect(html).toContain('data-testid="event-venue">The lobby');
     expect(html).toContain('data-testid="event-join-pitch"');
-    expect(html).toContain("Learn the opening");
-    expect(html).toContain("Step-free entrance");
     expect(html).not.toContain('data-testid="event-organizer"');
     expect(html).not.toContain('data-testid="event-join-details"');
     expect(html).not.toContain('data-testid="event-public-join-link"');
@@ -169,7 +163,7 @@ describe("event public host and join-details acceptance", () => {
       "overlong join instructions",
       { organizer_name: "Riley", join_instructions: "x".repeat(5001) },
     ],
-  ])("rejects %s before persisting and retains purpose/accessibility", async (_name, extra) => {
+  ])("rejects %s before persisting", async (_name, extra) => {
     const source = fixture();
     const response = await source.create({
       title: "Chess night",
@@ -180,8 +174,6 @@ describe("event public host and join-details acceptance", () => {
       timezone: "UTC",
       location: "The lobby",
       capacity: "10",
-      purpose: "Learn the opening",
-      accessibility_notes: "Step-free entrance",
       ...extra,
     });
     expect(source.queries.some((sql) => /insert into "events"|update "events"/i.test(sql))).toBe(
@@ -189,8 +181,8 @@ describe("event public host and join-details acceptance", () => {
     );
     expect(response.status).toBe(422);
     const html = await response.text();
-    expect(html).toContain("Learn the opening");
-    expect(html).toContain("Step-free entrance");
+    // Purpose/accessibility retention is owned by their own cards, not pinned here.
+    expect(html).toContain('data-testid="form-errors"');
   });
 
   it("keeps a draft moderator-only even when it contains public join details", async () => {
