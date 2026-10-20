@@ -39,6 +39,7 @@ import {
   type SortOrder,
 } from "./table-list";
 import { utcToWall } from "./validation-wall-time";
+import { savedEventReview, type SavedEventReview } from "./event-saved-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -104,6 +105,7 @@ export type KitEventEditView = {
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
   endsAt: string;
+  savedReview: SavedEventReview;
   roster: KitEventEditRosterView;
 };
 
@@ -128,6 +130,8 @@ export type KitEventEditRow = {
   status: string;
   rsvpOpen: boolean;
   recurrenceFrequency: string | null;
+  /** Already present on the real store row; absent only in narrower fixtures. */
+  updatedAt?: Date;
 };
 
 export type KitEventEditRosterRow = {
@@ -235,6 +239,7 @@ export async function resolveKitEventEdit(
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
       endsAt: row.endsAt.toISOString(),
+      savedReview: savedEventReview(row, now),
       roster: {
         total: roster.total,
         query,

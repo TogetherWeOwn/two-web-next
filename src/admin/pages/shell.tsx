@@ -72,8 +72,8 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
   </Shell>
 );
 
-export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
-  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+export const RsvpAction: FC<{ row: EventRow; now?: Date }> = ({ row, now = new Date() }) => {
+  if (row.status !== "published" || row.endsAt <= now) return null;
   const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
   return (
     <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
