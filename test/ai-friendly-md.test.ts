@@ -205,7 +205,7 @@ describe("md builders (pure, DB-free)", () => {
     expect(body.indexOf("## Purpose")).toBeLessThan(body.indexOf("## About this event"));
   });
 
-  it.each([null, "", " \\t\\n "])("omits blank or legacy detail purpose %s", (purpose) => {
+  it.each([null, "", " \t\n "])("omits blank or legacy detail purpose %s", (purpose) => {
     const body = mdEvent(APP_URL, mdRow({ purpose }));
     expect(body).not.toContain("## Purpose");
     expect(body).toContain("## About this event\n\nBring stims.");

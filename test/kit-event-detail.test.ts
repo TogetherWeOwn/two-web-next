@@ -734,7 +734,7 @@ describe("Kit detail presentation", () => {
       const html = renderDetail(resolved.outcome.model as unknown as Record<string, unknown>);
       expect(html).toContain("Purpose");
       expect(html).toContain(
-        "A welcoming intro &amp; &quot;practice&quot; &lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;",
+        "A welcoming intro &amp; \"practice\" &lt;script>alert('x')&lt;/script>",
       );
       expect(html).not.toContain("<script>alert('x')</script>");
       const eventJsonLd = html.match(
