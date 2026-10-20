@@ -29,16 +29,38 @@ function readBudget() {
   return Number.parseInt(match[1], 10);
 }
 
+// Journey-spec enumeration mirrors playwright.config.ts: testMatch
+// **/*.spec.ts under e2e/, minus testIgnore **/{staging,watch,explore,
+// kit-parity}/**. Staging/watch/explore run in other jobs against other
+// buckets; kit-parity is pinned separately below. A non-recursive read here
+// would miss a journey spec added in a subdirectory while Playwright runs it.
+const PLAYWRIGHT_IGNORED_DIRS = new Set(["staging", "watch", "explore", "kit-parity"]);
+
+function journeySpecFiles() {
+  const files = [];
+  const visit = (relativeDir) => {
+    const entries = readdirSync(new URL(relativeDir, e2eDir), { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!PLAYWRIGHT_IGNORED_DIRS.has(entry.name)) {
+          visit(`${relativeDir}${entry.name}/`);
+        }
+      } else if (entry.isFile() && entry.name.endsWith(".spec.ts")) {
+        files.push(`${relativeDir}${entry.name}`);
+      }
+    }
+  };
+  visit("./");
+  return files.sort();
+}
+
 function countLogins() {
-  const files = readdirSync(e2eDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".spec.ts"))
-    .map((entry) => entry.name)
-    .sort();
+  const files = journeySpecFiles();
   assert.ok(files.length > 0, "no e2e spec files found");
   return files.map((file) => {
-    const source = readFileSync(new URL(`./${file}`, e2eDir), "utf8");
+    const source = readFileSync(new URL(file, e2eDir), "utf8");
     const calls = source.match(/await\s+qaLogin\s*\(/g) ?? [];
-    return { file, count: calls.length };
+    return { file: file.slice("./".length), count: calls.length };
   });
 }
 
@@ -72,7 +94,7 @@ test("the sequential smoke holds at most one throttle window of QA logins", () =
 // their spec to satisfy this pin.
 function countQaLoginPosts(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
-  return (source.match(/\.post\(\s*["`]\/auth\/qa\//g) ?? []).length;
+  return (source.match(/\.post\(\s*["'`]\/auth\/qa\//g) ?? []).length;
 }
 
 // Absolute QA URLs (staging-style `${origin}/auth/qa/...`) would evade the
@@ -82,7 +104,7 @@ function countQaLoginPosts(relativePath) {
 // treat any new post(variable) in this window as a budget question in review.)
 function countAbsoluteQaLoginPosts(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
-  return (source.match(/\.post\(\s*["`]https?:\/\/[^"`]*\/auth\/qa\//g) ?? []).length;
+  return (source.match(/\.post\(\s*["'`]https?:\/\/[^"'`]*\/auth\/qa\//g) ?? []).length;
 }
 
 test("teardown and parity QA logins stay pinned inside the throttle window", () => {
