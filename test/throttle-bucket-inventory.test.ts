@@ -1,6 +1,6 @@
 // Throttle bucket inventory: pins every human-route throttle bucket name to
 // its registration files so a move without a docs+test update fails loudly.
-// Static scan only, DB-free. Covers TOG-34206: stale file pointers in
+// Static scan only, DB-free. Covers stale file pointers in
 // docs/throttling.md (logout/event-write/qa-login), the missing admin-write
 // row, the RSVP contracts move, and the MCP cap-before-throttle order.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
