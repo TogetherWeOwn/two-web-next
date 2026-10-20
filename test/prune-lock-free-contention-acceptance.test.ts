@@ -118,7 +118,11 @@ describe.skipIf(!DB)("scoped prune bounded deferral (test Postgres, acceptance)"
         expect(reports).toHaveLength(1);
         expect(reports[0]).toHaveLength(1);
         expect(reports[0]![0]!.table).toBe(held.key);
-        expect(reports[0]![0]!.error).toMatchObject({ code: "55P03" });
+        // Equal 5 s lock and statement deadlines race: lock_timeout reports
+        // 55P03, statement_timeout reports 57014. Either bounded cancellation
+        // proves deferral under the witnessed held lock; the
+        // execution-budget suite pins each deadline separately.
+        expect(["55P03", "57014"]).toContain((reports[0]![0]!.error as { code: string }).code);
         expect(caps).toEqual([false]);
         expect(counts).toEqual({
           agentEventAudits: 2,
