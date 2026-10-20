@@ -27,6 +27,7 @@ import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
   PROFILE_SHARE_DESCRIPTION,
+  PROFILE_TIMEZONE_HELP_ID,
   profileFieldForErrorKey,
   profileInitials,
   statsDate,
@@ -364,13 +365,15 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               value={form.timezone}
               placeholder="Europe/London"
               aria-invalid={errors?.timezone ? "true" : undefined}
-              aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : "profile-timezone-help"}
+              aria-describedby={errors?.timezone
+                ? `${PROFILE_TIMEZONE_HELP_ID} ${PROFILE_ERROR_IDS.timezone}`
+                : PROFILE_TIMEZONE_HELP_ID}
             />
           </label>
           {#if errors?.timezone}
             <p id={PROFILE_ERROR_IDS.timezone} class="error">{errors.timezone}</p>
           {/if}
-          <p id="profile-timezone-help" class="profile-hint">{PROFILE_COPY.timezoneHelp}</p>
+          <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">{PROFILE_COPY.timezoneHelp}</p>
           <div data-device-timezone hidden>
             <button
               class="btn profile-secondary"

@@ -45,6 +45,8 @@ export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
   timezone: "profile-timezone-error",
   leaderboard_opt_out: "profile-leaderboard-opt-out-error",
 };
+// The timezone help text stays associated in both valid and error states.
+export const PROFILE_TIMEZONE_HELP_ID = "profile-timezone-help";
 export const profileFieldForErrorKey = (key: string): ProfileField | null =>
   key === "bio"
     ? "bio"
@@ -419,7 +421,9 @@ export const ProfilePage: FC<{
                   placeholder="Europe/London"
                   aria-invalid={errors?.timezone ? "true" : undefined}
                   aria-describedby={
-                    errors?.timezone ? PROFILE_ERROR_IDS.timezone : "profile-timezone-help"
+                    errors?.timezone
+                      ? `${PROFILE_TIMEZONE_HELP_ID} ${PROFILE_ERROR_IDS.timezone}`
+                      : PROFILE_TIMEZONE_HELP_ID
                   }
                 />
               </label>
@@ -428,7 +432,7 @@ export const ProfilePage: FC<{
                   {errors.timezone}
                 </p>
               ) : null}
-              <p id="profile-timezone-help" class="profile-hint">
+              <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">
                 {PROFILE_COPY.timezoneHelp}
               </p>
               <div data-device-timezone hidden>
