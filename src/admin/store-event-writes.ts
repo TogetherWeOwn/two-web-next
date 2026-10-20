@@ -26,7 +26,7 @@ import {
 } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
-import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
 
 export type EventRow = typeof events.$inferSelect;
 
@@ -58,6 +58,7 @@ export async function createEvent(
   // no key field and parseEventForm refuses forged event_key/eventKey
   // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [parent] = await tx
       .insert(events)
       .values({
@@ -201,6 +202,7 @@ export async function updateEvent(
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
       // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
       // child shift below always sees the committed old times (no double-shift).
       const [locked] = await tx
@@ -268,6 +270,7 @@ export async function patchEvent(
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
       const [locked] = await tx
         .select()
         .from(events)
@@ -427,6 +430,7 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
@@ -487,6 +491,7 @@ export async function setRsvpOpen(
   clock: () => Date = () => new Date(),
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx

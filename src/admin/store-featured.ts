@@ -11,7 +11,7 @@ import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
 import { activityLog, featuredContents } from "../db/admin-schema";
 import type { FeaturedFormInput } from "./validation";
-import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
 import { retireHomeGuestCache } from "../home-cache";
 
 export type FeaturedRow = typeof featuredContents.$inferSelect;
@@ -49,6 +49,7 @@ export async function createFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [row] = await tx
       .insert(featuredContents)
       .values({
@@ -86,6 +87,7 @@ export async function updateFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [locked] = await tx
       .select(featuredEditSelection)
       .from(featuredContents)
@@ -130,6 +132,7 @@ export async function updateFeatured(
 /** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [locked] = await tx
       .select()
       .from(featuredContents)
