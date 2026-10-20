@@ -5,6 +5,7 @@
 // Chromium and the locked root/web development dependencies are required.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -298,10 +299,7 @@ describe.skipIf(process.env.PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS !== "true")(
     beforeAll(async () => {
       const worktree = fileURLToPath(new URL("../", import.meta.url).href);
       const scratchRoot =
-        process.env.PAPERCLIP_RUN_SCRATCH_DIR ??
-        process.env.PAPERCLIP_SCRATCH_DIR ??
-        process.env.RUNNER_TEMP ??
-        process.env.TMPDIR;
+        process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir();
       if (!scratchRoot)
         throw new Error(
           "Set TMPDIR to an owned scratch directory for the SSR compilation fixture.",
