@@ -87,7 +87,8 @@ export function pgEventStore(
 ): EventStore {
   // Operational previews cannot combine a fresh timestamp with cached source reads.
   // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
-  const readMarker = () => (bypassReadCache ? sql`, clock_timestamp() as preview_read_at` : sql``);
+  const readMarker = (client: ReturnType<typeof postgres> | TxClient = sql) =>
+    bypassReadCache ? client`, clock_timestamp() as preview_read_at` : client``;
   // Bound every handler statement on its owning connection, including the
   // prepare fallback read. SET LOCAL expires on commit/rollback; callers that
   // already own a transaction must not issue a nested BEGIN or inherit this
@@ -276,7 +277,7 @@ export function pgEventStore(
         // Clean rows need no further bot call even if redundant jobs were queued
         // while an older attempt was finishing. Dirty conflicts wait, never ACK.
         // A single-key eligibility check always answers an array, never a page.
-        const eligibility = await staleKeys(eventKey, undefined, sql);
+        const eligibility = await staleKeys(eventKey, undefined, undefined, sql);
         const eligible = Array.isArray(eligibility) ? eligibility : eligibility.keys;
         return eligible.length ? { waiting: true as const } : null;
       });
