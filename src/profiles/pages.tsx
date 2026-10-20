@@ -189,6 +189,9 @@ export const ProfilePage: FC<{
             <a class="btn" href="/profile">
               Your profile
             </a>
+            <a class="btn profile-secondary" href="/events">
+              Events
+            </a>
             {/* Convenience link only: /admin still 403s anyone without the moderator bit. */}
             {isModerator ? (
               <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
@@ -293,9 +296,14 @@ export const ProfilePage: FC<{
           >
             <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
             <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
-            <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
-              {PROFILE_NEW_MEMBER_COPY.cta}
-            </a>
+            <div class="actions">
+              <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+                {PROFILE_NEW_MEMBER_COPY.cta}
+              </a>
+              <a class="btn profile-secondary" href="/events">
+                Find an event
+              </a>
+            </div>
           </section>
         ) : null}
         {stats ? <MemberStatsBlock stats={stats} /> : null}

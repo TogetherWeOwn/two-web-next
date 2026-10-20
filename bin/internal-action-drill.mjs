@@ -22,23 +22,16 @@ import { createBotClient } from "../src/bot/client.ts";
 import { BotTerminalError } from "../src/jobs/types.ts";
 import { resolveDrillTarget, runInternalActionDrill } from "../src/probes/internal-action-drill.ts";
 
-function opt(name) {
-  const prefix = `--${name}=`;
-  const found = process.argv.slice(2).find((a) => a.startsWith(prefix));
-  return found ? found.slice(prefix.length) : "";
-}
+import { parseInternalActionArgs } from "./internal-action-args.mjs";
 
-const discordId = opt("discord-id");
-const roleKey = opt("role-key");
-const channelKey = opt("channel-key");
-
-const missing = ["discord-id", "role-key", "channel-key"].filter((n) => opt(n) === "");
-if (missing.length > 0) {
-  console.error(
-    `internal-action-drill: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`,
-  );
+let args;
+try {
+  args = parseInternalActionArgs(process.argv.slice(2));
+} catch (e) {
+  console.error(`internal-action-drill: ${e.message}`);
   process.exit(2);
 }
+const { discordId, roleKey, channelKey } = args;
 
 let targets;
 try {

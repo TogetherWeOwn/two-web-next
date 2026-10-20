@@ -11,15 +11,20 @@
 // Set RELEASE_ON_PROMOTE to point at an alternate copy of the script under
 // test (same seam as ci/release-on-promote.selftest.cjs). Offline throughout:
 // a throwaway git repository and a fake `gh` on PATH; no network, no real
-// release. This file is the independent acceptance contract; wiring it into a
-// suite (for example from test/release-workflow.test.ts) must not require
-// editing it.
+// release. The untagged newest publish is the only case that creates a tag,
+// so only that child gets hermetic production proof: Actions API reads are
+// forwarded to ci/release-promotion-proof.fixture.cjs, while release lookup
+// and create stay in this file's fake `gh`. The candidate is not tagged
+// ahead of the publisher. This file is the independent acceptance contract;
+// wiring it into a suite (for example from test/release-workflow.test.ts)
+// must not require editing it.
 
 const assert = require("node:assert/strict");
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { fixture: promotionFixture } = require("./release-promotion-proof.fixture.cjs");
 
 const SCRIPT = process.env.RELEASE_ON_PROMOTE || path.join(__dirname, "release-on-promote.cjs");
 const REAL_CONFIG = path.join(__dirname, "..", "release-please-config.json");
@@ -54,8 +59,18 @@ g("tag", "v0.10.0", newestTagged);
 const newestUntagged = commit("fix(voice): after topics (#5)");
 g("update-ref", "refs/remotes/origin/main", newestUntagged);
 
+// Proof for the untagged newest publish only. Reuse the paired fixture's
+// provider, then bind its receipt and producer metadata to this suite's
+// candidate. Do not tag that commit here: a pre-existing tag would skip proof.
+const promotion = promotionFixture({ after() {} });
+promotion.state.receipt.sha = newestUntagged;
+promotion.state.runs[0].head_sha = newestUntagged;
+promotion.state.artifacts[0].workflow_run.head_sha = newestUntagged;
+fs.writeFileSync(path.join(promotion.root, "provider.json"), JSON.stringify(promotion.state));
+
 // Fake gh: records every argv line, models the release lookup per mode, and
-// never creates a git tag or touches the network.
+// never creates a git tag or touches the network. Actions reads, and only
+// those, are answered by the paired fixture.
 const ghBin = fs.mkdtempSync(path.join(os.tmpdir(), "release-latest-gh-"));
 fs.writeFileSync(
   path.join(ghBin, "gh"),
@@ -74,6 +89,9 @@ fs.writeFileSync(
     '      create-fails) echo "gh: release create failed (HTTP 500)" >&2; exit 1 ;;',
     "      *) exit 0 ;;",
     "    esac ;;",
+    '  "api --method GET repos/o/r/actions/"*)',
+    '    if [ -z "$PROOF_FIXTURE" ]; then echo "unexpected gh call: $*" >&2; exit 2; fi',
+    `    exec "${process.execPath}" ${JSON.stringify(path.resolve(__dirname, "release-promotion-proof.fixture.cjs"))} --fake-gh "$@" ;;`,
     "esac",
     'echo "unexpected gh call: $*" >&2',
     "exit 2",
@@ -83,7 +101,7 @@ fs.writeFileSync(
 );
 
 let runCount = 0;
-const run = ({ sha, mode = "absent", dryRun = false }) => {
+const run = ({ sha, mode = "absent", dryRun = false, promotionProof = false }) => {
   runCount += 1;
   const out = path.join(ghBin, `output-${runCount}`);
   const log = path.join(ghBin, `gh-${runCount}.log`);
@@ -102,6 +120,15 @@ const run = ({ sha, mode = "absent", dryRun = false }) => {
       DRY_RUN: dryRun ? "true" : "false",
       GITHUB_OUTPUT: out,
       RUNNER_TEMP: ghBin,
+      ...(promotionProof
+        ? {
+            PROOF_FIXTURE: promotion.root,
+            GITHUB_REPOSITORY: "o/r",
+            GITHUB_REPOSITORY_ID: "100",
+            PROMOTION_RUN_ID: "700",
+            PROMOTION_RUN_ATTEMPT: "2",
+          }
+        : {}),
     },
   });
   return { ...res, out: fs.readFileSync(out, "utf8"), gh: fs.readFileSync(log, "utf8") };
@@ -186,7 +213,7 @@ assertLatest(newestTokens, "v0.10.0");
 
 // 3. Positive control: publishing a genuinely newest untagged commit keeps
 // Latest semantics for the computed next version.
-const newestPublish = run({ sha: newestUntagged });
+const newestPublish = run({ sha: newestUntagged, promotionProof: true });
 assert.equal(newestPublish.status, 0, newestPublish.stderr);
 assert.equal(newestPublish.out, "tag_name=v0.10.1\nreleased=true\n");
 const publishTokens = createTokens(newestPublish.gh, "v0.10.1");
@@ -224,5 +251,6 @@ assertTarget(failedTokens, historical, "v0.9.0");
 
 fs.rmSync(ghBin, { recursive: true, force: true });
 fs.rmSync(dir, { recursive: true, force: true });
+fs.rmSync(promotion.root, { recursive: true, force: true });
 
 console.log("release-on-promote latest acceptance: all tests passed");
