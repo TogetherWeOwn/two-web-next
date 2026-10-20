@@ -575,9 +575,24 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
   // The post-deploy `release` call (release.yml) is the only job override: it
-  // runs after both gate jobs and needs only contents: write to tag the commit.
+  // needs only Actions read for promotion proof and contents write to tag/release.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
-  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+  const releaseLines = release
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, "").trimEnd())
+    .filter((line) => line.trim());
+  const permissionsAt = releaseLines.indexOf("    permissions:");
+  assert.notEqual(permissionsAt, -1, "release caller must declare its permissions");
+  const permissions = releaseLines.slice(permissionsAt + 1);
+  const nextField = permissions.findIndex((line) => /^ {0,4}\S/.test(line));
+  assert.deepEqual(
+    permissions
+      .slice(0, nextField === -1 ? undefined : nextField)
+      .map((line) => line.trim())
+      .sort(),
+    ["actions: read", "contents: write"],
+    "release caller must grant exactly Actions read and contents write",
+  );
   assert.ok(
     !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
