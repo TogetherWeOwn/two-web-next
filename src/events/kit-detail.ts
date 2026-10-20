@@ -156,6 +156,9 @@ export interface KitEventDetailModel {
   joinReturnTo: string;
   joinResult: JoinResult | null;
   viewerMember: boolean;
+  /** Boolean signed-in signal for the RSVP twin: guests get the sign-in link,
+   * signed-in non-members get the join path, never a login loop. */
+  viewerSignedIn: boolean;
   viewerModerator: boolean;
   /** Signed-in display name for the header sign-out form; null for guests. */
   viewerUsername: string | null;
@@ -495,6 +498,7 @@ export async function resolveKitEventDetail(
           joinReturnTo: `${pagePath}${search}`,
           joinResult,
           viewerMember: member,
+          viewerSignedIn: viewer != null,
           viewerModerator: viewer?.moderator === true,
           viewerUsername: viewer?.username ?? null,
           endsAt: event.endsAt.toISOString(),

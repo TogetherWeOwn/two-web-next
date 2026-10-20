@@ -11,6 +11,9 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_GUEST_FULL_HINT_TESTID,
+  RSVP_GUEST_SIGNIN_TESTID,
+  RSVP_JOIN_SERVER_TESTID,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
@@ -51,6 +54,7 @@ const full = $derived(model.capacity !== null && occupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
+const joinHref = $derived(`/join?next=${encodeURIComponent(model.joinReturnTo)}`);
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
     ? `/e/${encodeURIComponent(model.eventKey)}/rsvp?attendees=${model.attendeesPaging.page}`
@@ -153,12 +157,27 @@ const lineup = $derived(
       data-capacity={model.capacity ?? undefined}
       data-full={full ? "true" : "false"}
       data-paused={model.rsvpOpen ? "false" : "true"}
+      data-signed-in={model.viewerSignedIn ? "true" : "false"}
       aria-label="RSVP"
     >
       {#if closed}
         <p role="status" data-testid={RSVP_CLOSED_TESTID}>{rsvpClosedCopy(closed)}</p>
       {:else if !model.viewerMember}
-        <a href={signIn}>{RSVP_COPY.guestCta}</a>
+        {#if model.viewerSignedIn}
+          <a href={joinHref} data-testid={RSVP_JOIN_SERVER_TESTID}>{RSVP_COPY.joinToRsvp}</a>
+        {:else if !model.rsvpOpen}
+          <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_COPY.paused}</p>
+          <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_COPY.guestCta}</a>
+        {:else if full}
+          <p role="status" data-testid={EVENT_FULL_TESTID}>
+            {RSVP_COPY.full} {rsvpFullCapCopy(model.capacity!)}
+          </p>
+          <p data-testid={RSVP_GUEST_FULL_HINT_TESTID}>
+            <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_COPY.guestFullHint}</a>
+          </p>
+        {:else}
+          <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_COPY.guestCta}</a>
+        {/if}
       {:else}
         <form method="post" action={rsvpAction} data-rsvp-form>
           {#if !model.rsvpOpen}

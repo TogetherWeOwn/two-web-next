@@ -51,6 +51,10 @@ export const RSVP_FAILED_TESTID = "rsvp-failed";
 export const RSVP_UNKNOWN_TESTID = "rsvp-unknown";
 export const RSVP_REFRESH_TESTID = "rsvp-refresh";
 export const RSVP_SESSION_EXPIRED_TESTID = "rsvp-session-expired";
+/** Guest paused/full prompts and the signed-in non-member join path (V1). */
+export const RSVP_GUEST_SIGNIN_TESTID = "rsvp-guest-signin";
+export const RSVP_GUEST_FULL_HINT_TESTID = "rsvp-guest-full-hint";
+export const RSVP_JOIN_SERVER_TESTID = "rsvp-join-server";
 
 /** Full legacy RsvpStatus enum: the PUT body accepts every value. */
 export const RSVP_STATUSES = ["going", "maybe", "not_going", "waitlisted"] as const;
@@ -151,6 +155,10 @@ export const RSVP_COPY = {
   paused: "RSVPs are paused for this event — check back soon.",
   sessionExpired: "Your session expired.",
   guestCta: "Log in with Discord",
+  /** Guest full-event hint: the sign-in link text that names the waitlist path. */
+  guestFullHint: "Sign in to join the waitlist",
+  /** Signed-in non-member prompt: links to /join?next=<event>, never login. */
+  joinToRsvp: "Join the server to RSVP",
 } as const;
 
 /** Closed-event copy by reason (legacy closed branch, role=status). */
