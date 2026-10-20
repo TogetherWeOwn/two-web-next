@@ -188,6 +188,37 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
+  <section aria-label="Saved event review">
+    <h2>Review the saved event</h2>
+    <p>
+      <a href={view.savedReview.href}>Review saved event</a> on its detail page. Drafts remain visible only to
+      moderators.
+    </p>
+    <p>
+      {#if view.savedReview.updatedAt}
+        Saved record last updated: <time datetime={view.savedReview.updatedAt}>{view.savedReview.updatedAt}</time> (UTC).
+        This is an update time, not an immutable revision or a preview check time.
+      {:else}
+        Saved record update time is unavailable.
+      {/if}
+    </p>
+    <p>
+      Review and the separate Publish action use only the saved record. Unsaved edits are not included
+      in either. Save successfully, then review again before publishing.
+    </p>
+    <p>{view.savedReview.guidance}</p>
+    {#if view.savedReview.corrections.length > 0}
+      <ul>
+        {#each view.savedReview.corrections as issue (issue.href)}
+          <li>{issue.message} <a href={issue.href}>{issue.label}</a> and Save.</li>
+        {/each}
+      </ul>
+    {/if}
+    <p class="hint">
+      Advice reflects the saved record when this page rendered, not permission to publish. The server
+      rechecks the current saved record when Publish runs.
+    </p>
+  </section>
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
     <div class="actions">
