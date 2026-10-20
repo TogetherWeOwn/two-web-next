@@ -288,9 +288,22 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
+/** Badge word shared by cancelled list cards and month-grid entries. */
+export const GRID_CANCELLED_COPY = "Cancelled";
+
 /** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
-export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
-  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+export function gridAccessibleName(
+  title: string,
+  startsAt: Date,
+  zone: string,
+  cancelled = false,
+): string {
+  const lead = `${wallTimeHm(startsAt, zone)} ${title}`;
+  // Cancelled entries carry the same badge word visibly, so the name leads
+  // with it too: speech users hear the status in the same position they see it.
+  return cancelled
+    ? `${lead} ${GRID_CANCELLED_COPY}, ${cardDayLabel(startsAt, zone)}`
+    : `${lead}, ${cardDayLabel(startsAt, zone)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

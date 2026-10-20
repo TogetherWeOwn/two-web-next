@@ -54,6 +54,13 @@ export function goingCountText(going: number, capacity: number | null): string {
   return capacity !== null ? `${going} of ${capacity} going` : `${going} going`;
 }
 
+/** Cancelled schedule rows keep their retained answers visible as history,
+ * never as attendance, places, or an invitation: "N existing responses".
+ * Capacity is meaningless after cancellation, so it is never shown here. */
+export function existingResponsesText(responses: number): string {
+  return `${responses} existing responses`;
+}
+
 export function spotsLeftText(going: number, capacity: number): string {
   const left = Math.max(0, capacity - going);
   return left <= 0 ? "Full" : `${left} of ${capacity} spots left`;

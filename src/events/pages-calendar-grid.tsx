@@ -8,6 +8,7 @@ import {
   EVENTS_CALENDAR_GRID_TESTID,
   EVENTS_CALENDAR_SCROLL_LABEL,
   EVENTS_CALENDAR_SCROLL_TESTID,
+  GRID_CANCELLED_COPY,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
   calendarJumpUrl,
@@ -19,7 +20,7 @@ import {
   type CalendarDay,
   type CalendarState,
 } from "../islands/contracts";
-import { type CalRow, rowKey, rowTitle, rowZone } from "./pages-calendar-row";
+import { type CalRow, isTransient, rowKey, rowTitle, rowZone } from "./pages-calendar-row";
 
 /** The month grid: prev/next anchors are real links; cells link into the list. */
 export const MonthGrid: FC<{
@@ -70,17 +71,35 @@ export const MonthGrid: FC<{
                 >
                   <span>{day.day}</span>
                   <ul>
-                    {day.events.map((e) => (
-                      <li>
-                        <a
-                          href={calendarJumpUrl(state.past, rowKey(e))}
-                          data-cal-jump
-                          aria-label={gridAccessibleName(rowTitle(e), e.startsAt, rowZone(e, zone))}
-                        >
-                          {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
-                        </a>
-                      </li>
-                    ))}
+                    {day.events.map((e) => {
+                      // Cancelled entries keep their day-jump to the retained
+                      // list card, but say so in words — never color alone —
+                      // with the same badge word the card carries.
+                      const cancelled = !isTransient(e) && e.status === "cancelled";
+                      return (
+                        <li>
+                          <a
+                            href={calendarJumpUrl(state.past, rowKey(e))}
+                            data-cal-jump
+                            data-cancelled={cancelled ? "true" : undefined}
+                            aria-label={gridAccessibleName(
+                              rowTitle(e),
+                              e.startsAt,
+                              rowZone(e, zone),
+                              cancelled,
+                            )}
+                          >
+                            {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
+                            {cancelled ? (
+                              <>
+                                {" "}
+                                <span class="schedule-badge">{GRID_CANCELLED_COPY}</span>
+                              </>
+                            ) : null}
+                          </a>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </td>
               ))}

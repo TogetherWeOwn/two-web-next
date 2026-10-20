@@ -7,6 +7,7 @@ import {
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
   cardTimeLabel,
+  existingResponsesText,
   goingCountText,
   loginUrl,
   wallTimeHm,
@@ -26,6 +27,9 @@ import {
  * viewer until slice 2 lands the RSVP control — guests get the sign-in link,
  * Discord-native rows get "RSVP in Discord" and no going count (there are no
  * local answers to count). `isPast` suppresses the action area entirely.
+ * Cancelled rows keep their title, schedule and badge, but never invite
+ * participation: no sign-in link, and the retained answers read as existing
+ * responses, never attendance or places.
  */
 export const CalCard: FC<{
   e: CalRow;
@@ -37,6 +41,7 @@ export const CalCard: FC<{
 }> = ({ e, zone, isPast, member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
+  const cancelled = !transient && e.status === "cancelled";
   return (
     <li>
       <article
@@ -90,14 +95,16 @@ export const CalCard: FC<{
         <div class="schedule-actions">
           {!transient ? (
             <span class="schedule-attendance" data-testid="event-going-count">
-              {goingCountText(e.goingCount, e.capacity)}
+              {cancelled
+                ? existingResponsesText(e.goingCount)
+                : goingCountText(e.goingCount, e.capacity)}
             </span>
           ) : null}
           {isPast ? null : transient ? (
             <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>
               {EVENTS_EMPTY_COPY.discordRsvp}
             </a>
-          ) : member ? null : (
+          ) : member || cancelled ? null : (
             <a href={loginUrl(loginReturnTo)} data-testid="signin">
               {EVENTS_EMPTY_COPY.signIn}
             </a>
