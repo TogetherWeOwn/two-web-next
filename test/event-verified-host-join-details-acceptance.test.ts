@@ -59,7 +59,9 @@ function fixture(over: Record<string, unknown> = {}) {
   };
   const row: typeof events.$inferSelect = values as typeof events.$inferSelect;
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
+  const queries: string[] = [];
   const db = drizzle(async (sql) => {
+    queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes("count(*)")) {
       return { rows: [[row.id, 3]] };
     }
@@ -73,6 +75,9 @@ function fixture(over: Record<string, unknown> = {}) {
     }
     return { rows: [] };
   });
+  Object.assign(db, {
+    transaction: async (run: (tx: Db) => Promise<unknown>) => run(db as unknown as Db),
+  });
   const sessions = createMemorySessionStore();
   const env = {
     APP_URL: `${APP_URL}/`,
@@ -83,6 +88,7 @@ function fixture(over: Record<string, unknown> = {}) {
   return {
     row,
     env,
+    queries,
     async cookie(moderator = false) {
       const token = newSessionToken();
       await sessions.create({
@@ -105,6 +111,21 @@ function fixture(over: Record<string, unknown> = {}) {
     },
     request: (path = PATH, cookie?: string) =>
       app.request(path, cookie ? { headers: { cookie } } : {}, env),
+    async create(fields: Record<string, string>) {
+      return app.request(
+        "/admin/events",
+        {
+          method: "POST",
+          headers: {
+            cookie: await this.cookie(true),
+            origin: APP_URL,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams(fields),
+        },
+        env,
+      );
+    },
   };
 }
 
@@ -138,6 +159,38 @@ describe("event public host and join-details acceptance", () => {
     expect(html).not.toContain('data-testid="event-organizer"');
     expect(html).not.toContain('data-testid="event-join-details"');
     expect(html).not.toContain('data-testid="event-public-join-link"');
+  });
+
+  it.each([
+    ["unsupported URL scheme", { organizer_name: "Riley", join_url: "javascript:alert(1)" }],
+    ["malformed URL", { organizer_name: "Riley", join_url: "https://" }],
+    ["overlong organizer name", { organizer_name: "x".repeat(501), join_url: "" }],
+    [
+      "overlong join instructions",
+      { organizer_name: "Riley", join_instructions: "x".repeat(5001) },
+    ],
+  ])("rejects %s before persisting and retains purpose/accessibility", async (_name, extra) => {
+    const source = fixture();
+    const response = await source.create({
+      title: "Chess night",
+      game: "Chess",
+      description: "Bring a friend",
+      starts_at: "2030-01-10 20:00",
+      ends_at: "2030-01-10 22:00",
+      timezone: "UTC",
+      location: "The lobby",
+      capacity: "10",
+      purpose: "Learn the opening",
+      accessibility_notes: "Step-free entrance",
+      ...extra,
+    });
+    expect(source.queries.some((sql) => /insert into "events"|update "events"/i.test(sql))).toBe(
+      false,
+    );
+    expect(response.status).toBe(422);
+    const html = await response.text();
+    expect(html).toContain("Learn the opening");
+    expect(html).toContain("Step-free entrance");
   });
 
   it("keeps a draft moderator-only even when it contains public join details", async () => {
