@@ -423,6 +423,27 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
   });
 
   it.each([
+    { label: "no import", declaration: "" },
+    {
+      label: "a local-module writer",
+      declaration: 'import { generateCookie } from "./cookie";',
+    },
+    {
+      label: "a different local binding",
+      declaration: 'import { generateCookie as otherCookie } from "hono/cookie";',
+    },
+    {
+      label: "a different imported writer",
+      declaration: 'import { generateSignedCookie as generateCookie } from "hono/cookie";',
+    },
+  ])("rejects a deletion-shaped call with $label", ({ declaration }) => {
+    const source = `${declaration}\ngenerateCookie(name, "", { maxAge: 0 });`;
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it.each([
     'generateCookie(name, "live", { maxAge: 0 });',
     'generateCookie(name, "", { maxAge: 1 });',
     'generateCookie(name, "", { maxAge: 0, ...options });',
