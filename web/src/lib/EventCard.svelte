@@ -36,7 +36,9 @@ const badge = $derived(dateParts(e.startsAt, e.timezone));
     <h2>
       <a href={`/e/${e.eventKey}`}>{e.title}</a>
     </h2>
-    <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time></p>
+    <!-- Upcoming-card shape (time · zone · location), mirroring Card in
+         src/events/pages-past.tsx: zone always, location only when present. -->
+    <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}<span>{e.timezone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
   </div>
   <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
