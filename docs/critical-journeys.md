@@ -206,9 +206,18 @@ report-config provenance must be checked. `unexpected` becomes `failed` with
 the first-line failure message. Failure and skip diagnostics are bounded and
 scrubbed for known credential forms, email/member identifiers, long numeric
 IDs, URLs and the configured QA token before they enter the ledger. Redaction
-handles quoted credential/member keys and token-suffixed names, passwords, API
-keys and the session cookie. The configured token is removed before first-line
-normalization, and all redaction runs before the 200-character cap so truncation
+handles quoted keys and compound credential names (for example `client_secret`,
+`db_password`, `secret_key`, `token_value`, private keys and session IDs), including
+underscore, hyphen and camelCase affixes and common spaced labels (`API Key`,
+`secret key`, `session id`). Member fields accept those spellings and spaces
+(`display_name`, `userId`, `member id`, `discord-id`). Standalone Bearer, Basic
+and Digest values are scrubbed too, with whitespace or a colon/equal delimiter
+(including quoted keys). A matched credential/member
+field or auth scheme withholds the remainder of the line, including any quoted
+commas/semicolons or additional Digest parameters. This is known-pattern
+redaction, not a general-purpose sanitizer for arbitrary unlabelled data. The
+configured token is removed before first-line normalization, and all redaction
+runs before the 200-character cap so truncation
 cannot retain a token prefix. `skipped`
 becomes `skipped` with the skip annotation or result error, or `no reason
 recorded` when neither names one.

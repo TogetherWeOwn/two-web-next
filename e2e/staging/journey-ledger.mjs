@@ -44,13 +44,16 @@ function scrubDiagnosticReason(value, qaAuthToken) {
       : value;
   return cleanReason(tokenScrubbed)
     .replace(
-      /["']?\b(?:authorization|cookie|set-cookie|x-two-qa-auth|[\w-]*token|password|api[-_]?key|secret|__Host-two_session)["']?\s*[:=].*$/i,
+      /["']?\b[\w-]*(?:authorization|cookie|x-two-qa-auth|token|password|passwd|api[_\s-]*key|secret|private[_\s-]*key|session)[\w\s-]*["']?\s*[:=].*$/i,
       "[redacted credential data]",
     )
-    .replace(/\bbearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(
+      /["']?\b(bearer|basic|digest)\b["']?(?:\s*[:=]\s*|\s+).*$/gi,
+      (_, scheme) => `${scheme[0].toUpperCase()}${scheme.slice(1).toLowerCase()} [redacted]`,
+    )
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted email]")
     .replace(
-      /["']?\b(?:member|user|username|display\s*name|email|discord\s*id)["']?\s*[:=]\s*[^,;]+/gi,
+      /["']?\b[\w-]*(?:(?:member|user)(?:[_\s-]*(?:id|name))?|display[_\s-]*name|email|discord[_\s-]*id)[\w-]*["']?\s*[:=].*$/gi,
       "[redacted member data]",
     )
     .replace(/\b\d{17,}\b/g, "[redacted id]")

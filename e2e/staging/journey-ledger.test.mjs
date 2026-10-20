@@ -277,6 +277,136 @@ for (const [label, message, expected] of [
   });
 }
 
+const compoundCredentialKeys = [
+  "client_secret",
+  "db_password",
+  "user_password",
+  "app_secret",
+  "clientSecret",
+  "secret_key",
+  "token_value",
+  "passwd",
+  "private_key",
+  "private-key",
+  "privateKey",
+  "session_id",
+  "sessionId",
+  "client_api_key_value",
+  "app-password-hash",
+  "appPasswdValue",
+  "refresh_token_value",
+  "request_authorization",
+  "response_set_cookie",
+  "secret key",
+  "API Key",
+  "private key",
+  "session id",
+  "token value",
+];
+const memberFieldKeys = [
+  "display_name",
+  "display-name",
+  "display name",
+  "displayName",
+  "user_id",
+  "user-id",
+  "user id",
+  "userId",
+  "member_id",
+  "member-id",
+  "member id",
+  "memberId",
+  "discord_id",
+  "discord-id",
+  "discord id",
+  "discordId",
+  "user_name",
+  "user-name",
+  "user name",
+  "member_name",
+  "memberName",
+  "preferred_display_name",
+  "cachedUserId",
+  "user_id_value",
+];
+
+for (const [category, keys] of [
+  ["credential", compoundCredentialKeys],
+  ["member", memberFieldKeys],
+]) {
+  for (const key of keys) {
+    test(`flaky diagnostic redacts ${category} field ${key} exactly`, () => {
+      const summary = summarizeJourneys(
+        reportWith([flakySpec("flaky journey", `Timeout: ${key}=fixture-canary-value`)]),
+      );
+      assert.equal(summary.journeys[0].reason, `Timeout: [redacted ${category} data]`);
+    });
+  }
+
+  test(`${category} field serialization sweep redacts quoted keys, separators and casing`, () => {
+    for (const key of keys) {
+      for (const spelling of [key, key.toUpperCase()]) {
+        for (const quote of ["", '"', "'"]) {
+          for (const separator of ["=", ":", " : "]) {
+            const message = `Timeout: {${quote}${spelling}${quote}${separator}${quote}fixture-canary-value${quote}}`;
+            const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+            assert.equal(
+              summary.journeys[0].reason,
+              `Timeout: {[redacted ${category} data]`,
+              `${category} key ${spelling}, quote ${quote}, separator ${separator}`,
+            );
+            assert.ok(!formatLedgerMarkdown(summary).includes("fixture-canary-value"));
+          }
+        }
+      }
+    }
+  });
+}
+
+test("quoted member values with punctuation cannot leave a partial identifier", () => {
+  for (const message of [
+    'Timeout: {"display_name":"Fixture, Member"}',
+    "Timeout: user_id='fixture;identifier'",
+  ]) {
+    const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+    assert.equal(
+      summary.journeys[0].reason,
+      message.startsWith("Timeout: {")
+        ? "Timeout: {[redacted member data]"
+        : "Timeout: [redacted member data]",
+    );
+  }
+});
+
+for (const [message, expected] of [
+  ["request failed: Basic Zml4dHVyZTpvbmx5", "request failed: Basic [redacted]"],
+  ["request failed: basic fixture-canary-value", "request failed: Basic [redacted]"],
+  ["request failed: bAsIc fixture-canary-value", "request failed: Basic [redacted]"],
+  ["request failed: BEARER fixture-canary-value", "request failed: Bearer [redacted]"],
+  ["request failed: Digest fixture-canary-value", "request failed: Digest [redacted]"],
+  ["request failed: Bearer: fixture-canary-value", "request failed: Bearer [redacted]"],
+  ["request failed: Basic=fixture-canary-value", "request failed: Basic [redacted]"],
+  ["request failed: Digest : fixture-canary-value", "request failed: Digest [redacted]"],
+  ['request failed: {"Basic": "fixture-canary-value"}', "request failed: {Basic [redacted]"],
+  ["request failed: {'Digest' = 'fixture-canary-value'}", "request failed: {Digest [redacted]"],
+  [
+    'request failed: digest username="fixture-name", realm="fixture-realm", nonce="fixture-nonce", response="fixture-response"',
+    "request failed: Digest [redacted]",
+  ],
+]) {
+  test(`standalone auth scheme is scrubbed: ${message.split(/\s+/)[2]}`, () => {
+    const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+    assert.equal(summary.journeys[0].reason, expected);
+  });
+}
+
+test("auth scheme delimiters do not match an unrelated word prefix", () => {
+  for (const message of ["basicTimeout: exceeded", "bearerish=value", "digestion: failed"]) {
+    const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+    assert.equal(summary.journeys[0].reason, message);
+  }
+});
+
 test("configured token is scrubbed before the 200-character reason limit", () => {
   const token = "qa-token-canary-value";
   const prefix = `${"x".repeat(190)} `;
@@ -549,6 +679,52 @@ test("gate scrubs its environment token from every diagnostic output before any 
     assert.ok(output.includes("[redacted token]"), "each output must contain the scrubbed reason");
   }
   assert.ok(!streams.err.includes(token));
+});
+
+test("gate scrubs compound fields and auth schemes on every diagnostic path and output", () => {
+  for (const [message, expected] of [
+    ["client_secret=fixture-canary-value", "[redacted credential data]"],
+    ["db_password=fixture-canary-value", "[redacted credential data]"],
+    ["secret_key=fixture-canary-value", "[redacted credential data]"],
+    ["token_value=fixture-canary-value", "[redacted credential data]"],
+    ['{"display_name":"fixture-canary-value"}', "{[redacted member data]"],
+    ["user_id=fixture-canary-value", "[redacted member data]"],
+    ["Basic fixture-canary-value", "Basic [redacted]"],
+    ["API Key: fixture-canary-value", "[redacted credential data]"],
+    ["secret key: fixture-canary-value", "[redacted credential data]"],
+    ['{"Basic":"fixture-canary-value"}', "{Basic [redacted]"],
+    ['Digest nonce="fixture-canary-value", opaque="fixture-canary-value"', "Digest [redacted]"],
+  ]) {
+    const paths = gateScratch("journey-gate-compound-");
+    const failed = flakySpec("failed journey", message);
+    failed.tests[0].status = "unexpected";
+    writeReport(
+      paths.reportPath,
+      reportWith([
+        flakySpec("flaky journey", message),
+        failed,
+        skippedSpec("skipped journey", message),
+        statusSpec("unknown journey", message),
+      ]),
+    );
+    const streams = gateStreams();
+    assert.equal(runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr }), 1);
+    const json = readFileSync(paths.ledgerJsonPath, "utf8");
+    assert.deepEqual(
+      JSON.parse(json).journeys.map((journey) => journey.reason),
+      [expected, expected, expected, `unknown test status: ${expected}`],
+    );
+    for (const output of [
+      json,
+      readFileSync(paths.ledgerMdPath, "utf8"),
+      readFileSync(paths.stepSummaryPath, "utf8"),
+      streams.out,
+    ]) {
+      assert.ok(!output.includes("fixture-canary-value"), "canary must never reach an output");
+      assert.ok(output.includes(expected), "each output must contain the exact scrubbed reason");
+    }
+    assert.ok(!streams.err.includes("fixture-canary-value"));
+  }
 });
 
 test("both artifact uploads have exactly the two derived ledger paths", () => {
