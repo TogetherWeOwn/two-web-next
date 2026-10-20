@@ -1,12 +1,15 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
 // Offline documentation contract for environment-correct queue containment.
-// No live commands execute here: target selection is exercised through inert
-// stubs that record commands without spawning processes or network calls.
+// Execute the documented Bash, not a mirror. Its only external commands resolve
+// to inert stubs on an isolated PATH, with no inherited credentials or network calls.
 const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
 const queueSection = runbook
   .split("## Queue containment, drain and failed-job replay")[1]!
@@ -34,55 +37,84 @@ const productionOwner = production?.name as string;
 const productionTail = production?.tail_consumers?.[0]?.service as string;
 const productionOrigin = production?.vars?.APP_URL as string;
 
-// Mirror of the documented ENVIRONMENT case statement: fail closed before any
-// mutation. Inert: callers pass a stub exec that records commands.
-function selectQueueTargets(env: string): { queues: string[]; owner: string; upUrl: string } {
-  if (env === "staging") {
-    return {
-      queues: [...stagingQueues],
-      owner: stagingOwner,
-      upUrl: `${stagingOrigin}/up`,
-    };
-  }
-  if (env === "production") {
-    return {
-      queues: [...productionQueues],
-      owner: productionOwner,
-      upUrl: `${productionOrigin}/up`,
-    };
-  }
-  throw new Error(`unknown ENVIRONMENT=${env}; refusing to mutate`);
+const environments = [
+  {
+    environment: "staging",
+    queues: stagingQueues,
+    owner: stagingOwner,
+    tail: stagingTail,
+    origin: stagingOrigin,
+  },
+  {
+    environment: "production",
+    queues: productionQueues,
+    owner: productionOwner,
+    tail: productionTail,
+    origin: productionOrigin,
+  },
+];
+const gatedBlocks = [
+  { marker: "# GATED CONTAINMENT:", action: "pause-delivery" },
+  { marker: "# GATED RESUME:", action: "resume-delivery" },
+];
+
+function documentedShell(marker: string): string {
+  const blocks = [...queueSection.matchAll(/```bash\n([\s\S]*?)\n```/g)]
+    .map((match) => match[1]!)
+    .filter((block) => block.includes(marker));
+  expect(blocks).toHaveLength(1);
+  return blocks[0]!;
 }
 
-function assertTargetMatches(env: string, queue: string): void {
-  const expected = selectQueueTargets(env).queues;
-  if (!expected.includes(queue)) {
-    throw new Error(`queue ${queue} does not belong to ${env}; refusing to mutate`);
+function runDocumentedShell(script: string, environment: string | undefined) {
+  const directory = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "queue-doc-shell-",
+    ),
+  );
+  try {
+    const log = join(directory, "commands");
+    writeFileSync(log, "");
+    for (const command of ["npx", "curl"]) {
+      writeFileSync(
+        join(directory, command),
+        `#!/bin/bash\n{ printf '${command}'; printf '\\t%s' "$@"; printf '\\n'; } >> "$RUNBOOK_COMMAND_LOG"\n`,
+        { mode: 0o700 },
+      );
+    }
+    const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", script], {
+      cwd: directory,
+      env: {
+        PATH: directory,
+        HOME: directory,
+        RUNBOOK_COMMAND_LOG: log,
+        ...(environment === undefined ? {} : { ENVIRONMENT: environment }),
+      },
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    const commands = readFileSync(log, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\t"));
+    return { status: result.status, stderr: result.stderr, commands };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 
-function pauseQueues(env: string, exec: (command: string) => void): string[] {
-  const targets = selectQueueTargets(env);
-  const recorded: string[] = [];
-  for (const queue of targets.queues) {
-    assertTargetMatches(env, queue);
-    const command = `wrangler queues pause-delivery ${queue}`;
-    exec(command);
-    recorded.push(command);
-  }
-  return recorded;
+function tableCells(row: string): string[] {
+  return row
+    .split("|")
+    .slice(1, -1)
+    .map((cell) => cell.trim());
 }
 
-function resumeQueues(env: string, exec: (command: string) => void): string[] {
-  const targets = selectQueueTargets(env);
-  const recorded: string[] = [];
-  for (const queue of targets.queues) {
-    assertTargetMatches(env, queue);
-    const command = `wrangler queues resume-delivery ${queue}`;
-    exec(command);
-    recorded.push(command);
-  }
-  return recorded;
+function inlineCode(text: string): string[] {
+  return [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]!);
 }
 
 describe("runbook queue incident targets by environment", () => {
@@ -104,17 +136,35 @@ describe("runbook queue incident targets by environment", () => {
     expect(main.triggers?.crons).toEqual([]);
     expect(production?.triggers?.crons).toContain("*/10 * * * *");
 
-    // The matrix names every derived target.
     expect(queueSection).toContain("Queue incident targets by environment");
-    for (const queue of [...stagingQueues, ...productionQueues]) {
-      expect(queueSection).toContain(`\`${queue}\``);
-    }
-    expect(queueSection).toContain(`\`${stagingOwner}\``);
-    expect(queueSection).toContain(`\`${productionOwner}\``);
-    expect(queueSection).toContain(`\`${stagingTail}\``);
-    expect(queueSection).toContain(`\`${productionTail}\``);
-    expect(queueSection).toContain(stagingOrigin);
-    expect(queueSection).toContain(productionOrigin);
+    const matrix = queueSection.split("#### Staging (read-only metadata)")[0]!;
+    const rows = matrix.split("\n").filter((line) => /^\| (staging|production) \|/.test(line));
+    expect(rows.map(tableCells)).toEqual(
+      environments.map(({ environment, queues, owner, tail, origin }) => [
+        environment,
+        queues.map((queue) => `\`${queue}\``).join(", "),
+        `\`${owner}\``,
+        `\`${tail}\``,
+        `\`${origin}\``,
+      ]),
+    );
+  });
+
+  it("associates each first-responder diagnostic with that environment's queues", () => {
+    const rows = runbook.split("\n").filter((line) => line.startsWith("| `queue.failing`"));
+    expect(rows).toHaveLength(1);
+    const diagnostic = tableCells(rows[0]!)[2]!;
+    expect(diagnostic).toContain("Choose environment first (no silent default): staging ");
+    const staging = diagnostic.split(": staging ")[1]!.split(", production ")[0]!;
+    const production = diagnostic
+      .split(", production ")[1]!
+      .split(" (transport metadata only)")[0]!;
+    expect(inlineCode(staging)).toEqual([
+      `npx wrangler queues info ${stagingQueues[0]}`,
+      ...stagingQueues.slice(1),
+    ]);
+    expect(inlineCode(production)).toEqual(productionQueues);
+    expect(diagnostic).toContain("do not purge or replay");
   });
 
   it("labels checked-in expectations versus required authorized live readback", () => {
@@ -206,39 +256,40 @@ describe("runbook queue incident targets by environment", () => {
     expect(queueSection).toMatch(/holds/i);
   });
 
-  it("rejects cross-environment substitutions through inert stubs", () => {
-    expect(selectQueueTargets("staging").queues).toEqual(stagingQueues);
-    expect(selectQueueTargets("production").queues).toEqual(productionQueues);
-    expect(() => selectQueueTargets("")).toThrow(/refusing to mutate/);
-    expect(() => selectQueueTargets("Staging")).toThrow(/refusing to mutate/);
-    expect(() => selectQueueTargets("prod")).toThrow(/refusing to mutate/);
-    for (const queue of stagingQueues) {
-      expect(() => assertTargetMatches("production", queue)).toThrow(/does not belong/);
-    }
-    for (const queue of productionQueues) {
-      expect(() => assertTargetMatches("staging", queue)).toThrow(/does not belong/);
-    }
-  });
+  describe.each(gatedBlocks)("documented $action Bash fence", ({ marker, action }) => {
+    it.each(environments)(
+      "uses only $environment targets with inert command stubs",
+      ({ environment, queues }) => {
+        const result = runDocumentedShell(documentedShell(marker), environment);
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        const expected = queues.map((queue) => [
+          "npx",
+          "--no-install",
+          "wrangler",
+          "queues",
+          action,
+          queue,
+        ]);
+        if (action === "pause-delivery") {
+          expected.push(
+            ...queues.map((queue) => ["npx", "--no-install", "wrangler", "queues", "info", queue]),
+          );
+        }
+        expect(result.commands).toEqual(expected);
+      },
+    );
 
-  it("exercises pause/resume only after validation with inert command stubs", () => {
-    const recorded: string[] = [];
-    const stub = (command: string) => {
-      recorded.push(command);
-    };
-    expect(pauseQueues("staging", stub)).toEqual([
-      "wrangler queues pause-delivery two-sync-event",
-      "wrangler queues pause-delivery two-internal-action",
-    ]);
-    expect(resumeQueues("production", stub)).toEqual([
-      "wrangler queues resume-delivery two-web-next-production-sync-event",
-      "wrangler queues resume-delivery two-web-next-production-internal-action",
-    ]);
-    // Fail closed before mutation: unknown env records nothing.
-    const before = recorded.length;
-    expect(() => pauseQueues("unknown", stub)).toThrow(/refusing to mutate/);
-    expect(() => resumeQueues("", stub)).toThrow(/refusing to mutate/);
-    expect(recorded).toHaveLength(before);
-    // Stub recorded only inert strings; no child processes or network ran.
-    expect(recorded.every((command) => command.startsWith("wrangler queues"))).toBe(true);
+    it.each([undefined, "", "unknown", "prod", "Staging", "Production"])(
+      "refuses ENVIRONMENT=%s before any external command",
+      (environment) => {
+        const result = runDocumentedShell(documentedShell(marker), environment);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(
+          /set ENVIRONMENT to staging or production|refusing to mutate/,
+        );
+        expect(result.commands).toEqual([]);
+      },
+    );
   });
 });
