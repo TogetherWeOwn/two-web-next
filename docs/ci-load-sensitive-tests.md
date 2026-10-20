@@ -27,23 +27,60 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   `ci/audit-lifecycle.test.mjs`) and `tier0/vitest.config.ts` (`tier0/`). The
   gate scans every file an `include` glob matches, even excluded or opt-in
   cases, each literal `test.setupFiles` path (a string or string array resolved
-  from the config's package root), and every module those files import through
-  a relative path. The gate fails closed on non-literal or duplicate
-  `setupFiles`, duplicate `include` or `testTimeout` keys, object spreads and
-  dynamic computed keys in the config and `test` options, and explicit roots
-  that are not statically verified to match the config's package root. Each
-  config `test` block keeps `testTimeout: 30_000`.
+  from the config's package root), and every source module they load through a
+  relative static import, literal dynamic import, literal CommonJS `require`,
+  or literal call through a `createRequire` binding. Non-literal dynamic import,
+  `require`, and `createRequire` specifiers fail closed, except `pathToFileURL(...).href`
+  imports whose path is statically derived from `mkdtempSync(join(tmpdir(), ...))`
+  (temporary generated bundles are not traversed), `data:text/javascript;base64,`
+  template-literal specifiers, and a `createRequire` call inside a `__require` wrapper that throws
+  unless its single argument is included in a literal array of Node built-ins.
+  Statically resolved source paths assigned from `fileURLToPath(new URL(...,
+  import.meta.url).href)` to a local and passed through `pathToFileURL(...).href`
+  remain in the relative import walk. Non-relative imports
+  must be Node built-ins, `vitest`, or packages declared by a package manifest
+  or present in the corresponding npm lockfile; package-import aliases and packages absent
+  from both fail closed because they could hide test APIs or helpers. Calls
+  from declared or lockfile-resolved packages are treated as test APIs only
+  when the resolved imported/member name exactly matches `it`, `test`,
+  `describe`, `suite`, or `setConfig`; an arbitrary custom runner API in a
+  dependency is not inferred. Non-code relative resources (for example `?raw`
+  SQL imports) are not traversed.
+  In configs with a `test` block,
+  the gate fails closed on
+  non-literal or duplicate `setupFiles`, duplicate `include` or `testTimeout`
+  keys, object spreads, dynamic computed keys, non-package roots, any assignment,
+  update, or deletion, and calls or constructors other than statically
+  imported `defineConfig`, `resolve`/`dirname` from `node:path`/`path`, and
+  `fileURLToPath` from `node:url`. This rejects third-party merge
+  helpers and helper-method calls too (even unrelated calls such as `map.set`).
+  `test.dir` and `test.includeSource` are unsupported; each `test.projects`
+  entry must be an inline object with a literal `test` block. Package scripts
+  using `vitest` may not override scope/defaults with `--root`/`-r`, `--dir`,
+  `--project`/`-p`, `--workspace`, `--include`, `--testTimeout`, or
+  `--test-timeout`. An explicitly
+  selected Vite config without a `test` block also fails closed; auto-discovered
+  plain Vite configs without a `test` block are not treated as test scopes.
+  Each `testTimeout` remains exactly `30_000`.
 - Limits: a per-test timeout literal below the 30 s default (`0`, which turns
   the limit off, counts too) that Vitest reads as a timeout: the third
   argument, or a direct `timeout` option in the second, of `it`, `test`,
   `describe` or `suite` (a suite limit binds every test inside it). That
   includes their chains (`.each`, `.for`, `.skipIf`, `.runIf`, `.skip`,
-  `.concurrent`) and aliases (`const t = test.extend(...)`, destructuring,
-  object and array literals, vitest imports and namespaces including
-  `await import("vitest")`, fixtures re-exported from a helper module), plus
-  `vi.setConfig({ testTimeout })` under any alias. Hook limits
-  (`beforeEach`/`afterEach` and friends), non-literal timeouts, and aliases
-  passed through function returns or parameters are out of scope.
+  `.concurrent`), `globalThis`/`global` Vitest APIs, literal timeout options in
+  inline objects or statically resolved local `const` object references, and
+  aliases (`const t = test.extend(...)`, destructuring, object and array
+  literals, Vitest imports and namespaces including `await import("vitest")`,
+  literal CommonJS `require` calls, and fixtures re-exported from a helper
+  module), plus `vi.setConfig({ testTimeout })` under any alias. Dynamic computed
+  member access through a Vitest global, API, or imported namespace fails closed.
+  Mutable,
+  imported, member, or otherwise non-static options references fail closed, as
+  do non-literal timeout values, getters, and dynamic computed keys. Callbacks
+  in the options/timeout argument positions must be inline functions or local
+  function/const aliases; member-expression callbacks fail closed. Hook limits
+  (`beforeEach`/`afterEach` and friends) and function-return/parameter API
+  aliases are out of scope.
 - Rows: each file holding such a limit carries one row naming the file with an
   `(N× <limit>)` pin immediately after its path in the Test cell, plus a "why
   it stays" justification. Mixed limits use `(N× 2 s, M× 20 s)`. Counts are

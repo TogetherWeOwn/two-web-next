@@ -12,8 +12,9 @@
 // matched file (excluded and opt-in ones too), each literal test.setupFiles
 // module, and every module those files import through a relative path,
 // transitively, since setup files can set limits and helpers can define tests.
-// Explicit root and test.root values must resolve to the package root; ambiguous
-// roots and option shapes fail closed. Each test block keeps the 30 s default.
+// Config scope must stay statically enumerable: only imported defineConfig and
+// Node path/URL helpers are callable, and test-block mutation/deletion, dir,
+// includeSource, project-file paths and scope-changing CLI flags fail closed.
 //
 // A per-test limit is a numeric literal that Vitest reads as a timeout: the
 // third argument, or a direct `{ timeout: N }` option in the second, of a
@@ -48,6 +49,7 @@ import {
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { builtinModules } from "node:module";
 import { join, resolve, dirname, normalize, relative, isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
@@ -60,6 +62,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const TEST_API = new Set(["it", "test", "describe", "suite"]);
 const VI_API = new Set(["vi", "vitest"]);
 const API_GLOBALS = new Set([...TEST_API, ...VI_API]);
+const GLOBAL_OBJECTS = new Set(["global", "globalThis"]);
 // The value of vi.setConfig under any alias.
 const SET_CONFIG = "vi.setConfig";
 const CALL = new Set(["CallExpression", "OptionalCallExpression"]);
@@ -158,6 +161,239 @@ function patternNames(pattern) {
   }
 }
 
+// Permit the repository's VM wrapper to call createRequire only with a
+// literal-allowlisted Node builtin; all other computed module loads fail closed.
+function isGuardedBuiltinRequire(scope, call) {
+  const argument = call.arguments[0];
+  if (argument?.type !== "Identifier") return false;
+  const parents = new Map();
+  visitWithParent(scope.ast, (node, parent) => parents.set(node, parent));
+  let fn = parents.get(call);
+  while (fn && !["ArrowFunctionExpression", "FunctionExpression"].includes(fn.type))
+    fn = parents.get(fn);
+  const property = fn && parents.get(fn);
+  if (
+    fn?.params.length !== 1 ||
+    fn.params[0]?.type !== "Identifier" ||
+    fn.params[0].name !== argument.name ||
+    property?.type !== "ObjectProperty" ||
+    keyName(property.key, property.computed) !== "__require" ||
+    fn.body.type !== "BlockStatement"
+  )
+    return false;
+  let parameterReassigned = false;
+  visit(fn.body, (node) => {
+    if (
+      (node.type === "AssignmentExpression" &&
+        node.left.type === "Identifier" &&
+        node.left.name === argument.name) ||
+      (node.type === "UpdateExpression" &&
+        node.argument.type === "Identifier" &&
+        node.argument.name === argument.name)
+    )
+      parameterReassigned = true;
+  });
+  if (parameterReassigned) return false;
+  const callIndex = fn.body.body.findIndex((statement) => {
+    let containsCall = false;
+    visit(statement, (node) => {
+      if (node === call) containsCall = true;
+    });
+    return containsCall;
+  });
+  if (callIndex < 0) return false;
+  return fn.body.body.some((statement, index) => {
+    const test = statement.type === "IfStatement" ? unwrap(statement.test) : undefined;
+    if (index >= callIndex || test?.type !== "UnaryExpression" || test.operator !== "!")
+      return false;
+    const predicate = test.argument;
+    const callee = predicate?.type === "CallExpression" ? predicate.callee : undefined;
+    const list =
+      ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type) &&
+      keyName(callee.property, callee.computed) === "includes"
+        ? callee.object
+        : undefined;
+    return (
+      statement.type === "IfStatement" &&
+      statement.consequent.type === "ThrowStatement" &&
+      list?.type === "ArrayExpression" &&
+      list.elements.every(
+        (item) => item?.type === "StringLiteral" && BUILTIN_IMPORTS.has(item.value),
+      ) &&
+      predicate.arguments?.length === 1 &&
+      predicate.arguments[0].type === "Identifier" &&
+      predicate.arguments[0].name === argument.name
+    );
+  });
+}
+
+// Runtime bundles built in a temporary directory may be loaded from a file URL
+// or a data URL. Source files addressed through file URLs stay in the import walk.
+function fileUrlPathArgument(scope, expression) {
+  const node = unwrap(expression);
+  if (
+    node?.type !== "MemberExpression" ||
+    keyName(node.property, node.computed) !== "href" ||
+    node.object.type !== "CallExpression" ||
+    node.object.callee.type !== "Identifier" ||
+    !scope.ast.program.body.some(
+      (statement) =>
+        statement.type === "ImportDeclaration" &&
+        ["node:url", "url"].includes(statement.source.value) &&
+        statement.specifiers.some(
+          (specifier) =>
+            specifier.local.name === node.object.callee.name &&
+            keyName(specifier.imported) === "pathToFileURL",
+        ),
+    ) ||
+    keyName(node.object.callee) !== node.object.callee.name
+  )
+    return undefined;
+  return node.object.arguments[0];
+}
+
+function importedName(scope, local, source) {
+  for (const statement of scope.ast.program.body) {
+    if (
+      statement.type !== "ImportDeclaration" ||
+      ![source, source.replace(/^node:/, "")].includes(statement.source.value)
+    )
+      continue;
+    for (const specifier of statement.specifiers)
+      if (specifier.local.name === local)
+        return specifier.type === "ImportSpecifier" ? keyName(specifier.imported) : "*";
+  }
+  return undefined;
+}
+
+function isSystemTempdir(scope, expression) {
+  const node = unwrap(expression);
+  if (node?.type !== "CallExpression" || node.arguments.length !== 0) return false;
+  if (
+    node.callee.type === "Identifier" &&
+    importedName(scope, node.callee.name, "node:os") === "tmpdir"
+  )
+    return true;
+  return (
+    node.callee.type === "MemberExpression" &&
+    node.callee.object.type === "Identifier" &&
+    importedName(scope, node.callee.object.name, "node:os") === "*" &&
+    keyName(node.callee.property, node.callee.computed) === "tmpdir"
+  );
+}
+
+function isSafePathSegment(expression) {
+  const node = unwrap(expression);
+  const value =
+    node?.type === "StringLiteral"
+      ? node.value
+      : node?.type === "TemplateLiteral" && node.expressions.length === 0
+        ? node.quasis[0]?.value.cooked
+        : undefined;
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !isAbsolute(value) &&
+    !value.split(/[\\/]/).includes("..")
+  );
+}
+
+function bindingsAt(scope, name, at) {
+  const bindings = (scope.bindings.get(name) ?? []).filter((init) => init.start <= at);
+  if (!bindings.length) return [];
+  const lastStart = Math.max(...bindings.map((init) => init.start));
+  return bindings.filter((init) => init.start === lastStart);
+}
+
+function isTemporaryOutput(
+  scope,
+  expression,
+  seen = new Set(),
+  at = expression?.start ?? Infinity,
+) {
+  const node = unwrap(expression);
+  if (node?.type === "Identifier") {
+    if (seen.has(node.name)) return false;
+    seen.add(node.name);
+    const bindings = bindingsAt(scope, node.name, at);
+    return (
+      bindings.length > 0 &&
+      bindings.every((init) => isTemporaryOutput(scope, init, new Set(seen), at))
+    );
+  }
+  if (node?.type !== "CallExpression" || node.callee.type !== "Identifier") return false;
+  const callee = node.callee.name;
+  if (
+    importedName(scope, callee, "node:fs") === "mkdtempSync" &&
+    node.arguments.length === 1 &&
+    node.arguments[0].type === "CallExpression" &&
+    node.arguments[0].callee.type === "Identifier" &&
+    importedName(scope, node.arguments[0].callee.name, "node:path") === "join" &&
+    isSystemTempdir(scope, node.arguments[0].arguments[0]) &&
+    node.arguments[0].arguments.slice(1).every(isSafePathSegment)
+  )
+    return true;
+  return (
+    importedName(scope, callee, "node:path") === "join" &&
+    node.arguments.length > 1 &&
+    isTemporaryOutput(scope, node.arguments[0], seen) &&
+    node.arguments.slice(1).every(isSafePathSegment)
+  );
+}
+
+function sourceFileURLSpecifier(scope, expression) {
+  const argument = fileUrlPathArgument(scope, expression);
+  const candidates =
+    argument?.type === "Identifier"
+      ? bindingsAt(scope, argument.name, expression?.start ?? Infinity)
+      : [argument];
+  if (candidates.length !== 1) return undefined;
+  for (const candidate of candidates) {
+    const init = unwrap(candidate);
+    if (init?.type !== "CallExpression" || init.callee.type !== "Identifier") continue;
+    if (
+      !scope.ast.program.body.some(
+        (statement) =>
+          statement.type === "ImportDeclaration" &&
+          ["node:url", "url"].includes(statement.source.value) &&
+          statement.specifiers.some(
+            (specifier) =>
+              specifier.local.name === init.callee.name &&
+              keyName(specifier.imported) === "fileURLToPath",
+          ),
+      )
+    )
+      continue;
+    const url = unwrap(init.arguments[0]);
+    const href =
+      url?.type === "MemberExpression" && keyName(url.property, url.computed) === "href"
+        ? url.object
+        : url;
+    if (
+      href?.type === "NewExpression" &&
+      href.callee.type === "Identifier" &&
+      href.callee.name === "URL" &&
+      href.arguments[0]?.type === "StringLiteral" &&
+      isImportMetaUrl(href.arguments[1])
+    )
+      return href.arguments[0].value;
+  }
+  return undefined;
+}
+
+function isGeneratedBundleImport(scope, expression) {
+  const argument = fileUrlPathArgument(scope, expression);
+  if (argument && isTemporaryOutput(scope, argument)) return true;
+  const node = unwrap(expression);
+  const isDataBundle = (value) =>
+    value?.type === "TemplateLiteral" &&
+    value.quasis[0]?.value.cooked?.startsWith("data:text/javascript;base64,");
+  if (isDataBundle(node)) return true;
+  if (node?.type !== "Identifier") return false;
+  const bindings = scope.bindings.get(node.name) ?? [];
+  return bindings.length > 0 && bindings.every(isDataBundle);
+}
+
 // What a module binds: its imports, every `x = ...` initializer in any scope
 // (a same-named binding elsewhere can only add API names, never hide one),
 // its exports, and the modules it loads.
@@ -191,13 +427,184 @@ function moduleScope(file, source) {
         if (element) bindPattern(element, member(init, String(index)));
     }
   };
+  const createRequireNames = new Set();
+  const createRequireNamespaces = new Set();
+  for (const statement of ast.program.body) {
+    if (
+      statement.type !== "ImportDeclaration" ||
+      !["node:module", "module"].includes(statement.source.value)
+    )
+      continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type === "ImportSpecifier" && keyName(specifier.imported) === "createRequire")
+        createRequireNames.add(specifier.local.name);
+      else if (["ImportNamespaceSpecifier", "ImportDefaultSpecifier"].includes(specifier.type))
+        createRequireNamespaces.add(specifier.local.name);
+    }
+  }
+  const createRequireBindings = new Set();
+  scope.createRequireBindings = createRequireBindings;
+  visit(ast, (node) => {
+    if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
+      const init = node.init.type === "AwaitExpression" ? node.init.argument : node.init;
+      if (
+        init.type === "CallExpression" &&
+        init.callee.type === "Import" &&
+        ["node:module", "module"].includes(keyName(init.arguments[0], true))
+      )
+        createRequireNamespaces.add(node.id.name);
+    }
+  });
+  const isCreateRequireReference = (expression) => {
+    if (expression?.type === "Identifier") return createRequireNames.has(expression.name);
+    if (
+      !["MemberExpression", "OptionalMemberExpression"].includes(expression?.type) ||
+      keyName(expression.property, expression.computed) !== "createRequire"
+    )
+      return false;
+    if (
+      expression.object.type === "Identifier" &&
+      createRequireNamespaces.has(expression.object.name)
+    )
+      return true;
+    return (
+      expression.object.type === "CallExpression" &&
+      expression.object.callee.type === "Identifier" &&
+      expression.object.callee.name === "require" &&
+      ["node:module", "module"].includes(keyName(expression.object.arguments[0], true))
+    );
+  };
+  const isCreateRequireFactory = (callee) => isCreateRequireReference(callee);
+  const looksLikeCreateRequireFactory = (callee) =>
+    callee?.type === "Identifier"
+      ? callee.name === "createRequire"
+      : ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type) &&
+        keyName(callee.property, callee.computed) === "createRequire";
+  const markCreateRequireBinding = (target, init) => {
+    if (!init) return;
+    if (target?.type !== "Identifier") {
+      let hasFactory = false;
+      visit(init, (node) => {
+        if (
+          isCreateRequireReference(node) ||
+          (["CallExpression", "OptionalCallExpression"].includes(node.type) &&
+            looksLikeCreateRequireFactory(node.callee))
+        )
+          hasFactory = true;
+      });
+      if (hasFactory) throw new Error(`${file}: createRequire source is not statically verifiable`);
+      const moduleObject =
+        (init.type === "CallExpression" &&
+          init.callee.type === "Identifier" &&
+          init.callee.name === "require" &&
+          ["node:module", "module"].includes(keyName(init.arguments[0], true))) ||
+        (init.type === "Identifier" && createRequireNamespaces.has(init.name));
+      if (moduleObject) {
+        for (const property of target.properties ?? []) {
+          if (
+            property.type === "ObjectProperty" &&
+            keyName(property.key, property.computed) === "createRequire"
+          )
+            for (const name of patternNames(property.value)) createRequireNames.add(name);
+        }
+      }
+      return;
+    }
+    if (isCreateRequireReference(init)) {
+      createRequireNames.add(target.name);
+      return;
+    }
+    if (init.type === "Identifier" && init.name === "createRequire")
+      throw new Error(`${file}: createRequire source is not statically verifiable`);
+    if (looksLikeCreateRequireFactory(init))
+      throw new Error(`${file}: createRequire source is not statically verifiable`);
+    if (!["CallExpression", "OptionalCallExpression"].includes(init.type)) return;
+    if (isCreateRequireFactory(init.callee)) createRequireBindings.add(target.name);
+    else if (looksLikeCreateRequireFactory(init.callee))
+      throw new Error(`${file}: createRequire source is not statically verifiable`);
+  };
+  visit(ast, (node) => {
+    if (node.type === "VariableDeclarator") markCreateRequireBinding(node.id, node.init);
+    else if (node.type === "AssignmentExpression" && node.operator === "=")
+      markCreateRequireBinding(node.left, node.right);
+  });
+  const parents = new Map();
+  visitWithParent(ast, (node, parent) => parents.set(node, parent));
+  visitWithParent(ast, (node, parent) => {
+    if (node.type !== "Identifier" || node.name !== "require") return;
+    const enclosingFunction = (functionNode) =>
+      functionNode &&
+      [
+        "FunctionDeclaration",
+        "FunctionExpression",
+        "ArrowFunctionExpression",
+        "ObjectMethod",
+        "ClassMethod",
+        "ClassPrivateMethod",
+      ].includes(functionNode.type);
+    let owner = parent;
+    while (owner && !enclosingFunction(owner)) owner = parents.get(owner);
+    const shadowedByParameter = owner?.params?.some(
+      (parameter) => parameter.type === "Identifier" && parameter.name === "require",
+    );
+    const methodKey =
+      ["ObjectMethod", "ClassMethod", "ClassPrivateMethod"].includes(parent?.type) &&
+      parent.key === node;
+    const functionName =
+      ["FunctionDeclaration", "FunctionExpression"].includes(parent?.type) && parent.id === node;
+    const importBinding =
+      ["ImportSpecifier", "ImportDefaultSpecifier", "ImportNamespaceSpecifier"].includes(
+        parent?.type,
+      ) && parent.local === node;
+    if (shadowedByParameter || methodKey || functionName || importBinding) return;
+    const directCall =
+      ["CallExpression", "OptionalCallExpression"].includes(parent?.type) && parent.callee === node;
+    const createRequireBinding =
+      parent?.type === "VariableDeclarator" &&
+      parent.id === node &&
+      createRequireBindings.has(node.name);
+    const memberReference =
+      parent?.type === "MemberExpression" && (parent.object === node || parent.property === node);
+    const propertyKey = parent?.type === "ObjectProperty" && parent.key === node;
+    const mainReference =
+      parent?.type === "MemberExpression" &&
+      parent.object === node &&
+      keyName(parent.property, parent.computed) === "main";
+    if (!directCall && !createRequireBinding && !mainReference && !memberReference && !propertyKey)
+      throw new Error(`${file}: require() calls are not statically verifiable`);
+  });
   visit(ast, (node) => {
     if (node.type === "VariableDeclarator" && node.init) bindPattern(node.id, node.init);
     else if (node.type === "AssignmentExpression" && node.operator === "=")
       bindPattern(node.left, node.right);
-    else if (node.type === "CallExpression" && node.callee.type === "Import") {
+  });
+  visit(ast, (node) => {
+    if (
+      ["CallExpression", "OptionalCallExpression"].includes(node.type) &&
+      node.callee.type === "Import"
+    ) {
       const specifier = keyName(node.arguments[0], true);
       if (specifier !== undefined) scope.loads.push(specifier);
+      else if (isGeneratedBundleImport(scope, node.arguments[0])) return;
+      else {
+        const source = sourceFileURLSpecifier(scope, node.arguments[0]);
+        if (source) scope.loads.push(source);
+        else throw new Error(`${file}: dynamic module specifier is not statically verifiable`);
+      }
+    } else if (
+      ["CallExpression", "OptionalCallExpression"].includes(node.type) &&
+      ((node.callee.type === "Identifier" &&
+        (node.callee.name === "require" || createRequireBindings.has(node.callee.name))) ||
+        (["MemberExpression", "OptionalMemberExpression"].includes(node.callee.type) &&
+          keyName(node.callee.property, node.callee.computed) === "require"))
+    ) {
+      const specifier = keyName(node.arguments[0], true);
+      if (specifier === undefined) {
+        if (createRequireBindings.has(node.callee.name) && isGuardedBuiltinRequire(scope, node))
+          return;
+        throw new Error(`${file}: dynamic module specifier is not statically verifiable`);
+      }
+      scope.loads.push(specifier);
     }
   });
   for (const statement of ast.program.body) {
@@ -235,6 +642,7 @@ function moduleScope(file, source) {
 function project(root) {
   const modules = new Map();
   return {
+    root,
     load(file, source) {
       if (!modules.has(file)) {
         try {
@@ -280,6 +688,7 @@ function values(ctx, scope, expression, stack = new Set()) {
       const key = keyName(node.property, node.computed);
       if (key === undefined) return [];
       return values(ctx, scope, node.object, stack).flatMap((value) => {
+        if (value.global) return API_GLOBALS.has(key) ? [{ vitest: key }] : [];
         if (value.literal) return literalMember(ctx, value.scope, value.literal, key, stack);
         if (value.source !== undefined)
           return exportValues(ctx, value.scope, value.source, key, stack);
@@ -290,7 +699,11 @@ function values(ctx, scope, expression, stack = new Set()) {
     }
     case "CallExpression":
     case "OptionalCallExpression": {
-      if (node.callee.type === "Import") {
+      if (
+        node.callee.type === "Import" ||
+        node.callee.name === "require" ||
+        scope.createRequireBindings?.has(node.callee.name)
+      ) {
         const specifier = keyName(node.arguments[0], true);
         return specifier === undefined ? [] : [{ scope, source: specifier }];
       }
@@ -341,8 +754,9 @@ function nameValues(ctx, scope, name, stack) {
   const key = `${scope.file}\0${name}`;
   if (stack.has(key)) return [];
   stack.add(key);
-  // A global API name counts even when a same-named binding exists.
+  // Global Vitest API names count even when a same-named binding exists.
   const found = API_GLOBALS.has(name) ? [{ vitest: name }] : [];
+  if (GLOBAL_OBJECTS.has(name)) found.push({ global: true });
   const imported = scope.imports.get(name);
   if (imported?.name === "*") found.push({ scope, source: imported.source });
   else if (imported) found.push(...exportValues(ctx, scope, imported.source, imported.name, stack));
@@ -353,6 +767,8 @@ function nameValues(ctx, scope, name, stack) {
 
 function exportValues(ctx, scope, source, name, stack) {
   if (source === "vitest") return [{ vitest: name }];
+  if (!/^\.\.?\//.test(source))
+    return BUILTIN_IMPORTS.has(source) ? [] : [{ external: source, name }];
   const file = ctx.resolve(scope.file, source);
   const key = `${file}\0export ${name}`;
   if (!file || stack.has(key)) return [];
@@ -376,9 +792,115 @@ function exportValues(ctx, scope, source, name, stack) {
 // Timeout LOCATIONS in one module, not the tests .each/for or a suite expands to.
 function scanModule(ctx, scope) {
   const found = [];
-  const options = (node, key) => {
-    const object = unwrap(node);
-    if (object?.type !== "ObjectExpression") return [];
+  const constNames = new Set();
+  const functionNames = new Set();
+  const mutatedNames = new Set();
+  const rootName = (node) => {
+    while (node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression")
+      node = node.object;
+    return node?.type === "Identifier" ? node.name : undefined;
+  };
+  visit(scope.ast, (node) => {
+    if (node.type === "VariableDeclaration" && node.kind === "const")
+      for (const declaration of node.declarations)
+        if (declaration.id.type === "Identifier") constNames.add(declaration.id.name);
+    if (node.type === "FunctionDeclaration" && node.id?.name) functionNames.add(node.id.name);
+    if (
+      (node.type === "AssignmentExpression" && node.operator === "=") ||
+      node.type === "UpdateExpression"
+    ) {
+      const name = rootName(node.left ?? node.argument);
+      if (name) mutatedNames.add(name);
+    }
+  });
+  const staticObject = (node, seen = new Set()) => {
+    node = unwrap(node);
+    if (node?.type === "ObjectExpression") return node;
+    if (node?.type !== "Identifier" || !constNames.has(node.name) || seen.has(node.name))
+      return undefined;
+    const bindings = scope.bindings.get(node.name);
+    if (bindings?.length !== 1) return undefined;
+    seen.add(node.name);
+    const object = staticObject(bindings[0], seen);
+    seen.delete(node.name);
+    return object;
+  };
+  const containsObject = (node) => {
+    node = unwrap(node);
+    if (node?.type === "ObjectExpression") return true;
+    if (node?.type === "ConditionalExpression")
+      return containsObject(node.consequent) || containsObject(node.alternate);
+    if (node?.type === "LogicalExpression" || node?.type === "SequenceExpression")
+      return node.type === "SequenceExpression"
+        ? node.expressions.some(containsObject)
+        : containsObject(node.left) || containsObject(node.right);
+    return false;
+  };
+  const options = (node, key, strict = false) => {
+    const value = unwrap(node);
+    const bindings = value?.type === "Identifier" ? (scope.bindings.get(value.name) ?? []) : [];
+    const object = staticObject(node);
+    const staticallyCallable =
+      value?.type === "Identifier" &&
+      (functionNames.has(value.name) ||
+        (bindings.length > 0 &&
+          bindings.every((init) =>
+            ["ArrowFunctionExpression", "FunctionExpression"].includes(unwrap(init)?.type),
+          )));
+    const importedNamespace =
+      value?.type === "MemberExpression" && scope.imports.has(rootName(value));
+    const unsupportedExpression =
+      value !== undefined &&
+      !object &&
+      !staticallyCallable &&
+      ![
+        "ArrowFunctionExpression",
+        "FunctionExpression",
+        "NumericLiteral",
+        "StringLiteral",
+        "BooleanLiteral",
+        "NullLiteral",
+      ].includes(value?.type);
+    if (
+      strict &&
+      (scope.imports.has(value?.name) ||
+        importedNamespace ||
+        unsupportedExpression ||
+        [
+          "AssignmentExpression",
+          "CallExpression",
+          "MemberExpression",
+          "NewExpression",
+          "OptionalCallExpression",
+          "OptionalMemberExpression",
+          "AwaitExpression",
+          "ConditionalExpression",
+          "LogicalExpression",
+          "SequenceExpression",
+        ].includes(value?.type) ||
+        (value?.type === "Identifier" &&
+          (!object ||
+            object.type !== "ObjectExpression" ||
+            !constNames.has(value.name) ||
+            mutatedNames.has(value.name)) &&
+          !staticallyCallable) ||
+        (value?.type !== "ObjectExpression" && containsObject(value)))
+    )
+      throw new Error(`${scope.file}: non-static test options object reference`);
+    if (!object || object.type !== "ObjectExpression") return [];
+    if (strict && object.properties.some((prop) => prop.type === "SpreadElement"))
+      throw new Error(`${scope.file}: test options object must not use spreads`);
+    if (strict) {
+      for (const prop of object.properties) {
+        if (prop.computed && keyName(prop.key, true) === undefined)
+          throw new Error(`${scope.file}: dynamic computed test options key`);
+        if (keyName(prop.key, prop.computed) !== key) continue;
+        if (prop.type !== "ObjectProperty")
+          throw new Error(`${scope.file}: non-static test timeout property`);
+        if (unwrap(prop.value)?.type !== "NumericLiteral")
+          throw new Error(`${scope.file}: non-static test timeout value`);
+      }
+    }
     return object.properties
       .filter((prop) => prop.type === "ObjectProperty" && keyName(prop.key, prop.computed) === key)
       .map((prop) => prop.value);
@@ -395,19 +917,45 @@ function scanModule(ctx, scope) {
     // third-slot object (it throws since Vitest 4) still counts.
     // vi.setConfig(config) reads config.testTimeout.
     const [first, second, third] = node.arguments.map(unwrap);
+    if (
+      ["MemberExpression", "OptionalMemberExpression"].includes(node.callee.type) &&
+      node.callee.computed &&
+      keyName(node.callee.property, true) === undefined &&
+      values(ctx, scope, node.callee.object).some(
+        (value) =>
+          value.global ||
+          value.source !== undefined ||
+          value.external ||
+          TEST_API.has(value.vitest) ||
+          VI_API.has(value.vitest),
+      )
+    )
+      throw new Error(
+        `${scope.file}:${node.loc.start.line}: dynamic computed test API access is not statically verifiable`,
+      );
+    const callee = values(ctx, scope, node.callee);
+    const testApi = callee.some((value) => TEST_API.has(value.vitest));
+    const setConfig = callee.some((value) => value.vitest === SET_CONFIG);
+    const configInvocation =
+      setConfig &&
+      !(node.callee.type === "MemberExpression" && keyName(node.callee.property) === "bind");
     const testLimits = subDefault(
       third?.type === "NumericLiteral"
         ? [third]
-        : [second, third].flatMap((arg) => options(arg, "timeout")),
+        : [second, third].flatMap((arg) => options(arg, "timeout", testApi)),
     );
-    const configLimits = subDefault(options(first, "testTimeout"));
-    // Resolve the callee only for calls that carry a sub-default literal.
+    const configLimits = subDefault(options(first, "testTimeout", configInvocation));
     if (testLimits.length + configLimits.length === 0) return;
-    const callee = values(ctx, scope, node.callee);
-    const limits = [
-      ...(callee.some((value) => TEST_API.has(value.vitest)) ? testLimits : []),
-      ...(callee.some((value) => value.vitest === SET_CONFIG) ? configLimits : []),
-    ];
+    if (
+      callee.some(
+        (value) =>
+          value.external && /^(?:it|test|describe|suite|setConfig)$/i.test(value.name ?? ""),
+      )
+    )
+      throw new Error(
+        `${scope.file}:${node.loc.start.line}: declared external test-like API is not statically verifiable`,
+      );
+    const limits = [...(testApi ? testLimits : []), ...(setConfig ? configLimits : [])];
     for (const limit of limits) found.push({ line: limit.loc.start.line, value: limit.value });
   });
   return found.sort((a, b) => a.line - b.line);
@@ -421,8 +969,9 @@ export function scanTestTimeouts(source, file = "test/inline.test.ts", root = re
 
 // Vitest configs the repo runs: the conventional names anywhere outside
 // dependencies and dot-directories, plus every `vitest --config <file>` in the
-// package.json scripts.
+// package.json scripts. Scope-changing CLI flags are rejected.
 function configFiles(root) {
+  const explicit = new Set();
   const files = new Set(
     globSync(CONFIG_GLOBS, {
       cwd: root,
@@ -433,12 +982,25 @@ function configFiles(root) {
   const scripts = existsSync(manifest)
     ? Object.values(JSON.parse(readFileSync(manifest, "utf8")).scripts ?? {})
     : [];
-  for (const script of scripts)
-    for (const match of String(script).matchAll(
-      /\bvitest\b[^;&|]*?\s(?:--config|-c)(?:=|\s+)["']?([^\s"';&|]+)/g,
-    ))
-      files.add(normalize(match[1]));
-  return [...files].sort();
+  for (const script of scripts) {
+    const commands = String(script).matchAll(/\bvitest\b[^;&|]*/g);
+    for (const [command] of commands) {
+      if (
+        /\s(?:--(?:root|dir|project|workspace|include|testTimeout|test-timeout)|-[rp])(?:=|\s|$)/.test(
+          command,
+        )
+      )
+        throw new Error(
+          `package.json Vitest flags can override scanned scope or testTimeout: ${command}`,
+        );
+      for (const match of command.matchAll(/\s(?:--config|-c)(?:=|\s+)["']?([^\s"';&|]+)/g)) {
+        const target = normalize(match[1]);
+        files.add(target);
+        explicit.add(target);
+      }
+    }
+  }
+  return { files: [...files].sort(), explicit };
 }
 
 // npm runs Vitest from the package root, so include globs resolve there.
@@ -448,8 +1010,45 @@ function packageRoot(root, dir) {
   return ".";
 }
 
+const BUILTIN_IMPORTS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((name) => `node:${name}`),
+]);
+
+function isDeclaredExternalImport(root, file, specifier) {
+  if (BUILTIN_IMPORTS.has(specifier)) return true;
+  if (specifier.startsWith("#")) return false;
+  const packageName = specifier.startsWith("@")
+    ? specifier.split("/").slice(0, 2).join("/")
+    : specifier.split("/")[0];
+  if (!packageName || packageName === "." || packageName === "..") return false;
+  const base = packageRoot(root, dirname(file));
+  const manifests = new Set([
+    join(root, base, "package.json"),
+    join(root, "package.json"),
+    join(root, "web/package.json"),
+  ]);
+  return [...manifests].some((manifest) => {
+    if (!existsSync(manifest)) return false;
+    const packageJson = JSON.parse(readFileSync(manifest, "utf8"));
+    const declared = [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ].some((field) => Object.hasOwn(packageJson[field] ?? {}, packageName));
+    if (declared) return true;
+    const lockfile = manifest.replace(/package\.json$/, "package-lock.json");
+    if (!existsSync(lockfile)) return false;
+    const lock = JSON.parse(readFileSync(lockfile, "utf8"));
+    return Object.hasOwn(lock.packages ?? {}, `node_modules/${packageName}`);
+  });
+}
+
 function configRootMatchesPackage(root, config, base, ast, expression) {
   const imports = new Map();
+  const namespaces = new Map();
+  const defaults = new Map();
   const bindings = new Map();
   for (const statement of ast.program.body) {
     if (statement.type === "ImportDeclaration") {
@@ -459,6 +1058,10 @@ function configRootMatchesPackage(root, config, base, ast, expression) {
             module: statement.source.value,
             name: keyName(specifier.imported),
           });
+        if (specifier.type === "ImportNamespaceSpecifier")
+          namespaces.set(specifier.local.name, statement.source.value);
+        if (specifier.type === "ImportDefaultSpecifier")
+          defaults.set(specifier.local.name, statement.source.value);
       }
     } else if (statement.type === "VariableDeclaration") {
       for (const declaration of statement.declarations)
@@ -485,9 +1088,17 @@ function configRootMatchesPackage(root, config, base, ast, expression) {
       seen.delete(node.name);
       return value;
     }
-    if (node?.type !== "CallExpression" || node.callee.type !== "Identifier") return undefined;
-
-    const imported = imports.get(node.callee.name);
+    if (node?.type !== "CallExpression") return undefined;
+    let imported;
+    if (node.callee.type === "Identifier") imported = imports.get(node.callee.name);
+    else if (node.callee.type === "MemberExpression" && !node.callee.computed) {
+      const object =
+        node.callee.object?.type === "Identifier" ? node.callee.object.name : undefined;
+      imported = {
+        module: namespaces.get(object) ?? defaults.get(object),
+        name: keyName(node.callee.property, false),
+      };
+    } else return undefined;
     if (imported?.module === "node:url" && imported.name === "fileURLToPath") {
       const argument = node.arguments[0];
       if (node.arguments.length === 1 && isImportMetaUrl(argument)) return resolve(root, config);
@@ -515,12 +1126,156 @@ function configRootMatchesPackage(root, config, base, ast, expression) {
   return configured === cwd;
 }
 
+// Config composition and mutation can change scope without a literal root
+// beside `test`. Reject arbitrary config execution rather than pretending to
+// resolve it; plain Vite configs without a test block are not test scopes.
+function verifyConfigRoots(root, config, base, ast, hasTestBlock) {
+  const importedNames = new Map();
+  const importedNamespaces = new Map();
+  const importedDefaults = new Map();
+  for (const statement of ast.program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type === "ImportSpecifier")
+        importedNames.set(specifier.local.name, {
+          module: statement.source.value,
+          name: keyName(specifier.imported),
+        });
+      if (specifier.type === "ImportNamespaceSpecifier")
+        importedNamespaces.set(specifier.local.name, statement.source.value);
+      if (specifier.type === "ImportDefaultSpecifier")
+        importedDefaults.set(specifier.local.name, statement.source.value);
+    }
+  }
+  const safeConfigCall = (callee) => {
+    if (
+      ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type) &&
+      !callee.computed
+    ) {
+      const object = callee.object?.type === "Identifier" ? callee.object.name : undefined;
+      const module = importedNamespaces.get(object) ?? importedDefaults.get(object);
+      const name = keyName(callee.property, false);
+      if (name === "defineConfig" && ["vite", "vitest/config"].includes(module)) return true;
+      if (["resolve", "dirname"].includes(name) && ["node:path", "path"].includes(module))
+        return true;
+      if (name === "fileURLToPath" && module === "node:url") return true;
+    }
+    if (callee?.type !== "Identifier") return false;
+    const imported = importedNames.get(callee.name);
+    if (!imported) return false;
+    return (
+      (imported.name === "defineConfig" && ["vite", "vitest/config"].includes(imported.module)) ||
+      (imported.name === "resolve" && ["node:path", "path"].includes(imported.module)) ||
+      (imported.name === "dirname" && ["node:path", "path"].includes(imported.module)) ||
+      (imported.name === "fileURLToPath" && imported.module === "node:url")
+    );
+  };
+  visit(ast, (node) => {
+    if (hasTestBlock && ["CallExpression", "OptionalCallExpression"].includes(node.type)) {
+      const callee = node.callee;
+      const property = ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type)
+        ? keyName(callee.property, callee.computed)
+        : undefined;
+      if (callee?.type === "Identifier" && callee.name === "mergeConfig")
+        throw new Error(
+          `${config}: config composition with mergeConfig is not statically verifiable`,
+        );
+      if (property === "mergeConfig")
+        throw new Error(
+          `${config}: config composition with mergeConfig is not statically verifiable`,
+        );
+      if (property === "assign")
+        throw new Error(
+          `${config}: config composition with Object.assign is not statically verifiable`,
+        );
+      if (
+        property &&
+        ["defineProperty", "defineProperties", "set", "setPrototypeOf", "create"].includes(property)
+      )
+        throw new Error(`${config}: config root mutation is not statically verifiable`);
+      if (
+        ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type) &&
+        callee.computed &&
+        property === undefined
+      )
+        throw new Error(`${config}: dynamic computed config access is not statically verifiable`);
+      if (!safeConfigCall(callee))
+        throw new Error(`${config}: config calls are not statically verifiable`);
+    }
+    if (hasTestBlock && node.type === "NewExpression")
+      throw new Error(`${config}: config construction is not statically verifiable`);
+    if (hasTestBlock && ["MemberExpression", "OptionalMemberExpression"].includes(node.type)) {
+      const property = keyName(node.property, node.computed);
+      if (node.computed && property === undefined)
+        throw new Error(`${config}: dynamic computed config access is not statically verifiable`);
+      if (property === "mergeConfig")
+        throw new Error(
+          `${config}: config composition with mergeConfig is not statically verifiable`,
+        );
+      if (property === "assign")
+        throw new Error(
+          `${config}: config composition with Object.assign is not statically verifiable`,
+        );
+      if (
+        ["defineProperty", "defineProperties", "set", "setPrototypeOf", "create"].includes(property)
+      )
+        throw new Error(`${config}: config root mutation is not statically verifiable`);
+    }
+    if (
+      hasTestBlock &&
+      node.type === "VariableDeclarator" &&
+      node.id?.type === "ObjectPattern" &&
+      node.id.properties.some((prop) =>
+        ["assign", "defineProperty", "defineProperties", "set", "setPrototypeOf"].includes(
+          prop.type === "ObjectProperty" ? keyName(prop.key, prop.computed) : undefined,
+        ),
+      )
+    )
+      throw new Error(`${config}: config root mutation is not statically verifiable`);
+    if (hasTestBlock && node.type === "AssignmentExpression")
+      throw new Error(`${config}: config assignments are not statically verifiable`);
+    if (hasTestBlock && node.type === "UpdateExpression")
+      throw new Error(`${config}: config updates are not statically verifiable`);
+    if (hasTestBlock && node.type === "UnaryExpression" && node.operator === "delete")
+      throw new Error(`${config}: deleting config properties is not statically verifiable`);
+    if (
+      hasTestBlock &&
+      node.type === "ObjectProperty" &&
+      node.computed &&
+      keyName(node.key, true) === undefined
+    )
+      throw new Error(`${config}: computed config option keys must be static`);
+    if (
+      hasTestBlock &&
+      node.type === "ObjectProperty" &&
+      keyName(node.key, node.computed) === "alias"
+    )
+      throw new Error(`${config}: resolve aliases are not statically supported`);
+    if (
+      hasTestBlock &&
+      node.type === "ObjectProperty" &&
+      keyName(node.key, node.computed) === "__proto__"
+    )
+      throw new Error(`${config}: config prototype changes are not statically verifiable`);
+    if (
+      hasTestBlock &&
+      node.type === "ObjectProperty" &&
+      keyName(node.key, node.computed) === "root" &&
+      !configRootMatchesPackage(root, config, base, ast, node.value)
+    )
+      throw new Error(`${config}: configured Vitest root must match the config package root`);
+  });
+}
+
 // Every literal test.include array and test.setupFiles value of every config,
 // inline projects too. Ambiguous scope or root options fail closed.
 function listTestFiles(root) {
   const files = new Set();
-  for (const config of configFiles(root)) {
+  const setupFileRoots = new Set();
+  const discovered = configFiles(root);
+  for (const config of discovered.files) {
     const ast = syntax(readFileSync(join(root, config), "utf8"), config);
+    const base = packageRoot(root, dirname(config));
     const blocks = [];
     visitWithParent(ast, (node, parent) => {
       if (
@@ -530,10 +1285,15 @@ function listTestFiles(root) {
       )
         blocks.push({ block: unwrap(node.value), parent });
     });
-    // A plain Vite config (the Kit app's) carries no test block.
-    if (blocks.length === 0 && /(^|\/)vite\.config\./.test(config)) continue;
+    // An auto-discovered plain Vite config (the Kit app's) carries no test
+    // block; an explicitly selected config must describe its Vitest scope.
+    if (blocks.length === 0 && /(^|\/)vite\.config\./.test(config)) {
+      if (discovered.explicit.has(config))
+        throw new Error(`${config}: explicit Vitest config has no literal test block`);
+      continue;
+    }
     if (blocks.length === 0) throw new Error(`${config} has no literal test block`);
-    const base = packageRoot(root, dirname(config));
+    verifyConfigRoots(root, config, base, ast, true);
     const packagePath = resolve(root, base);
     for (const { block, parent } of blocks) {
       if (parent?.type === "ObjectExpression") {
@@ -587,6 +1347,9 @@ function listTestFiles(root) {
         }
         return unwrap(property?.value);
       };
+      for (const name of ["dir", "includeSource"])
+        if (option(name) !== undefined)
+          throw new Error(`${config}: test.${name} scope is not statically supported`);
       const testRoot = option("root");
       if (testRoot && !configRootMatchesPackage(root, config, base, ast, testRoot))
         throw new Error(`${config}: configured Vitest root must match the config package root`);
@@ -606,11 +1369,29 @@ function listTestFiles(root) {
           if (isAbsolute(file) || file === ".." || file.startsWith(`..${sep}`))
             throw new Error(`${config}: test.setupFiles must stay inside the repository`);
           files.add(file);
+          setupFileRoots.add(file);
         }
       }
       const include = option("include");
+      const projects = option("projects");
+      if (
+        projects !== undefined &&
+        (projects.type !== "ArrayExpression" ||
+          !projects.elements.every((item) => {
+            const project = unwrap(item);
+            return (
+              project?.type === "ObjectExpression" &&
+              project.properties.some(
+                (property) =>
+                  keyName(property.key, property.computed) === "test" &&
+                  unwrap(property.value)?.type === "ObjectExpression",
+              )
+            );
+          }))
+      )
+        throw new Error(`${config}: test.projects must be inline objects with literal test blocks`);
       // A projects block runs each project's own test block instead.
-      if (!include && option("projects")) continue;
+      if (!include && projects !== undefined) continue;
       if (
         include?.type !== "ArrayExpression" ||
         !include.elements.every((item) => item?.type === "StringLiteral")
@@ -628,22 +1409,43 @@ function listTestFiles(root) {
     }
   }
   if (files.size === 0) throw new Error("no Vitest config with a test.include scope");
-  return [...files].sort();
+  return { files: [...files].sort(), setupFiles: setupFileRoots };
 }
 
 // Configured test files and setupFiles modules, plus every module they import
 // through a relative path, transitively.
-function scanScope(ctx, files) {
+function scanScope(ctx, files, setupFiles) {
   const queue = [...files];
   const seen = new Set(queue);
-  for (const file of queue)
-    for (const specifier of ctx.load(file).loads) {
+  const setupReachable = new Set(setupFiles);
+  for (let index = 0; index < queue.length; index++) {
+    const file = queue[index];
+    const module = ctx.load(file);
+    for (const specifier of module.loads) {
       const target = ctx.resolve(file, specifier);
+      const resource = /^\.\.?\//.test(specifier)
+        ? resolve(ctx.root, dirname(file), specifier.replace(/\?.*$/, ""))
+        : undefined;
+      if (
+        !target &&
+        !(resource && existsSync(resource) && !CODE.test(resource)) &&
+        specifier !== "vitest" &&
+        !isDeclaredExternalImport(ctx.root, file, specifier)
+      )
+        throw new Error(
+          `${file}: ${setupReachable.has(file) ? "setupFiles module has " : ""}unresolved non-relative import ${specifier}`,
+        );
       if (target && !seen.has(target)) {
         seen.add(target);
         queue.push(target);
       }
     }
+    if (setupReachable.has(file))
+      for (const specifier of module.loads) {
+        const target = ctx.resolve(file, specifier);
+        if (target) setupReachable.add(target);
+      }
+  }
   return [...seen].sort();
 }
 
@@ -701,9 +1503,9 @@ export function checkLedger(root, output = console) {
     return 2;
   }
   const { pins, mentioned } = parseLedgerPins(ledgerText);
-  let files;
+  let scope;
   try {
-    files = listTestFiles(root);
+    scope = listTestFiles(root);
   } catch (error) {
     output.error(`timeout ledger: cannot enumerate Vitest scope: ${error.message}`);
     return 2;
@@ -711,7 +1513,8 @@ export function checkLedger(root, output = console) {
   const ctx = project(root);
   const scanned = new Map();
   try {
-    for (const file of scanScope(ctx, files)) scanned.set(file, scanModule(ctx, ctx.load(file)));
+    for (const file of scanScope(ctx, scope.files, scope.setupFiles))
+      scanned.set(file, scanModule(ctx, ctx.load(file)));
   } catch (error) {
     output.error(`timeout ledger: ${error.message}`);
     return 2;
@@ -1256,6 +2059,686 @@ function selftest() {
       ["3 sub-default", "a.test.ts:1 (1000 ms)", "a.test.ts:2 (5000 ms)", "a.test.ts:5 (4000 ms)"],
     );
     check(
+      "mutable options object reference fails closed",
+      {
+        "test/a.test.ts": [
+          "let opts = { timeout: 5000 };",
+          'it("mutable options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "mutated const options object reference fails closed",
+      {
+        "test/a.test.ts": [
+          "const opts = {};",
+          "opts.timeout = 5000;",
+          'it("mutated options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "spread-supplied test options fail closed",
+      {
+        "test/a.test.ts": [
+          "const base = { timeout: 5000 };",
+          "const opts = { ...base };",
+          'it("spread options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["test options object must not use spreads"],
+    );
+    check(
+      "conditionally built test options fail closed",
+      {
+        "test/a.test.ts": [
+          "const opts = cond ? { timeout: 5000 } : {};",
+          'it("conditional options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "mutable alias options fail closed",
+      {
+        "test/a.test.ts": [
+          "const opts = { timeout: 5000 };",
+          "let alias = opts;",
+          'it("mutable alias", alias, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "conditional identifier aliases fail closed",
+      {
+        "test/a.test.ts": [
+          "const opts = { timeout: 5000 };",
+          "const other = {};",
+          "const selected = cond ? opts : other;",
+          'it("conditional alias", selected, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "sequence option aliases fail closed",
+      {
+        "test/a.test.ts": [
+          "const opts = { timeout: 5000 };",
+          "const selected = (setup(), opts);",
+          'it("sequence alias", selected, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "parameter option references fail closed",
+      { "test/a.test.ts": 'function f(q) { it("parameter options", q, () => {}); }' },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "namespace options imports fail closed",
+      {
+        "test/options.ts": "export const opts = { timeout: 5000 };",
+        "test/a.test.ts": [
+          'import * as helper from "./options";',
+          'it("namespace options", helper.opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "imported options object reference fails closed",
+      {
+        "test/options.ts": "export const opts = { timeout: 5000 };",
+        "test/a.test.ts": [
+          'import { opts } from "./options";',
+          'it("imported options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "globalThis and global Vitest APIs are scanned",
+      {
+        "test/a.test.ts": [
+          'globalThis.it("globalThis", () => {}, 5000);',
+          'global.it("global", () => {}, 4000);',
+          "globalThis.vi.setConfig({ testTimeout: 3000 });",
+        ].join("\n"),
+      },
+      ["| `test/a.test.ts` (1× 5 s, 1× 4 s, 1× 3 s) | 3 limits | Bounds them |"],
+      0,
+    );
+    check(
+      "dynamic computed global Vitest APIs fail closed",
+      { "test/a.test.ts": 'globalThis["i" + "t"]("hidden", () => {}, 5000);' },
+      [],
+      2,
+      ["dynamic computed test API access is not statically verifiable"],
+    );
+    check(
+      "dynamic computed vi APIs fail closed",
+      { "test/a.test.ts": 'vi["set" + "Config"]({ testTimeout: 5000 });' },
+      [],
+      2,
+      ["dynamic computed test API access is not statically verifiable"],
+    );
+    check(
+      "assignment and construction options fail closed",
+      {
+        "test/a.test.ts": [
+          'it("assignment", opts = { timeout: 5000 }, () => {});',
+          'it("construction", new Options({ timeout: 4000 }), () => {});',
+          'it("computed timeout", () => {}, 2000 + 3000);',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "local member options references fail closed",
+      {
+        "test/a.test.ts": [
+          "const holder = { opts: { timeout: 5000 } };",
+          'it("member", holder.opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "optional and computed member options references fail closed",
+      {
+        "test/a.test.ts": [
+          "const holder = { opts: { timeout: 5000 } };",
+          'it("optional", holder?.opts, () => {});',
+          'it("computed", holder["opts"], () => {});',
+          'it("third slot", () => {}, holder.opts);',
+          "vi.setConfig(holder.opts);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test options object reference"],
+    );
+    check(
+      "non-literal timeout values fail closed",
+      {
+        "test/a.test.ts": [
+          "const limit = 5000;",
+          "const opts = { timeout: limit };",
+          'it("variable timeout", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test timeout value"],
+    );
+    check(
+      "getter timeout options fail closed",
+      {
+        "test/a.test.ts": [
+          "const opts = { get timeout() { return 5000; } };",
+          'it("getter timeout", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["non-static test timeout property"],
+    );
+    check(
+      "dynamic computed timeout keys fail closed",
+      {
+        "test/a.test.ts": [
+          'const key = "timeout";',
+          "const opts = { [key]: 5000 };",
+          'it("computed timeout", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic computed test options key"],
+    );
+    check(
+      "CommonJS require Vitest APIs are scanned",
+      {
+        "test/a.test.ts": [
+          'const { it: test } = require("vitest");',
+          'test("required API", () => {}, 5000);',
+        ].join("\n"),
+      },
+      ["| `test/a.test.ts` (1× 5 s) | 5 s per test | Covers require |"],
+      0,
+    );
+    check(
+      "CommonJS required helper modules are scanned",
+      {
+        "test/a.test.ts": 'require("./helper.cjs");',
+        "test/helper.cjs": 'it("required helper", () => {}, 4000);',
+      },
+      ["| `test/helper.cjs` (1× 4 s) | 4 s per test | Covers helper |"],
+      0,
+    );
+    check(
+      "bare module createRequire follows relative helpers",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "module";',
+          "const req = createRequire(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("bare module helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "namespace createRequire follows relative helpers",
+      {
+        "test/a.test.ts": [
+          'import * as module from "node:module";',
+          "const req = module.createRequire(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("namespace helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "destructured createRequire bindings fail closed",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const [req] = [createRequire(import.meta.url)];",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("hidden", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["createRequire source is not statically verifiable"],
+    );
+    check(
+      "createRequire factory aliases follow relative helpers",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const factory = createRequire;",
+          "const req = factory(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("factory alias", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "unverified extracted createRequire factory members fail closed",
+      {
+        "test/a.test.ts": [
+          'const module = require("module");',
+          "const factory = module.createRequire;",
+          "const req = factory(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("factory member", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["createRequire source is not statically verifiable"],
+    );
+    check(
+      "destructured createRequire from require module is tracked",
+      {
+        "test/a.test.ts": [
+          'const { createRequire: cr } = require("module");',
+          "const req = cr(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("destructured factory", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "optional createRequire factory calls are tracked",
+      {
+        "test/a.test.ts": [
+          'import { createRequire as factory } from "node:module";',
+          "const req = factory?.(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("optional factory", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "createRequire-loaded Vitest aliases are tracked",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const req = createRequire(import.meta.url);",
+          'const { it: myTest } = req("vitest");',
+          'myTest("hidden", () => {}, 5000);',
+        ].join("\n"),
+      },
+      [],
+      1,
+      ["test/a.test.ts:4 (5000 ms)"],
+    );
+    check(
+      "member require calls scan literal helpers",
+      {
+        "test/a.test.ts": ['globalThis.require("./helper.cjs");'].join("\n"),
+        "test/helper.cjs": 'it("member require", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "literal data URL imports fail closed",
+      {
+        "test/a.test.ts": 'await import("data:text/javascript;base64,Y29uc29sZS5sb2coMSk=");',
+      },
+      [],
+      2,
+      ["unresolved non-relative import data:text/javascript;base64"],
+    );
+    check(
+      "reassigned temporary and data URL bindings fail closed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtempSync } from "node:fs";',
+          'import { tmpdir } from "node:os";',
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'let scratch = mkdtempSync(join(tmpdir(), "bundle-"));',
+          'scratch = "test";',
+          'await import(pathToFileURL(join(scratch, "helper.ts")).href);',
+          'let url = "./helper.ts";',
+          "url = `data:text/javascript;base64,Y29uc29sZS5sb2coMSk=`;",
+          "await import(url);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "ordinary require property names and resolve calls are allowed",
+      {
+        "test/a.test.ts": [
+          "const options = { require: true };",
+          "console.log(options.require);",
+          'require.resolve("./helper.cjs");',
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "require method names and shadowing parameters are allowed",
+      {
+        "test/a.test.ts": [
+          "const object = { require() { return 1; } };",
+          "class Example { require() {} }",
+          "function helper(require) { return require; }",
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "aliased CommonJS require references fail closed",
+      { "test/a.test.ts": ["const load = require;", "load(moduleName);"].join("\n") },
+      [],
+      2,
+      ["require() calls are not statically verifiable"],
+    );
+    check(
+      "assignment-bound createRequire follows relative helpers",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "let req;",
+          "req = createRequire(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("assignment helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "dynamic-import module namespace createRequire follows helpers",
+      {
+        "test/a.test.ts": [
+          'const module = await import("node:module");',
+          "const req = module.createRequire(import.meta.url);",
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("dynamic namespace helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "require module createRequire follows relative helpers",
+      {
+        "test/a.test.ts": [
+          'const req = require("module").createRequire(import.meta.url);',
+          'req("./helper.cjs");',
+        ].join("\n"),
+        "test/helper.cjs": 'it("required module helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.cjs:1 (5000 ms)"],
+    );
+    check(
+      "unknown createRequire factories fail closed",
+      {
+        "test/a.test.ts":
+          'const req = helpers.createRequire(import.meta.url); req("./helper.cjs");',
+      },
+      [],
+      2,
+      ["createRequire source is not statically verifiable"],
+    );
+    check(
+      "dynamic CommonJS module specifiers fail closed",
+      { "test/a.test.ts": "require(moduleName);" },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "non-literal dynamic imports fail closed",
+      { "test/a.test.ts": "await import(`./helper-${name}.ts`);" },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "temporary generated file URL bundle imports are not traversed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtempSync } from "node:fs";',
+          'import { tmpdir } from "node:os";',
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'const scratch = mkdtempSync(join(tmpdir(), "bundle-"));',
+          'const outfile = join(scratch, "bundle.mjs");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "temporary path joins that escape the temp directory fail closed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtempSync } from "node:fs";',
+          'import { tmpdir } from "node:os";',
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'const scratch = mkdtempSync(join(tmpdir(), "bundle-"));',
+          'const outfile = join(scratch, "..", "helper.ts");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "absolute path resolution from temp directories fails closed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtempSync } from "node:fs";',
+          'import { tmpdir } from "node:os";',
+          'import { join, resolve } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'const scratch = mkdtempSync(join(tmpdir(), "bundle-"));',
+          'const outfile = resolve(scratch, "/repo/helper.ts");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "source file URL imports remain in the helper walk",
+      {
+        "test/a.test.ts": [
+          'import { fileURLToPath, pathToFileURL } from "node:url";',
+          'const helper = fileURLToPath(new URL("./helper.ts", import.meta.url).href);',
+          "await import(pathToFileURL(helper).href);",
+        ].join("\n"),
+        "test/helper.ts": 'it("hidden source helper", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["test/helper.ts:1 (5000 ms)"],
+    );
+    check(
+      "arbitrary file URL imports fail closed",
+      {
+        "test/a.test.ts": [
+          'import { pathToFileURL } from "node:url";',
+          'await import(pathToFileURL("./helper.ts").href);',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "generated data URL bundle imports are not traversed",
+      {
+        "test/a.test.ts": [
+          'const bundled = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;',
+          "await import(bundled);",
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "inline generated data URL bundle imports are not traversed",
+      {
+        "test/a.test.ts":
+          'await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);',
+      },
+      [],
+      0,
+    );
+    check(
+      "createRequire calls behind a literal builtin allowlist are accepted",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const require = createRequire(import.meta.url);",
+          'const helpers = { __require: (name) => { if (!["fs", "path"].includes(name)) throw new Error("blocked"); return require(name); } };',
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "inverted createRequire builtin guard fails closed",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const require = createRequire(import.meta.url);",
+          'const helpers = { __require: (name) => { if (["fs", "path"].includes(name)) throw new Error("blocked"); return require(name); } };',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "createRequire builtin guard parameter reassignment fails closed",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const require = createRequire(import.meta.url);",
+          'const helpers = { __require: (name) => { if (!["fs"].includes(name)) throw new Error("blocked"); name = "./helper.cjs"; return require(name); } };',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "unreachable createRequire builtin guard fails closed",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const require = createRequire(import.meta.url);",
+          'const helpers = { __require: (name) => { return require(name); if (!["fs"].includes(name)) throw new Error("blocked"); } };',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "non-literal createRequire calls fail closed",
+      {
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          "const require = createRequire(import.meta.url);",
+          "require(helperPath);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
+    check(
+      "referenced options object timeout remains pinned",
+      {
+        "test/a.test.ts": [
+          "const opts = { timeout: 5000 };",
+          'it("referenced options", opts, () => {});',
+        ].join("\n"),
+      },
+      [],
+      1,
+      ["a.test.ts:1 (5000 ms)"],
+    );
+    check(
+      "referenced vi.setConfig object timeout remains pinned",
+      {
+        "test/a.test.ts": ["const config = { testTimeout: 5000 };", "vi.setConfig(config);"].join(
+          "\n",
+        ),
+      },
+      [],
+      1,
+      ["a.test.ts:1 (5000 ms)"],
+    );
+    check(
       "vi.setConfig testTimeout is a per-test limit",
       {
         "test/a.test.ts": [
@@ -1265,6 +2748,47 @@ function selftest() {
         ].join("\n"),
       },
       ["| `test/a.test.ts` (1× 5 s) | 5 s per test | Bounds the file |"],
+      0,
+    );
+    check(
+      "declared package test APIs with timeout literals fail closed",
+      {
+        "package.json": '{"devDependencies":{"test-tools":"1.0.0"}}',
+        "test/a.test.ts": [
+          'import { test as customTest } from "test-tools";',
+          'customTest("hidden API", () => {}, 5000);',
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["declared external test-like API is not statically verifiable"],
+    );
+    check(
+      "locked transitive package imports are recognized",
+      {
+        "web/package.json": "{}",
+        "web/package-lock.json": JSON.stringify({
+          packages: { "node_modules/@tailwindcss/node": { version: "4.3.3" } },
+        }),
+        "test/a.test.ts": [
+          'import { createRequire } from "node:module";',
+          'const webRequire = createRequire("web/package.json");',
+          'webRequire("@tailwindcss/node");',
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "external names containing test are not inferred as test APIs",
+      {
+        "package.json": '{"dependencies":{"latest-test-utils":"1.0.0"}}',
+        "test/a.test.ts": [
+          'import * as utils from "latest-test-utils";',
+          'utils.latest("ordinary helper", () => {}, 5000);',
+        ].join("\n"),
+      },
+      [],
       0,
     );
     check(
@@ -1337,6 +2861,36 @@ function selftest() {
       [],
       1,
       ["test/setup.ts:1 (5000 ms)"],
+    );
+    check(
+      "unresolved non-relative setup import fails closed",
+      {
+        "package.json": '{"dependencies":{"@h/slow":"1.0.0"}}',
+        "vitest.config.ts": [
+          'export default { resolve: { alias: { "@h": "./helpers" } }, test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./test/setup.ts" } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("test", () => {});',
+        "test/setup.ts": 'import "@h/slow";',
+        "helpers/slow.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["resolve aliases are not statically supported"],
+    );
+    check(
+      "computed resolve aliases fail closed",
+      {
+        "package.json": '{"dependencies":{"@h/slow":"1.0.0"}}',
+        "vitest.config.ts": [
+          'export default { resolve: { ["ali" + "as"]: { "@h": "./helpers" } }, test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./test/setup.ts" } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("test", () => {});',
+        "test/setup.ts": 'import "@h/slow";',
+        "helpers/slow.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["computed config option keys must be static"],
     );
     check(
       "a setupFiles timeout passes with an exact pin from its package root",
@@ -1414,7 +2968,7 @@ function selftest() {
       },
       [],
       2,
-      ["computed test option keys must be static"],
+      ["computed config option keys must be static"],
     );
     check(
       "duplicate include properties fail closed",
@@ -1454,6 +3008,296 @@ function selftest() {
       ["configured Vitest root must match the config package root"],
     );
     check(
+      "root composed through mergeConfig fails closed",
+      {
+        "vitest.config.ts": [
+          'import { mergeConfig, defineConfig } from "vitest/config";',
+          'export default mergeConfig({ root: "sub" }, defineConfig({ test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: ["./setup.ts"] } }));',
+        ].join("\n"),
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "setup.ts": "// no timeout",
+        "sub/test/a.test.ts": 'it("uses setup config", () => {});',
+        "sub/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["config composition with mergeConfig is not statically verifiable"],
+    );
+    check(
+      "namespace mergeConfig cannot import an unscanned root config",
+      {
+        "vitest.config.ts": [
+          'import * as vite from "vite";',
+          'import base from "./base.config";',
+          'export default vite.mergeConfig(base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config composition with mergeConfig is not statically verifiable"],
+    );
+    check(
+      "root composed through Object.assign fails closed",
+      {
+        "vitest.config.ts": [
+          'import { defineConfig } from "vitest/config";',
+          'export default Object.assign({ root: "sub" }, defineConfig({ test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } }));',
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("root", () => {});',
+      },
+      [],
+      2,
+      ["config composition with Object.assign is not statically verifiable"],
+    );
+    check(
+      "computed root assignment fails closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          'const key = "root";',
+          'cfg[key] = "sub";',
+          "export default cfg;",
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config assignments are not statically verifiable"],
+    );
+    check(
+      "config mutation helpers fail closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          'Object.defineProperty(cfg, "root", { value: "sub" });',
+          'Reflect.set(cfg, "root", "sub");',
+          "export default cfg;",
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config root mutation is not statically verifiable"],
+    );
+    check(
+      "indirect mergeConfig invocation fails closed",
+      {
+        "vitest.config.ts": [
+          'import { mergeConfig } from "vite";',
+          'import base from "./base.config";',
+          'export default (0, mergeConfig)(base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "aliased Object.assign invocation fails closed",
+      {
+        "vitest.config.ts": [
+          'import base from "./base.config";',
+          "const assign = Object.assign;",
+          'export default assign({}, base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config composition with Object.assign is not statically verifiable"],
+    );
+    check(
+      "destructured composition helpers through aliases fail closed",
+      {
+        "vitest.config.ts": [
+          'import base from "./base.config";',
+          "const O = Object;",
+          "const { assign: combine } = O;",
+          'export default combine({}, base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config root mutation is not statically verifiable"],
+    );
+    check(
+      "destructured mutation helpers through aliases fail closed",
+      {
+        "vitest.config.ts": [
+          "const R = Reflect;",
+          "const { set } = R;",
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          'set(cfg, "root", "sub");',
+          "export default cfg;",
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config root mutation is not statically verifiable"],
+    );
+    check(
+      "third-party config composition fails closed",
+      {
+        "vitest.config.ts": [
+          'import merge from "lodash/merge";',
+          'import base from "./base.config";',
+          'export default merge({}, base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "prototype mutations fail closed",
+      {
+        "vitest.config.ts": [
+          'import base from "./base.config";',
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          "cfg.__proto__ = base;",
+          "export default cfg;",
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config assignments are not statically verifiable"],
+    );
+    check(
+      "prototype object properties fail closed",
+      {
+        "vitest.config.ts": [
+          'import base from "./base.config";',
+          'export default { __proto__: base, test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config prototype changes are not statically verifiable"],
+    );
+    check(
+      "computed merge and mutation access plus aliased receivers fail closed",
+      {
+        "vitest.config.ts": [
+          'import * as vite from "vite";',
+          'import base from "./base.config";',
+          "const O = Object;",
+          "const R = Reflect;",
+          "const d = O.defineProperty;",
+          'const cfg = vite["merge" + "Config"](base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+          'O["assi" + "gn"](cfg, {});',
+          'd(cfg, "root", { value: "sub" });',
+          'R.set(cfg, "root", "sub");',
+          'Reflect.defineProperty(cfg, "root", { value: "sub" });',
+          'Object.defineProperties(cfg, { ["ro" + "ot"]: { value: "sub" } });',
+          "export default cfg;",
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config root mutation is not statically verifiable"],
+    );
+    check(
+      "computed config method names fail closed",
+      {
+        "vitest.config.ts": [
+          'import * as vite from "vite";',
+          'import base from "./base.config";',
+          'export default vite["merge" + "Config"](base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["dynamic computed config access is not statically verifiable"],
+    );
+    check(
+      "dynamic computed config access fails closed",
+      {
+        "vitest.config.ts": [
+          'const name = "mergeConfig";',
+          'export default vite[name]({}, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+      },
+      [],
+      2,
+      ["dynamic computed config access is not statically verifiable"],
+    );
+    check(
+      "later root assignment fails closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          'cfg.root = "sub";',
+          "export default cfg;",
+        ].join("\n"),
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/a.test.ts": 'it("root", () => {});',
+      },
+      [],
+      2,
+      ["config assignments are not statically verifiable"],
+    );
+    check(
+      "testTimeout update fails closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          "cfg.test.testTimeout--;",
+          "export default cfg;",
+        ].join("\n"),
+        "test/a.test.ts": 'it("update", () => {});',
+      },
+      [],
+      2,
+      ["config updates are not statically verifiable"],
+    );
+    check(
+      "merged Vite config is rejected even without a test block",
+      {
+        "vitest.config.ts": [
+          'import { mergeConfig } from "vite";',
+          'import viteConfig from "./vite.config";',
+          'export default mergeConfig(viteConfig, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "vite.config.ts": "export default {};",
+        "test/a.test.ts": 'it("root", () => {});',
+      },
+      [],
+      2,
+      ["config composition with mergeConfig is not statically verifiable"],
+    );
+    check(
       "test.root override fails closed",
       {
         "vitest.config.ts":
@@ -1479,7 +3323,7 @@ function selftest() {
       },
       [],
       2,
-      ["config options must not use object spreads"],
+      ["configured Vitest root must match the config package root"],
     );
     check(
       "computed config root keys fail closed",
@@ -1529,6 +3373,132 @@ function selftest() {
       [],
       1,
       ["a/x.test.ts:1 (5000 ms)", "b/y.test.ts:1 (6000 ms)"],
+    );
+    check(
+      "post-hoc test config assignment fails closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          'cfg.test.include = ["sub/**/*.test.ts"];',
+          "export default cfg;",
+        ].join("\n"),
+        "test/ok.test.ts": 'it("ok", () => {});',
+        "sub/b.test.ts": 'it("hidden", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config assignments are not statically verifiable"],
+    );
+    check(
+      "deleting test config properties fails closed",
+      {
+        "vitest.config.ts": [
+          'const cfg = { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+          "delete cfg.test.include;",
+          "export default cfg;",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["deleting config properties is not statically verifiable"],
+    );
+    for (const name of ["dir", "includeSource"]) {
+      check(
+        `test.${name} scope option fails closed`,
+        {
+          "vitest.config.ts": rootConfig(["test/**/*.test.ts"]).replace(
+            "testTimeout: 30_000",
+            `testTimeout: 30_000, ${name}: ["sub/**/*.ts"]`,
+          ),
+        },
+        [],
+        2,
+        [`test.${name} scope is not statically supported`],
+      );
+    }
+    check(
+      "project config paths fail closed",
+      {
+        "vitest.config.ts": 'export default { test: { projects: ["./sub/project.ts"] } };',
+        "sub/project.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+        "sub/test/b.test.ts": 'it("hidden", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["test.projects must be inline objects with literal test blocks"],
+    );
+    for (const flag of [
+      "--dir sub",
+      "-r sub",
+      "--workspace ./custom.workspace.ts",
+      "--include sub/**/*.test.ts",
+    ]) {
+      check(
+        `scope-changing Vitest CLI flag ${flag} fails closed`,
+        {
+          "package.json": JSON.stringify({ scripts: { test: `vitest run ${flag}` } }),
+          "vitest.config.ts": rootConfig(["test/**/*.test.ts"]),
+          "test/ok.test.ts": 'it("ok", () => {});',
+        },
+        [],
+        2,
+        ["package.json Vitest flags can override scanned scope or testTimeout"],
+      );
+    }
+    check(
+      "explicit Vite config without test block fails closed",
+      {
+        "package.json": JSON.stringify({
+          scripts: { test: "vitest run --config web/vite.config.ts" },
+        }),
+        "vitest.config.ts": rootConfig(["test/**/*.test.ts"]),
+        "test/ok.test.ts": 'it("ok", () => {});',
+        "web/vite.config.ts": "export default { build: {} };",
+      },
+      [],
+      2,
+      ["explicit Vitest config has no literal test block"],
+    );
+    check(
+      "optional mergeConfig invocation fails closed",
+      {
+        "vitest.config.ts": [
+          'import * as vite from "vite";',
+          'import base from "./base.config";',
+          'export default vite?.mergeConfig(base, { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "base.config.ts": 'export default { root: "sub" };',
+        "test/a.test.ts": 'it("root", () => {});',
+        "sub/test/hidden.test.ts": 'it("hidden", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config composition with mergeConfig is not statically verifiable"],
+    );
+    check(
+      "namespaced defineConfig is statically accepted",
+      {
+        "vitest.config.ts": [
+          'import * as v from "vitest/config";',
+          'export default v.defineConfig({ test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } });',
+        ].join("\n"),
+        "test/ok.test.ts": 'it("ok", () => {});',
+      },
+      [],
+      0,
+    );
+    check(
+      "plain Vite config composition remains outside Vitest scope",
+      {
+        "web/vite.config.ts": [
+          'import { mergeConfig } from "vite";',
+          "export default mergeConfig({ build: {} }, { build: { minify: true } });",
+        ].join("\n"),
+        "test/ok.test.ts": 'it("ok", () => {});',
+      },
+      [],
+      0,
     );
     check(
       "a vitest --config script target is scanned",
