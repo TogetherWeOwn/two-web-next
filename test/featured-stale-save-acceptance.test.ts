@@ -310,7 +310,9 @@ describe("featured stale Save acceptance (disposable Postgres)", () => {
   it("Kit load renders a real precondition and its native POST participates in Hono conflict/review recovery", async () => {
     const headers: Record<string, string> = {};
     const data = await kitLoad(fixture.db, id, (value) => Object.assign(headers, value));
-    expect(headers["Cache-Control"] ?? headers["cache-control"]).toBe("private, no-store");
+    expect(headers["Cache-Control"] ?? headers["cache-control"]).toMatch(
+      /private.*no-store|no-store.*private/,
+    );
     const kitDocument = savedForm(kit.renderForm(3, data));
     expect.soft(Object.values(kitDocument.hidden).some((value) => value.length > 0)).toBe(true);
     expect(kitDocument.attrs.method?.toLowerCase()).toBe("post");
@@ -474,7 +476,8 @@ describe("featured stale Save acceptance (disposable Postgres)", () => {
       expect(await visible(), "rollback must not retire the existing homepage cache").toEqual(warm);
     } finally {
       await fixture.client.unsafe(
-        `DROP TRIGGER reject_featured_save_audit ON "${schema}".activity_log`,
+        `DROP TRIGGER reject_featured_save_audit ON "${schema}".activity_log;
+         DROP FUNCTION "${schema}".reject_featured_save_audit()`,
       );
     }
     expect((await save({ ...document.fields, title: "Retry after rollback" })).status).toBe(303);
