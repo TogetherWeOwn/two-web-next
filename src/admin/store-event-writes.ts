@@ -383,11 +383,15 @@ async function shiftFutureChildren(
   const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
   const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
   if (startDelta === 0 && endDelta === 0) return [];
-  const children = await tx
+  const lockedChildren = await tx
     .select()
     .from(events)
     .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())))
     .for("update");
+  // The query's cutoff predates any lock wait. Judge eligibility once after
+  // all child locks are held, for both validation and every reschedule effect.
+  const now = Date.now();
+  const children = lockedChildren.filter((child) => child.startsAt.getTime() > now);
   // A parent delta must never invert (or zero) a future occurrence the
   // moderator shortened individually: refuse the whole edit with the existing
   // ends_at response before any child write, so the surrounding transaction
