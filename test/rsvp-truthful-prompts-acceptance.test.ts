@@ -198,7 +198,9 @@ describe("acceptance: guest paused/full truth (Hono)", () => {
     expect(res.status).toBe(200);
     expect(html).toContain('data-full="true"');
     expect(html).toContain(`data-testid="${EVENT_FULL_TESTID}"`);
-    expect(html).toContain(RSVP_COPY.full);
+    // Hono JSX escapes the apostrophe in served HTML; RSVP_COPY.full itself
+    // stays pinned to the raw copy below (contract assertion).
+    expect(html).toContain("This one&#39;s full.");
     expect(html).toContain(rsvpFullCapCopy(4));
     // The new hint names the waitlist path; the link returns to this page.
     expect(html).toContain(EXPECTED_GUEST_FULL_HINT);
@@ -445,12 +447,12 @@ describe("acceptance: no-JS parity (Hono)", () => {
     const guest = page({ rsvpOpen: false, capacity: 10 });
     guest.as(null);
     const guestHtml = mount(await (await guest.request()).text());
-    expect(guestHtml).toMatch(/<a href="[^"]+">/);
+    expect(guestHtml).toMatch(/<a href="[^"]+"[^>]*>/);
     expect(guestHtml).not.toContain("<form");
     const outsider = page({ rsvpOpen: true, capacity: null });
     outsider.as(nonMemberSession);
     const outsiderHtml = mount(await (await outsider.request()).text());
-    expect(outsiderHtml).toMatch(/<a href="[^"]+">/);
+    expect(outsiderHtml).toMatch(/<a href="[^"]+"[^>]*>/);
     expect(outsiderHtml).not.toContain("<form");
     const member = page({ rsvpOpen: true, capacity: null });
     member.as(memberSession);
