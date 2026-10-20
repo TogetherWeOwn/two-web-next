@@ -266,8 +266,33 @@ function importedName(scope, local, source) {
   return undefined;
 }
 
-function isSystemTempdir(scope, expression) {
+function isScratchRoot(scope, expression, seen = new Set(), at = expression?.start ?? Infinity) {
   const node = unwrap(expression);
+  if (node?.type === "Identifier") {
+    if (seen.has(node.name)) return false;
+    seen.add(node.name);
+    const bindings = bindingsAt(scope, node.name, at);
+    return (
+      bindings.length > 0 && bindings.every((init) => isScratchRoot(scope, init, new Set(seen), at))
+    );
+  }
+  if (node?.type === "LogicalExpression" && ["??", "||"].includes(node.operator))
+    return (
+      isScratchRoot(scope, node.left, new Set(seen), at) &&
+      isScratchRoot(scope, node.right, new Set(seen), at)
+    );
+  // These variables are the harness-owned temporary roots, not arbitrary env paths.
+  if (
+    node?.type === "MemberExpression" &&
+    ["PAPERCLIP_RUN_SCRATCH_DIR", "PAPERCLIP_SCRATCH_DIR"].includes(
+      keyName(node.property, node.computed),
+    ) &&
+    node.object.type === "MemberExpression" &&
+    keyName(node.object.property, node.object.computed) === "env" &&
+    node.object.object.type === "Identifier" &&
+    node.object.object.name === "process"
+  )
+    return true;
   if (node?.type !== "CallExpression" || node.arguments.length !== 0) return false;
   if (
     node.callee.type === "Identifier" &&
@@ -329,7 +354,7 @@ function isTemporaryOutput(
     node.arguments[0].type === "CallExpression" &&
     node.arguments[0].callee.type === "Identifier" &&
     importedName(scope, node.arguments[0].callee.name, "node:path") === "join" &&
-    isSystemTempdir(scope, node.arguments[0].arguments[0]) &&
+    isScratchRoot(scope, node.arguments[0].arguments[0]) &&
     node.arguments[0].arguments.slice(1).every(isSafePathSegment)
   )
     return true;
@@ -2570,6 +2595,76 @@ function selftest() {
       },
       [],
       0,
+    );
+    for (const [name, root, expected] of [
+      [
+        "Paperclip scratch root fallback aliases are accepted",
+        "const scratchRoot = process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir();",
+        0,
+      ],
+      [
+        "Paperclip scratch root inline fallbacks are accepted",
+        "const scratchRoot = process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir();",
+        0,
+      ],
+      [
+        "Paperclip shared scratch root is accepted",
+        "const scratchRoot = process.env.PAPERCLIP_SCRATCH_DIR;",
+        0,
+      ],
+      [
+        "unrelated environment roots fail closed",
+        "const scratchRoot = process.env.TEST_SOURCE_DIR ?? tmpdir();",
+        2,
+      ],
+      [
+        "source directory fallback fails closed",
+        'const scratchRoot = process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? "test";',
+        2,
+      ],
+      [
+        "reassigned scratch root fails closed",
+        'let scratchRoot = process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(); scratchRoot = "test";',
+        2,
+      ],
+      [
+        "cyclic scratch root aliases fail closed",
+        "const scratchRoot = other; const other = scratchRoot;",
+        2,
+      ],
+    ]) {
+      check(
+        name,
+        {
+          "test/a.test.ts": [
+            'import { mkdtempSync } from "node:fs";',
+            'import { tmpdir } from "node:os";',
+            'import { join } from "node:path";',
+            'import { pathToFileURL } from "node:url";',
+            root,
+            'const scratch = mkdtempSync(join(scratchRoot, "bundle-"));',
+            'const outfile = join(scratch, "bundle.mjs");',
+            "await import(pathToFileURL(outfile).href);",
+          ].join("\n"),
+        },
+        [],
+        expected,
+        expected === 2 ? ["dynamic module specifier is not statically verifiable"] : [],
+      );
+    }
+    check(
+      "Paperclip scratch root alone is not a generated bundle path",
+      {
+        "test/a.test.ts": [
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'const outfile = join(process.env.PAPERCLIP_RUN_SCRATCH_DIR, "helper.ts");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
     );
     check(
       "temporary path joins that escape the temp directory fail closed",

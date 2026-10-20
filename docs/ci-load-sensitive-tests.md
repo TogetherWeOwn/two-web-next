@@ -31,8 +31,11 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   relative static import, literal dynamic import, literal CommonJS `require`,
   or literal call through a `createRequire` binding. Non-literal dynamic import,
   `require`, and `createRequire` specifiers fail closed, except `pathToFileURL(...).href`
-  imports whose path is statically derived from `mkdtempSync(join(tmpdir(), ...))`
-  (temporary generated bundles are not traversed), `data:text/javascript;base64,`
+  imports whose path is statically derived from `mkdtempSync(join(root, ...))`,
+  where `root` is `tmpdir()`, a harness-owned `process.env.PAPERCLIP_RUN_SCRATCH_DIR`
+  or `process.env.PAPERCLIP_SCRATCH_DIR`, or an alias/`??`/`||` fallback containing
+  only those roots (temporary generated bundles are not traversed; arbitrary
+  environment roots and source-directory fallbacks fail closed), `data:text/javascript;base64,`
   template-literal specifiers, and a `createRequire` call inside a `__require` wrapper that throws
   unless its single argument is included in a literal array of Node built-ins.
   Statically resolved source paths assigned from `fileURLToPath(new URL(...,
@@ -127,6 +130,8 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/queue-settlement-released-acceptance.test.ts` (1× 15 s) | 15 s per test | The hung released-stamp case must stay bounded yet fail open to retry; 15 s bounds the hung clock |
 | `ci/audit-lifecycle.test.mjs` (1× 20 s, 2× 2 s) | 20 s browser signal cleanup; 2 s child shutdown | The browser proof waits through 1.2 s disposal after a real signal before recording evidence; the two child-process probes bound shutdown for already-exited and running children |
 | `test/tail-build-attribution-acceptance.test.ts` (1× 15 s) | 15 s per test (options form) | A healthy response whose body stalls must still let a failing synthetic check page without attribution; 15 s bounds settlement of the Tail worker's independent body-read deadline |
+| `test/member-erasure-chained-rotation.test.ts` (1× 15 s) | 15 s per test | Held session-row locks force three fresh erasure passes across chained rotations; 15 s bounds the lock-wait handshakes and successor cleanup |
+| `test/member-erasure-inflight-rotation-acceptance.test.ts` (4× 15 s) | 15 s per test | Held-row rotation/erasure rendezvous, bystander isolation, queued-erasure ordering and rollback controls; 15 s bounds the database lock-wait handshakes and cleanup |
 
 The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
 `test/agent-events-inner-lock-busy.test.ts`, and the busy cases in
