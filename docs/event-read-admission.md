@@ -3,10 +3,10 @@
 The public event pages and feeds share one `events-read:<clientKey>` budget:
 **60 admitted requests per client in the last 60 seconds**. This covers GET and
 HEAD on `/events` (including search and island fragments), `/events/past`,
-`/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/sitemap_index.xml`
-and the hot-zone heatmaps (`/hotzones`, `/hotzones/joins`, `/hotzones/voice`,
-`/hotzones/games`). Different query values, page numbers, event keys and feed
-formats do not create new budgets.
+`/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/events.md`,
+`/e/:key.md`, `/sitemap_index.xml` and the hot-zone heatmaps (`/hotzones`,
+`/hotzones/joins`, `/hotzones/voice`, `/hotzones/games`). Different query values,
+page numbers, event keys and feed formats do not create new budgets.
 The guard runs before event-store access, session reads, analytics and Discord
 reads. It also charges redirects and missing-key requests on these routes.
 On the hot-zone paths the guard runs after the season grammar and the signal
@@ -24,9 +24,12 @@ and `/openapi.json` routes remain unguarded.
 
 ## Responses and search bounds
 
-An exhausted budget returns the existing branded HTML or JSON 429 response with
-`Retry-After` and `Cache-Control: no-store, private`. The guard sets the header on
-its constructed Response, following Hono's [response-header mutation API](https://hono.dev/docs/api/context#res).
+An exhausted budget returns 429 with `Retry-After`, `Cache-Control: no-store,
+private` and `Vary: Accept`. RSS, ICS and event Markdown paths (`/events.md` and
+`/e/:key.md`) return `text/plain` with the fixed body `Too many requests`, even
+when Accept requests HTML or JSON. Other callers retain the branded HTML or
+JSON response. The guard sets the cache header on its constructed Response,
+following Hono's [response-header mutation API](https://hono.dev/docs/api/context#res).
 Successful cache headers and
 feed ETags/conditional 304 responses are unchanged. Conditional requests that
 reach the Worker consume budget because generating their validator still reads
@@ -64,7 +67,10 @@ refreshes; heavy shared clients may receive 429 and should respect `Retry-After`
 admission statements with local SQL/Drizzle doubles. It pins the shared budget,
 pre-read denials, JSON/HTML/HEAD/island responses, client separation, window expiry,
 feed cache/304 behavior, untouched JSON authentication and query boundaries,
-including supplementary Unicode and a multi-kilobyte query. Existing throttle
-connection and concurrency suites cover Hyperdrive resolution and atomic
+including supplementary Unicode and a multi-kilobyte query.
+`test/feed-throttle-429.test.ts` pins plain-text 429 bodies and headers on the
+real RSS, ICS and event Markdown routes across Accept variants, with
+unexhausted-budget controls. Existing throttle connection and concurrency suites
+cover Hyperdrive resolution and atomic
 Postgres admission. Local fixtures do not prove a deployed edge rule or staging
 revision; record staging verification separately after the reviewed head deploys.
