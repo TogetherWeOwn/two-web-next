@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
+import { loadCalendarPageModel, resolveCalendarInput } from "../src/events/page-models.server";
 import { listCalendarPast, listUpcoming, listUpcomingForMonth } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
+import { partialEvent, partialHtml } from "./helpers/calendar-discord-partial";
 
-// Read seams remove external SQL only; the Hono route and shared screen stay
-// real. The independent acceptance suite owns the populated-month and
-// list-view cases; this file owns only the empty-month gap it does not cover.
+// Read seams remove external SQL only; the model, Hono route and Kit screen
+// stay real. These implementation-owned cases supplement the independent
+// acceptance suite with empty-month and failed-empty precedence coverage.
 vi.mock("../src/events/reads", async (original) => ({
   ...(await original<typeof import("../src/events/reads")>()),
   listUpcoming: vi.fn(),
@@ -82,4 +84,63 @@ describe("partial-source empty month", () => {
     expect(notice).toBeDefined();
     expect(notice!.replace(/<[^>]*>/g, " ")).not.toMatch(/shown below|listed below/i);
   });
+});
+
+describe("failed-empty notice precedence", () => {
+  for (const adapter of ["Hono", "Kit"] as const) {
+    it.each(["empty calendar", "past-only search"] as const)(
+      `${adapter} renders only the full error for a failed %s`,
+      async (scenario) => {
+        vi.mocked(listUpcoming).mockResolvedValue({
+          rows: [],
+          hasMore: false,
+          totalPages: 0,
+          total: 0,
+        });
+        vi.mocked(listUpcomingForMonth).mockResolvedValue([]);
+        const input: Record<string, string> =
+          scenario === "empty calendar"
+            ? { view: "calendar", month: "2099-05" }
+            : { q: "chess", past: "1" };
+        if (scenario === "past-only search") {
+          vi.mocked(listCalendarPast).mockResolvedValue([
+            {
+              ...partialEvent(2),
+              startsAt: new Date("2020-01-01T20:00:00Z"),
+              endsAt: new Date("2020-01-01T22:00:00Z"),
+            },
+          ]);
+        }
+
+        let html: string;
+        if (adapter === "Kit") {
+          const model = await loadCalendarPageModel({
+            db,
+            input: resolveCalendarInput(input),
+            includeDrafts: false,
+            discord,
+            now: new Date("2099-05-01T12:00:00Z"),
+          });
+          html = await partialHtml(model);
+        } else {
+          const response = await app.request(
+            `/events?${new URLSearchParams(input)}`,
+            undefined,
+            env,
+          );
+          expect(response.status).toBe(200);
+          html = await response.text();
+        }
+
+        // Dropping the empty-state guard renders a partial notice as well as
+        // the full error in both cases, duplicating the retry and join actions.
+        expect(html.match(/data-testid="events-empty-error"/g)).toHaveLength(1);
+        expect(notices(html)).toHaveLength(0);
+        expect(html).not.toContain('data-testid="events-partial-source"');
+        expect(html.match(/data-testid="events-retry"/g)).toHaveLength(1);
+        expect(html.match(/data-testid="discord-join"/g)).toHaveLength(1);
+        expect(html).not.toContain('data-testid="events-empty-search"');
+      },
+    );
+  }
 });
