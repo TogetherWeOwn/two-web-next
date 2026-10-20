@@ -110,6 +110,21 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       expect(await store.get(replacement.tokenHash)).toBeNull();
     });
 
+    it("revoking the predecessor ends its grace without revoking the successor", async () => {
+      const predecessor = row();
+      const successor = row();
+      await store.create(predecessor);
+      expect(await store.rotate(predecessor.tokenHash, successor)).toBe(true);
+
+      await store.revoke(predecessor.tokenHash);
+
+      expect(await store.get(predecessor.tokenHash)).toBeNull();
+      expect(await store.get(successor.tokenHash)).toMatchObject({
+        userId: successor.userId,
+        username: successor.username,
+      });
+    });
+
     it("expiry of the rotated row deactivates the original status key", async () => {
       const original = row();
       const replacement = { ...row(), expiresAt: new Date(Date.now() - 1000) };
