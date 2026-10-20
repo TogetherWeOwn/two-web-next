@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { build } from "esbuild";
@@ -17,6 +17,29 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
+
+// Browser callbacks run in Chromium; keep their DOM surface local to this module.
+interface BrowserElement {
+  outerHTML: string;
+  textContent: string | null;
+  tagName: string;
+  closest(selector: string): BrowserElement | null;
+  checkVisibility(options: { checkVisibilityCSS: boolean }): boolean;
+}
+declare const window: typeof globalThis;
+declare const document: {
+  body: BrowserElement;
+  activeElement: BrowserElement | null;
+  querySelector(selector: string): BrowserElement | null;
+  querySelectorAll(selector: string): Iterable<BrowserElement>;
+  createTreeWalker(
+    root: BrowserElement,
+    whatToShow: number,
+  ): { nextNode(): { parentElement: BrowserElement | null; textContent: string | null } | null };
+};
+declare const NodeFilter: { readonly SHOW_TEXT: number };
+
+type TestEnv = Env & { ADMIN_DB?: Db };
 
 const ORIGIN = "https://events.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -233,7 +256,7 @@ async function renderFixture(view: View, clock: ClockCase) {
     APP_URL: ORIGIN,
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: createMemorySessionStore(),
-  } as unknown as Env;
+  } as unknown as TestEnv;
   if (view === "Hono") {
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
     env.ADMIN_DB = drizzle(async (sql) => {
@@ -254,7 +277,7 @@ async function renderFixture(view: View, clock: ClockCase) {
   }
   const store: KitEventDetailStore = {
     dbForFn: async () => ({}) as Db,
-    getEventFn: async () => ({ ...row, goingCount: 0 }),
+    getEventFn: async () => ({ ...row, goingCount: 0, goingOccupancy: 0 }),
     neighborsFn: async () => ({ previous: null, next: null }),
     relatedFn: async () => [],
     attendeesFn: async () => [],
