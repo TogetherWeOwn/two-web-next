@@ -61,15 +61,7 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
 };
 
 export function isKitErrorStatus(status: number): status is KitErrorStatus {
-  return (
-    status === 400 ||
-    status === 404 ||
-    status === 403 ||
-    status === 410 ||
-    status === 429 ||
-    status === 500 ||
-    status === 503
-  );
+  return Object.hasOwn(COPY, status);
 }
 
 export function kitErrorCopy(status: KitErrorStatus): KitErrorCopy {

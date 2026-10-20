@@ -545,6 +545,12 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
     );
+    // Whole binding: deleting the hotzones line silently drops the hot-zone
+    // read throttle (the dispatch treats it as optional), so the exact line
+    // must fail. The import and comments alone carry the name.
+    expect(source).toContain(
+      "hotzones: (request, render) => dispatchHotzonesRequest(request, env, render)",
+    );
     // Whole binding: the member board's post-release view log lives on this
     // closure. Making it a no-op or passing a fixed status instead of
     // response.status silently drops every Kit board view, so the exact call

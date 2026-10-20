@@ -30,6 +30,20 @@ const ErrorShell: FC<
   </RecoveryShell>
 );
 
+export const BadRequestPage: FC = () => (
+  <ErrorShell code="400" title="Check your request">
+    <p class="lead">Check the address or filters and try again.</p>
+    <p class="recovery-actions">
+      <a class="btn" href="/events" data-testid="error-events">
+        Browse all events
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
+    </p>
+  </ErrorShell>
+);
+
 // 404 recovery stays available even when the optional event lookup fails.
 export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
   <ErrorShell

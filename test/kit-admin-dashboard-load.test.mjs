@@ -85,6 +85,62 @@ describe("Kit admin dashboard load: outage wiring", () => {
     expect(err?.status).toBe(503);
   });
 
+  it.each([false, true])(
+    "zero-search outage throws 503 with funnel cache warm=%s",
+    async (warm) => {
+      let outage = false;
+      let calls = 0;
+      const fakeDb = {
+        transaction: vi.fn(async () => {
+          if (outage) throw refused();
+          return ++calls === 1 ? { added: 3 } : [];
+        }),
+      };
+      vi.stubGlobal("__kitAdminDashboardDb", fakeDb);
+      if (warm) expect((await load({ parent }, {})).funnel).toEqual({ added: 3 });
+      else {
+        fakeDb.transaction.mockImplementationOnce(async () => ({ added: 3 }));
+      }
+      outage = true;
+      await expect(load({ parent }, {})).rejects.toMatchObject({ status: 503 });
+      expect(fakeDb.transaction).toHaveBeenCalledTimes(warm ? 3 : 2);
+    },
+  );
+
+  it.each([
+    Object.assign(new Error("missing table"), { code: "42P01", name: "PostgresError" }),
+    new TypeError("programming error"),
+    Object.assign(new Error("statement timeout"), { code: "57014", name: "PostgresError" }),
+  ])("an ordinary zero-search failure preserves the funnel: %s", async (error) => {
+    let calls = 0;
+    vi.stubGlobal("__kitAdminDashboardDb", {
+      transaction: async () => {
+        if (++calls === 1) return { added: 3 };
+        throw error;
+      },
+    });
+    const data = await load({ parent }, {});
+    expect(data.funnel).toEqual({ added: 3 });
+    expect(data.zeroSearches).toBeUndefined();
+  });
+
+  it("a zero-search deadline omits only that section", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      vi.stubGlobal("__kitAdminDashboardDb", {
+        transaction: async () => (++calls === 1 ? { added: 3 } : new Promise(() => {})),
+      });
+      const pending = load({ parent }, {});
+      await vi.advanceTimersByTimeAsync(1500);
+      const data = await pending;
+      expect(data.funnel).toEqual({ added: 3 });
+      expect(data.zeroSearches).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a moderator dashboard load succeeds when optional database widgets are unavailable", async () => {
     vi.stubGlobal("__kitAdminDashboardDb", null);
     const data = await load({ parent }, {});

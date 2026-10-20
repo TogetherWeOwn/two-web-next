@@ -312,6 +312,9 @@ describe("erase target and TLS policy (no connection)", () => {
       ssl: "verify-full",
       max: 1,
     });
+    // Bounded operator waits, like revoke-sessions: finite server-enforced
+    // statement and lock budgets on this CLI's own single connection.
+    expect(options.connection).toMatchObject({ statement_timeout: 10_000, lock_timeout: 5_000 });
     expect((options!.password as () => string)()).toBe("synthetic-password");
     expect(options).not.toHaveProperty("sslmode");
   });

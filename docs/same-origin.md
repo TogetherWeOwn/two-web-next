@@ -5,7 +5,9 @@ before any route, throttle, session lookup/rotation, body parsing or write.
 It applies to **POST, PUT, PATCH and DELETE**, including mounted admin/profile
 routes, login QA, logout, JSON event writes, RSVP writes and HTML form overrides.
 It does not depend on a cookie being present: unauthenticated writes must pass
-it too. GET, HEAD and OPTIONS retain their existing behavior.
+it too. GET, HEAD and OPTIONS retain their existing behavior. Methods compare
+case-insensitively: fetch normalizes every unsafe verb except PATCH, so a raw
+lowercase `patch` spelling is guarded rather than bypassing the check.
 
 For guarded requests:
 
@@ -32,8 +34,11 @@ Only these **method + path** pairs bypass this guard:
 | POST | `/mcp` | Stateless, cookie-free JSON-RPC for remote MCP clients that cannot send our Origin; the handler validates supplied Origins, while global TrustHosts pins Host before routing (`src/mcp/routes.ts:7-13`, `src/index.tsx:160-166`, `src/trust-hosts.ts:72-85`). |
 
 Other methods on these paths, trailing-slash variants and child paths are not
-exempt. No new exemptions may be added merely to accommodate a browser route
-or a test client missing headers. Non-browser callers to a guarded route must
+exempt. Exemption paths match after Hono's path decoding, so percent-encoded
+spellings of an exempt path (for example `/%6dcp`) are likewise exempt; the
+Kit twin decodes identically, and `test/same-origin-differential.test.ts`
+pins the agreement including adversarial escapes. No new exemptions may be
+added merely to accommodate a browser route or a test client missing headers. Non-browser callers to a guarded route must
 send a matching Origin; neither Origin nor Fetch Metadata is authentication.
 
 ## Regression proof
