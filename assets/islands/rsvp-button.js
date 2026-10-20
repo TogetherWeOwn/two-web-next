@@ -880,9 +880,16 @@
               if (controller && inflight !== controller) return;
               setBusy(false, button);
               var position = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
+              // A soft answer holds no seat, so a raced fill flips its change
+              // control without painting the full notice SSR omits — the same
+              // rule as the capacity refresh.
+              var soft = root.querySelector(
+                '[data-testid="' + TESTID.maybe + '"],[data-testid="' + TESTID.notGoing + '"]',
+              );
               var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
-              if (position) {
+              if (position || soft) {
                 if (old) old.remove();
+                old = null;
               } else {
                 if (!old) {
                   old = document.createElement("p");
@@ -909,7 +916,12 @@
                   going || root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]'),
                 );
               if (position) focusTestid([TESTID.waitlistPosition]);
-              else if (focusOwned && old && old.focus) old.focus();
+              else if (soft) {
+                // No notice exists to take focus; the flipped change control
+                // announces the fill itself when focused.
+                var changed = root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]');
+                if (focusOwned && changed && changed.focus) changed.focus();
+              } else if (focusOwned && old && old.focus) old.focus();
             };
             var domRaw = root.getAttribute("data-capacity");
             var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
