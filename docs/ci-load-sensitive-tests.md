@@ -17,18 +17,33 @@ written for a laptop fail under normal queue load (TOG-12177).
 
 The vitest defaults detect hangs; they are not performance budgets. Prefer the
 default to a per-test limit. Add a per-test limit only when the limit is the
-behavior under test, and list it below. Every file matched by Vitest's `include`
-list (`test/` plus `ci/audit-lifecycle.test.mjs`, even excluded or opt-in cases)
-with a per-test timeout literal below the 30 s default carries one row naming
-the file with an `(N× <limit>)` count pin immediately after its path in the Test
-cell, plus a "why it stays" justification. Mixed limits use `(N× 2 s, M× 20 s)`.
-Counts are timeout locations, not generated tests. The syntax parser covers
-trailing arguments and direct options properties on `it()`/`test()`, including
-generic, conditional and table forms (`.each`, `.for`, `.skipIf`, `.runIf`).
-Hook limits (`beforeEach`/`afterEach` and friends) are out of scope for the
-ledger. `ci/check-test-timeout-ledger.mjs` enforces the pins; it runs in
-`npm run check` and the always-selected CI `docs-links` job
-(`npm run ledger:timeouts:selftest && npm run ledger:timeouts`).
+behavior under test, and list it below. `ci/check-test-timeout-ledger.mjs`
+enforces the list in `npm run check` and the always-selected CI `docs-links`
+job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
+
+- Scope: every Vitest config (`vitest.config.*`, `vitest.<name>.config.*`, a
+  `vite.config.*` with a `test` block, and any `vitest --config` target in the
+  `package.json` scripts). Today that is `vitest.config.ts` (`test/` plus
+  `ci/audit-lifecycle.test.mjs`) and `tier0/vitest.config.ts` (`tier0/`). The
+  gate scans every file an `include` glob matches, even excluded or opt-in
+  cases, plus every module those files import through a relative path. Each
+  config `test` block keeps `testTimeout: 30_000`.
+- Limits: a per-test timeout literal below the 30 s default (`0`, which turns
+  the limit off, counts too) that Vitest reads as a timeout: the third
+  argument, or a direct `timeout` option in the second, of `it`, `test`,
+  `describe` or `suite` (a suite limit binds every test inside it). That
+  includes their chains (`.each`, `.for`, `.skipIf`, `.runIf`, `.skip`,
+  `.concurrent`) and aliases (`const t = test.extend(...)`, destructuring,
+  object and array literals, vitest imports and namespaces including
+  `await import("vitest")`, fixtures re-exported from a helper module), plus
+  `vi.setConfig({ testTimeout })` under any alias. Hook limits
+  (`beforeEach`/`afterEach` and friends), non-literal timeouts, and aliases
+  passed through function returns or parameters are out of scope.
+- Rows: each file holding such a limit carries one row naming the file with an
+  `(N× <limit>)` pin immediately after its path in the Test cell, plus a "why
+  it stays" justification. Mixed limits use `(N× 2 s, M× 20 s)`. Counts are
+  timeout locations, not generated tests. A pin must match the file by count
+  and by limit, and a pin on a file without such a literal fails.
 
 ## Remaining limits and timing asserts
 
