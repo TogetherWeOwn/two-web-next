@@ -365,6 +365,48 @@ describe("skip_e2e verdict", () => {
     expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
   });
 
+  it.each(
+    ["import", "require"].flatMap((keyword) =>
+      [
+        "/**/",
+        "// comment\n",
+        "// comment\r\n",
+        "// comment\r",
+        "// comment\u2028",
+        "// comment\u2029",
+      ].map((gap) => [keyword, gap]),
+    ),
+  )("fails closed on a comment-split computed %s call (%j)", (keyword, gap) => {
+    writeFileSync(
+      join(repo, "e2e/computed.spec.ts"),
+      `function pick() { return ".." + "/test/helpers/fixture"; }\nconst path = pick(); ${keyword}${gap}(path);\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(
+    ['"', "'"].flatMap((quote) =>
+      ["\n", "\r\n", "\r", "\u2028", "\u2029"].map((newline) => [quote, newline]),
+    ),
+  )("fails closed on a continued static specifier (%j, %j)", (quote, newline) => {
+    writeFileSync(
+      join(repo, "e2e/continued.spec.ts"),
+      `import ${quote}../test/helpers/\\${newline}fixture${quote};\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(['"', "'"])("fails closed on a continued relative prefix (%j)", (quote) => {
+    writeFileSync(
+      join(repo, "e2e/continued.spec.ts"),
+      `import ${quote}.\\\n./test/helpers/fixture${quote};\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
   it.each([
     'import("../test/helpers/" + name);\n',
     'const path = "../test/helpers/" + name; import(path);\n',
@@ -393,6 +435,41 @@ describe("skip_e2e verdict", () => {
     writeFileSync(
       join(repo, "e2e/lazy.spec.ts"),
       'export const load = () => import("../test/helpers/imported.js");\n',
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(
+    ["import", "require"].flatMap((keyword) =>
+      ["/**/", "// comment\n"].map((gap) => [keyword, gap]),
+    ),
+  )("keeps a comment-split literal %s call precise (%j)", (keyword, gap) => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      `${keyword}${gap}("../test/helpers/imported.js");\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("scans long module-call trivia in linear time", () => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      `import${"/* trivia */".repeat(5000)}("../test/helpers/imported.js");\n`,
+    );
+    git("add", ".");
+    const started = Date.now();
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("does not parse continuation-like bytes in a binary screenshot as JS", () => {
+    writeFileSync(
+      join(repo, "e2e/screenshot.png"),
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0x5c, 0x0a]),
     );
     git("add", ".");
     expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");

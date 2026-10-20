@@ -2,7 +2,9 @@
 // Node built-ins. Conservatively follow quoted relative paths, not JS syntax:
 // this covers multiline imports, re-exports, require and literal import(`...`).
 // A computed import()/require() path, or a multiline relative template, fails
-// closed. An import-like comment/string may select extra smoke, never suppress it.
+// closed, as does any backslash line continuation. Comments may separate a module
+// keyword from its opening paren. Import-like comments/strings may select extra
+// smoke, never suppress it.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -20,29 +22,27 @@ const visited = new Set();
 const helpers = new Set();
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts"];
 
-// Linear scan past whitespace, comments and closing parens; true when a `+`
-// follows. Hand-rolled because an alternation regex over the same trivia
-// backtracks exponentially on repeated `//`.
-function followedByPlus(source, from) {
+// Linear scan past JS trivia, optionally including closing parens for the
+// concatenation check. An alternation regex over the same trivia backtracks
+// exponentially on repeated `//`. Line comments end at any JS line terminator.
+function skipTrivia(source, from, closingParens = false) {
   let i = from;
   while (i < source.length) {
     const ch = source[i];
-    if (ch === "+") return true;
-    if (ch === ")" || /\s/.test(ch)) {
+    if (/\s/.test(ch) || (closingParens && ch === ")")) {
       i += 1;
     } else if (source.startsWith("//", i)) {
-      const nl = source.indexOf("\n", i);
-      if (nl === -1) return false;
-      i = nl + 1;
+      i += 2;
+      while (i < source.length && !/[\r\n\u2028\u2029]/.test(source[i])) i += 1;
     } else if (source.startsWith("/*", i)) {
       const end = source.indexOf("*/", i + 2);
-      if (end === -1) return false;
+      if (end === -1) return source.length;
       i = end + 2;
     } else {
-      return false;
+      break;
     }
   }
-  return false;
+  return i;
 }
 
 while (pending.length) {
@@ -50,12 +50,20 @@ while (pending.length) {
   if (visited.has(file)) continue;
   visited.add(file);
   const source = readFileSync(file, "utf8");
-  if (
-    /\b(?:import|require)\s*\((?!\s*(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|`[^`\\$\r\n]*`)\s*\))/.test(
-      source,
-    )
-  ) {
-    throw new Error("Cannot resolve a computed module import");
+  // A continuation can hide even the relative prefix from the literal scan.
+  // Don't try to cook JS strings: any continued JS/TS source runs smoke instead.
+  // The e2e tree also holds binary screenshots, whose bytes aren't JS strings.
+  if (extensions.some((ext) => file.endsWith(ext)) && /\\[\r\n\u2028\u2029]/.test(source)) {
+    throw new Error("Cannot resolve a continued helper path");
+  }
+  let hasModuleCall = false;
+  for (const match of source.matchAll(/\b(?:import|require)\b/g)) {
+    const open = skipTrivia(source, match.index + match[0].length);
+    if (source[open] !== "(") continue;
+    hasModuleCall = true;
+    if (!/^\(\s*(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|`[^`\\$\r\n]*`)\s*\)/.test(source.slice(open))) {
+      throw new Error("Cannot resolve a computed module import");
+    }
   }
   if (/`\.\.?\/[^`\n]*\n/.test(source)) throw new Error("Cannot resolve a multiline helper path");
   // No line or keyword restriction: the specifier may follow `from` on the
@@ -68,11 +76,7 @@ while (pending.length) {
       // Don't infer variable dataflow. Opaque test paths, escaped paths, or
       // opaque relative paths in a file with dynamic imports all run smoke.
       // A plain file-reader template (no dynamic import) is not a module path.
-      if (
-        /\\/.test(specifier) ||
-        /^test(\/|$)/.test(target) ||
-        /\b(?:import|require)\s*\(/.test(source)
-      ) {
+      if (/\\/.test(specifier) || /^test(\/|$)/.test(target) || hasModuleCall) {
         throw new Error("Cannot resolve an escaped or computed helper import");
       }
       continue;
@@ -80,7 +84,7 @@ while (pending.length) {
     if (!/^(test|e2e)(\/|$)/.test(target)) continue;
     // A relative prefix may feed import(variable) later, so don't infer a
     // complete dependency from a concatenated string, even outside import().
-    if (followedByPlus(source, match.index + match[0].length)) {
+    if (source[skipTrivia(source, match.index + match[0].length, true)] === "+") {
       throw new Error("Cannot resolve a concatenated helper path");
     }
     // Include all possible source counterparts, even absent ones: deleted or
