@@ -125,13 +125,14 @@ jobs:
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Journey ledger (pass/skip/fail accounting)
-        # Playwright exits 0 when every journey skips, so without this gate an
-        # all-skipped run looks green. The gate writes the per-journey ledger
-        # (JSON + Markdown) and fails loud with every skipped journey and its
-        # reason named when nothing passed.
+        # Playwright can exit 0 with only skips or retries that eventually pass.
+        # The gate writes a per-journey ledger (JSON + Markdown) and fails loud
+        # for all-skipped, empty, failed or flaky results with reasons where safe.
         id: ledger
         if: always()
         run: node ci/check-staging-journeys.mjs
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Scrub QA token from failure artifacts
         # The repo is public and artifacts are downloadable without log
         # masking. Delete any file holding the token (also inside the report's
@@ -142,25 +143,27 @@ jobs:
         run: python3 ci/scrub-qa-token.py test-results playwright-report
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
-      - name: Failure traces and report
+      - name: Failure traces and report (sanitized ledger only)
+        # Upload only the derived, bounded ledger, never the raw report, HTML
+        # report or traces (which may contain request data, cookies or member
+        # content). The QA-token sweep still covers their full source tree and
+        # the ledger; a crashed or incomplete sweep uploads nothing.
         if: failure() && steps.scrub.outputs.swept == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            test-results/
-            playwright-report/
+            test-results/staging-journey-ledger.json
+            test-results/staging-journey-ledger.md
           if-no-files-found: ignore
           retention-days: 7
       - name: Journey ledger artifact
         # Ships only the derived ledger files (journey titles, outcomes and
-        # skip reasons), never the raw Playwright JSON report: that report can
-        # hold request and error text. The raw report reaches an artifact
-        # solely through the swept failure upload above. The ledger still
-        # carries the first line of each failure's error text, so it follows
-        # the same gate: uploaded on a green run (the scrub is skipped) and on
-        # a failed run only once the scrub finished the whole tree. A crashed
-        # or incomplete scrub (swept unset) uploads nothing.
+        # reasons), never the raw Playwright JSON report, HTML report or traces.
+        # The ledger carries only bounded single-line first-failure context. On
+        # failed runs it waits for the scrub sweep to finish the whole tree;
+        # on green runs no failure evidence is uploaded. A crashed or incomplete
+        # scrub (swept unset) uploads nothing.
         if: ${{ !cancelled() && (steps.scrub.outcome == 'skipped' || steps.scrub.outputs.swept == 'true') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -56,6 +56,22 @@ test("all-skipped run names every journey with its reason and fails loud", () =>
   assert.match(markdown, /no reason recorded/);
 });
 
+test("skip diagnostics remove configured tokens and member identifiers", () => {
+  const token = "qa-token-canary-value";
+  const summary = summarizeJourneys(
+    reportWith([
+      skippedSpec(
+        "skipped journey",
+        `email=member@example.com; memberId=123456789012345678; ${token}`,
+      ),
+    ]),
+    { qaAuthToken: token },
+  );
+  const reason = summary.journeys[0].reason ?? "";
+  assert.doesNotMatch(reason, /qa-token-canary-value|member@example\.com|123456789012345678/);
+  assert.match(reason, /redacted/);
+});
+
 test("mixed pass and skip stays green while the skip stays visible", () => {
   const summary = summarizeJourneys(reportWith([passingSpec(), skippedSpec("journey b", "empty")]));
   assert.equal(summary.verdict, "pass");
@@ -91,6 +107,43 @@ test("any failure is a fail verdict with the first-line reason", () => {
   assert.equal(summary.journeys[1].project, "mobile-375");
 });
 
+test("unexpected failure reasons redact credentials and member identifiers", () => {
+  const token = "qa-token-canary-value";
+  const summary = summarizeJourneys(
+    reportWith([
+      {
+        title: "unexpected journey",
+        file: "e2e/staging/auth.spec.ts",
+        tests: [
+          {
+            projectName: "chromium",
+            status: "unexpected",
+            annotations: [],
+            results: [
+              {
+                status: "failed",
+                error: {
+                  message:
+                    `Timeout: ${token}; Cookie: session=secret; email=member@example.com; ` +
+                    "memberId=123456789012345678",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]),
+    { qaAuthToken: token },
+  );
+  const reason = summary.journeys[0].reason ?? "";
+  assert.match(reason, /Timeout/);
+  assert.doesNotMatch(
+    reason,
+    /qa-token-canary-value|secret|member@example\.com|123456789012345678/,
+  );
+  assert.match(reason, /redacted/);
+});
+
 test("empty report fails closed instead of reporting green", () => {
   for (const report of [undefined, null, {}, { suites: [] }, { suites: [{ specs: [] }] }]) {
     const summary = summarizeJourneys(report);
@@ -100,10 +153,7 @@ test("empty report fails closed instead of reporting green", () => {
   }
 });
 
-function flakySpec(
-  title = "nested journey",
-  message = "Timeout 30000ms exceeded\nCall log:\n...",
-) {
+function flakySpec(title = "nested journey", message = "Timeout 30000ms exceeded\nCall log:\n...") {
   return {
     title,
     file: "e2e/staging/profile.spec.ts",
@@ -170,6 +220,25 @@ test("flaky preserves first-attempt failure context as a bounded single-line rea
     .find((line) => line.startsWith("| flaky journey"));
   assert.ok(row, "flaky row renders in markdown");
   assert.match(row ?? "", /First attempt timeout/);
+});
+
+test("flaky reasons redact common credentials and member identifiers", () => {
+  const message =
+    "Timeout 30000ms exceeded; Cookie: session=secret; email=member@example.com; memberId=123456789012345678";
+  const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+  const reason = summary.journeys[0].reason ?? "";
+  assert.match(reason, /Timeout 30000ms exceeded/);
+  assert.doesNotMatch(reason, /secret|member@example\.com|123456789012345678/);
+  assert.match(reason, /redacted/);
+});
+
+test("flaky reason removes the configured QA token before log or summary output", () => {
+  const token = "qa-token-canary-value";
+  const summary = summarizeJourneys(
+    reportWith([flakySpec("flaky journey", `Timeout 30000ms exceeded: ${token}`)]),
+    { qaAuthToken: token },
+  );
+  assert.equal(summary.journeys[0].reason, "Timeout 30000ms exceeded: [redacted token]");
 });
 
 test("flaky summary explains retries and config provenance must be checked", () => {
@@ -248,6 +317,19 @@ test("unknown, missing or non-string statuses fail closed with bounded diagnosti
     );
     assert.doesNotMatch(summary.journeys[0].reason ?? "", /[\u0000-\u001f\u007f\n]/);
   }
+});
+
+test("unknown status diagnostics remove configured tokens and member identifiers", () => {
+  const token = "qa-token-canary-value";
+  const summary = summarizeJourneys(
+    reportWith([
+      statusSpec("unknown status", `bad-${token}-member@example.com-123456789012345678`),
+    ]),
+    { qaAuthToken: token },
+  );
+  const reason = summary.journeys[0].reason ?? "";
+  assert.doesNotMatch(reason, /qa-token-canary-value|member@example\.com|123456789012345678/);
+  assert.match(reason, /redacted/);
 });
 
 test("unknown-status reason stays bounded and single-line for long input", () => {
@@ -376,18 +458,30 @@ test("flaky evidence uploads only via the scrubbed failure path, never raw befor
   const scrub = steps.find((s) => s.startsWith("Scrub QA token from failure artifacts"));
   assert.ok(scrub, "scrub step exists");
   assert.match(scrub, /if: failure\(\)/, "scrub runs when the gate fails (flaky exits 1)");
-  const failure = steps.find((s) => s.startsWith("Failure traces and report"));
+  const failure = steps.find((s) =>
+    s.startsWith("Failure traces and report (sanitized ledger only)"),
+  );
   assert.ok(failure, "failure upload step exists");
   assert.match(
     failure,
     /if: failure\(\) && steps\.scrub\.outputs\.swept == 'true'/,
     "failure upload waits for a swept tree",
   );
+  assert.match(failure, /staging-journey-ledger\.json/);
+  assert.match(failure, /staging-journey-ledger\.md/);
+  assert.doesNotMatch(failure, /staging-journeys\.json|playwright-report\/|trace\.zip|\.html/i);
+  const gateStep = steps.find((s) => s.startsWith("Journey ledger (pass/skip/fail accounting)"));
+  assert.ok(gateStep, "journey ledger gate exists");
+  assert.match(gateStep, /QA_AUTH_TOKEN: \$\{\{ secrets\.QA_AUTH_TOKEN \}\}/);
   const ledgerStep = steps.find((s) => s.startsWith("Journey ledger artifact"));
   assert.ok(ledgerStep, "ledger artifact step exists");
-  assert.doesNotMatch(ledgerStep, /staging-journeys\.json/, "ledger never ships the raw report");
   assert.match(ledgerStep, /staging-journey-ledger\.json/);
   assert.match(ledgerStep, /staging-journey-ledger\.md/);
+  assert.doesNotMatch(
+    ledgerStep,
+    /staging-journeys\.json|playwright-report\/|test-results\/$|trace\.zip|\.html/i,
+    "ledger artifact never ships raw reports, traces, or HTML",
+  );
 });
 
 test("expected, failed, skipped and unknown keep explicit reasons and exit codes", () => {
@@ -494,11 +588,7 @@ test("critical-journeys guide explains flaky fail-closed accounting with zero re
     /`flaky`.*does not count toward `passed`/i,
     "guide must say flaky does not count toward passed",
   );
-  assert.match(
-    normalizedSection,
-    /flaky.*fails? closed/i,
-    "guide must say flaky fails closed",
-  );
+  assert.match(normalizedSection, /flaky.*fails? closed/i, "guide must say flaky fails closed");
   assert.doesNotMatch(
     normalizedSection,
     /counts toward `passed` in the headline and CLI line; the separate `flaky` count appears only/,
