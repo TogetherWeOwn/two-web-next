@@ -54,19 +54,27 @@ function markerRow() {
 
 function fakeTag(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.join("?");
+  const normalized = text.replace(/\s+/g, " ").trim();
   // Cache-defeat fragments are interpolated, never executed: like the real
   // driver, build them without recording a source read.
   if (text.trim().startsWith(", clock_timestamp()")) return {};
-  // SET LOCAL configures the connection; it is not an evidence/source read.
+  if (
+    normalized ===
+      "select current_setting('lock_timeout') as lock_timeout, current_setting('statement_timeout') as statement_timeout" &&
+    values.length === 0
+  ) {
+    return [{ lock_timeout: "17s", statement_timeout: "23s" }];
+  }
+  // Timeout setup/restoration configures the transaction; it is not an
+  // evidence/source read. The fixture uses non-default caller settings.
   if (text.includes("set_config")) {
-    if (
-      text.replace(/\s+/g, " ").trim() ===
-        "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)" &&
-      values.length === 2 &&
-      values.every((value) => value === "2000" || value === "2000ms")
-    ) {
-      return [];
-    }
+    const timeoutConfig =
+      normalized ===
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)";
+    const isBounded =
+      values.length === 2 && values.every((value) => value === "2000" || value === "2000ms");
+    const restoresCallerSettings = values[0] === "17s" && values[1] === "23s";
+    if (timeoutConfig && (isBounded || restoresCallerSettings)) return [];
     throw new Error(`unexpected statement: ${text.slice(0, 80)}`);
   }
   mocks.texts.push(text);
@@ -129,9 +137,17 @@ describe("evidence-only source/cache verifier admission", () => {
       mocks.options.push(options);
       const tag = (strings: TemplateStringsArray, ...values: unknown[]) =>
         fakeTag(strings, ...values);
-      // A postgres.js transaction tag can query but cannot open another transaction.
-      const tx = (strings: TemplateStringsArray, ...values: unknown[]) =>
-        fakeTag(strings, ...values);
+      // A postgres.js transaction tag can savepoint but cannot open another transaction.
+      function transactionClient() {
+        const tx = (strings: TemplateStringsArray, ...values: unknown[]) =>
+          fakeTag(strings, ...values);
+        return Object.assign(tx, {
+          async savepoint<T>(work: (client: unknown) => Promise<T>) {
+            return work(transactionClient());
+          },
+        });
+      }
+      const tx = transactionClient();
       return Object.assign(tag, {
         begin: (...args: unknown[]) => {
           mocks.begins.push(args);
@@ -349,10 +365,14 @@ describe("evidence-only source/cache verifier admission", () => {
     expect(await res.json()).toEqual({ error: "evidence_unavailable" });
   });
 
-  it.each(["2000", "2000ms"])(
-    "local timeout configuration %s does not count as a source read",
-    async (timeout) => {
-      fakeTag`select set_config('lock_timeout', ${timeout}, true), set_config('statement_timeout', ${timeout}, true)`;
+  it.each([
+    ["bounded timeout setup", "2000", "2000"],
+    ["bounded timeout setup with units", "2000ms", "2000ms"],
+    ["caller timeout restoration", "17s", "23s"],
+  ] as const)(
+    "%s does not count as a source read",
+    async (_label, lockTimeout, statementTimeout) => {
+      fakeTag`select set_config('lock_timeout', ${lockTimeout}, true), set_config('statement_timeout', ${statementTimeout}, true)`;
       expect(mocks.texts).toHaveLength(0);
       const res = await request(createMemorySessionStore());
       expect(res.status).toBe(200);

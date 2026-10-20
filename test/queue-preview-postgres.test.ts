@@ -250,20 +250,25 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
       const before = await state();
       const preview = await previewFailedJobWithSql(monitored, failureId, STAGING_APP_URL);
       const selects = queries.filter((query) => /^select\b/i.test(query.trim()));
-      // Transaction-local timeout configuration (pendingSync's set_config
-      // SELECT) is not a source read: it carries no clock marker and reads no
-      // table. Absent on the old implementation, one statement when bounded.
-      const isTimeoutConfig = (query: string) =>
-        /set_config\s*\(\s*'(?:lock_timeout|statement_timeout)'/i.test(query);
-      const timeoutConfigs = selects.filter(isTimeoutConfig);
-      const sourceReads = selects.filter((query) => !isTimeoutConfig(query));
+      // Timeout setting reads, setup and restoration carry no source table or
+      // clock marker, so they are not part of the five evidence reads.
+      const isTimeoutControl = (query: string) =>
+        /(?:set_config|current_setting)\s*\(\s*'(?:lock_timeout|statement_timeout)'/i.test(query);
+      const timeoutControls = selects.filter(isTimeoutControl);
+      const sourceReads = selects.filter((query) => !isTimeoutControl(query));
       expect(sourceReads).toHaveLength(5);
       for (const query of sourceReads) expect(query).toContain("clock_timestamp()");
-      expect(timeoutConfigs.length).toBeLessThanOrEqual(1);
-      for (const query of timeoutConfigs) {
-        expect(query).toMatch(/set_config\s*\(\s*'lock_timeout'/i);
-        expect(query).toMatch(/set_config\s*\(\s*'statement_timeout'/i);
-        expect(query.match(/,\s*true\s*\)/g)).toHaveLength(2);
+      expect(timeoutControls.length).toBeGreaterThan(0);
+      for (const query of timeoutControls) {
+        const settings = [
+          ...query.matchAll(/(?:set_config|current_setting)\s*\(\s*'([^']+)'/gi),
+        ].map((match) => match[1]);
+        expect(settings.length).toBeGreaterThan(0);
+        expect(
+          settings.every((name) => name === "lock_timeout" || name === "statement_timeout"),
+        ).toBe(true);
+        const writes = [...query.matchAll(/set_config\s*\(/gi)].length;
+        expect(query.match(/,\s*true\s*\)/g) ?? []).toHaveLength(writes);
         expect(query).not.toMatch(/\bfrom\b/i);
         expect(query).not.toContain("clock_timestamp()");
         expect(query).not.toContain("preview_read_at");

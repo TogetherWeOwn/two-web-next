@@ -90,17 +90,42 @@ export function pgEventStore(
   const readMarker = () => (bypassReadCache ? sql`, clock_timestamp() as preview_read_at` : sql``);
   // Bound every handler statement on its owning connection, including the
   // prepare fallback read. SET LOCAL expires on commit/rollback; callers that
-  // already own a transaction must not issue a nested BEGIN.
+  // already own a transaction must not issue a nested BEGIN or inherit this
+  // operation's timeout for the rest of their transaction.
+  const setSyncTimeouts = (
+    tx: TxClient,
+    lockTimeout = `${FAIL_SYNC_DB_TIMEOUT_MS}ms`,
+    statementTimeout = `${FAIL_SYNC_DB_TIMEOUT_MS}ms`,
+  ) =>
+    tx`select set_config('lock_timeout', ${lockTimeout}, true), set_config('statement_timeout', ${statementTimeout}, true)`;
   const withSyncTimeout = async <T>(work: (tx: TxClient) => Promise<T>): Promise<T> => {
     const bounded = async (tx: TxClient): Promise<T> => {
-      await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await setSyncTimeouts(tx);
       return work(tx);
+    };
+    const boundedExisting = async (tx: TxClient): Promise<T> => {
+      // Postgres.js isolates rejected queries in its savepoint scope. Raw
+      // SAVEPOINT queries would still poison the caller's transaction scope.
+      const transaction = tx as TxClient & {
+        savepoint?: <Result>(work: (nested: TxClient) => Promise<Result>) => Promise<Result>;
+      };
+      // Keep tag-only client doubles on the legacy path; real Postgres.js
+      // transaction clients always provide savepoint().
+      if (typeof transaction.savepoint !== "function") return bounded(tx);
+      const [previous] =
+        await tx`select current_setting('lock_timeout') as lock_timeout, current_setting('statement_timeout') as statement_timeout`;
+      return transaction.savepoint(async (nested) => {
+        await setSyncTimeouts(nested);
+        const result = await work(nested);
+        await setSyncTimeouts(nested, previous.lock_timeout, previous.statement_timeout);
+        return result;
+      });
     };
     const pool = sql as unknown as {
       begin?: (fn: (tx: TxClient) => Promise<T>) => Promise<T>;
     };
     try {
-      return await (typeof pool.begin === "function" ? pool.begin(bounded) : bounded(sql));
+      return await (typeof pool.begin === "function" ? pool.begin(bounded) : boundedExisting(sql));
     } catch (error) {
       // SQL diagnostics can contain credentials or member data. Preserve the
       // rejection for the caller's per-message disposition, not its message.

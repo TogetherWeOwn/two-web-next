@@ -80,6 +80,7 @@ function sqlHarness(options: { fresh?: boolean; code?: "57014" | "55P03" } = {})
   const settings: { name: string; value: string; local: boolean; scope: "pool" | "tx" }[] = [];
   let session = { ...inherited };
   let local: Budgets | undefined;
+  let transactionAborted = false;
   let begins = 0;
   let rollbacks = 0;
   let cancelAt: number | undefined;
@@ -89,6 +90,7 @@ function sqlHarness(options: { fresh?: boolean; code?: "57014" | "55P03" } = {})
   const cancelled = new PostgresError(options.code ?? "57014");
 
   async function execute(scope: "pool" | "tx", sql: string, parameters: unknown[]) {
+    if (transactionAborted) throw new Error("transaction is aborted");
     const rendered = sql.replace(/\$(\d+)/g, (_, n: string) => {
       const value = parameters[Number(n) - 1];
       return typeof value === "string" ? `'${value.replaceAll("'", "''")}'` : String(value);
@@ -110,9 +112,19 @@ function sqlHarness(options: { fresh?: boolean; code?: "57014" | "55P03" } = {})
       }
     }
     if (configs.length) return [];
+    if (
+      /^\s*select current_setting\('lock_timeout'\) as lock_timeout,\s*current_setting\('statement_timeout'\) as statement_timeout\s*$/i.test(
+        sql,
+      )
+    ) {
+      return [{ ...(local ?? session) }];
+    }
     statements.push({ sql, scope, budgets: { ...(local ?? session) } });
     applicationStatements++;
-    if (applicationStatements === cancelAt) throw cancelled;
+    if (applicationStatements === cancelAt) {
+      transactionAborted = true;
+      throw cancelled;
+    }
     if (options.fresh && /^\s*select a\.\*/.test(sql)) return [];
     return [dbRow(eventKey, idempotencyKey)];
   }
@@ -151,18 +163,34 @@ function sqlHarness(options: { fresh?: boolean; code?: "57014" | "55P03" } = {})
       };
     };
   }
-  const tx = query("tx") as unknown as TxClient;
+  function transactionClient(): TxClient {
+    return Object.assign(query("tx"), {
+      async savepoint<T>(work: (client: TxClient) => Promise<T>) {
+        const priorLocal = local ? { ...local } : undefined;
+        try {
+          return await work(transactionClient());
+        } catch (error) {
+          if (priorLocal) local = priorLocal;
+          transactionAborted = false;
+          throw error;
+        }
+      },
+    }) as unknown as TxClient;
+  }
+  const tx = transactionClient();
   const client = Object.assign(query("pool"), {
     async begin<T>(work: (client: TxClient) => Promise<T>) {
       if (local) throw new Error("nested BEGIN");
       begins++;
       const priorSession = { ...session };
       local = { ...session };
+      transactionAborted = false;
       try {
         return await work(tx);
       } catch (error) {
         rollbacks++;
         session = priorSession;
+        transactionAborted = false;
         throw error;
       } finally {
         local = undefined;
@@ -271,11 +299,30 @@ describe.each(cases)("$name transaction-local SQL budget", ({ name, run, fresh }
     expect(h.state()).toEqual({ session: inherited, local: undefined, begins: 1, rollbacks: 0 });
   });
 
-  it("uses an existing TxClient without a nested BEGIN", async () => {
+  it("restores caller timeouts on an existing TxClient without a nested BEGIN", async () => {
     const h = sqlHarness({ fresh });
     await h.client.begin(async () => {
+      expect(h.state().local).toEqual(inherited);
       await run(pgEventStore(h.tx));
       expectBounded(h);
+      expect(h.state().local).toEqual(inherited);
+      expect(
+        Object.fromEntries(h.settings.slice(-2).map(({ name, value }) => [name, value])),
+      ).toEqual(inherited);
+    });
+    expect(h.state()).toEqual({ session: inherited, local: undefined, begins: 1, rollbacks: 0 });
+  });
+
+  it("keeps an existing TxClient usable after a bounded statement fails", async () => {
+    const h = sqlHarness({ fresh });
+    const store = pgEventStore(h.tx);
+    h.cancelNext();
+    await h.client.begin(async () => {
+      await expect(run(store)).rejects.toBe(h.cancelled);
+      expect(h.state().local).toEqual(inherited);
+      await run(store);
+      expectBounded(h);
+      expect(h.state().local).toEqual(inherited);
     });
     expect(h.state()).toEqual({ session: inherited, local: undefined, begins: 1, rollbacks: 0 });
   });
