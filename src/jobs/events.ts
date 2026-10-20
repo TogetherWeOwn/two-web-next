@@ -117,23 +117,25 @@ export function pgEventStore(
       dueBefore === undefined ? sql`` : sql` and pending.next_attempt_at <= ${dueBefore}`;
     const futureBlock = () =>
       dueBefore === undefined ? sql`` : sql` or blocking.next_attempt_at > ${dueBefore}`;
+    const stalePredicate = () => sql`
+      where (${eventKey}::text is null or event_key = ${eventKey}) and (
+        exists (select 1 from event_sync_attempts pending
+          where pending.event_id = events.id and pending.state = 'pending'
+            and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
+            and pending.next_attempt_at is not null${recoveryDue()})
+        or (status in ('published', 'cancelled')
+          and not exists (select 1 from event_sync_attempts rejected
+            where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+          and not exists (select 1 from event_sync_attempts blocking
+            where blocking.event_id = events.id and blocking.state = 'pending'
+              and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
+          and (sync_revision > synced_revision or
+            (status = 'published' and (discord_event_id is null or exists (
+              select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
+            ))))))`;
     if (eventKey === null && typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
       const page = await sql`select event_key, count(*) over() as total${readMarker()} from events
-        where (${eventKey}::text is null or event_key = ${eventKey}) and (
-          exists (select 1 from event_sync_attempts pending
-            where pending.event_id = events.id and pending.state = 'pending'
-              and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
-              and pending.next_attempt_at is not null${recoveryDue()})
-          or (status in ('published', 'cancelled')
-            and not exists (select 1 from event_sync_attempts rejected
-              where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
-            and not exists (select 1 from event_sync_attempts blocking
-              where blocking.event_id = events.id and blocking.state = 'pending'
-                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
-            and (sync_revision > synced_revision or
-              (status = 'published' and (discord_event_id is null or exists (
-                select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
-              ))))))
+        ${stalePredicate()}
         order by event_key asc limit ${Math.floor(limit)}`;
       onSourceRead?.({
         statement: "stale_keys",
@@ -150,21 +152,7 @@ export function pgEventStore(
     // Kept separate so the clock-free statement below stays the canonical text.
     if (dueBefore !== undefined) {
       const filtered = await sql`select event_key${readMarker()} from events
-        where (${eventKey}::text is null or event_key = ${eventKey}) and (
-          exists (select 1 from event_sync_attempts pending
-            where pending.event_id = events.id and pending.state = 'pending'
-              and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
-              and pending.next_attempt_at is not null${recoveryDue()})
-          or (status in ('published', 'cancelled')
-            and not exists (select 1 from event_sync_attempts rejected
-              where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
-            and not exists (select 1 from event_sync_attempts blocking
-              where blocking.event_id = events.id and blocking.state = 'pending'
-                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
-            and (sync_revision > synced_revision or
-              (status = 'published' and (discord_event_id is null or exists (
-                select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
-              ))))))
+        ${stalePredicate()}
         order by event_key asc`;
       onSourceRead?.({
         statement: "stale_keys",
