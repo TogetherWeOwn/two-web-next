@@ -1,7 +1,7 @@
 // Regression breaks: either admin-only probe gate left in place, missing/duplicate
 // controllers, probes minted before audit release, or probe authority becoming login.
 import { parseSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { resolveRouteOwner } from "../src/route-ownership";
 import { SESSION_COOKIE } from "../src/session-cookie";
@@ -9,6 +9,7 @@ import { SESSION_TTL_SECONDS, hashToken, newSessionToken } from "../src/sessions
 import {
   BOARD,
   SELF,
+  OTHER,
   OTHER_PROFILE,
   MEMBER,
   SECRET,
@@ -176,6 +177,142 @@ describe("released Kit member documents: real ownership, bridge, audit and SSR",
     expect(resolveRouteOwner({ method: "GET", path: "/profile" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: OTHER_PROFILE })).toBe("hono");
     expect(resolveRouteOwner({ method: "PATCH", path: OTHER_PROFILE })).toBe("hono");
+  });
+});
+
+// Member text must not impersonate an existing controller and suppress injection.
+describe.each([
+  { label: "self", path: SELF, subject: MEMBER },
+  { label: "other", path: OTHER_PROFILE, subject: OTHER },
+])("Kit $label profile bio cannot suppress the auth-status controller", ({ path, subject }) => {
+  const outbound = vi.fn(async () => {
+    throw new Error("Unexpected outbound member-bio acceptance request");
+  });
+  beforeEach(() => {
+    outbound.mockClear();
+    vi.stubGlobal("fetch", outbound);
+  });
+  afterEach(() => {
+    try {
+      expect(outbound).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    { label: "normal bio", bio: "Accepted bio", escapedBio: "Accepted bio" },
+    {
+      label: "bare src substring",
+      bio: 'I document src="/islands/auth-status.js" in my bio.',
+      escapedBio: 'I document src="/islands/auth-status.js" in my bio.',
+    },
+    {
+      label: "script-looking bio",
+      bio: 'Literal <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script> stays text.',
+      escapedBio:
+        'Literal &lt;script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">&lt;/script> stays text.',
+    },
+  ])(
+    "$label stays literal beside one real controller and a read-only probe",
+    async ({ bio, escapedBio }) => {
+      const f = kitMemberAuthFixture(render);
+      await f.profiles.save(subject, { bio, games: ["Chess"], timezone: "Europe/London" });
+      const login = await f.login();
+      const before = await f.sessions.get(login.tokenHash);
+      const writes = mutations(f);
+      const response = await f.request(path, { headers: { cookie: login.cookie } });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-two-renderer")).toBe("kit");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(f.state.rendered).toBe(1);
+      expect(f.state.sessionReads).toBe(1);
+      expect(f.audit).toHaveLength(subject === MEMBER ? 0 : 1);
+      if (subject !== MEMBER)
+        expect(f.audit[0]).toMatchObject({ viewerUserId: MEMBER, subjectUserIds: [subject] });
+
+      const html = await response.text();
+      const bioMarkup = html
+        .match(/<p\b[^>]*data-testid="profile-bio"[^>]*>([\s\S]*?)<\/p>/)?.[1]
+        ?.replace(/<!--[\s\S]*?-->/g, "");
+      expect(bioMarkup, "the stored bio must reach real Svelte SSR as literal text").toBe(
+        escapedBio,
+      );
+      expect(controllers(bioMarkup!)).toHaveLength(0);
+      expect((await f.profiles.find(subject))?.bio).toBe(bio);
+
+      // Check the probe before the controller assertion: the bug leaves a valid
+      // cookie on the response even though no executable controller is present.
+      const cookie = probe(response);
+      expect(cookie).toBeDefined();
+      expect(response.headers.getSetCookie()).toHaveLength(1);
+      for (const flag of [
+        "Path=/",
+        "Secure",
+        "HttpOnly",
+        "SameSite=Lax",
+        `Max-Age=${SESSION_TTL_SECONDS}`,
+      ])
+        expect(cookie).toContain(flag);
+      expect(cookie).not.toMatch(/Domain=/i);
+      const signed = await parseSigned(pair(cookie!), SECRET);
+      expect(signed[AUTH_STATUS_COOKIE]).toBe(await f.sessions.statusHash(login.tokenHash));
+      expect(signed[AUTH_STATUS_COOKIE]).toMatch(/^[a-f0-9]{64}$/);
+      expect((await parseSigned(pair(cookie!), `${SECRET}-wrong`))[AUTH_STATUS_COOKIE]).toBe(false);
+      const status = await f.request("/auth/status", { headers: { cookie: pair(cookie!) } });
+      expect(status.status).toBe(200);
+      expect(await status.json()).toEqual({ authenticated: true });
+      expect(status.headers.getSetCookie()).toEqual([]);
+      expect(await f.sessions.get(login.tokenHash)).toEqual(before);
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+
+      const scripts = controllers(html);
+      expect(scripts, "literal bio text must not count as a shipped controller").toHaveLength(1);
+      expect(scripts[0]![0]).toContain("defer");
+      expect(scripts[0]![0]).toContain('data-testid="auth-tab-sync"');
+    },
+  );
+
+  it("keeps an already-present real controller without injecting a duplicate", async () => {
+    const controller =
+      '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>';
+    const withController =
+      (renderProfile: MemberAuthRenderers["profile"]) =>
+      (data: Parameters<MemberAuthRenderers["profile"]>[0]) => {
+        const html = renderProfile(data);
+        expect(controllers(html)).toHaveLength(0);
+        expect(html).toContain("</body>");
+        return html.replace("</body>", `${controller}</body>`);
+      };
+    // Only this duplicate-suppression control adds a real script to SSR output;
+    // the hostile-bio cases above always use the unmodified renderer and store.
+    const f = kitMemberAuthFixture({
+      ...render,
+      profile: withController(render.profile),
+      other: withController(render.other),
+    });
+    await f.profiles.save(subject, {
+      bio: "Accepted bio",
+      games: ["Chess"],
+      timezone: "Europe/London",
+    });
+    const login = await f.login();
+    const writes = mutations(f);
+    const response = await f.request(path, { headers: { cookie: login.cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-two-renderer")).toBe("kit");
+    expect(f.state.rendered).toBe(1);
+    expect(f.audit).toHaveLength(subject === MEMBER ? 0 : 1);
+    const html = await response.text();
+    expect(html).toContain("Accepted bio");
+    expect(controllers(html)).toHaveLength(1);
+    expect(html).toContain(controller);
+    expect(response.headers.getSetCookie()).toHaveLength(1);
+    expect(probe(response)).toBeDefined();
+    expect((await parseSigned(pair(probe(response)!), SECRET))[AUTH_STATUS_COOKIE]).toBe(
+      await f.sessions.statusHash(login.tokenHash),
+    );
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
   });
 });
 
