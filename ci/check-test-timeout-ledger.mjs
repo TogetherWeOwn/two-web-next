@@ -10,8 +10,9 @@
 // package.json scripts). Each literal test.include array, inline projects
 // included, is globbed from the config's package root. The scan covers every
 // matched file (excluded and opt-in ones too), each literal test.setupFiles
-// module, and every module those files import through a relative path,
-// transitively, since setup files can set limits and helpers can define tests.
+// and test.globalSetup module, and every module those files import through a
+// relative path, transitively, since setup files can set limits and helpers
+// can define tests.
 // Config scope must stay statically enumerable: only imported defineConfig and
 // Node path/URL helpers are callable, and test-block mutation/deletion, dir,
 // includeSource, project-file paths and scope-changing CLI flags fail closed.
@@ -168,12 +169,27 @@ function isGuardedBuiltinRequire(scope, call) {
   if (argument?.type !== "Identifier") return false;
   const parents = new Map();
   visitWithParent(scope.ast, (node, parent) => parents.set(node, parent));
+  // The call must sit directly in the wrapper: stopping at every function
+  // form (not just arrows) keeps a nested `function run(name)` from
+  // attributing its shadowed call to the wrapper.
   let fn = parents.get(call);
-  while (fn && !["ArrowFunctionExpression", "FunctionExpression"].includes(fn.type))
+  while (
+    fn &&
+    ![
+      "ArrowFunctionExpression",
+      "FunctionExpression",
+      "FunctionDeclaration",
+      "ObjectMethod",
+      "ClassMethod",
+      "ClassPrivateMethod",
+      "StaticBlock",
+    ].includes(fn.type)
+  )
     fn = parents.get(fn);
   const property = fn && parents.get(fn);
+  // Optional params: a StaticBlock stop has none, and must reject cleanly.
   if (
-    fn?.params.length !== 1 ||
+    fn?.params?.length !== 1 ||
     fn.params[0]?.type !== "Identifier" ||
     fn.params[0].name !== argument.name ||
     property?.type !== "ObjectProperty" ||
@@ -181,15 +197,24 @@ function isGuardedBuiltinRequire(scope, call) {
     fn.body.type !== "BlockStatement"
   )
     return false;
+  // Any rebinding of the guarded parameter, in any syntactic form, voids the
+  // allowlist: destructuring and loop targets assign it, while a shadowing
+  // declaration or catch parameter swaps the binding the call resolves.
   let parameterReassigned = false;
+  const bindsParameter = (pattern) => patternNames(pattern).includes(argument.name);
   visit(fn.body, (node) => {
     if (
-      (node.type === "AssignmentExpression" &&
-        node.left.type === "Identifier" &&
-        node.left.name === argument.name) ||
-      (node.type === "UpdateExpression" &&
-        node.argument.type === "Identifier" &&
-        node.argument.name === argument.name)
+      (node.type === "AssignmentExpression" && bindsParameter(node.left)) ||
+      (node.type === "UpdateExpression" && bindsParameter(node.argument)) ||
+      (node.type === "VariableDeclarator" && bindsParameter(node.id)) ||
+      (["ForInStatement", "ForOfStatement"].includes(node.type) &&
+        (node.left.type === "VariableDeclaration"
+          ? node.left.declarations.some((declaration) => bindsParameter(declaration.id))
+          : bindsParameter(node.left))) ||
+      (node.type === "CatchClause" && node.param && bindsParameter(node.param)) ||
+      (["FunctionDeclaration", "ClassDeclaration"].includes(node.type) &&
+        node.id &&
+        bindsParameter(node.id))
     )
       parameterReassigned = true;
   });
@@ -336,7 +361,8 @@ function isTemporaryOutput(
   seen = new Set(),
   at = expression?.start ?? Infinity,
 ) {
-  const node = unwrap(expression);
+  let node = unwrap(expression);
+  if (node?.type === "AwaitExpression") node = unwrap(node.argument);
   if (node?.type === "Identifier") {
     if (seen.has(node.name)) return false;
     seen.add(node.name);
@@ -348,8 +374,11 @@ function isTemporaryOutput(
   }
   if (node?.type !== "CallExpression" || node.callee.type !== "Identifier") return false;
   const callee = node.callee.name;
+  const mkdtempCall =
+    importedName(scope, callee, "node:fs") === "mkdtempSync" ||
+    importedName(scope, callee, "node:fs/promises") === "mkdtemp";
   if (
-    importedName(scope, callee, "node:fs") === "mkdtempSync" &&
+    mkdtempCall &&
     node.arguments.length === 1 &&
     node.arguments[0].type === "CallExpression" &&
     node.arguments[0].callee.type === "Identifier" &&
@@ -1282,8 +1311,9 @@ function verifyConfigRoots(root, config, base, ast, hasTestBlock) {
       keyName(node.key, node.computed) === "__proto__"
     )
       throw new Error(`${config}: config prototype changes are not statically verifiable`);
+    // Ungated: a root in any config file, including a skipped plain Vite
+    // config another config could merge, must match the package root.
     if (
-      hasTestBlock &&
       node.type === "ObjectProperty" &&
       keyName(node.key, node.computed) === "root" &&
       !configRootMatchesPackage(root, config, base, ast, node.value)
@@ -1297,6 +1327,7 @@ function verifyConfigRoots(root, config, base, ast, hasTestBlock) {
 function listTestFiles(root) {
   const files = new Set();
   const setupFileRoots = new Set();
+  const globalSetupRoots = new Set();
   const discovered = configFiles(root);
   for (const config of discovered.files) {
     const ast = syntax(readFileSync(join(root, config), "utf8"), config);
@@ -1315,6 +1346,7 @@ function listTestFiles(root) {
     if (blocks.length === 0 && /(^|\/)vite\.config\./.test(config)) {
       if (discovered.explicit.has(config))
         throw new Error(`${config}: explicit Vitest config has no literal test block`);
+      verifyConfigRoots(root, config, base, ast, false);
       continue;
     }
     if (blocks.length === 0) throw new Error(`${config} has no literal test block`);
@@ -1364,10 +1396,9 @@ function listTestFiles(root) {
           throw new Error(`${config}: test.${name} must be specified only once`);
         const property = properties[0];
         if (property && property.type !== "ObjectProperty") {
-          const detail =
-            name === "setupFiles"
-              ? "must be a literal string or string array"
-              : "must be a static property";
+          const detail = ["setupFiles", "globalSetup"].includes(name)
+            ? "must be a literal string or string array"
+            : "must be a static property";
           throw new Error(`${config}: test.${name} ${detail}`);
         }
         return unwrap(property?.value);
@@ -1395,6 +1426,25 @@ function listTestFiles(root) {
             throw new Error(`${config}: test.setupFiles must stay inside the repository`);
           files.add(file);
           setupFileRoots.add(file);
+        }
+      }
+      const globalSetupOption = option("globalSetup");
+      if (globalSetupOption !== undefined) {
+        const globalSetup =
+          globalSetupOption.type === "StringLiteral"
+            ? [globalSetupOption.value]
+            : globalSetupOption.type === "ArrayExpression" &&
+                globalSetupOption.elements.every((item) => item?.type === "StringLiteral")
+              ? globalSetupOption.elements.map((item) => item.value)
+              : undefined;
+        if (!globalSetup)
+          throw new Error(`${config}: test.globalSetup must be a literal string or string array`);
+        for (const setupModule of globalSetup) {
+          const file = normalize(relative(root, resolve(packagePath, setupModule)));
+          if (isAbsolute(file) || file === ".." || file.startsWith(`..${sep}`))
+            throw new Error(`${config}: test.globalSetup must stay inside the repository`);
+          files.add(file);
+          globalSetupRoots.add(file);
         }
       }
       const include = option("include");
@@ -1434,12 +1484,14 @@ function listTestFiles(root) {
     }
   }
   if (files.size === 0) throw new Error("no Vitest config with a test.include scope");
-  return { files: [...files].sort(), setupFiles: setupFileRoots };
+  return { files: [...files].sort(), setupFiles: setupFileRoots, globalSetup: globalSetupRoots };
 }
 
-// Configured test files and setupFiles modules, plus every module they import
-// through a relative path, transitively.
-function scanScope(ctx, files, setupFiles) {
+// Configured test files, setupFiles and globalSetup modules, plus every
+// module they import through a relative path, transitively. Also returns the
+// globalSetup-reachable set, computed as a fixpoint over the loaded graph so
+// modules first reached through a test path are still marked.
+function scanScope(ctx, files, setupFiles, globalSetupFiles = []) {
   const queue = [...files];
   const seen = new Set(queue);
   const setupReachable = new Set(setupFiles);
@@ -1471,7 +1523,101 @@ function scanScope(ctx, files, setupFiles) {
         if (target) setupReachable.add(target);
       }
   }
-  return [...seen].sort();
+  const globalSetupReachable = new Set();
+  const pending = [...globalSetupFiles];
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (globalSetupReachable.has(file)) continue;
+    globalSetupReachable.add(file);
+    for (const specifier of ctx.load(file).loads) {
+      const target = ctx.resolve(file, specifier);
+      if (target && seen.has(target)) pending.push(target);
+    }
+  }
+  return { scanned: [...seen].sort(), globalSetupReachable };
+}
+
+// A string the checker can see through: literals and `"a" + "b"` folds.
+// Anything else (an identifier, a call, a template with expressions) is an
+// opaque key that could name any property.
+function staticString(node) {
+  node = unwrap(node);
+  if (node?.type === "StringLiteral") return node.value;
+  if (node?.type === "NumericLiteral") return String(node.value);
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0)
+    return node.quasis[0]?.value.cooked;
+  if (node?.type === "BinaryExpression" && node.operator === "+") {
+    const left = staticString(node.left);
+    const right = staticString(node.right);
+    if (typeof left === "string" && typeof right === "string") return left + right;
+  }
+  return undefined;
+}
+
+// A globalSetup module runs before the suite with the resolved config, so
+// `ctx.config.testTimeout = N` (vi.setConfig throws there) would lower every
+// test's limit with no literal in any test file. Any testTimeout reference in
+// those modules or their relative imports fails closed, as does any member
+// write, delete, or object/class key through a computed name the checker
+// cannot see through: `config[key] = N` could bind any property. Reads
+// through opaque names cannot mutate the config and stay allowed.
+function verifyGlobalSetupTimeouts(ctx, files) {
+  for (const file of [...files].sort()) {
+    const ast = ctx.load(file).ast;
+    let hit = false;
+    visit(ast, (node) => {
+      if (
+        (node.type === "Identifier" && node.name === "testTimeout") ||
+        (node.type === "StringLiteral" && node.value === "testTimeout") ||
+        (node.type === "TemplateLiteral" &&
+          node.expressions.length === 0 &&
+          node.quasis[0]?.value.cooked === "testTimeout") ||
+        (node.type === "BinaryExpression" &&
+          node.operator === "+" &&
+          staticString(node) === "testTimeout")
+      )
+        hit = true;
+    });
+    if (hit) throw new Error(`${file}: globalSetup module must not reference testTimeout`);
+    const writeTargets = [];
+    visit(ast, (node) => {
+      if (node.type === "AssignmentExpression") writeTargets.push(node.left);
+      else if (["ForInStatement", "ForOfStatement"].includes(node.type))
+        writeTargets.push(node.left);
+      else if (node.type === "VariableDeclarator" && node.init) writeTargets.push(node.id);
+      else if (node.type === "UpdateExpression") writeTargets.push(node.argument);
+      else if (node.type === "UnaryExpression" && node.operator === "delete")
+        writeTargets.push(node.argument);
+    });
+    for (const target of writeTargets)
+      visit(target, (node) => {
+        if (
+          ["MemberExpression", "OptionalMemberExpression"].includes(node?.type) &&
+          node.computed &&
+          staticString(node.property) === undefined
+        )
+          throw new Error(
+            `${file}: globalSetup module must not write through a computed member name`,
+          );
+      });
+    visit(ast, (node) => {
+      if (
+        [
+          "ObjectProperty",
+          "ObjectMethod",
+          "ClassMethod",
+          "ClassPrivateMethod",
+          "ClassProperty",
+          "PropertyDefinition",
+        ].includes(node?.type) &&
+        node.computed &&
+        staticString(node.key) === undefined
+      )
+        throw new Error(
+          `${file}: globalSetup module must not use a computed key the checker cannot see through`,
+        );
+    });
+  }
 }
 
 // "1× 20 s, 2× 2 s": a limit-to-count map in pin form, largest limit first.
@@ -1538,8 +1684,14 @@ export function checkLedger(root, output = console) {
   const ctx = project(root);
   const scanned = new Map();
   try {
-    for (const file of scanScope(ctx, scope.files, scope.setupFiles))
-      scanned.set(file, scanModule(ctx, ctx.load(file)));
+    const { scanned: files, globalSetupReachable } = scanScope(
+      ctx,
+      scope.files,
+      scope.setupFiles,
+      scope.globalSetup,
+    );
+    for (const file of files) scanned.set(file, scanModule(ctx, ctx.load(file)));
+    verifyGlobalSetupTimeouts(ctx, globalSetupReachable);
   } catch (error) {
     output.error(`timeout ledger: ${error.message}`);
     return 2;
@@ -2596,6 +2748,39 @@ function selftest() {
       [],
       0,
     );
+    check(
+      "async mkdtemp bundle imports are not traversed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtemp } from "node:fs/promises";',
+          'import { tmpdir } from "node:os";',
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          "let scratch;",
+          'scratch = await mkdtemp(join(tmpdir(), "kit-members-binding-"));',
+          'const outfile = join(scratch, "members-load.mjs");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+    check(
+      "async mkdtemp outside scratch roots fails closed",
+      {
+        "test/a.test.ts": [
+          'import { mkdtemp } from "node:fs/promises";',
+          'import { join } from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          'const scratch = await mkdtemp(join("test", "bundle-"));',
+          'const outfile = join(scratch, "bundle.mjs");',
+          "await import(pathToFileURL(outfile).href);",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["dynamic module specifier is not statically verifiable"],
+    );
     for (const [name, root, expected] of [
       [
         "Paperclip scratch root fallback aliases are accepted",
@@ -2784,6 +2969,32 @@ function selftest() {
       2,
       ["dynamic module specifier is not statically verifiable"],
     );
+    for (const [name, reassign] of [
+      ["destructuring reassignment", '({ v: name } = { v: "./helper.cjs" });'],
+      ["array reassignment", "[name] = ['./helper.cjs'];"],
+      ["for-of reassignment", 'for (name of ["./helper.cjs"]) { /* once */ }'],
+      ["for-in reassignment", 'for (name in { "./helper.cjs": 1 }) { /* once */ }'],
+      ["shadowing declaration", '{ let name = "./helper.cjs"; return require(name); }'],
+      ["catch parameter shadowing", "try { void name; } catch (name) { return require(name); }"],
+      ["nested function shadowing", "function run(name) { return require(name); }"],
+      ["nested arrow shadowing", "const run = (name) => require(name);"],
+      ["function declaration shadowing", "{ function name() {} return require(name); }"],
+      ["static block scope", "class C { static { require(name); } }"],
+    ]) {
+      check(
+        `createRequire builtin guard ${name} fails closed`,
+        {
+          "test/a.test.ts": [
+            'import { createRequire } from "node:module";',
+            "const require = createRequire(import.meta.url);",
+            `const helpers = { __require: (name) => { if (!["fs"].includes(name)) throw new Error("blocked"); ${reassign} return require(name); } };`,
+          ].join("\n"),
+        },
+        [],
+        2,
+        ["dynamic module specifier is not statically verifiable"],
+      );
+    }
     check(
       "unreachable createRequire builtin guard fails closed",
       {
@@ -3064,6 +3275,125 @@ function selftest() {
       [],
       2,
       ["computed config option keys must be static"],
+    );
+    check(
+      "clean globalSetup modules pass",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: ["./test/guard.ts"] } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/guard.ts": [
+          'import { helper } from "./helper";',
+          "export default function guard() { helper(); }",
+        ].join("\n"),
+        "test/helper.ts": "export function helper() {}",
+      },
+      [],
+      0,
+    );
+    check(
+      "globalSetup config mutation fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: "./test/guard.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/guard.ts": [
+          "export default function guard(context) {",
+          "  context.config.testTimeout = 5000;",
+          "}",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["globalSetup module must not reference testTimeout"],
+    );
+    check(
+      "globalSetup transitive testTimeout fails closed",
+      {
+        // The shared module sorts before the guard, so it is visited before
+        // the guard marks it: reachability must be a fixpoint, not visit order.
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: ["./test/aaa-shared.ts"], globalSetup: ["./test/zzz-guard.ts"] } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/aaa-shared.ts": 'import "./leaf"; export const shared = 1;',
+        "test/zzz-guard.ts": 'import "./aaa-shared"; export default function guard() {}',
+        "test/leaf.ts": "export function tweak(context) { context.config.testTimeout = 5000; }",
+      },
+      [],
+      2,
+      ["globalSetup module must not reference testTimeout"],
+    );
+    check(
+      "non-literal globalSetup scope fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+      },
+      [],
+      2,
+      ["test.globalSetup must be a literal string or string array"],
+    );
+    check(
+      "globalSetup outside the repository fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: ["../guard.ts"] } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+      },
+      [],
+      2,
+      ["test.globalSetup must stay inside the repository"],
+    );
+    check(
+      "globalSetup folded testTimeout key fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: "./test/guard.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/guard.ts": [
+          "export default function guard(context) {",
+          '  const key = "test" + "Timeout";',
+          "  context.config[key] = 5000;",
+          "}",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["globalSetup module must not reference testTimeout"],
+    );
+    check(
+      "globalSetup opaque computed member write fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: "./test/guard.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/guard.ts": [
+          "export default function guard(context) {",
+          "  context.config[process.env.CONFIG_KEY] = 5000;",
+          "}",
+        ].join("\n"),
+      },
+      [],
+      2,
+      ["must not write through a computed member name"],
+    );
+    check(
+      "globalSetup static computed member writes pass",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, globalSetup: "./test/guard.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/guard.ts": [
+          "const seen = {};",
+          'seen["done"] = true;',
+          "const counts = [];",
+          "counts[0] = 1;",
+          "export default function guard() { return seen.done && counts[0]; }",
+        ].join("\n"),
+      },
+      [],
+      0,
     );
     check(
       "duplicate include properties fail closed",
@@ -3624,6 +3954,25 @@ function selftest() {
       {
         "web/vite.config.ts":
           'export default { build: { rollupOptions: { output: { manualChunks: [{ name: "admin", test: /admin/ }] } } } };',
+        "test/ok.test.ts": 'it("ok", () => {});',
+      },
+      [],
+      0,
+    );
+    check(
+      "a skipped Vite config with a foreign root fails closed",
+      {
+        "vite.config.ts": 'export default { root: "sub" };',
+        "test/ok.test.ts": 'it("ok", () => {});',
+      },
+      [],
+      2,
+      ["configured Vitest root must match the config package root"],
+    );
+    check(
+      "a skipped Vite config with a package root passes",
+      {
+        "vite.config.ts": 'export default { root: "." };',
         "test/ok.test.ts": 'it("ok", () => {});',
       },
       [],

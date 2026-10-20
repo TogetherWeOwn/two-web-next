@@ -26,18 +26,20 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   `package.json` scripts). Today that is `vitest.config.ts` (`test/` plus
   `ci/audit-lifecycle.test.mjs`) and `tier0/vitest.config.ts` (`tier0/`). The
   gate scans every file an `include` glob matches, even excluded or opt-in
-  cases, each literal `test.setupFiles` path (a string or string array resolved
-  from the config's package root), and every source module they load through a
+  cases, each literal `test.setupFiles` and `test.globalSetup` path (a string or
+  string array resolved from the config's package root), and every source module they load through a
   relative static import, literal dynamic import, literal CommonJS `require`,
   or literal call through a `createRequire` binding. Non-literal dynamic import,
   `require`, and `createRequire` specifiers fail closed, except `pathToFileURL(...).href`
-  imports whose path is statically derived from `mkdtempSync(join(root, ...))`,
+  imports whose path is statically derived from `mkdtempSync(join(root, ...))`
+  or `await mkdtemp(join(root, ...))` (the `node:fs/promises` form),
   where `root` is `tmpdir()`, a harness-owned `process.env.PAPERCLIP_RUN_SCRATCH_DIR`
   or `process.env.PAPERCLIP_SCRATCH_DIR`, or an alias/`??`/`||` fallback containing
   only those roots (temporary generated bundles are not traversed; arbitrary
   environment roots and source-directory fallbacks fail closed), `data:text/javascript;base64,`
   template-literal specifiers, and a `createRequire` call inside a `__require` wrapper that throws
-  unless its single argument is included in a literal array of Node built-ins.
+  unless its single argument is included in a literal array of Node built-ins
+  and never reassigns or shadows that argument.
   Statically resolved source paths assigned from `fileURLToPath(new URL(...,
   import.meta.url).href)` to a local and passed through `pathToFileURL(...).href`
   remain in the relative import walk. Non-relative imports
@@ -51,7 +53,7 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   SQL imports) are not traversed.
   In configs with a `test` block,
   the gate fails closed on
-  non-literal or duplicate `setupFiles`, duplicate `include` or `testTimeout`
+  non-literal or duplicate `setupFiles` or `globalSetup`, duplicate `include` or `testTimeout`
   keys, object spreads, dynamic computed keys, non-package roots, any assignment,
   update, or deletion, and calls or constructors other than statically
   imported `defineConfig`, `resolve`/`dirname` from `node:path`/`path`, and
@@ -63,7 +65,14 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   `--project`/`-p`, `--workspace`, `--include`, `--testTimeout`, or
   `--test-timeout`. An explicitly
   selected Vite config without a `test` block also fails closed; auto-discovered
-  plain Vite configs without a `test` block are not treated as test scopes.
+  plain Vite configs without a `test` block are not treated as test scopes,
+  but a `root` in one must still match the package root, since another config
+  could merge it. A `testTimeout` reference in a `globalSetup` module or its
+  imports fails closed, as does a member write, delete, or object/class key
+  through a computed name the checker cannot see through (literals and
+  `"a" + "b"` folds are transparent): setup-time config mutation would bind
+  every test. Fully dynamic property names via reflection helpers are out of
+  scope.
   Each `testTimeout` remains exactly `30_000`.
 - Limits: a per-test timeout literal below the 30 s default (`0`, which turns
   the limit off, counts too) that Vitest reads as a timeout: the third
