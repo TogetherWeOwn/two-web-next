@@ -201,8 +201,8 @@ critical journeys on the same seeded disposable Postgres:
 
 | Journey | Request | Session | Budget (server response) |
 |---|---|---|---|
-| member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 1500 ms, slowest sample 3000 ms |
-| moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 1500 ms, slowest sample 3000 ms |
+| member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 500 ms, slowest sample 1000 ms |
+| moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 500 ms, slowest sample 1000 ms |
 
 `ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, at least five
 samples each; the parser rejects smaller sample counts) mints exactly one QA session per identity, replays the
@@ -210,8 +210,7 @@ samples each; the parser rejects smaller sample counts) mints exactly one QA ses
 asserts status 200 **plus** authenticated content (signed-in account chrome on
 the detail page, administration nav on the admin list — a published event
 answers 200 to guests too, so status alone is not session proof) before it
-measures. Ceilings are initial fail-closed budgets for the local worker;
-tightening is follow-up work. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
+measures. Ceilings are calibrated (see below) fail-closed budgets for the local worker. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
 `--selftest`: good fixtures pass, slow samples and cookie-stripped guest
 bodies fail, malformed budgets fail closed) runs in the `check` job; the
 live gate runs in browser-smoke and fails `e2e-ok` with it. Cookie stripped (`--mutant no-cookie`) goes red:
@@ -222,6 +221,27 @@ Local verification (hermetic only):
 npm run auth-perf:selftest
 node --test ci/check-auth-perf.test.mjs
 ```
+
+### Calibration evidence
+
+The first ceilings (median 1500 ms, slowest 3000 ms) were tightened to the
+values above after two independent runs of the `browser-smoke` job on the pinned
+`ubuntu-24.04` runner, against the workflow's disposable Postgres fixture, both on
+head `71866d4` (five status-200 samples per journey per run, server response ms):
+
+| Journey | Run | Samples | Median |
+|---|---|---|---|
+| member-rsvp | [39410396685](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39410396685) | 87, 93, 38, 37, 37 | 38 |
+| member-rsvp | [39414247798](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39414247798) | 100, 44, 46, 42, 40 | 44 |
+| moderator-admin | 39410396685 | 28, 20, 21, 19, 20 | 20 |
+| moderator-admin | 39414247798 | 24, 23, 23, 21, 22 | 23 |
+
+The slowest sample was 100 ms (member-rsvp, a cold first read) and 28 ms
+(moderator-admin). The new ceilings keep at least 10x headroom over the slowest
+sample, so runner variance stays absorbed while sub-second regressions fail. The
+anti-relaxation guard in `ci/check-auth-perf.test.mjs` now pins the new values as
+the upper bound. Limitation: two runs on one runner type; further tightening
+needs more runs, including cold-start samples.
 
 Never relax these ceilings to turn a build green; threshold changes need
 their own reviewed PR, like the Lighthouse thresholds above.
