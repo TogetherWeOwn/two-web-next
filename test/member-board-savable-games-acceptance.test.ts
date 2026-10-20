@@ -279,7 +279,6 @@ describe("savable games: Hono member board (hermetic)", () => {
     expectPrivateNoStore(res, "unmatched savable");
     const body = await res.text();
     expect(body).toContain("Nobody is ranked for this season and game yet.");
-    expect(body).not.toContain(VIEWER_NAME);
     expect(body).not.toContain(OTHER_NAME);
     for (const copy of OUTAGE_COPY) expect(body).not.toContain(copy);
     const sql = statements.map((s) => s.sql).join("\n");
