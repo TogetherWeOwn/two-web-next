@@ -1,8 +1,11 @@
 // Acceptance contract: an authenticated Kit GET /e/:key read renews the
 // sliding session — the post-release twin of Hono's readSession rotation
 // (src/index.tsx: every authenticated page view mints a fresh token, deletes
-// the old row and re-stamps the 120-minute sliding expiry, so a replayed
-// bearer finds no row). The read-only bridge (src/kit-session.ts
+// the old row and re-stamps the 120-minute sliding expiry). The retired
+// bearer keeps a 10s immediate-predecessor grace
+// (SESSION_PREDECESSOR_GRACE_SECONDS in src/sessions.ts) that authenticates
+// the member without rotating, so only a post-grace replay finds no row.
+// The read-only bridge (src/kit-session.ts
 // resolveRequestSession) still only peeks: rotation runs in the hook core
 // after the member-read boundary releases a successful GET, at the same
 // post-response position as the auth-status probe append in
@@ -43,6 +46,7 @@ import {
   hashToken,
   isValidSessionToken,
   newSessionToken,
+  SESSION_PREDECESSOR_GRACE_SECONDS,
   SESSION_TTL_SECONDS,
   type SessionStore,
 } from "../src/sessions";
@@ -131,7 +135,13 @@ type HarnessOptions = {
 
 function harness(options: HarnessOptions = {}) {
   const { variant = "published", contentType = "text/html", throttle = false } = options;
-  const store = createMemorySessionStore();
+  // Controllable clock: the store reads grace and expiry through it, so tests
+  // advance past SESSION_PREDECESSOR_GRACE_SECONDS without real waiting.
+  let now = Date.now();
+  const store = createMemorySessionStore(() => now);
+  const advanceTime = (ms: number) => {
+    now += ms;
+  };
   const env = { ...baseEnv, SESSION_SECRET: SECRET, SESSION_STORE: store } as Env;
   const entries: AccessEntry[] = [];
   const rotations: { oldHash: string; expiresAt: Date }[] = [];
@@ -189,7 +199,7 @@ function harness(options: HarnessOptions = {}) {
       });
     },
   };
-  return { deps, entries, env, store, rotations };
+  return { advanceTime, deps, entries, env, store, rotations };
 }
 
 const eventFor = (
@@ -278,7 +288,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("authenticated detail reads renew the sliding session", () => {
   it("rotates the bearer, re-stamps 120 minutes, and retires the old row", async () => {
-    const { deps, store } = harness();
+    const { advanceTime, deps, store } = harness();
     const { cookie, token } = await mint(store, MEMBER);
     const startedAt = Date.now();
     let captured: { tokenHash: string; expiresAt: Date } | null = null;
@@ -296,6 +306,11 @@ describe("authenticated detail reads renew the sliding session", () => {
     expect(res.headers.get("x-two-renderer")).toBe("kit");
     expect(await res.clone().text()).toContain("Sign out");
     const replacement = expectRotationCookie(res, token);
+    // The live row is retired at rotation: no status probe survives. The
+    // predecessor still authenticates inside its 10s grace, then finds no row.
+    expect(await store.statusHash(await hashToken(token))).toBeNull();
+    expect(await store.get(await hashToken(token))).toMatchObject({ userId: MEMBER_ID });
+    advanceTime((SESSION_PREDECESSOR_GRACE_SECONDS + 1) * 1000);
     expect(await store.get(await hashToken(token))).toBeNull();
     const row = await store.get(await hashToken(replacement));
     expect(row?.userId).toBe(MEMBER_ID);
@@ -316,13 +331,24 @@ describe("authenticated detail reads renew the sliding session", () => {
     expect(isValidSessionToken(verified[SESSION_COOKIE])).toBe(true);
   });
 
-  it("rejects the prior bearer after rotation: replay renders the guest contract", async () => {
-    const { deps, store } = harness();
+  it("grace then guest: immediate replay renders member without rotation, post-grace replay renders guest", async () => {
+    const { advanceTime, deps, store } = harness();
     const { cookie } = await mint(store, MEMBER);
     const first = await dispatchHookRequest(eventFor(`/e/${KEY}`, cookie), deps);
     expect(first.status).toBe(200);
     expect(sessionSets(first)).toHaveLength(1);
 
+    // Inside grace the retired bearer still authenticates the member, but
+    // the replay itself rotates nothing and mints no sibling.
+    const immediate = await dispatchHookRequest(eventFor(`/e/${KEY}`, cookie), deps);
+    expect(immediate.status).toBe(200);
+    const immediateBody = await immediate.clone().text();
+    expect(immediateBody).not.toContain('data-testid="event-join-pitch"');
+    expect(immediateBody).toContain("Sign out");
+    expect(immediateBody).not.toContain("Welcome, guest");
+    expect(sessionSets(immediate)).toEqual([]);
+
+    advanceTime((SESSION_PREDECESSOR_GRACE_SECONDS + 1) * 1000);
     const replay = await dispatchHookRequest(eventFor(`/e/${KEY}`, cookie), deps);
     expect(replay.status).toBe(200);
     const body = await replay.clone().text();
@@ -333,11 +359,14 @@ describe("authenticated detail reads renew the sliding session", () => {
   });
 
   it("rotates a signed-in non-moderator draft read (403): Hono reads the session before the draft check", async () => {
-    const { deps, store } = harness({ variant: "draft" });
+    const { advanceTime, deps, store } = harness({ variant: "draft" });
     const { cookie, token } = await mint(store, MEMBER);
     const res = await dispatchHookRequest(eventFor(`/e/${DRAFT_KEY}`, cookie), deps);
     expect(res.status).toBe(403);
     expectRotationCookie(res, token);
+    expect(await store.statusHash(await hashToken(token))).toBeNull();
+    expect(await store.get(await hashToken(token))).toMatchObject({ userId: MEMBER_ID });
+    advanceTime((SESSION_PREDECESSOR_GRACE_SECONDS + 1) * 1000);
     expect(await store.get(await hashToken(token))).toBeNull();
   });
 });
