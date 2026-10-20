@@ -1,10 +1,9 @@
-// Builder-owned lock-skipping proof for the eight scheduled prune adapters.
-// Each adapter must delete unlocked eligible rows while a locked eligible row
-// is held by another transaction, defer the locked row to a later pass, and
-// keep cutoff-exact/newer controls. A scheduler-level pass must commit other
-// tables' deletions while one table's row stays locked. NOT an acceptance
-// file: the Test Author owns *-acceptance.test.ts; this file is the builder's
-// RED->GREEN gate and stays out of that namespace on purpose.
+// Lock-skipping controls for the three non-scoped scheduled prune adapters:
+// join_attempts, web_sessions and job_unique_locks still skip held rows.
+// The five scoped age tables instead defer a whole batch on lock timeout;
+// their scheduled-flight/isolation proof lives in
+// prune-lock-free-contention-acceptance.test.ts. Cutoff and recovery controls
+// here remain unchanged. Reconciled by the test owner for that contract.
 //
 // Live round-trips use a guarded disposable schema on agent-testdb or the CI
 // service only; memory fakes are not used here because row locks need real
@@ -118,7 +117,7 @@ async function runObserved<T>(
 }
 
 describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => {
-  it("each adapter deletes unlocked eligible rows while its locked row is held, then drains it", async () => {
+  it("non-scoped adapters delete unlocked eligible rows while held, then drain the deferred rows", async () => {
     const fixture = await createJobsFixture(DB!, { max: 4 });
     const sweeperName = `prune_skiplock_${Date.now()}`;
     const sweeper = schemaClient(fixture, sweeperName, 2);
@@ -145,22 +144,12 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
 
       await locker.begin(async (tx) => {
         const [holder] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
-        await tx`select id from agent_event_audits where request_id = 'lock-audit' for update`;
-        await tx`select id from member_data_access_logs where viewer_discord_id = 'lock-acc' for update`;
         await tx`select id from join_attempts where request_id = 'lock-join' for update`;
-        await tx`select id from agent_event_idempotency_keys where key = 'lock-key' for update`;
-        await tx`select id from event_search_logs where normalized_query = 'lock q' for update`;
-        await tx`select id from board_view_logs where normalized_board_key = 'lock-board' for update`;
         await tx`select token_hash from web_sessions where token_hash = 'lock-sess' for update`;
         await tx`select key from job_unique_locks where key = 'lock-uls' for update`;
 
         const runs: [string, () => Promise<number>][] = [
-          ["agentEventAudits", () => stores.agentEventAudits.pruneOlderThan(cutoff)],
-          ["accessLog", () => stores.accessLog.pruneOlderThan(cutoff)],
           ["joinAttempts", () => stores.joinAttempts.pruneOlderThan(cutoff)],
-          ["idempotencyKeys", () => stores.idempotencyKeys.pruneOlderThan(cutoff)],
-          ["searchLog", () => stores.searchLog.pruneOlderThan(cutoff)],
-          ["boardViews", () => stores.boardViews.pruneOlderThan(cutoff)],
           ["sessions", () => stores.sessions.sweepExpired(now)],
           ["jobUniqueLocks", () => stores.jobUniqueLocks!.sweepExpired(now)],
         ];
@@ -172,26 +161,15 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
           }
           first[name] = r.value!;
         }
-        settledBeforeRelease = observedBlocked.length === 0 && Object.keys(first).length === 8;
+        settledBeforeRelease = observedBlocked.length === 0 && Object.keys(first).length === 3;
       });
 
-      // RED before the fix: at least one adapter blocks on its held row, so it
-      // never settles before release. GREEN: all eight settle while held.
+      // These three adapters retain SKIP LOCKED. They must still commit free
+      // rows, including expiry-exact sessions/leases, while the holder parks.
       expect(observedBlocked).toEqual([]);
       expect(settledBeforeRelease).toBe(true);
-      // Six age tables each drop exactly their one free eligible row; the
-      // session sweep drops its free expired row plus the expiry-exact row
-      // (reads require expires_at > now, so it is already invisible), and the
-      // lock sweep drops its free expired row plus the expiry-exact row
-      // (expiry-exact leases are sweep-eligible one instant before acquire
-      // would supersede them).
       expect(first).toEqual({
-        agentEventAudits: 1,
-        accessLog: 1,
         joinAttempts: 1,
-        idempotencyKeys: 1,
-        searchLog: 1,
-        boardViews: 1,
         sessions: 2,
         jobUniqueLocks: 2,
       });
@@ -220,7 +198,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
       ).toBe(1);
 
       // Release happened when the locker transaction ended: the next pass
-      // drains exactly the eight deferred rows, then runs clean.
+      // drains the three deferred rows and the five untouched scoped tables.
       const second = {
         agentEventAudits: await stores.agentEventAudits.pruneOlderThan(cutoff),
         accessLog: await stores.accessLog.pruneOlderThan(cutoff),
@@ -232,12 +210,12 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         jobUniqueLocks: await stores.jobUniqueLocks!.sweepExpired(now),
       };
       expect(second).toEqual({
-        agentEventAudits: 1,
-        accessLog: 1,
+        agentEventAudits: 2,
+        accessLog: 2,
         joinAttempts: 1,
-        idempotencyKeys: 1,
-        searchLog: 1,
-        boardViews: 1,
+        idempotencyKeys: 2,
+        searchLog: 2,
+        boardViews: 2,
         sessions: 1,
         jobUniqueLocks: 1,
       });

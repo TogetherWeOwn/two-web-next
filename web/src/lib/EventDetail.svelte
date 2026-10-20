@@ -246,10 +246,12 @@ const lineup = $derived(
       <h2 id="event-share-heading">Save the date</h2>
       <p>
         <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {" · "}
-        <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-          Google Calendar
-        </a>
+        {#if model.googleCalendarUrl}
+          {" · "}
+          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+            Google Calendar
+          </a>
+        {/if}
         {" · "}
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link

@@ -5,7 +5,7 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl } from "./feeds";
+import { googleCalendarUrl, isWireInstant } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
@@ -78,6 +78,10 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  // Finite but non-wire years stay a readable page: only the Google Calendar
+  // deep link (an ICS instant pair) is omitted, never the whole render.
+  const gcalUrl =
+    isWireInstant(e.startsAt) && isWireInstant(e.endsAt) ? googleCalendarUrl(e) : null;
   return (
     <EventDetailShell
       title={e.title}
@@ -198,10 +202,14 @@ export const EventPage: FC<{
             <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
               Add to calendar (.ics)
             </a>
-            {" · "}
-            <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">
-              Google Calendar
-            </a>
+            {gcalUrl ? (
+              <>
+                {" · "}
+                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
+                  Google Calendar
+                </a>
+              </>
+            ) : null}
             {" · "}
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link

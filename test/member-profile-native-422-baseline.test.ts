@@ -27,6 +27,7 @@ import { PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD } from "../src/islands/con
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { registerProfileParticipationBrowserCases } from "./helpers/profile-participation-browser";
 
 const ID = "100000000000000001";
 const env = {
@@ -181,6 +182,7 @@ describe("native profile 422 response (route level)", () => {
 describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   "native 422 baseline in a real browser",
   () => {
+    registerProfileParticipationBrowserCases();
     let browser: Browser;
     const contexts: BrowserContext[] = [];
     const servers: Server[] = [];

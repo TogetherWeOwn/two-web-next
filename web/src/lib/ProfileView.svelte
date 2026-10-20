@@ -123,6 +123,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     <div class="profile-header-actions">
       <nav aria-label="Primary">
         <a class="btn" href="/profile">Your profile</a>
+        <a class="btn profile-secondary" href="/events">Events</a>
         {#if isModerator}
           <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
             Moderator admin
@@ -209,9 +210,12 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       >
         <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
         <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
-        <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
-          {PROFILE_NEW_MEMBER_COPY.cta}
-        </a>
+        <div class="actions">
+          <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+            {PROFILE_NEW_MEMBER_COPY.cta}
+          </a>
+          <a class="btn profile-secondary" href="/events">Find an event</a>
+        </div>
       </section>
     {/if}
     {#if stats}
