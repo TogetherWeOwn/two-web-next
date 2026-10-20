@@ -55,6 +55,7 @@ const row = (id: number, over: Partial<Row> = {}): Row => ({
   eventKey: key(id),
   title: `${PRIVATE_TEXT} title ${id}`,
   game: null,
+  ...{ purpose: null },
   description: `${PRIVATE_TEXT} description`,
   startsAt: new Date(NOW.getTime() + id * 60_000),
   endsAt: new Date(NOW.getTime() + id * 60_000 + 3_600_000),
@@ -422,7 +423,12 @@ describe("window omission diagnostics are independent of builder timestamp/SEQUE
     ]);
     const output = await listFeed(source.db, ["published", "cancelled"], NOW);
     expect(output.map((entry) => entry.eventKey)).toEqual([key(2), key(5)]);
-    expect(output).toEqual([row(2), row(5)]);
+    const columns = getTableColumns(events);
+    expect(output).toEqual(
+      [row(2), row(5)].map((event) =>
+        Object.fromEntries(Object.entries(event).filter(([key]) => Object.hasOwn(columns, key))),
+      ),
+    );
     expectQuery(source.seen, "feed", ["published", "cancelled"]);
     expect(logs).toEqual([[FEED_SKIP, { skipped: 3 }]]);
   });

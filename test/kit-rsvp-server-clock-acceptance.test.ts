@@ -30,6 +30,7 @@ function event(status: PublicEvent["status"]): PublicEvent {
     eventKey: KEY,
     title: "Chess night",
     game: "Chess",
+    ...{ purpose: null },
     description: "Bring a friend and a board.",
     startsAt: start,
     endsAt: new Date(AT_END),
