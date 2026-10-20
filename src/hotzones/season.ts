@@ -63,6 +63,24 @@ export function seasonLabel(raw: string | null | undefined): string {
   return raw;
 }
 
+/** Current UTC month/quarter season values for the period-picker shortcuts.
+///
+/// Pure UTC getters only, never viewer-local dates. `now` is the injectable
+/// request clock: callers use the default (the request-time clock) and tests
+/// inject a fixed instant for deterministic quarter/year boundaries. */
+export function utcPeriodShortcuts(now: Date = new Date()): {
+  month: string;
+  quarter: string;
+} {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const quarter = Math.floor((month - 1) / 3) + 1;
+  return {
+    month: `${year}-${String(month).padStart(2, "0")}`,
+    quarter: `${year}-Q${quarter}`,
+  };
+}
+
 /** True when `d` lies inside the window (all = unbounded). */
 export function inSeasonWindow(d: Date, window: SeasonWindow): boolean {
   if (window.kind === "all") return true;

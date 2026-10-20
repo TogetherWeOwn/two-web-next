@@ -4,9 +4,19 @@ import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-// gridHtml comes only from the escaped server-side renderHotzoneGrid output.
-const { signal, season, gridHtml, total, eventCount, retentionNote, estimated, appUrl } =
-  $derived(data);
+// gridHtml and periodPickerHtml come only from the escaped server-side
+// renderHotzoneGrid/renderPeriodPicker output.
+const {
+  signal,
+  season,
+  gridHtml,
+  total,
+  eventCount,
+  retentionNote,
+  estimated,
+  appUrl,
+  periodPickerHtml,
+} = $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
@@ -34,6 +44,7 @@ const destination = $derived(
     <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
+  {@html periodPickerHtml}
   <p><a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> · <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a></p>
   {@html gridHtml}
 </Shell>
