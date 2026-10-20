@@ -4,6 +4,7 @@
 import { count, desc, eq, max, asc, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
+import { isDatabaseUnavailable } from "../db/errors";
 import { nonSensitiveRead } from "../member-reads";
 
 export const MAX_QUERY_LENGTH = 255;
@@ -80,8 +81,9 @@ export const LOG_READ_DEADLINE_MS = 1500;
 
 /**
  * Content-gap read: zero-result queries by miss count, ties alphabetical.
- * Optional analytics: never throws, never waits past the deadline — a blocked
- * or failed read resolves undefined so the dashboard omits the widget.
+ * Optional analytics: never waits past the deadline. A blocked or ordinarily
+ * failed read resolves undefined so the dashboard omits the widget; classified
+ * DB outages propagate to the dashboard's shared 503 boundary.
  * The SELECT runs in a transaction with DB-side lock/statement timeouts so
  * Postgres cancels a lock-blocked read server-side (a client-side race alone
  * would leave the SELECT holding a connection).
@@ -120,7 +122,8 @@ export async function topZeroResultSearches(
           lastSearchedAt: r.lastSearchedAt!,
         }));
       });
-    } catch {
+    } catch (err) {
+      if (isDatabaseUnavailable(err)) throw err;
       return undefined;
     }
   })();
