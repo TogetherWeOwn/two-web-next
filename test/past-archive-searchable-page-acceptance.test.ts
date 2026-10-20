@@ -3,7 +3,7 @@
 // position (M191 T1). RED-first for the build: the GET form and "Page N of M"
 // exist on neither twin yet. The controls pin what the build must not change:
 // empty/empty-search/out-of-range copy, the fragment-turn inputs the shipped
-// binder validates, and the overlong-q 422 path (owned by TOG-34202).
+// binder validates, and the overlong-q 422 path (owned by the overlong-q card).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import {
