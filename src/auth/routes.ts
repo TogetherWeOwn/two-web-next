@@ -9,6 +9,7 @@
 // JoinSessionHooks.
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { exceptionClass } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
@@ -101,7 +102,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const state = crypto.randomUUID();
-    const store = await hooks.storeFor(c).catch(() => null);
+    const store = await hooks.storeFor(c).catch((err: unknown) => {
+      // The store never materialized, so no journey exists to sweep: one
+      // class-only warn joins the signin_failed redirect for triage.
+      console.warn("auth login-start store unavailable", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
+      return null;
+    });
     if (!store) return c.redirect("/?n=signin_failed", 302);
     // No-DDL storeFor connects lazily, so an unreachable database surfaces on
     // first use instead of in storeFor: fail the login the same way, never a 500.
@@ -111,7 +120,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       await store.journeys.sweepExpired();
       if (!(await store.journeys.issue(await hashToken(state), "auth")))
         return c.redirect("/?n=signin_failed", 302);
-    } catch {
+    } catch (err) {
+      // A throwing sweep/issue is a store failure, not a refused issue (a
+      // false return stays silent above): one class-only warn for triage.
+      console.warn("auth login-start journey failed", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
       return c.redirect("/?n=signin_failed", 302);
     }
     // Return journey (legacy login_next): a safe ?next= rides the
@@ -314,9 +329,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
             await store.revokeLineage(statusHash);
           }
-        } catch {
+        } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
           // this browser's cookie as if the server row were gone.
+          console.error("logout revocation failed", {
+            exception: exceptionClass(err),
+            request_id: safeRequestId(c.get("requestId")),
+          });
           c.header("cache-control", "no-store, private");
           varyAccept(c);
           if (prefersHtmlError(c)) {
