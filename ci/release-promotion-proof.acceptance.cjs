@@ -475,6 +475,60 @@ test("workflow publishes the attempt-bound receipt only after successful identit
   assert.doesNotMatch(String(workflow.jobs.release.if ?? ""), /always\(|failure\(/);
 });
 
+// GitHub exposes these display names to the verifier as API identifiers. A
+// cosmetic rename, duplicate or unrelated namesake must not strand tag repair.
+test("workflow proof API names identify the unique semantic producers in order", () => {
+  const { parse } = require("yaml");
+  const workflow = parse(
+    fs.readFileSync(path.join(__dirname, "..", ".github/workflows/deploy-production.yml"), "utf8"),
+  );
+  const deploy = workflow.jobs["deploy-production"];
+  assert.equal(deploy.name, "deploy-production", "verifier selects the deploy job by API name");
+  const steps = deploy.steps;
+  const producers = [
+    [
+      "Gradual promotion 5-50-100 with automatic rollback",
+      (step) =>
+        step.id === "gradual" &&
+        step.uses?.startsWith("TogetherWeOwn/.github/actions/gradual-promote@"),
+    ],
+    [
+      "Verify public routes on the promoted version",
+      (step) =>
+        step.env?.PROMOTED_VERSION_ID === "${{ steps.gradual.outputs.promoted-version-id }}" &&
+        step.run?.includes("--expected-version-id"),
+    ],
+    [
+      "Record successful production promotion",
+      (step) =>
+        step.env?.DEPLOY_SHA === "${{ needs.preflight.outputs.sha }}" &&
+        step.env?.PROMOTED_VERSION_ID === "${{ steps.gradual.outputs.promoted-version-id }}" &&
+        step.run?.includes("promotion.json"),
+    ],
+    [
+      "Upload production promotion proof",
+      (step) =>
+        step.uses?.startsWith("actions/upload-artifact@") &&
+        step.with?.name === "production-promotion-${{ github.run_id }}-${{ github.run_attempt }}",
+    ],
+  ];
+  let previousAt = -1;
+  for (const [name, matches] of producers) {
+    const selected = steps.filter(matches);
+    assert.equal(selected.length, 1, `${name} has exactly one semantic producer`);
+    const step = selected[0];
+    assert.equal(step.name, name, "the actual producer carries the verifier's exact API name");
+    assert.equal(
+      steps.filter((candidate) => candidate.name === name).length,
+      1,
+      `${name} is unique, including unrelated steps`,
+    );
+    const at = steps.indexOf(step);
+    assert.ok(at > previousAt, `${name} follows the preceding proof producer`);
+    previousAt = at;
+  }
+});
+
 test("workflow receipt binds the selected SHA, version and producing attempt at runtime", (t) => {
   const { parse } = require("yaml");
   const workflow = parse(
