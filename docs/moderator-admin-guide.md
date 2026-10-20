@@ -102,9 +102,12 @@ the private review record. Keep ID lists, member identifiers, database URLs, tok
 leg correctly: guests bounce to session recovery (303), signed-in
 non-moderators get 403, and moderators read the dashboard (200). It logs in
 both QA identities, sends empty bodies (expectations resolve before any
-handler touches the database, so it writes nothing), and prints only statuses
-— never tokens, cookies, or bodies. Run it with `QA_AUTH_TOKEN` from an
-approved secret binding:
+handler touches the database, so it writes nothing), and prints status checks
+and fixed redirect classes (`empty`, `network-path`, `root-relative`, or
+`other-location`; an absent header is `null`). Unexpected redirect targets are
+never printed verbatim, nor are tokens, cookies, or bodies. Response disposal is
+best-effort and cannot change or delay the status/header verdict. Run it with
+`QA_AUTH_TOKEN` from an approved secret binding:
 
 ```sh
 QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-probe.mjs
