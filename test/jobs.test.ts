@@ -116,8 +116,8 @@ describe("retry constants match the Laravel originals (two-web @ 3965a6e8)", () 
   it("CallInternalAction", () => {
     expect(CALL_INTERNAL_ACTION).toEqual({ tries: 5, backoffSeconds: [5, 15, 60, 180] });
   });
-  it("wrangler cron triggers are the pinned expressions", () => {
-    const cfg = readFileSync("wrangler.jsonc", "utf8");
+  it("jobs Wrangler cron triggers are the pinned expressions", () => {
+    const cfg = readFileSync("wrangler.jobs.jsonc", "utf8");
     expect(cfg).toContain(`"crons": ["${RECONCILE_CRON}", "${PRUNE_CRON}"]`);
   });
 });

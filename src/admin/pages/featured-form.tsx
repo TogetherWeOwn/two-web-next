@@ -5,6 +5,7 @@ import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
+import { ValidationSummary } from "./validation-summary";
 
 export const FeaturedFormPage: FC<{
   mode: "new" | "edit";
@@ -46,11 +47,7 @@ export const FeaturedFormPage: FC<{
             )}
           </section>
         ) : null}
-        {Object.keys(errors).length > 0 ? (
-          <p class="notice" role="alert" data-testid="form-errors">
-            Check the highlighted fields and try again.
-          </p>
-        ) : null}
+        <ValidationSummary errors={errors} kind="featured" mode={mode} />
         <form
           method="post"
           action={action}

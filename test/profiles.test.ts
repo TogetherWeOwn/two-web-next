@@ -661,7 +661,10 @@ describe("PATCH /members/:user (memory doubles)", () => {
         env,
       );
       expect(response.status).toBe(400);
-      expect(await response.text()).toBe("Bad request");
+      expect(response.headers.get("content-type")).toContain("text/html");
+      const html = await response.text();
+      expect(html).toContain("Check your request");
+      expect(html).not.toContain("fixture upload failure");
       expect(escaped).not.toHaveBeenCalled();
       expect(save).not.toHaveBeenCalled();
       expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
