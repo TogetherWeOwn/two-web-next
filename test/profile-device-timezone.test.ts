@@ -43,6 +43,7 @@ type Detection =
   | "missing"
   | "constructor-throws"
   | "options-throws"
+  | "absent"
   | "blank"
   | "malformed"
   | "unsupported"
@@ -119,6 +120,7 @@ async function openProfileFor(editor: Editor, options: OpenOptions = {}) {
         const result = new Native(locales, options);
         if (!options || !('timeZone' in options)) result.resolvedOptions = () => {
           if (mode === 'options-throws') throw new Error('Unavailable options');
+          if (mode === 'absent') return {};
           return { timeZone: zone };
         };
         return result;
@@ -127,9 +129,17 @@ async function openProfileFor(editor: Editor, options: OpenOptions = {}) {
       Fixed.supportedLocalesOf = Native.supportedLocalesOf.bind(Native);
       Intl.DateTimeFormat = Fixed;
     }
-    window.deviceEffects = { geolocation: 0, beacon: 0, storage: 0, cookies: 0 };
+    window.deviceEffects = { geolocation: 0, beacon: 0, fetch: 0, xhr: 0, storage: 0, cookies: 0 };
     for (const name of ['getCurrentPosition', 'watchPosition']) Object.defineProperty(navigator.geolocation, name, { configurable: true, value: () => { window.deviceEffects.geolocation++; } });
     navigator.sendBeacon = () => { window.deviceEffects.beacon++; return true; };
+    // Pin the no-telemetry guarantee for programmatic calls: the route
+    // inventory only records /profile and /members (Hono Layout statics take
+    // the 204 path unrecorded), so a same-origin fetch/XHR from the helper
+    // would otherwise be invisible. Counted on call, so no timing race.
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (...args) => { window.deviceEffects.fetch++; return nativeFetch(...args); };
+    const nativeXhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(...args) { window.deviceEffects.xhr++; return nativeXhrOpen.apply(this, args); };
     for (const name of ['setItem', 'removeItem', 'clear']) {
       const original = Storage.prototype[name];
       Storage.prototype[name] = function(...args) { window.deviceEffects.storage++; return original.apply(this, args); };
@@ -249,6 +259,8 @@ async function noPrivateEffects(page: Page) {
   expect(await page.evaluate("window.deviceEffects")).toEqual({
     geolocation: 0,
     beacon: 0,
+    fetch: 0,
+    xhr: 0,
     storage: 0,
     cookies: 0,
   });
@@ -257,7 +269,21 @@ async function guidance(page: Page) {
   const field = timezoneField(page);
   expect(await field.isEditable()).toBe(true);
   expect(await page.getByRole("textbox", { name: /timezone/i }).count()).toBe(1);
-  // Inspect rendered content, not the renderer's source or a particular help id.
+  // No-error association: the field's aria-describedby must resolve exactly
+  // once to the visible IANA help text. A mistyped help id in either
+  // renderer fails here instead of silently dropping screen-reader guidance.
+  const describedBy =
+    (await field.getAttribute("aria-describedby"))?.split(/\s+/).filter(Boolean) ?? [];
+  expect(describedBy.filter((token) => token === "profile-timezone-help")).toHaveLength(1);
+  const help = page.locator("#profile-timezone-help");
+  expect(await help.count()).toBe(1);
+  expect(await help.isVisible()).toBe(true);
+  const helpText = await help.textContent();
+  expect(helpText).toMatch(/IANA/i);
+  expect(helpText).toMatch(/Europe\/London|Asia\/Tokyo|America\/New_York/);
+  expect(helpText).toMatch(/blank|empty|optional/i);
+  // The form-text check below stays renderer-agnostic: rendered content, not
+  // the renderer's source or a particular help id.
   const text = await page.getByTestId("profile-form").textContent();
   expect(text).toMatch(/IANA/i);
   expect(text).toMatch(/Europe\/London|Asia\/Tokyo|America\/New_York/);
@@ -352,7 +378,7 @@ export function renderKit(props) { const { body, head } = render(View, { props }
         it(`activation changes only the timezone draft for ${timezone || "a blank profile"}`, async () => {
           const { page, requests, store } = await openProfile({ timezone });
           await page.evaluate(
-            "window.timezoneEvents = []; for (const type of ['input', 'change']) document.querySelector('[name=timezone]').addEventListener(type, e => window.timezoneEvents.push(e.type));",
+            "window.timezoneEvents = []; for (const type of ['input', 'change']) document.querySelector('[name=timezone]').form.addEventListener(type, e => window.timezoneEvents.push(e.type));",
           );
           await activate(page);
           expect(await state(page)).toEqual({
@@ -362,7 +388,10 @@ export function renderKit(props) { const { body, head } = render(View, { props }
             leaderboard: true,
             dirty: true,
           });
-          expect(await page.evaluate("window.timezoneEvents.length")).toBeGreaterThan(0);
+          // The contract is ordinary bubbling input/change: the form listener
+          // observes both, in order. A single dispatch or a non-bubbling
+          // dispatch fails here.
+          expect(await page.evaluate("window.timezoneEvents")).toEqual(["input", "change"]);
           expect(requests).toEqual([{ method: "GET", path: "/profile", body: null }]);
           expect((await store.find(ID))?.timezone).toBe(timezone || null);
           await noPrivateEffects(page);
@@ -404,6 +433,7 @@ export function renderKit(props) { const { body, head } = render(View, { props }
         "missing",
         "constructor-throws",
         "options-throws",
+        "absent",
         "blank",
         "malformed",
         "unsupported",
