@@ -175,8 +175,13 @@ export const EventsCalendarPage: FC<{
           {/* Partial source: healthy rows stay useful beside the notice. An
               empty state (including the failed-empty error) takes precedence,
               and an out-of-range page keeps its turns back into the schedule.
-              Inside the swapped zone so fragment turns add/remove the notice. */}
-          {discordFailed && emptyState === null && (hasVisibleResults || outOfRange) ? (
+              The month grid renders whenever there is no empty state, so an
+              empty month of a non-empty schedule carries the notice too —
+              without it the month would read as definitively empty. Inside
+              the swapped zone so fragment turns add/remove the notice. */}
+          {discordFailed &&
+          emptyState === null &&
+          (hasVisibleResults || outOfRange || state.view === "calendar") ? (
             <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
           ) : null}
 
