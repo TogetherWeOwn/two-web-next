@@ -184,7 +184,11 @@ export async function loadCalendarPageModel(args: {
     readFailed: discordFailed,
   });
 
-  if (searching && listPage === 1) {
+  // An incomplete read must never manufacture demand evidence: while the
+  // Discord source reports failure, the count is partial and a zero is not a
+  // definitive no-match, so neither the search-demand record nor the
+  // event_search result log is written. Recovery records normally.
+  if (searching && listPage === 1 && !discordFailed) {
     const totalMatches = totalUpcoming + transients.length + localPast.length;
     await recordSearch(db, q, totalMatches);
     const entry = eventSearchLogEntry(match ?? "", totalMatches);

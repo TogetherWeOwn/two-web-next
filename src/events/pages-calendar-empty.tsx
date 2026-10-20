@@ -10,6 +10,8 @@ import {
   EVENTS_EMPTY_NEVER_TESTID,
   EVENTS_EMPTY_SEARCH_TESTID,
   EVENTS_GAP_LIST_LIMIT,
+  EVENTS_PARTIAL_COPY,
+  EVENTS_PARTIAL_TESTID,
   EVENTS_RETRY_TESTID,
   EVENTS_SEARCH_CLEAR_EMPTY_TESTID,
   calendarUrl,
@@ -61,6 +63,22 @@ export const EmptyError: FC<{ url: string; inviteUrl: string }> = ({ url, invite
   <div role="alert" data-testid={EVENTS_EMPTY_ERROR_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.errorTitle}</h2>
     <p>{EVENTS_EMPTY_COPY.errorBody}</p>
+    <p>
+      <a href={url} data-testid={EVENTS_RETRY_TESTID}>
+        {EVENTS_EMPTY_COPY.retry}
+      </a>{" "}
+      <a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>
+        {EVENTS_EMPTY_COPY.join}
+      </a>
+    </p>
+  </div>
+);
+
+/** Partial source (role=status): healthy rows stay visible beside this notice.
+ * Retry re-issues the same URL; the join link is the human fallback. */
+export const PartialSourceNotice: FC<{ url: string; inviteUrl: string }> = ({ url, inviteUrl }) => (
+  <div role="status" data-testid={EVENTS_PARTIAL_TESTID}>
+    <p>{EVENTS_PARTIAL_COPY.notice}</p>
     <p>
       <a href={url} data-testid={EVENTS_RETRY_TESTID}>
         {EVENTS_EMPTY_COPY.retry}
