@@ -126,15 +126,22 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
   const candidates = [...html.matchAll(/class="([^"]+)"/g)].flatMap((match) =>
     match[1]!.split(/\s+/),
   );
-  const css = ["styles", "theme", "schedule-theme"]
+  // Real served order for the schedule shell (src/page-shell.tsx): styles,
+  // theme-tokens, theme, schedule-theme. Tokens must precede the sheets that
+  // consume them, or sticky headers resolve --surface to transparent.
+  const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
   const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");
   if (styles.includes("</style")) throw new Error("Fixture CSS must not close its style tag");
   // Keep the real shell and page, but inline the served styles and never execute islands.
+  // Preserve the real <body> attributes: the Hono shell themes through
+  // body.base-theme.schedule-theme, and a bare <body> drops every token.
   const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] ?? "";
-  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/)?.[1] ?? html;
+  const bodyMatch = html.match(/<body([^>]*)>([\s\S]*?)<\/body>/);
+  const bodyAttrs = bodyMatch?.[1] ?? "";
+  const body = bodyMatch?.[2] ?? html;
   const inert = (value: string) =>
     value.replace(/<link\b[^>]*>/g, "").replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body>${inert(body)}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${inert(body)}</body></html>`;
 }

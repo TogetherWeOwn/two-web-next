@@ -82,6 +82,13 @@ const scrollProbe = `(async () => {
   return result;
 })()`;
 
+// Sticky headers paint over scrolled body rows: their computed background
+// must be opaque, or row text shows through the header text.
+const headerBackgroundProbe = `(() => {
+  const headers = [...document.querySelectorAll("thead th")];
+  return headers.map((header) => getComputedStyle(header).backgroundColor);
+})()`;
+
 for (const twin of ["hono", "kit"] as const) {
   for (const scope of ["overall", "relative"] as const) {
     for (const viewport of viewports) {
@@ -137,6 +144,30 @@ for (const twin of ["hono", "kit"] as const) {
                 .soft(header.bottom, `${label}: readable header after scroll`)
                 .toBeGreaterThan(scrolled.top + 10);
               expect(header.text).not.toBe("");
+            }
+            if (forcedColors === "none") {
+              // Missing theme tokens resolve --surface to transparent: the
+              // header sticks but body rows show through. Soft, like the
+              // other behavior assertions, so the screenshot keeps the
+              // overlap evidence for CI review.
+              const backgrounds = await page.evaluate<string[]>(headerBackgroundProbe);
+              expect(backgrounds.length).toBeGreaterThan(0);
+              for (const background of backgrounds) {
+                const parts =
+                  background
+                    .match(/^rgba?\(([^)]+)\)$/)?.[1]
+                    ?.split(",")
+                    .map((part) => part.trim()) ?? [];
+                const alpha =
+                  parts.length === 4
+                    ? Number.parseFloat(parts[3] ?? "0")
+                    : parts.length === 3
+                      ? 1
+                      : 0;
+                expect
+                  .soft(alpha, `${label}: sticky header must be opaque, got ${background}`)
+                  .toBe(1);
+              }
             }
             expect
               .soft(
