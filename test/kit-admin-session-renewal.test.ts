@@ -365,7 +365,7 @@ describe("released Kit admin GET documents slide the session", () => {
       // The audit still ran: one row naming the moderator viewer and the subject.
       expect(h.entries).toHaveLength(1);
       const entry = h.entries[0]!;
-      expect(entry).toMatchObject({ viewer: MOD_ID });
+      expect(entry).toMatchObject({ viewerDiscordId: MOD_ID });
       expect(JSON.stringify(entry)).toContain(SUBJECT);
       // The slid row outlives its original 1-hour mint, then dies at the new stamp.
       h.advanceTime(3600_000 + 5000);
