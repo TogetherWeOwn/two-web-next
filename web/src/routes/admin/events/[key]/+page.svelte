@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import TerminalReview from "#lib/TerminalReview.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of EventFormPage mode="edit"
@@ -190,16 +191,20 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   </form>
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
-    <div class="actions">
+    <div class="actions terminal-actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
         </form>
       {/if}
       {#if view.showCancel}
-        <form method="post" action={`/admin/events/${view.key}/cancel`}>
-          <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
-        </form>
+        <TerminalReview
+          kind="cancel"
+          title={view.title}
+          targetId={view.key}
+          action={`/admin/events/${view.key}/cancel`}
+          testId="cancel-event"
+        />
       {/if}
       {#if view.rsvpAction}
         <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>

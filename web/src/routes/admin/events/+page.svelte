@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import TerminalReview from "#lib/TerminalReview.svelte";
 import type { PageProps } from "./$types";
 import { eventListUrl, type EventSort } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -139,9 +140,12 @@ const now = new Date();
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
-                  <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link">Cancel</button>
-                  </form>
+                  <TerminalReview
+                    kind="cancel"
+                    title={r.title}
+                    targetId={r.eventKey}
+                    action={`/admin/events/${r.eventKey}/cancel`}
+                  />
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}

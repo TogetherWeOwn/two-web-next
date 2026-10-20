@@ -100,8 +100,10 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('data-testid="publish-event"');
     expect(source).toContain(">Publish<");
     expect(source).toContain("/cancel");
-    expect(source).toContain('data-testid="cancel-event"');
-    expect(source).toContain("Cancel event");
+    expect(source).toContain('testId="cancel-event"');
+    expect(source).toContain("<TerminalReview");
+    expect(source).toContain('kind="cancel"');
+    expect(source).toContain("title={view.title}");
     expect(source).toContain("rsvp-pause");
     expect(source).toContain("rsvp-reopen");
     expect(source).toContain("Pause RSVPs");

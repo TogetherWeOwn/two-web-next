@@ -50,6 +50,11 @@ test("staging moderator creates a draft then cancels it without publishing", asy
     const draft = await guest.request.get(`/e/${eventKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
 
+    await page
+      .locator("details")
+      .filter({ has: page.getByTestId("cancel-event") })
+      .locator("summary")
+      .click();
     await page.getByTestId("cancel-event").click();
     await expect(
       page.getByRole("heading", { name: "Status: cancelled", exact: true }),
@@ -60,7 +65,8 @@ test("staging moderator creates a draft then cancels it without publishing", asy
     if (eventKey) {
       await page.goto(`/admin/events/${eventKey}`);
       const cancel = page.getByTestId("cancel-event");
-      if (await cancel.isVisible()) {
+      if (await cancel.count()) {
+        await page.locator("details").filter({ has: cancel }).locator("summary").click();
         await cancel.click();
         await expect(
           page.getByRole("heading", { name: "Status: cancelled", exact: true }),
