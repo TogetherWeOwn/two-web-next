@@ -76,6 +76,37 @@ const realSleep = (ms: number) =>
   new Promise<void>((resolve) => {
     realSetTimeoutImpl(() => resolve(), ms);
   });
+const realClearTimeoutImpl = globalThis.clearTimeout.bind(globalThis);
+const MAX_FIXTURE_WALL_WAIT_MS = 5_000;
+
+// This guard bounds test startup/drain on the wall clock, not the product's
+// analytics deadline. Keep fake time frozen while crypto/streams finish.
+async function waitForFixture<T>(pending: Promise<T>, label: string): Promise<T> {
+  let settled = false;
+  let expired = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  const guard = realSetTimeoutImpl(() => {
+    expired = true;
+  }, MAX_FIXTURE_WALL_WAIT_MS) as ReturnType<typeof setTimeout>;
+  try {
+    while (!settled && !expired) {
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+      await realYield();
+      await realSleep(1);
+    }
+    expect(settled, `${label} within ${MAX_FIXTURE_WALL_WAIT_MS}ms of wall time`).toBe(true);
+    return await pending;
+  } finally {
+    realClearTimeoutImpl(guard);
+  }
+}
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -109,6 +140,7 @@ class DeferredQuery implements PromiseLike<unknown[]> {
   cancelCalls = 0;
   #resolve!: (rows: unknown[]) => void;
   #reject!: (err: unknown) => void;
+  #settled = false;
 
   constructor(private readonly onLanded: () => void) {
     this.promise = new Promise<unknown[]>((resolve, reject) => {
@@ -140,17 +172,21 @@ class DeferredQuery implements PromiseLike<unknown[]> {
 
   cancel(): void {
     this.cancelCalls += 1;
-    this.#reject(new Error(`query cancelled: ${INSERT_PROBE}`));
+    this.settleRejected(new Error(`query cancelled: ${INSERT_PROBE}`));
   }
 
   /** Test-side late success: the row lands, then the query resolves. */
   settleLanded(): void {
+    if (this.#settled) return;
+    this.#settled = true;
     this.onLanded();
     this.#resolve([]);
   }
 
   /** Test-side late failure of the original statement. */
   settleRejected(err: unknown): void {
+    if (this.#settled) return;
+    this.#settled = true;
     this.#reject(err);
   }
 }
@@ -162,6 +198,11 @@ function fakeSql(attemptMode: AttemptMode) {
   const attempts: AttemptRow[] = [];
   let attemptInsertTries = 0;
   let deferred: DeferredQuery | null = null;
+  let drainOnAdmission = false;
+  let admit!: () => void;
+  const insertAdmitted = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
   // Statements are recorded per channel: the outer `sql` handle and each
   // distinct `tx` handle handed to a `begin` callback log separately.
   // Aliasing `tx` to `sql` would let a regression that runs the analytics
@@ -172,6 +213,7 @@ function fakeSql(attemptMode: AttemptMode) {
 
   const attemptInsert = (values: unknown[]) => {
     attemptInsertTries += 1;
+    admit();
     if (attemptMode === "throwing")
       return Promise.reject(new Error(`join_attempts insert failed: ${INSERT_PROBE}`));
     const [outcome, source, requestId, discordId] = values as [
@@ -186,6 +228,7 @@ function fakeSql(attemptMode: AttemptMode) {
       return Promise.resolve([]);
     }
     deferred = new DeferredQuery(() => attempts.push(row));
+    if (drainOnAdmission) deferred.settleLanded();
     return deferred;
   };
 
@@ -239,6 +282,12 @@ function fakeSql(attemptMode: AttemptMode) {
   return {
     sql,
     attempts,
+    insertAdmitted,
+    drainAttemptInsert() {
+      // Sticky: startup may not have constructed the deferred query yet.
+      drainOnAdmission = true;
+      deferred?.settleLanded();
+    },
     outerStatements,
     txTransactions,
     get attemptInsertTries() {
@@ -390,19 +439,47 @@ function expectStatementBounded(fake: Fake) {
   ).toBe(false);
 }
 
-// Drive a callback (or a direct recordAttempt) whose analytics INSERT is
-// deferred: flush microtasks until the INSERT is initiated, prove the
-// caller is genuinely waiting, then advance the fake clock in 100ms steps
-// up to the ceiling. Each fake advance is paired with real event-loop yields
-// plus a short real sleep so wall-clock work (crypto.subtle digests/HMAC,
-// Response body streams, session issuance) completes without consuming fake
-// time; the caller bound stays an independent <=5 s of fake time. On failure
-// the deferred INSERT is settled landed and the promise drained before
-// asserting, so a red run leaves no orphaned in-flight request on the next
-// test's clock.
+const ownedAttempts = new Map<Promise<unknown>, Fake>();
+
+function ownAttempt<T>(pending: Promise<T>, fake: Fake): Promise<T> {
+  ownedAttempts.set(pending, fake);
+  return pending;
+}
+
+async function awaitAttemptAdmission(pending: Promise<unknown>, fake: Fake) {
+  await waitForFixture(
+    Promise.race([
+      fake.insertAdmitted,
+      pending.then(() => {
+        throw new Error("caller resolved before analytics INSERT admission");
+      }),
+    ]),
+    "analytics INSERT admission",
+  );
+  expect(fake.attemptInsertTries).toBe(1);
+}
+
+async function drainAttempt(pending: Promise<unknown>, fake: Fake) {
+  fake.drainAttemptInsert();
+  // Observe either outcome here; the driver still reports the original
+  // rejection. Cleanup must finish even when the driver failed pre-INSERT.
+  await waitForFixture(
+    pending.then(
+      () => undefined,
+      () => undefined,
+    ),
+    "owned analytics request cleanup",
+  );
+}
+
+// Startup waits for actual INSERT admission under a separate wall-clock
+// guard. Only then measure the <=5s caller bound in 100ms fake-time steps.
+// Every failure path drains the request before it can escape onto a peer's
+// clock. afterEach also owns cleanup if a later response assertion fails.
 async function driveBounded<T>(pendingInput: Promise<T> | T, fake: Fake): Promise<T> {
-  const pending = Promise.resolve(pendingInput);
+  const pending = ownAttempt(Promise.resolve(pendingInput), fake);
   let settled = false;
+  let completed = false;
   void pending.then(
     () => {
       settled = true;
@@ -411,47 +488,38 @@ async function driveBounded<T>(pendingInput: Promise<T> | T, fake: Fake): Promis
       settled = true;
     },
   );
-  for (let round = 0; round < 1000 && fake.attemptInsertTries === 0 && !settled; round++) {
-    await vi.advanceTimersByTimeAsync(0);
-    await realYield();
-  }
-  expect(fake.attemptInsertTries).toBe(1);
-  expect(settled, "caller must actually wait for the analytics write, not drop it").toBe(false);
+  try {
+    await awaitAttemptAdmission(pending, fake);
+    expect(settled, "caller must actually wait for the analytics write, not drop it").toBe(false);
 
-  let elapsed = 0;
-  while (!settled && elapsed < MAX_ANALYTICS_WAIT_MS) {
-    await vi.advanceTimersByTimeAsync(100);
-    await realYield();
-    await vi.advanceTimersByTimeAsync(0);
-    await realYield();
-    // Wall-clock grace without fake-time cost: the success path signs the
-    // member in after the analytics deadline (moderator fetch, session
-    // HMAC, roster write), all on the real threadpool/streams. A short real
-    // sleep lets that work land inside the same fake-time step.
-    await realSleep(5);
-    elapsed += 100;
-  }
-  // Final drain without consuming fake time: post-deadline crypto/session
-  // work may have finished on the wall clock during the last advance but its
-  // .then has not run yet. This does not extend the fake-time bound.
-  for (let round = 0; round < 50 && !settled; round++) {
-    await vi.advanceTimersByTimeAsync(0);
-    await realYield();
-    await realSleep(2);
-  }
-  const settledWithinBound = settled;
-  if (!settledWithinBound) {
-    fake.resolveAttemptInsert();
-    for (let round = 0; round < 200 && !settled; round++) {
+    let elapsed = 0;
+    while (!settled && elapsed < MAX_ANALYTICS_WAIT_MS) {
+      await vi.advanceTimersByTimeAsync(100);
+      await realYield();
       await vi.advanceTimersByTimeAsync(0);
       await realYield();
+      // Session crypto/streams run on the real event loop, not fake time.
+      await realSleep(5);
+      elapsed += 100;
     }
+    // Post-deadline session work gets wall-clock grace, never extra fake
+    // time. Capture failure before releasing the INSERT during cleanup.
+    if (!settled) {
+      await waitForFixture(
+        pending,
+        `must settle within ${MAX_ANALYTICS_WAIT_MS}ms of fake time without the INSERT settling`,
+      );
+    }
+    expect(
+      settled,
+      `must settle within ${MAX_ANALYTICS_WAIT_MS}ms of fake time without the INSERT settling`,
+    ).toBe(true);
+    const result = await pending;
+    completed = true;
+    return result;
+  } finally {
+    if (!completed) await drainAttempt(pending, fake);
   }
-  expect(
-    settledWithinBound,
-    `must settle within ${MAX_ANALYTICS_WAIT_MS}ms of fake time without the INSERT settling`,
-  ).toBe(true);
-  return pending;
 }
 
 // Settle the original INSERT late, after the answer: it must be observed
@@ -629,10 +697,15 @@ async function settlePruneLate(fake: PruneFake, mode: "resolve" | "reject") {
 const sessionCookies = (res: Response) =>
   res.headers.getSetCookie().filter((c) => /__Host-two_session=[^;]/.test(c));
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    for (const [pending, fake] of ownedAttempts) await drainAttempt(pending, fake);
+  } finally {
+    ownedAttempts.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  }
 });
 
 describe("join callback with a never-settling analytics INSERT", () => {
@@ -883,18 +956,18 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     const fake = fakeSql("deferred");
     vi.useFakeTimers();
     let settled = false;
-    const pending = recordAttempt(fake.sql, {
-      outcome: "denied",
-      source: "web-homepage",
-      requestId: null,
-      discordId: null,
-    }).then(() => {
-      settled = true;
-    });
-    for (let round = 0; round < 1000 && fake.attemptInsertTries === 0; round++) {
-      await vi.advanceTimersByTimeAsync(0);
-      await realYield();
-    }
+    const pending = ownAttempt(
+      recordAttempt(fake.sql, {
+        outcome: "denied",
+        source: "web-homepage",
+        requestId: null,
+        discordId: null,
+      }).then(() => {
+        settled = true;
+      }),
+      fake,
+    );
+    await awaitAttemptAdmission(pending, fake);
     expect(fake.attemptInsertTries).toBe(1);
     expect(settled).toBe(false);
     fake.resolveAttemptInsert();
@@ -957,6 +1030,145 @@ describe("checkJoinThrottle with a never-settling prune DELETE (direct)", () => 
     expect(fake.deleteTries).toBe(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expectNoLeak([JSON.stringify(warn.mock.calls)], "");
+  });
+});
+
+describe("analytics driver lifecycle", () => {
+  it("waits for INSERT admission beyond the former fixed warm-up count", async () => {
+    captureLogs();
+    let admit!: () => void;
+    const admission = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    let stallStartup = false;
+    const { fake, env: e } = isolated("deferred", {
+      store: async () => {
+        if (stallStartup) await admission;
+        return fake.sql;
+      },
+    });
+    mockDiscord();
+    const { state, cookie } = await startJoin(e);
+    stallStartup = true;
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    let admittedAt: number | undefined;
+    const advance = vi.advanceTimersByTimeAsync.bind(vi);
+    let startupYields = 0;
+    vi.spyOn(vi, "advanceTimersByTimeAsync").mockImplementation(async (ms) => {
+      const result = await advance(ms);
+      if (ms === 0 && ++startupYields === 1_001) {
+        admittedAt = Date.now();
+        admit();
+      }
+      return result;
+    });
+    const pending = Promise.resolve(finishJoinCb(e, state!, cookie));
+    try {
+      const res = await driveBounded(pending, fake);
+      expect(startupYields).toBeGreaterThan(1_000);
+      expect(admittedAt).toBe(startedAt);
+      expect(res.status).toBe(302);
+      expect(sessionCookies(res)).toHaveLength(1);
+      expect(fake.attemptInsertTries).toBe(1);
+      expect(fake.attempts).toEqual([]);
+      expectStatementBounded(fake);
+    } finally {
+      // The pre-fix driver throws before admission. Release that gate before
+      // draining so this regression's own red run cannot leak into a peer.
+      admit();
+      await advance(0);
+      fake.drainAttemptInsert();
+      await waitForFixture(pending, "lifecycle regression cleanup");
+    }
+  });
+
+  it("drains a pre-admission driver failure before a new fake clock can observe it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = fakeSql("deferred");
+    vi.useFakeTimers();
+    let finished = false;
+    // If cleanup returns early, this real-event-loop startup resumes only
+    // after the peer installs its fake clock, reproducing the extra warning.
+    const pending = realYield()
+      .then(() =>
+        recordAttempt(fake.sql, {
+          outcome: "added",
+          source: null,
+          requestId: null,
+          discordId: "42",
+        }),
+      )
+      .then(() => {
+        finished = true;
+      });
+    const advance = vi.advanceTimersByTimeAsync.bind(vi);
+    vi.spyOn(vi, "advanceTimersByTimeAsync").mockRejectedValueOnce(
+      new Error("injected driver failure"),
+    );
+    try {
+      await expect(driveBounded(pending, fake)).rejects.toThrow("injected driver failure");
+      const drainedBeforeClockChange = finished;
+      vi.useRealTimers();
+      vi.useFakeTimers();
+      const peer = fakeSql("deferred");
+      await driveBounded(
+        recordAttempt(peer.sql, {
+          outcome: "error",
+          source: null,
+          requestId: "malformed id",
+          discordId: null,
+        }),
+        peer,
+      );
+      await rejectLate(peer);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[1]).toEqual({
+        exception: "AnalyticsWriteDeadline",
+        outcome: "error",
+      });
+      expect(
+        drainedBeforeClockChange,
+        "the failed driver must drain its request before returning",
+      ).toBe(true);
+      expect(fake.attemptInsertTries).toBe(1);
+    } finally {
+      await advance(0);
+      fake.drainAttemptInsert();
+      await waitForFixture(pending, "lifecycle regression cleanup");
+    }
+  });
+
+  it("rejects genuinely unbounded analytics and drains the INSERT before reporting failure", async () => {
+    const lines = captureLogs();
+    const fake = fakeSql("deferred");
+    vi.useFakeTimers();
+    const schedule = globalThis.setTimeout;
+    // Negative control: disconnect the real recordAttempt's timer callback.
+    // The transaction/INSERT remain real to this fixture, but no caller
+    // deadline can fire. No source mutation or weakened assertion is needed.
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((_callback, ms) =>
+      schedule(() => undefined, ms),
+    );
+    let finished = false;
+    const pending = recordAttempt(fake.sql, {
+      outcome: "added",
+      source: null,
+      requestId: null,
+      discordId: "42",
+    }).then(() => {
+      finished = true;
+    });
+    const startedAt = Date.now();
+    await expect(driveBounded(pending, fake)).rejects.toThrow(
+      "must settle within 5000ms of fake time without the INSERT settling",
+    );
+    expect(Date.now() - startedAt).toBe(5_000);
+    expect(finished).toBe(true);
+    expect(fake.attemptInsertTries).toBe(1);
+    expect(fake.attempts).toHaveLength(1);
+    expectStatementBounded(fake);
+    expect(lines).toEqual([]);
   });
 });
 
