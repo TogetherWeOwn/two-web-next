@@ -95,13 +95,17 @@ class Node {
   }
 }
 
+// Single-pass entity decode: one replace call, so a decoded `&` can never be
+// re-unescaped by a later pass (CodeQL js/double-escaping).
+const ENTITIES: Record<string, string> = {
+  "&#39;": "'",
+  "&quot;": '"',
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+};
 const decode = (s: string): string =>
-  s
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  s.replace(/&#39;|&quot;|&amp;|&lt;|&gt;/g, (m) => ENTITIES[m]!);
 
 function parse(html: string): Node {
   const page = new Node();
