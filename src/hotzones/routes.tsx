@@ -50,6 +50,7 @@ async function renderIndex(c: Ctx) {
       voice={voice.cells}
       games={games.cells}
       retentionNote={joinsRetentionNote(window)}
+      available={db !== null}
     />,
   );
 }
@@ -86,6 +87,7 @@ async function renderSignal(c: Ctx) {
         total={joins.total}
         eventCount={joins.eventCount}
         retentionNote={joinsRetentionNote(window)}
+        available={db !== null}
       />,
     );
   }
@@ -107,6 +109,7 @@ async function renderSignal(c: Ctx) {
       season={label}
       cells={prior.cells}
       total={prior.total}
+      available={db !== null}
     />,
   );
 }
