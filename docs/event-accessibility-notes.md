@@ -45,6 +45,30 @@ The moderator create/edit control is proved by the DB-backed acceptance suite
 (`test/event-accessibility-notes-admin-acceptance.test.ts`, 4/4), which reads
 the rendered textarea value back after create and edit.
 
+## Correction-link follow-up
+
+The existing validation-summary interaction also applies to accessibility notes:
+moderators can activate the summary link to focus the notes textarea after a
+refused create or edit. Layout, tokens, typography and the save action stay
+unchanged; global and unknown errors remain visible without invented targets.
+
+The independent summary pins failed before the field metadata was added
+(4 failed, 8 passed) and passed afterward (12/12). Chromium then rendered the
+real Hono `EventFormPage` component with local fictional error fixtures and the
+current public assets. These intercepted fixture requests did not exercise a
+live route, POST, database or staging deployment. At 1280x800 and 390x844, all
+four summary links focused `f-accessibility-notes` with no horizontal overflow.
+All four full-page screenshots were opened:
+
+| Mode | Desktop | Mobile |
+| --- | --- | --- |
+| Create error | ![create correction link, desktop](evidence/event-accessibility-notes/correction-new-desktop.png) | ![create correction link, mobile](evidence/event-accessibility-notes/correction-new-mobile.png) |
+| Edit error | ![edit correction link, desktop](evidence/event-accessibility-notes/correction-edit-desktop.png) | ![edit correction link, mobile](evidence/event-accessibility-notes/correction-edit-mobile.png) |
+
+The page-wide gate results below are historical feature evidence, not reruns
+for this correction-link delta. Exact-head CI and independent review remain
+required.
+
 ## Gate results
 
 - `npm run a11y`: 146 local Hono page/state/viewport cases passed, zero
