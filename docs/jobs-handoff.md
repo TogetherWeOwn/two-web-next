@@ -267,12 +267,27 @@ the rollback.
     echo "bad PRE_HANDOFF_SHA (not 40-hex): $PRE_HANDOFF_SHA" >&2
     exit 1
   fi
-  # Delivery must be active before this rollback pauses it: confirm the step-0
-  # queues info showed Delivery active (not paused) for both queues. If either
-  # showed paused, stop and investigate instead of adopting an unowned pause —
-  # this rollback resumes only pauses it owns (markers below), never another
-  # run's pause.
-  : "${DELIVERY_WAS_ACTIVE:?confirm step-0 showed Delivery active for both queues}"
+  # Delivery must be active before this rollback pauses it. Set
+  # DELIVERY_WAS_ACTIVE=1 only after confirming via the Queues REST API
+  # (GET /accounts/:acct/queues shows settings.delivery_paused false for both
+  # queues — wrangler queues info prints no delivery state). Any other value,
+  # including 0 or unset, fails here: if either queue is paused, stop and
+  # investigate instead of adopting an unowned pause — this rollback resumes
+  # only pauses it owns (markers below), never another run's pause. The pause
+  # loop re-reads live delivery state before each pause, so this assertion and
+  # that read must agree.
+  if [ "${DELIVERY_WAS_ACTIVE:-}" != "1" ]; then
+    echo "DELIVERY_WAS_ACTIVE must be 1 (Queues API showed delivery active for both queues)" >&2
+    exit 1
+  fi
+  # A verified marker from an earlier run must never gate this run's resume:
+  # clear it before any pause. The resume block consumes it after resuming.
+  rm -f ./.rollback-verified
+  # Cloudflare API credentials are needed for the live delivery reads below
+  # (and the schedule readback later): fail here, before any mutation, when
+  # they are absent. Tokens come from the environment, never argv.
+  : "${CF_ACCOUNT_ID:?staging account id}"
+  : "${CLOUDFLARE_API_TOKEN:?injected, never on argv}"
 
   # --- Preflight: rollback configs (local writes, no Cloudflare mutations) ---
   # $PRE_HANDOFF_SHA is the pre-handoff main commit: the commit SHA the
@@ -289,7 +304,7 @@ the rollback.
   # unexpected): the web config restores both crons and both consumers, the
   # jobs config owns none. This runs before the version rollbacks so a wrong
   # $PRE_HANDOFF_SHA fails before any Cloudflare mutation.
-  node --input-type=module -e "import { readFileSync } from 'node:fs'; import { readWranglerConfig } from './ci/wrangler-config.mjs'; const web = readWranglerConfig(readFileSync('./rollback-wrangler.jsonc', 'utf8')); const jobs = readWranglerConfig(readFileSync('./rollback-wrangler.jobs.jsonc', 'utf8')); for (const cron of ['*/10 * * * *', '0 0 * * *']) { if (!(web.triggers?.crons ?? []).includes(cron)) { console.error('rollback web config is missing cron ' + cron); process.exit(1); } } if ((jobs.triggers?.crons ?? []).length !== 0) { console.error('rollback jobs config still owns crons'); process.exit(1); } const webQueues = (web.queues?.consumers ?? []).map((c) => c.queue).sort(); const wantQueues = ['two-internal-action', 'two-sync-event']; if (JSON.stringify(webQueues) !== JSON.stringify(wantQueues)) { console.error('rollback web config consumers mismatch: ' + JSON.stringify(webQueues)); process.exit(1); } if ((jobs.queues?.consumers ?? []).length !== 0) { console.error('rollback jobs config still owns consumers'); process.exit(1); } console.log('rollback preflight ok: web restores both crons and both consumers, jobs owns none');"
+  node --input-type=module -e "import { readFileSync } from 'node:fs'; import { readWranglerConfig } from './ci/wrangler-config.mjs'; const web = readWranglerConfig(readFileSync('./rollback-wrangler.jsonc', 'utf8')); const jobs = readWranglerConfig(readFileSync('./rollback-wrangler.jobs.jsonc', 'utf8')); const webCrons = (web.triggers?.crons ?? []).slice().sort(); const wantCrons = ['*/10 * * * *', '0 0 * * *'].sort(); if (JSON.stringify(webCrons) !== JSON.stringify(wantCrons)) { console.error('rollback web config crons mismatch: ' + JSON.stringify(webCrons)); process.exit(1); } if ((jobs.triggers?.crons ?? []).length !== 0) { console.error('rollback jobs config still owns crons'); process.exit(1); } const webQueues = (web.queues?.consumers ?? []).map((c) => c.queue).sort(); const wantQueues = ['two-internal-action', 'two-sync-event']; if (JSON.stringify(webQueues) !== JSON.stringify(wantQueues)) { console.error('rollback web config consumers mismatch: ' + JSON.stringify(webQueues)); process.exit(1); } if ((jobs.queues?.consumers ?? []).length !== 0) { console.error('rollback jobs config still owns consumers'); process.exit(1); } console.log('rollback preflight ok: web restores both crons and both consumers, jobs owns none');"
 
   # --- Preflight: live consumer ownership (reads, no mutations) ---
   # Read live attachments before mutating. A failed list fails the run instead
@@ -316,12 +331,41 @@ the rollback.
   # Each pause this rollback makes is recorded in a marker file
   # (./.rollback-paused-<queue>). The resume block below resumes only marked
   # queues; a queue paused by another run has no marker and is left untouched.
-  # Re-entry skips already-marked queues. Never purge, delete/recreate queues,
-  # age-delete ledger rows or clear unique locks.
+  # Re-entry is state-aware: live delivery is read via the Queues REST API
+  # before each pause (wrangler queues info prints no delivery state, so the
+  # API's settings.delivery_paused is the exact read). A marked queue that is
+  # still paused is this rollback's own pause (skip); a marked queue that is
+  # live-active holds a stale marker from an already-resumed incident (clear it
+  # and pause fresh); an unmarked queue that is live-paused belongs to another
+  # run (fail, never adopt). A failed or unknown delivery read fails the run.
+  # Never purge, delete/recreate queues, age-delete ledger rows or clear
+  # unique locks.
   for q in two-sync-event two-internal-action; do
+    delivery=$(CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" QUEUE="$q" node -e '
+      (async () => {
+        const r = await fetch("https://api.cloudflare.com/client/v4/accounts/" + process.env.CF_ACCT + "/queues", {
+          headers: { authorization: "Bearer " + process.env.CF_TOKEN },
+        });
+        const d = await r.json();
+        if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+        const found = (d.result ?? []).filter((x) => x.queue_name === process.env.QUEUE);
+        if (found.length !== 1) { console.error(process.env.QUEUE + ": expected exactly one queue, got " + found.length); process.exit(1); }
+        const paused = found[0].settings?.delivery_paused;
+        if (paused === true) console.log("paused");
+        else if (paused === false) console.log("active");
+        else { console.error(process.env.QUEUE + ": unknown delivery state " + JSON.stringify(paused)); process.exit(1); }
+      })();
+    ') || exit 1
     if [ -f "./.rollback-paused-$q" ]; then
-      echo "already paused by this rollback on $q, skipping"
-      continue
+      if [ "$delivery" = "paused" ]; then
+        echo "already paused by this rollback on $q, skipping"
+        continue
+      fi
+      echo "stale pause marker on $q (delivery is live-active); clearing and re-pausing"
+      rm -f "./.rollback-paused-$q"
+    elif [ "$delivery" = "paused" ]; then
+      echo "$q: delivery already paused by another run; refusing to adopt" >&2
+      exit 1
     fi
     npx --no-install wrangler queues pause-delivery "$q"
     touch "./.rollback-paused-$q"
@@ -412,8 +456,20 @@ the rollback.
   rm -f ./rollback-wrangler.jsonc ./rollback-wrangler.jobs.jsonc
 
   # Verify: exactly one consumer again (worker:two-web-next, once per queue).
-  npx --no-install wrangler queues consumer list two-sync-event
-  npx --no-install wrangler queues consumer list two-internal-action
+  # Re-read live state and fail unless converged: a remove/add that exited 0
+  # but did not take effect must not be marked verified.
+  for q in two-sync-event two-internal-action; do
+    out=$(npx --no-install wrangler queues consumer list "$q" --json) || exit 1
+    CONSUMERS_JSON="$out" QUEUE="$q" node -e '
+      const d = JSON.parse(process.env.CONSUMERS_JSON);
+      if (!Array.isArray(d)) { console.error(process.env.QUEUE + ": consumer list is not an array"); process.exit(1); }
+      const s = d.map((c) => c.script ?? c.script_name ?? null);
+      if (s.length !== 1 || s[0] !== "two-web-next") {
+        console.error(process.env.QUEUE + ": expected exactly worker:two-web-next, got " + JSON.stringify(s));
+        process.exit(1);
+      }
+    ' || exit 1
+  done
   npx --no-install wrangler deployments status --name two-web-next --json
   npx --no-install wrangler deployments status --name two-web-jobs --json
   curl -fsS https://next.togetherweown.com/up
@@ -426,19 +482,26 @@ the rollback.
 A Worker rollback does not undo schema, data, Discord side effects or queue
 messages. Keep required bindings in place; never delete a queue to roll back.
 
-Delivery resume is owned and gated: the main block above pauses only when this
-rollback owns the pause (marker files `./.rollback-paused-<queue>`), and the
-block below resumes only marked queues. A queue paused by another run — for
-example an aborted handoff whose own markers live outside this rollback — has
-no marker here and is left untouched: adopting it would resume delivery the
-owning run may still need paused. If the step-0 record showed active delivery
-but a queue is now paused with no marker, stop and investigate; resume it only
-by an explicit Operator decision recorded on the card (confirm the owning run
-is aborted, then resume that queue by hand and record why). Re-confirm the
-hold is active, no deploy or migrate run appeared (re-run the `gh run list`
-checks above and require only `completed`), and `/up` is healthy or degraded
-before resuming. Never purge, delete/recreate queues, age-delete ledger rows
-or clear unique locks.
+Delivery resume is owned and gated: the main block above reads live delivery
+state via the Queues API before each pause, pauses only queues that are
+live-active and unmarked, and records each pause it makes in a marker file
+(`./.rollback-paused-<queue>`); the block below resumes only marked queues. A
+queue paused by another run — for example an aborted handoff whose own markers
+live outside this rollback — has no marker here and fails the pause loop
+instead of being adopted: adopting it would resume delivery the owning run may
+still need paused. A marker whose queue reads live-active is stale (delivery
+was resumed since, by hand or from another checkout): the loop clears it and
+pauses fresh. If a queue is paused with no marker, stop and investigate; resume
+it only by an explicit Operator decision recorded on the card (confirm the
+owning run is aborted, then resume that queue by hand and record why). The
+verified marker (`./.rollback-verified`) is single-use: the main block clears
+any earlier copy before pausing, writes it only after the consumer, schedule
+and health readbacks pass, and the resume block consumes it after resuming, so
+a stale copy can never authorize a later resume. Re-confirm the hold is active,
+no deploy or migrate run appeared (re-run the `gh run list` checks above and
+require only `completed`), and `/up` is healthy or degraded before resuming.
+Never purge, delete/recreate queues, age-delete ledger rows or clear unique
+locks.
 
 ```bash
 (
@@ -456,6 +519,9 @@ or clear unique locks.
     npx --no-install wrangler queues resume-delivery "$q"
     rm -f "./.rollback-paused-$q"
   done
+  # Consume this run's verification: a later rollback must verify again, and a
+  # stale marker must never authorize its resume.
+  rm -f ./.rollback-verified
 )
 ```
 
@@ -480,9 +546,11 @@ is not the rollback. If the handoff fails before the first jobs attach:
   block, which reads live consumer metadata first (`consumer list --json`),
   fails on a failed list or an unexpected consumer, skips queues already back
   on the web Worker, and never blindly adds or removes an owner. A failed
-  consumer list fails the run instead of reading as empty, and delivery resumes
-  only if paused. Bounded delivery resume: the resume block runs
-  `resume-delivery` only for queues this rollback paused (marker files
-  `./.rollback-paused-<queue>`); a queue paused by another run has no marker
-  and is left untouched. Never purge, delete/recreate queues, age-delete ledger
-  rows or clear unique locks.
+  consumer list fails the run instead of reading as empty. Pauses are
+  state-aware too: the loop reads live delivery state via the Queues API,
+  refuses an unmarked live-paused queue, and clears a stale marker on a
+  live-active queue before pausing fresh. Bounded delivery resume: the resume
+  block runs `resume-delivery` only for queues this rollback paused (marker
+  files `./.rollback-paused-<queue>`) after the verified marker gates it; a
+  queue paused by another run has no marker and is left untouched. Never purge,
+  delete/recreate queues, age-delete ledger rows or clear unique locks.

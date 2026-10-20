@@ -314,7 +314,7 @@ describe("rollback fail-closed structure", () => {
       "triggers deploy",
       "Read back the live schedules",
       "Verify:",
-      ".rollback-verified",
+      "touch ./.rollback-verified",
     ];
     let last = -1;
     for (const marker of order) {
@@ -328,6 +328,9 @@ describe("rollback fail-closed structure", () => {
     expect(rollbackSection).toContain("DELIVERY_WAS_ACTIVE");
     expect(rollbackSection).toContain("rollback preflight ok");
     expect(rollbackSection).not.toContain("rollback schedules ok");
+    // The verified marker is single-use: cleared before any pause, written
+    // only after the readbacks pass, consumed after resume.
+    expect(rollbackSection).toContain("rm -f ./.rollback-verified");
   });
 
   it("makes consumer moves state-aware with exact --json matching", () => {
@@ -336,6 +339,9 @@ describe("rollback fail-closed structure", () => {
     expect(rollbackSection).toContain("already web-only");
     expect(rollbackSection).toContain("never blindly add or remove");
     expect(rollbackSection).toContain("two-web-jobs-preview as");
+    // The verify step re-reads live consumers and fails unless converged,
+    // instead of printing the lists and marking verified regardless.
+    expect(rollbackSection).toContain("expected exactly worker:two-web-next");
   });
 
   it("gates delivery resume on owned pauses and re-confirmed gates", () => {
@@ -348,6 +354,13 @@ describe("rollback fail-closed structure", () => {
     expect(rollbackSection).toContain("Re-confirm the");
     expect(rollbackSection).toContain("re-run the `gh run list`");
     expect(rollbackSection).toContain("Never purge");
+    // Pauses are state-aware: live delivery is read via the Queues API
+    // (wrangler info prints none), unmarked paused queues are refused, and
+    // stale markers on active queues are cleared before pausing fresh.
+    expect(rollbackSection).toContain("delivery_paused");
+    expect(rollbackSection).toContain("refusing to adopt");
+    expect(rollbackSection).toContain("stale pause marker");
+    expect(rollbackSection).toContain("single-use");
   });
 });
 
@@ -370,7 +383,18 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     "two-web-next": [RECONCILE_CRON, PRUNE_CRON],
     "two-web-jobs": [],
   });
+  // Default stub shape is the documented Queues API worker-consumer shape
+  // (script_name); consumersOfScript covers the alternate script shape so the
+  // doc's `c.script ?? c.script_name` fallback stays pinned on both branches.
   const consumersOf = (...scripts: string[]) =>
+    JSON.stringify(
+      scripts.map((script_name, i) => ({
+        script_name,
+        type: "worker",
+        consumer_id: String(1001 + i),
+      })),
+    );
+  const consumersOfScript = (...scripts: string[]) =>
     JSON.stringify(
       scripts.map((script, i) => ({ script, type: "worker", consumer_id: String(1001 + i) })),
     );
@@ -385,7 +409,8 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
 
   const npxStub = [
     `#!${process.execPath}`,
-    'import { appendFileSync } from "node:fs";',
+    'import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
     "const argv = process.argv.slice(2);",
     'appendFileSync(process.env.STUB_LOG_NPX, JSON.stringify(argv) + "\\n");',
     'const wi = argv.indexOf("wrangler");',
@@ -393,14 +418,41 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     'const joined = w.join(" ");',
     'const failAt = process.env.STUB_FAIL_AT ?? "";',
     'if (failAt !== "" && joined.includes(failAt)) { console.error("stub: injected failure"); process.exit(1); }',
+    "// Stateful consumer lists: the first --json read seeds per-queue state",
+    "// from STUB_CONSUMERS_*; remove/add mutate it, so the doc's verify",
+    "// re-read observes post-mutation state. STUB_STUCK_CONSUMERS=1 leaves",
+    "// state untouched to simulate mutations that exit 0 without converging.",
+    'const stateDir = process.env.STUB_STATE_DIR ?? "";',
+    "const stateFile = (q) => join(stateDir, `consumers-${q}.json`);",
+    "const readState = (q) => {",
+    '  if (stateDir !== "" && existsSync(stateFile(q))) return readFileSync(stateFile(q), "utf8");',
+    '  const key = "STUB_CONSUMERS_" + String(q).toUpperCase().replace(/-/g, "_");',
+    '  const initial = process.env[key] ?? "[]";',
+    '  if (stateDir !== "") writeFileSync(stateFile(q), initial);',
+    "  return initial;",
+    "};",
+    "const writeState = (q, json) => {",
+    '  if (stateDir !== "") writeFileSync(stateFile(q), json);',
+    "};",
+    "const scriptOf = (c) => c.script ?? c.script_name ?? null;",
     'if (w[0] === "wrangler" && w[1] === "queues" && w[2] === "consumer" && w[3] === "list") {',
     '  const q = w[4] ?? "";',
     '  if (w.includes("--json")) {',
-    '    const key = "STUB_CONSUMERS_" + String(q).toUpperCase().replace(/-/g, "_");',
-    '    process.stdout.write(process.env[key] ?? "[]");',
+    "    process.stdout.write(readState(q));",
     "    process.exit(0);",
     "  }",
     '  process.stdout.write("stub consumers for " + q + "\\n");',
+    "  process.exit(0);",
+    "}",
+    'if (w[0] === "wrangler" && w[1] === "queues" && w[2] === "consumer" && (w[3] === "remove" || w[3] === "add")) {',
+    '  if (process.env.STUB_STUCK_CONSUMERS !== "1") {',
+    '    const q = w[4] ?? "";',
+    '    const target = w[5] ?? "";',
+    "    const list = JSON.parse(readState(q));",
+    '    if (w[3] === "remove") writeState(q, JSON.stringify(list.filter((c) => scriptOf(c) !== target)));',
+    '    else writeState(q, JSON.stringify([...list, { script: target, type: "worker", consumer_id: "9001" }]));',
+    "  }",
+    '  process.stdout.write("stub ok\\n");',
     "  process.exit(0);",
     "}",
     'if (w[0] === "wrangler" && w[1] === "deployments" && w[2] === "status") { process.stdout.write("{}\\n"); process.exit(0); }',
@@ -446,6 +498,21 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     "  const payload = JSON.parse(stub);",
     "  globalThis.fetch = async (url) => {",
     "    const u = String(url);",
+    "    const failAt = process.env.STUB_FETCH_FAIL_AT ?? '';",
+    "    if (failAt !== '' && u.includes(failAt)) throw new Error('stub: injected fetch failure');",
+    "    if (u.includes('/queues') && !u.includes('/consumers')) {",
+    "      if (process.env.STUB_DELIVERY_ERROR === '1') {",
+    "        return { json: async () => ({ success: false, errors: [{ message: 'stub delivery error' }] }) };",
+    "      }",
+    "      const pausedByQueue = JSON.parse(process.env.STUB_DELIVERY_PAUSED ?? '{}');",
+    "      const result = ['two-sync-event', 'two-internal-action'].map((queue_name) => {",
+    "        const v = pausedByQueue[queue_name];",
+    "        return v === 'unknown'",
+    "          ? { queue_name, settings: {} }",
+    "          : { queue_name, settings: { delivery_paused: v ?? false } };",
+    "      });",
+    "      return { json: async () => ({ success: true, result }) };",
+    "    }",
     "    const m = u.match(/\\/scripts\\/([^/]+)\\/schedules/);",
     '    const script = m ? m[1] : "unknown";',
     "    const crons = payload[script] ?? [];",
@@ -472,6 +539,7 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     resumeStatus: number | null;
     resumeCalls: string[][];
     resumeMarkers: { sync: boolean; internal: boolean };
+    resumeVerified: boolean | null;
   };
 
   const wranglerArgs = (argv: string[]) => {
@@ -548,6 +616,11 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
         CF_ACCOUNT_ID: "test-acct",
         CLOUDFLARE_API_TOKEN: "test-token",
         STUB_SCHEDULES: healthySchedules,
+        STUB_DELIVERY_PAUSED: JSON.stringify({
+          "two-sync-event": false,
+          "two-internal-action": false,
+        }),
+        STUB_STATE_DIR: temp,
         STUB_CONSUMERS_TWO_SYNC_EVENT: consumersOf("two-web-jobs"),
         STUB_CONSUMERS_TWO_INTERNAL_ACTION: consumersOf("two-web-jobs"),
         STUB_GIT_WEB_CONFIG: goodWebConfig,
@@ -582,6 +655,7 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
       let resumeStatus: number | null = null;
       let resumeCalls: string[][] = [];
       let resumeMarkers = { sync: markers.sync, internal: markers.internal };
+      let resumeVerified: boolean | null = null;
       if (opts.runResume) {
         const resume = spawnSync("bash", ["resume.sh"], {
           cwd: temp,
@@ -596,6 +670,7 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
           sync: existsSync(join(temp, ".rollback-paused-two-sync-event")),
           internal: existsSync(join(temp, ".rollback-paused-two-internal-action")),
         };
+        resumeVerified = existsSync(join(temp, ".rollback-verified"));
       }
       return {
         mainStatus: main.status,
@@ -608,6 +683,7 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
         resumeStatus,
         resumeCalls,
         resumeMarkers,
+        resumeVerified,
       };
     } finally {
       rmSync(temp, { recursive: true, force: true });
@@ -629,6 +705,36 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
       "triggers ./rollback-wrangler.jsonc",
       "triggers ./rollback-wrangler.jobs.jsonc",
     ]);
+    // Consumer mutations pin the full argv: the target script and the
+    // pre-handoff retry/batch settings. A wrong target (two-web-jobs) or
+    // wrong settings (1/1/1) must fail here, not pass green mid-incident.
+    const consumerMutations = r.npxCalls
+      .map(wranglerArgs)
+      .filter(
+        (w) => w[1] === "queues" && w[2] === "consumer" && (w[3] === "add" || w[3] === "remove"),
+      );
+    expect(consumerMutations.map((w) => `${w[3]} ${w[4]}`)).toEqual([
+      "remove two-sync-event",
+      "add two-sync-event",
+      "remove two-internal-action",
+      "add two-internal-action",
+    ]);
+    for (const w of consumerMutations) {
+      if (w[3] === "remove") {
+        expect(w.slice(4)).toEqual([w[4], "two-web-jobs"]);
+      } else {
+        expect(w.slice(4)).toEqual([
+          w[4],
+          "two-web-next",
+          "--message-retries",
+          "10",
+          "--batch-size",
+          "10",
+          "--batch-timeout",
+          "5",
+        ]);
+      }
+    }
     expect(r.markers).toEqual({ sync: true, internal: true, verified: true });
     expect(r.resumeStatus).toBe(0);
     expect(r.resumeCalls.filter(isMutation).map(label)).toEqual([
@@ -636,6 +742,9 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
       "resume-delivery two-internal-action",
     ]);
     expect(r.resumeMarkers).toEqual({ sync: false, internal: false });
+    // The resume block consumes this run's verification: nothing is left for
+    // a later run to mistake for its own authorization.
+    expect(r.resumeVerified).toBe(false);
     const joined = r.npxCalls.map((c) => c.join(" ")).join("\n");
     expect(joined).not.toContain("purge");
     expect(joined).not.toContain("queues create");
@@ -647,6 +756,10 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     { name: "missing jobs pointer", unset: ["GOOD_JOBS_VERSION"] },
     { name: "missing pre-handoff SHA", unset: ["PRE_HANDOFF_SHA"] },
     { name: "missing delivery assertion", unset: ["DELIVERY_WAS_ACTIVE"] },
+    { name: "delivery was not active", env: { DELIVERY_WAS_ACTIVE: "0" } },
+    { name: "delivery assertion is not exactly 1", env: { DELIVERY_WAS_ACTIVE: "yes" } },
+    { name: "missing CF account id", unset: ["CF_ACCOUNT_ID"] },
+    { name: "missing API token", unset: ["CLOUDFLARE_API_TOKEN"] },
     { name: "malformed web pointer", env: { GOOD_WEB_VERSION: "not-a-uuid" } },
     {
       name: "uppercase web pointer",
@@ -671,6 +784,15 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
       env: {
         STUB_GIT_WEB_CONFIG: JSON.stringify({
           triggers: { crons: [RECONCILE_CRON] },
+          queues: { consumers: [{ queue: "two-sync-event" }, { queue: "two-internal-action" }] },
+        }),
+      },
+    },
+    {
+      name: "web config with an extra cron",
+      env: {
+        STUB_GIT_WEB_CONFIG: JSON.stringify({
+          triggers: { crons: [RECONCILE_CRON, PRUNE_CRON, "7 7 * * *"] },
           queues: { consumers: [{ queue: "two-sync-event" }, { queue: "two-internal-action" }] },
         }),
       },
@@ -912,14 +1034,99 @@ describe("rollback fail-closed execution (hermetic stubs)", () => {
     expect(consumerMutations).toEqual(want);
   });
 
-  it("re-entry with owned pause markers skips re-pausing", () => {
+  it("re-entry with owned pause markers and live-paused delivery skips re-pausing", () => {
     const r = runRollback({
       preCreate: [".rollback-paused-two-sync-event", ".rollback-paused-two-internal-action"],
+      env: {
+        STUB_DELIVERY_PAUSED: JSON.stringify({
+          "two-sync-event": true,
+          "two-internal-action": true,
+        }),
+      },
     });
     expect(r.mainStatus, `must exit 0: ${r.mainStderr}`).toBe(0);
     const labels = r.npxCalls.filter(isMutation).map(label);
     expect(labels.filter((l) => l.startsWith("pause-delivery"))).toEqual([]);
     expect(labels).toContain("rollback two-web-next");
+  });
+
+  it("stale markers on live-active delivery are cleared and re-paused", () => {
+    const r = runRollback({
+      preCreate: [".rollback-paused-two-sync-event", ".rollback-paused-two-internal-action"],
+    });
+    expect(r.mainStatus, `must exit 0: ${r.mainStderr}`).toBe(0);
+    const labels = r.npxCalls.filter(isMutation).map(label);
+    expect(labels.filter((l) => l.startsWith("pause-delivery"))).toEqual([
+      "pause-delivery two-sync-event",
+      "pause-delivery two-internal-action",
+    ]);
+    expect(r.markers).toEqual({ sync: true, internal: true, verified: true });
+    expect(r.mainStdout).toContain("stale pause marker");
+  });
+
+  it("unmarked live-paused queue fails without adopting another run's pause", () => {
+    const r = runRollback({
+      env: {
+        STUB_DELIVERY_PAUSED: JSON.stringify({
+          "two-sync-event": true,
+          "two-internal-action": false,
+        }),
+      },
+    });
+    expect(r.mainStatus, `must fail: ${r.mainStdout}${r.mainStderr}`).not.toBe(0);
+    expect(r.npxCalls.filter(isMutation)).toEqual([]);
+    expect(r.markers).toEqual({ sync: false, internal: false, verified: false });
+    expect(r.mainStderr).toContain("refusing to adopt");
+  });
+
+  it.each<{ name: string; env: Record<string, string> }>([
+    { name: "failed delivery read", env: { STUB_DELIVERY_ERROR: "1" } },
+    {
+      name: "unknown delivery state",
+      env: {
+        STUB_DELIVERY_PAUSED: JSON.stringify({
+          "two-sync-event": "unknown",
+          "two-internal-action": false,
+        }),
+      },
+    },
+    { name: "fetch failure on queues", env: { STUB_FETCH_FAIL_AT: "/queues" } },
+  ])("delivery read failure fails closed with zero mutations ($name)", ({ env }) => {
+    const r = runRollback({ env });
+    expect(r.mainStatus, `must fail: ${r.mainStdout}${r.mainStderr}`).not.toBe(0);
+    expect(r.npxCalls.filter(isMutation)).toEqual([]);
+    expect(r.markers).toEqual({ sync: false, internal: false, verified: false });
+  });
+
+  it("stale verified marker cannot authorize resume after a failed attempt", () => {
+    const r = runRollback({
+      runResume: true,
+      preCreate: [".rollback-verified"],
+      env: { STUB_FAIL_AT: "two-web-next -y" },
+    });
+    expect(r.mainStatus, `main must fail: ${r.mainStdout}`).not.toBe(0);
+    expect(r.markers.verified).toBe(false);
+    expect(r.resumeStatus, "resume must refuse without this run's verification").not.toBe(0);
+    expect(r.resumeCalls.filter(isMutation)).toEqual([]);
+  });
+
+  it("unconverged consumers fail verify with no verified marker", () => {
+    const r = runRollback({ env: { STUB_STUCK_CONSUMERS: "1" } });
+    expect(r.mainStatus, `must fail: ${r.mainStdout}${r.mainStderr}`).not.toBe(0);
+    expect(r.markers.verified).toBe(false);
+    expect(r.curlCalls).toBe(0);
+    expect(r.mainStderr).toContain("expected exactly worker:two-web-next");
+  });
+
+  it("consumer readback accepts script-shaped entries", () => {
+    const r = runRollback({
+      env: {
+        STUB_CONSUMERS_TWO_SYNC_EVENT: consumersOfScript("two-web-jobs"),
+        STUB_CONSUMERS_TWO_INTERNAL_ACTION: consumersOfScript("two-web-jobs"),
+      },
+    });
+    expect(r.mainStatus, `must exit 0: ${r.mainStderr}`).toBe(0);
+    expect(r.markers.verified).toBe(true);
   });
 
   it("resume without a verified main block refuses with zero resumes", () => {
