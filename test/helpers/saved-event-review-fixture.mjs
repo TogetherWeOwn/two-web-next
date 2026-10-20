@@ -34,7 +34,8 @@ export const root = fileURLToPath(new URL("../../", import.meta.url));
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
 async function compilePages() {
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler");
   const { outputFiles } = await build({
     stdin: {
       contents: `
