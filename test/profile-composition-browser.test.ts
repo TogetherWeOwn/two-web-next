@@ -230,8 +230,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           reply.writeHead(response.status, Object.fromEntries(response.headers));
           reply.end(body);
         } catch (error) {
+          console.error(error);
           reply.writeHead(500);
-          reply.end(String(error));
+          reply.end("fixture error");
         }
       });
       servers.push(server);

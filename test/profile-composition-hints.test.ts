@@ -121,6 +121,63 @@ const expectNoMaxlength = (html: string, id: string) => {
   expect(openingTag(html, id)).not.toMatch(/maxlength/i);
 };
 
+// Label/error adjacency tolerating Svelte 5 SSR hydration markers. Finds the
+// error node's <p> opening, takes the nearest </label> before it, and scans
+// the segment between with indexOf only: whitespace and <!-- ... --> tokens
+// pass, unterminated comments or any other content fail. No nested-quantifier
+// regex, so no backtracking (js/polynomial-redos); no global comment-strip
+// rewrite (js/incomplete-multi-character-sanitization). Precedent:
+// test/kit-join-attempt-detail-pairing-acceptance.test.mjs.
+const expectLabelErrorAdjacency = (html: string, errorId: string) => {
+  let errorStart = -1;
+  let search = 0;
+  while (true) {
+    const open = html.indexOf("<p", search);
+    if (open === -1) break;
+    const tagEnd = html.indexOf(">", open);
+    if (tagEnd === -1) break;
+    if (html.slice(open, tagEnd + 1).includes(`id="${errorId}"`)) {
+      errorStart = open;
+      break;
+    }
+    search = open + 2;
+  }
+  expect(errorStart, `${errorId} renders`).not.toBe(-1);
+  if (errorStart === -1) return;
+  let labelEnd = -1;
+  search = 0;
+  while (true) {
+    const found = html.indexOf("</label>", search);
+    if (found === -1 || found >= errorStart) break;
+    labelEnd = found;
+    search = found + 1;
+  }
+  expect(labelEnd, `${errorId} follows a label`).not.toBe(-1);
+  if (labelEnd === -1) return;
+  const segment = html.slice(labelEnd + "</label>".length, errorStart);
+  let cursor = 0;
+  let valid = true;
+  while (cursor < segment.length) {
+    const ch = segment[cursor]!;
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f" || ch === "\v") {
+      cursor += 1;
+      continue;
+    }
+    if (segment.startsWith("<!--", cursor)) {
+      const end = segment.indexOf("-->", cursor + 4);
+      if (end === -1) {
+        valid = false;
+        break;
+      }
+      cursor = end + 3;
+      continue;
+    }
+    valid = false;
+    break;
+  }
+  expect(valid, `${errorId} hugs its label`).toBe(true);
+};
+
 describe("Hono profile editor: composition hints and counts", () => {
   it("bio control carries hint+count association, exact copy, initial count, no maxlength", () => {
     const html = renderHono();
@@ -416,8 +473,8 @@ describe("Kit profile editor: composition hints and counts", () => {
     expect(nodeText(html, GAMES_COUNT_ID)).toBe("2 of 20 games, 12 of 1700 characters");
     // Svelte 5 SSR wraps the conditional error block in hydration markers
     // (`<!--[0-->`), so tolerate comments between the label and the error node.
-    expect(html).toMatch(/<\/label>(?:\s|<!--.*?-->)*<p[^>]*id="profile-bio-error"/);
-    expect(html).toMatch(/<\/label>(?:\s|<!--.*?-->)*<p[^>]*id="profile-games-text-error"/);
+    expectLabelErrorAdjacency(html, "profile-bio-error");
+    expectLabelErrorAdjacency(html, "profile-games-text-error");
   });
 
   it("unknown errors keep hints with no fabricated error association", () => {
