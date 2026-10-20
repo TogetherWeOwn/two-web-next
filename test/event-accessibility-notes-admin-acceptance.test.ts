@@ -62,10 +62,10 @@ const eventFields = (overrides: Record<string, string> = {}) => ({
 
 function formValue(html: string, name: string): string | undefined {
   const textarea = html.match(
-    new RegExp(`<textarea\\b(?=[^>]*\\bname="${name}"\\b)[^>]*>([\\s\\S]*?)<\\/textarea>`),
+    new RegExp(`<textarea\\b(?=[^>]*\\bname="${name}"(?=[\\s>]))[^>]*>([\\s\\S]*?)<\\/textarea>`),
   );
   if (textarea) return textarea[1];
-  const input = html.match(new RegExp(`<input\\b(?=[^>]*\\bname="${name}"\\b)[^>]*>`));
+  const input = html.match(new RegExp(`<input\\b(?=[^>]*\\bname="${name}"(?=[\\s>]))[^>]*>`));
   return input?.[0].match(/\bvalue="([^"]*)"/)?.[1];
 }
 
