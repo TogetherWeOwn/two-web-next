@@ -131,6 +131,21 @@ function boardBoundaryText(): string {
   return `${boundary}\n${imported.join("\n")}`;
 }
 
+/**
+ * The boundary file alone, without resolved lib imports: the shared
+ * ErrorShell fallback legitimately carries its own 503 copy ("We will be
+ * right back"), so the outage-copy pin scans only the route's own source.
+ * Fails while the route has no error boundary at all.
+ */
+function boardBoundaryOwnText(): string {
+  const boundaryFile = resolve(root, BOARD_ERROR_PATH);
+  expect(
+    existsSync(boundaryFile),
+    `Kit board route must own its 400 recovery in ${BOARD_ERROR_PATH} (see the e/[key] route boundary precedent)`,
+  ).toBe(true);
+  return readFileSync(boundaryFile, "utf8");
+}
+
 function expectBoardRecovery(text: string, filter: BadFilter): void {
   const label = `Kit board 400 (${filter.label})`;
   // Board-specific page, mirroring Hono's MemberBoardFilterErrorPage shape.
@@ -168,6 +183,7 @@ describe("Kit board-filter 400 recovery (route boundary per filter)", () => {
 
   it("keeps the 400 branch board-specific and the fallback shared", () => {
     const text = boardBoundaryText();
+    const ownText = boardBoundaryOwnText();
     // The boundary handles the board 400 itself: the generic 400 title and
     // events-browse recovery belong to the shared shell (hot-zone callers),
     // not to this route's 400 branch.
@@ -178,9 +194,12 @@ describe("Kit board-filter 400 recovery (route boundary per filter)", () => {
     // their robots meta through Shell; only the shell fallback needs one here
     // or the shell import carries it.
     expect(text, "shell fallback with invite").toMatch(/ErrorShell|FALLBACK_INVITE|inviteUrl/);
-    // No outage copy in the board 400 source: the copy lives in kit-errors.ts
-    // data, so a literal here would be a wrong-branch leak.
-    for (const copy of OUTAGE_COPY) expect(text, `board 400 source (${copy})`).not.toContain(copy);
+    // No outage copy in the board 400 source itself: the copy lives in
+    // kit-errors.ts data, so a literal here would be a wrong-branch leak. The
+    // shared-shell fallback import is excluded because its own 503 branch
+    // legitimately carries outage copy.
+    for (const copy of OUTAGE_COPY)
+      expect(ownText, `board 400 source (${copy})`).not.toContain(copy);
   });
 });
 
