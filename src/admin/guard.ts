@@ -139,23 +139,28 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       if (row?.moderator) actor = { id: row.userId, username: row.username };
       else if (!row) expiredGuest = true;
       if (actor && c.req.method === "GET") {
-        // Slide while the row is live, before rendering/audit can cross its expiry.
-        if (!(await resolved.renew(tokenHash, expiresAt))) return bounceToLogin(c);
-        attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
-        // Sign before the dashboard deadline; the post-handler read gates attachment.
-        const sessionCookie = await generateSignedCookie(
-          SESSION_COOKIE,
-          token,
-          c.env.SESSION_SECRET,
-          {
-            path: "/",
-            secure: true,
-            httpOnly: true,
-            sameSite: "Lax",
-            maxAge: SESSION_TTL_SECONDS,
-          },
-        );
-        renewedSession = { store: resolved, tokenHash, sessionCookie };
+        // get() also admits short predecessor grace; only a current bearer
+        // has a status key and can renew. Grace reads never refresh cookies.
+        const statusKey = await resolved.statusHash(tokenHash);
+        if (statusKey) {
+          // Slide while the row is live, before rendering/audit can cross its expiry.
+          if (!(await resolved.renew(tokenHash, expiresAt))) return bounceToLogin(c);
+          attachStatus = await prepareAuthStatus(c, resolved, tokenHash, statusKey);
+          // Sign before the dashboard deadline; the post-handler read gates attachment.
+          const sessionCookie = await generateSignedCookie(
+            SESSION_COOKIE,
+            token,
+            c.env.SESSION_SECRET,
+            {
+              path: "/",
+              secure: true,
+              httpOnly: true,
+              sameSite: "Lax",
+              maxAge: SESSION_TTL_SECONDS,
+            },
+          );
+          renewedSession = { store: resolved, tokenHash, sessionCookie };
+        }
       }
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
@@ -201,8 +206,15 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         c.res.status !== 503
       ) {
         try {
-          if (await renewedSession.store.get(renewedSession.tokenHash)) {
+          if (
+            (await renewedSession.store.get(renewedSession.tokenHash)) &&
+            (await renewedSession.store.statusHash(renewedSession.tokenHash))
+          ) {
             c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+            // The probe must not overwrite another tab's cookie either.
+            if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
+              attachStatus?.();
+            }
           }
         } catch (err) {
           console.error("admin guard could not revalidate the session; refusing.", {
@@ -211,11 +223,6 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
           c.res = await databaseUnavailable(c);
           return c.res;
         }
-      }
-      // Only rendered documents get the probe: redirects and refusals stay
-      // cookie-free.
-      if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
-        attachStatus?.();
       }
     } else {
       await next();

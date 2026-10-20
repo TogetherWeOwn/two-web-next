@@ -5,7 +5,7 @@
 import type { Next } from "hono";
 import { generateSignedCookie, getSignedCookie } from "hono/cookie";
 import { sessionStoreFor } from "../admin/guard";
-import { enableAuthStatus } from "../auth-status";
+import { prepareAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, forbidden } from "../errors";
@@ -65,6 +65,7 @@ export function memberGate(deps: ProfileDeps) {
       sessions: SessionStore;
       tokenHash: string;
       sessionCookie: string;
+      attachStatus: (() => void) | null;
     } | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
@@ -73,22 +74,27 @@ export function memberGate(deps: ProfileDeps) {
       const row = await sessions.get(tokenHash);
       if (row) {
         if (row.member && c.req.method === "GET") {
-          if (!(await sessions.renew(tokenHash, expiresAt))) return bounceToLogin(c);
-          await enableAuthStatus(c, sessions, tokenHash);
-          // Sign before the route's read deadline; attach only after revalidating below.
-          const sessionCookie = await generateSignedCookie(
-            SESSION_COOKIE,
-            token,
-            c.env.SESSION_SECRET,
-            {
-              path: "/",
-              secure: true,
-              httpOnly: true,
-              sameSite: "Lax",
-              maxAge: SESSION_TTL_SECONDS,
-            },
-          );
-          renewedSession = { sessions, tokenHash, sessionCookie };
+          // get() also admits short predecessor grace; only a current bearer
+          // has a status key and can renew. Grace reads never refresh cookies.
+          const statusKey = await sessions.statusHash(tokenHash);
+          if (statusKey) {
+            if (!(await sessions.renew(tokenHash, expiresAt))) return bounceToLogin(c);
+            const attachStatus = await prepareAuthStatus(c, sessions, tokenHash, statusKey);
+            // Sign before the route's read deadline; attach only after revalidating below.
+            const sessionCookie = await generateSignedCookie(
+              SESSION_COOKIE,
+              token,
+              c.env.SESSION_SECRET,
+              {
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "Lax",
+                maxAge: SESSION_TTL_SECONDS,
+              },
+            );
+            renewedSession = { sessions, tokenHash, sessionCookie, attachStatus };
+          }
         }
         viewer = {
           id: row.userId,
@@ -119,8 +125,12 @@ export function memberGate(deps: ProfileDeps) {
     // let a slower response restore a token that is no longer live.
     if (renewedSession) {
       try {
-        if (await renewedSession.sessions.get(renewedSession.tokenHash)) {
+        if (
+          (await renewedSession.sessions.get(renewedSession.tokenHash)) &&
+          (await renewedSession.sessions.statusHash(renewedSession.tokenHash))
+        ) {
           c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+          renewedSession.attachStatus?.();
         }
       } catch (err) {
         console.error("profiles could not revalidate the session; refusing.", {

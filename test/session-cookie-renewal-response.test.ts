@@ -107,8 +107,10 @@ describe("renewed session cookies follow the live bearer", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await store.get(tokenHash)).toBeNull();
+    expect(await store.statusHash(tokenHash)).toBeNull();
+    expect(await store.get(tokenHash)).toEqual(MEMBER);
     expect(sessionCookies(response)).toHaveLength(0);
+    expect(response.headers.getSetCookie()).toHaveLength(0);
   });
 
   it("does not send an admin cookie after another request rotates its bearer", async () => {
@@ -122,8 +124,10 @@ describe("renewed session cookies follow the live bearer", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await store.get(tokenHash)).toBeNull();
+    expect(await store.statusHash(tokenHash)).toBeNull();
+    expect(await store.get(tokenHash)).toEqual(MODERATOR);
     expect(sessionCookies(response)).toHaveLength(0);
+    expect(response.headers.getSetCookie()).toHaveLength(0);
   });
 
   it("refreshes the moderator cookie on an authorized rendered 404", async () => {
