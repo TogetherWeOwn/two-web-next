@@ -30,7 +30,7 @@ const destination = (nextScope: string) => {
   robots="noindex, nofollow"
   description="Members ranked by events attended."
   theme="schedule"
-  activeNav="events"
+  activeNav="leaderboard"
   mainClass="events-page"
   loginReturnTo={destination(scope)}
   accountChrome={memberChrome}

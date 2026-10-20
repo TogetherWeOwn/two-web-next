@@ -10,7 +10,9 @@ The goal names these targets:
 - At least 100 human messages per week.
 - One weekly event held for four consecutive weeks.
 
-The goal says the targets must hold for four consecutive weeks before monetization opens. Evaluate each week separately using the goal's human-only definitions. For event or attendance evidence sources, use the separate event evidence checklist when available. A week with a missed target, a missing or unknown measurement, no event, or an event that was not held breaks the consecutive run; do not count it as a passing week. Start the four-week run again after a break. This is a conservative evidence rule for determining whether the stated condition is demonstrated, not a new exception or target.
+The goal says the targets must hold for four consecutive weeks before monetization opens. Use the [weekly reporting convention](community-participation-metrics.md#weekly-reporting-convention) adopted 2026-10-20: ISO weeks, Monday 00:00 UTC inclusive to next Monday 00:00 UTC exclusive, labelled `YYYY-Www` with exact UTC timestamps. This reporting convention changes no goal target or policy. Evaluate each week separately using the goal's human-only definitions. For event or attendance evidence sources, use the separate event evidence checklist when available. A week with a missed target, a missing or unknown measurement, no event, or an event that was not held breaks the consecutive run; do not count it as a passing week. Start the four-week run again after a break. This is a conservative evidence rule for determining whether the stated condition is demonstrated, not a new exception or target.
+
+Consecutive weeks have adjoining UTC boundaries; `2026-W51`, `2026-W52`, `2026-W53`, `2027-W01` is a four-week window across New Year. In a separate synthetic example, if `2026-W12` has missing evidence after passing W10 and W11, W13 is week 1 of a new run, requiring W13–W16 all to pass. Do not skip W12 and count four non-adjacent passing weeks. Assign an event by its UTC start instant, even when its host-zone display date is in the preceding week.
 
 | Example evidence across the four-week window | Readiness result |
 | --- | --- |

@@ -109,6 +109,10 @@ writeFileSync(
       // fixture alone enables it for the RSVP companion journey.
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
       KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+      // Same shared `events-read:anon` bucket as the Hono loopback worker
+      // (same disposable Postgres, no forwarded client headers), so the Kit
+      // legs need the same raised budget (docs/event-read-admission.md).
+      E2E_PUBLIC_READ_BUDGET: "600",
     },
   }),
 );

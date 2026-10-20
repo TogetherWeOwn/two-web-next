@@ -292,8 +292,8 @@ export async function handleScheduled(
       prune: async (db) => {
         // Report the cap and any table failures without paging inside the
         // flight; the single page fires below, after the transaction commits.
-        // Sequential drains settle every table (including the autocommit lock
-        // sweep on the dispatch pool) before the flight commits, so pool
+        // Sequential drains settle every table (including the per-statement
+        // lock sweep on the dispatch pool) before the flight commits, so pool
         // cleanup in finally never closes a client under an in-flight sweep.
         await pruneModelTables(
           {
@@ -303,10 +303,10 @@ export async function handleScheduled(
             // DELETE holds row locks until the whole eight-table pass commits,
             // and a concurrent acquire (INSERT .. ON CONFLICT) blocks on the
             // deleting transaction instead of superseding or inserting. Like
-            // reconcile, run it on the autocommit dispatch pool: the flight
-            // still holds the advisory lock for mutual exclusion, while each
-            // sweep batch commits (and releases its row locks) when its own
-            // statement finishes.
+            // reconcile, run it on the separate dispatch pool: each DELETE
+            // gets a short transaction for local timeouts, never a transaction
+            // spanning the whole drain. The flight still holds the advisory
+            // lock while each batch commits and releases its row locks.
             jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks,
           },
           undefined,

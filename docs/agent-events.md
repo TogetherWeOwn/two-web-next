@@ -17,9 +17,12 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   on agent-owned rows, so an older agent update cannot overwrite a human correction. Lifecycle decisions
   share the event-row lock across both writers; a cancelled event cannot be republished by a racing moderator.
 - Inputs/reads retain naive `YYYY-MM-DD HH:MM` wall strings and their IANA zone; storage uses UTC instants
-  through the human form's DST resolver. Gaps are refused; fresh fold times use the first occurrence.
-  An unchanged wall string **and** zone preserve each stored endpoint exactly (including a migrated second
-  fold and sub-minute precision); changed walls/zones resolve afresh, with UTC end-after-start validation.
+  through the human form's DST resolver. Gaps are refused; fresh fold times use the second occurrence.
+  On update, an unchanged wall string **and** zone preserve each stored endpoint exactly (including either
+  fold occurrence and sub-minute precision); changed walls/zones resolve afresh. Duration is checked on
+  those effective UTC instants, so a positive stored interval survives even when its minute-only read
+  values look reversed across an autumn fold or equal within one minute. Create still requires strictly
+  increasing wall times; updates still refuse a resolved end at or before the start.
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
   `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate

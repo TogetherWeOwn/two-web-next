@@ -4,10 +4,23 @@
 // `NotFoundError` are re-exported through `./store`, so existing importers
 // keep working untouched; `dirty`/`audit` stay module-private as before.
 
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { activityLog } from "../db/admin-schema";
 
 export type Actor = { id: string; username: string };
+
+const MODERATOR_WRITE_DB_TIMEOUT_MS = 2000;
+
+// Same transaction-local convention as recordAccess. Install before any lock or
+// write, keeping dependent child, waitlist and audit statements bounded too.
+// This is a per-statement bound, not a whole-series/request deadline. Await the
+// surrounding transaction (including rollback) before returning an HTTP refusal.
+export async function boundModeratorWrite(tx: Pick<Db, "execute">): Promise<void> {
+  await tx.execute(
+    sql`select set_config('lock_timeout', ${`${MODERATOR_WRITE_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${MODERATOR_WRITE_DB_TIMEOUT_MS}ms`}, true)`,
+  );
+}
 
 export class NotFoundError extends Error {
   constructor(readonly what: string) {
