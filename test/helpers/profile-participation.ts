@@ -89,9 +89,18 @@ export function renderView(props) {
   return compiled;
 }
 
+type LoadCookies = {
+  get: (name: string) => string | undefined;
+  set: (name: string, value: string, options?: Record<string, unknown>) => void;
+};
 type LoadEvent = {
   locals: KitLocals;
   params: { user: string };
+  // Current Kit loads read url.href unconditionally; the cookies stub covers
+  // the intended-cookie branch. Old loads ignore the extra keys. The hook
+  // event's URL type, not the node:url import shadowed above.
+  url: HookEventLike["url"];
+  cookies: LoadCookies;
   setHeaders: (headers: Record<string, string>) => void;
 };
 type LoadSeam = {
@@ -243,6 +252,8 @@ export async function participationFixture(
         {
           locals: event.locals as KitLocals,
           params: { user: event.url.pathname.split("/")[2]! },
+          url: event.url,
+          cookies: { get: () => undefined, set: () => {} },
           setHeaders: (values) => {
             for (const [key, value] of Object.entries(values)) headers.set(key, value);
           },
