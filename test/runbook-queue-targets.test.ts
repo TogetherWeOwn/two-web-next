@@ -232,6 +232,34 @@ describe("runbook queue incident targets by environment", () => {
     expect(productionReadonly).toContain(productionOwner);
   });
 
+  it.each(environments)(
+    "pins every read-only command and Tail comment for $environment",
+    ({ environment, queues, owner, tail, origin }) => {
+      const script = documentedShell(`# READ-ONLY: ${environment} transport metadata`);
+      const result = runDocumentedShell(script, undefined);
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      // Queue names can contain the owner, so presence alone cannot pin --name.
+      expect(result.commands).toEqual([
+        ...queues.map((queue) => ["npx", "--no-install", "wrangler", "queues", "info", queue]),
+        ...queues.map((queue) => [
+          "npx",
+          "--no-install",
+          "wrangler",
+          "queues",
+          "consumer",
+          "list",
+          queue,
+        ]),
+        ["npx", "--no-install", "wrangler", "deployments", "status", "--name", owner, "--json"],
+        ["curl", "-sS", "--max-time", "10", `${origin}/up`],
+      ]);
+      expect(script.split("\n").map((line) => line.trim())).toContain(
+        `# Tail paging source for ${environment}: ${tail}.`,
+      );
+    },
+  );
+
   it("explains pause limits, per-environment gates and owned-pause resume evidence", () => {
     expect(queueSection).toMatch(/does not stop producers/i);
     expect(queueSection).toMatch(/cron.*continue|scheduled handler/i);
