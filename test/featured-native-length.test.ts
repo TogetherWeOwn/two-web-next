@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FeaturedFormPage } from "../src/admin/pages";
 import type { FeaturedRow } from "../src/admin/store";
 import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
+import { featuredEditorialBrowserTests } from "./helpers/featured-editorial-browser";
 
 const base = {
   title: "Game night",
@@ -175,6 +176,7 @@ describe.skipIf(process.env.FEATURED_NATIVE_BROWSER_TESTS !== "true")(
   "native featured headline and image description",
   () => {
     let browser: Browser;
+    featuredEditorialBrowserTests(() => browser);
     let page: Page;
     let mode: "new" | "edit" = "new";
     const editorSource = readFileSync(
