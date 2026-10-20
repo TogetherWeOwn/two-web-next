@@ -368,12 +368,14 @@ function selftest() {
   mkdirSync(join(badRoot, "ci"), { recursive: true });
   writeFileSync(
     join(badRoot, "ci/auth-perf-budget.json"),
-    JSON.stringify({ samples: 3, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
+    JSON.stringify({ samples: 5, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
   );
+  const missingJourneyError = loadBudget(badRoot).error;
   check(
     "budget missing a journey fails closed",
-    loadBudget(badRoot).error !== undefined,
-    loadBudget(badRoot).error ?? "",
+    missingJourneyError ===
+      "auth perf budget: cannot enforce: invalid journey entry: moderator-admin",
+    missingJourneyError ?? "",
   );
   writeFileSync(
     join(badRoot, "ci/auth-perf-budget.json"),

@@ -237,8 +237,11 @@ head `71866d4` (five status-200 samples per journey per run, server response ms)
 | moderator-admin | 39414247798 | 24, 23, 23, 21, 22 | 23 |
 
 The slowest sample was 100 ms (member-rsvp, a cold first read) and 28 ms
-(moderator-admin). The new ceilings keep at least 10x headroom over the slowest
-sample, so runner variance stays absorbed while sub-second regressions fail. The
+(moderator-admin). The 500 ms median ceiling is over 11x the highest measured
+member-rsvp run median (44 ms) and over 21x the highest moderator-admin run median
+(23 ms). The 1000 ms single-sample ceiling is 10x the slowest member-rsvp sample
+(100 ms) and over 35x the slowest moderator-admin sample (28 ms). This headroom
+absorbs runner variance while sustained median regressions above 500 ms fail. The
 anti-relaxation guard in `ci/check-auth-perf.test.mjs` now pins the new values as
 the upper bound. Limitation: two runs on one runner type; further tightening
 needs more runs, including cold-start samples.
