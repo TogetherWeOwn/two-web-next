@@ -735,8 +735,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return c.redirect(`/admin/featured/${row.id}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
-        if (err instanceof StaleFeaturedSaveError)
-          return featuredSaveConflict(c, existing, values, submitted);
+        if (err instanceof StaleFeaturedSaveError) {
+          // A commit may have landed between the pre-read and the lock: show
+          // the current row so the preview never labels a stale one last-saved.
+          const current = await getFeatured(db, id);
+          return featuredSaveConflict(c, current ?? existing, values, submitted);
+        }
         throw err;
       }
     },

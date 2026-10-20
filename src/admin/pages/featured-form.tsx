@@ -71,7 +71,7 @@ export const FeaturedFormPage: FC<{
           method="post"
           action={action}
           data-event-editor=""
-          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+          data-event-draft={Object.keys(errors).length > 0 || conflict ? "" : undefined}
         >
           {mode === "edit" && baseline !== undefined ? (
             <input type="hidden" name="saved_baseline" value={baseline} />
