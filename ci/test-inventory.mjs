@@ -315,6 +315,22 @@ function selftest() {
     ]);
   });
 
+  check("multiple unquoted exclude keys fail closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { coverage: { exclude: [] }, test: { exclude: ["test/ghost.test.mjs"] } };\n',
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "ghost.test.mjs"), "vitest placeholder\n");
+      assert.throws(() => inventory(dir), /exactly one unquoted exclude block/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   check("vitest-excluded smoke files resolve via test:smoke", () => {
     const { reachable } = inventory(repoRoot);
     const excluded = vitestExcludedTests(repoRoot);
