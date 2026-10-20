@@ -25,7 +25,7 @@ sync-event replay reconciliation is proved in `test/queue-replay.test.ts`.
 `GET /admin/queue/failed/:id/preview` loads exactly one server-side failed row
 from the Worker's source database (`DATABASE_URL`, otherwise `DB`). It runs
 `reconcileFailedJob` against `pgEventStore` in a PostgreSQL repeatable-read,
-read-only transaction. Every preview SELECT includes the VOLATILE
+read-only transaction. Every preview source SELECT includes the VOLATILE
 `clock_timestamp()` function: [Hyperdrive excludes such queries from its read
 cache](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/).
 This prevents a fresh timestamp being combined with cached source reads.
