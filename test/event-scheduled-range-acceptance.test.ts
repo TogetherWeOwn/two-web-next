@@ -17,21 +17,58 @@ beforeAll(async () => {
   kit = await compileScheduleKit();
 });
 
+// Extract evidence tokens, never sanitized HTML. Preserve source positions and
+// skip raw-text bodies before looking for text or <time> elements inside them.
+function* visibleTokens(html: string) {
+  const tokens = /<!--[\s\S]*?(?:-->|$)|<(?:"[^"]*"|'[^']*'|[^'">])*>|[^<]+/g;
+  let token: RegExpExecArray | null;
+  while ((token = tokens.exec(html))) {
+    const value = token[0];
+    if (value.startsWith("<!--")) continue;
+    const raw = value.match(/^<(script|style)(?=[\s/>])/i);
+    if (raw) {
+      const close = new RegExp(`</${raw[1]}\\s*>`, "gi");
+      close.lastIndex = tokens.lastIndex;
+      if (!close.exec(html)) return;
+      tokens.lastIndex = close.lastIndex;
+      continue;
+    }
+    yield { value, index: token.index };
+  }
+}
+
 function text(html: string) {
-  return html
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
-    .replace(/<[^>]*>/g, " ")
+  const parts: string[] = [];
+  for (const { value } of visibleTokens(html)) {
+    if (!value.startsWith("<")) parts.push(value);
+  }
+  return parts
+    .join(" ")
     .replace(/&nbsp;|&#160;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function times(html: string) {
-  return [...html.matchAll(/<time\b([^>]*)>([\s\S]*?)<\/time>/gi)].map((match) => ({
-    instant: match[1]!.match(/\bdatetime="([^"]+)"/i)?.[1] ?? "",
-    label: text(match[2]!),
-    index: match.index,
-  }));
+  const found: { instant: string; label: string; index: number }[] = [];
+  let opening: { instant: string; index: number; contentStart: number } | null = null;
+  for (const { value, index } of visibleTokens(html)) {
+    if (/^<time\b/i.test(value)) {
+      opening = {
+        instant: value.match(/\sdatetime="([^"]+)"/i)?.[1] ?? "",
+        index,
+        contentStart: index + value.length,
+      };
+    } else if (/^<\/time\s*>/i.test(value) && opening) {
+      found.push({
+        instant: opening.instant,
+        label: text(html.slice(opening.contentStart, index)),
+        index: opening.index,
+      });
+      opening = null;
+    }
+  }
+  return found;
 }
 
 function endpoint(html: string, iso: string) {
@@ -39,6 +76,55 @@ function endpoint(html: string, iso: string) {
   expect(matches, `one server-rendered <time datetime> for ${iso}`).toHaveLength(1);
   return matches[0]!;
 }
+
+describe("schedule evidence extraction", () => {
+  it("reads text, not JSON-LD, style rules, comments or calendar attributes", () => {
+    expect(
+      text(`<script type="application/ld+json">{"name":"Hidden JSON-LD"}</script>
+        <style>.schedule::after { content: "Hidden style"; }</style>
+        <!-- Hidden comment -->
+        <a href="/calendar?dates=Hidden-calendar" title="Hidden > attribute">Add to calendar</a>
+        <p>Starts&nbsp;now&#160;and ends later</p>`),
+    ).toBe("Add to calendar Starts now and ends later");
+  });
+
+  it("does not turn nested script-like text into visible schedule evidence", () => {
+    expect(text("<script><script>Hidden</script>Visible")).toBe("Visible");
+    expect(text("<script>Hidden<script>Ends hidden</script>Visible")).toBe("Visible");
+  });
+
+  it("does not expose unterminated script or style contents", () => {
+    expect(text("<script>Ends hidden")).toBe("");
+    expect(text("<style>Ends hidden")).toBe("");
+  });
+
+  it.each([
+    '<script type="application/ld+json"><time datetime="2030-01-01T22:00:00.000Z">Ends</time></script>',
+    '<style><time datetime="2030-01-01T22:00:00.000Z">Ends</time></style>',
+    '<!-- <time datetime="2030-01-01T22:00:00.000Z">Ends</time> -->',
+    '<a href="/calendar?ends=2030-01-01T22:00:00.000Z">Add to calendar</a>',
+  ])("rejects nonvisible endpoint evidence: %s", (html) => {
+    expect(times(html)).toEqual([]);
+    expect(() => endpoint(html, "2030-01-01T22:00:00.000Z")).toThrow();
+  });
+
+  it("retains both real endpoint labels and their original positions", () => {
+    const html = `<script>Hidden</script><time datetime="2030-01-01T20:00:00.000Z">Starts <b>20:00</b></time>
+      <time datetime="2030-01-01T22:00:00.000Z">Ends 22:00</time>`;
+    expect(times(html)).toEqual([
+      {
+        instant: "2030-01-01T20:00:00.000Z",
+        label: "Starts 20:00",
+        index: html.indexOf("<time"),
+      },
+      {
+        instant: "2030-01-01T22:00:00.000Z",
+        label: "Ends 22:00",
+        index: html.lastIndexOf("<time"),
+      },
+    ]);
+  });
+});
 
 function expectEndpoint(
   label: string,
