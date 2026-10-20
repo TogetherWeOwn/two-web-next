@@ -1,3 +1,4 @@
+import "./member-board-viewer.visual";
 import { expect, test } from "@playwright/test";
 import { HONO_ORIGIN, KIT_ORIGIN, PARITY_VIEWPORTS } from "../kit-parity";
 
