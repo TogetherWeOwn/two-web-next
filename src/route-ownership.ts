@@ -16,6 +16,7 @@ import { Context } from "hono";
 import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
 import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import { STAGING_APP_URL } from "./qa";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
@@ -287,6 +288,44 @@ export function fixtureManifestFor(env: {
   });
 }
 
+// Staging Kit starts with every route on Hono. The reviewed deploy workflow
+// may enable only the archive and static page families, while all other routes
+// stay Hono-owned even when the shared manifest enables them for preview/local
+// parity. The staging hostname or any rollout flag selects this restrictive
+// manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
+// can enable a family; absent, malformed and unknown flags keep it disabled.
+export function stagingManifestFor(
+  env: {
+    APP_URL?: string;
+    KIT_ROUTE_ARCHIVE?: string;
+    KIT_ROUTE_STATIC?: string;
+  },
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+): OwnedRoute[] | undefined {
+  let app: URL | undefined;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    // With rollout flags present an invalid URL must not select the preview manifest.
+    app = undefined;
+  }
+  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
+
+  const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
+  // Static pages are the second cumulative rollout stage; they cannot precede
+  // the archive family even if a Worker variable is set out of band.
+  const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  return routes.map((entry) => {
+    const familyEnabled =
+      (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
+      (entry.method === "GET" &&
+        (entry.path === "/about" || entry.path === "/faq") &&
+        staticEnabled);
+    return { ...entry, enabled: entry.enabled && familyEnabled };
+  });
+}
+
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
 // Hono responses (honoFetch or the catch-all fallback) never carry it.
@@ -439,6 +478,11 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  // Staging-only rollout controls. The staging APP_URL selects a fail-closed
+  // manifest that admits only these reviewed families; unset or malformed
+  // values keep every route on Hono. Preview/local parity stays unchanged.
+  kitRouteArchive?: string;
+  kitRouteStatic?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -670,6 +714,11 @@ export async function dispatchHookRequest(
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+      }) ??
+      stagingManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
+        KIT_ROUTE_STATIC: deps.kitRouteStatic,
       }) ??
       ROUTE_MANIFEST,
   );

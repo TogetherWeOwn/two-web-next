@@ -458,11 +458,11 @@ it). For an agent-published event, the warning's `request_id` never matches
 `agent_event_audits.request_id` (the ingress mints its own ULID for the body
 and audit rows), so always find the ingress request with
 `SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
-the deployed Workers' queue producer bindings with `wrangler.jsonc`: the
-top-level `queues.producers` block is staging (`SYNC_EVENT_QUEUE` bound to
-`two-sync-event`); production declares its own at
-`env.production.queues.producers` (`SYNC_EVENT_QUEUE` bound to
-`two-web-next-production-sync-event`) because bindings are not inherited, so
+the deployed Workers' queue producer bindings with
+`web/wrangler.staging.jsonc`: its top-level `queues.producers` block is staging
+(`SYNC_EVENT_QUEUE` bound to `two-sync-event`). Production declares its own at
+`env.production.queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE` bound
+to `two-web-next-production-sync-event`) because bindings are not inherited, so
 check the environment that served the request. On staging, if reconcile is not
 recovering events, also compare the jobs Worker's bindings with
 `wrangler.jobs.jsonc` (which has no production env).

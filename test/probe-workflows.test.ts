@@ -394,23 +394,25 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     // env.production declares the production approved Owner+Moderator pair;
     // Wrangler does not inherit top-level vars, so this entry is the one
-    // production boots with. The top level is the staging deploy: it carries
-    // the staging-guild pair, never the production one (role IDs are
-    // guild-scoped).
+    // production boots with. The deployed Kit staging config carries the
+    // staging-guild pair, never the production one (role IDs are guild-scoped).
     const parsed = readWranglerConfig(read("wrangler.jsonc"));
+    const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
     expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
     expect(parsed.env?.production?.vars?.DISCORD_GUILD_ID).toBe(PRODUCTION_GUILD_ID);
     expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
     expect(parsed.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
+    expect(stagingKit.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
+    expect(stagingKit.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
   });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
     const scripts = JSON.parse(read("package.json")).scripts;
     expect(scripts["check:worker-moderators"]).toContain(
-      "--config=wrangler.jsonc --require-configured",
+      "--config=web/wrangler.staging.jsonc --require-configured",
     );
     expect(deploy).toContain(
-      'run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"\n',
+      'run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}"',
     );
     const gate = deploy.indexOf("run: npm run check:worker-moderators");
     expect(gate).toBeGreaterThan(-1);
@@ -631,9 +633,10 @@ describe("production deployment preserves configured triggers", () => {
 
 describe("deployed revision marker is bound per environment", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
+  const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 
-  it("binds version_metadata on staging, env.production and the jobs Worker", () => {
-    expect(config.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
+  it("binds version_metadata on staging Kit, env.production and the jobs Worker", () => {
+    expect(stagingKit.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     // Bindings are not inherited, so production declares its own copy: its
     // /up revision marker and release-tagged log lines depend on it.
     expect(config.env?.production?.version_metadata).toEqual({
@@ -653,7 +656,7 @@ describe("deployed revision marker is bound per environment", () => {
     expect(record).toBeGreaterThan(-1);
     expect(record).toBeLessThan(deploy.indexOf("npx wrangler queues create"));
     expect(verify).toBeGreaterThan(
-      deploy.indexOf("run: npx wrangler deploy --config wrangler.jsonc"),
+      deploy.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc"),
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
