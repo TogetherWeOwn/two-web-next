@@ -46,6 +46,28 @@ export function gridTotal(cells: HeatGrid): number {
   return total;
 }
 
+export type HotzonePeak = { weekday: number; hour: number; count: number };
+
+// Peak cell of a 7x24 grid: weekday (0..6, WEEKDAY_NAMES/Postgres dow order)
+// and hour (0..23 UTC) of the max cell plus its count. Deterministic
+// tie-break: earliest weekday wins, then earliest hour (scan weekday outer,
+// hour inner, strict `>` keeps the first max). Empty/all-zero grids (no cell
+// > 0) return null and render no callout. Pure function of cells: no reads,
+// no dates, no seasons. Both twins compute peak lines from already-loaded
+// cells through this helper.
+export function peakCell(cells: HeatGrid): HotzonePeak | null {
+  let best: HotzonePeak | null = null;
+  for (let weekday = 0; weekday < 7; weekday++) {
+    const row = cells[weekday];
+    if (!row) continue;
+    for (let hour = 0; hour < 24; hour++) {
+      const n = row[hour] ?? 0;
+      if (n > (best?.count ?? 0)) best = { weekday, hour, count: n };
+    }
+  }
+  return best;
+}
+
 // Outcomes that mean a join succeeded (added or already a member).
 export const JOIN_SUCCESS_OUTCOMES = ["added", "already_member"] as const;
 
