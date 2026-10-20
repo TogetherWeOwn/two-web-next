@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   parseRetryAfterSeconds,
+  postQaLoginWithRetry,
   qaLoginRetryBudgetMs,
   qaLoginThrottleError,
   QA_LOGIN_MAX_ATTEMPTS,
@@ -65,6 +66,78 @@ test("the retry budget rejects a non-count instead of returning a bogus timeout"
   for (const bad of [0, -1, 1.5, Number.NaN, undefined]) {
     assert.throws(() => qaLoginRetryBudgetMs(bad), RangeError, `loginCount=${bad}`);
   }
+});
+
+// Minimal Playwright APIResponse shape: postQaLoginWithRetry reads only
+// status() and headers(), so fakes stay small and the helper stays
+// transport-agnostic.
+function fakeResponse(status, headers = {}) {
+  return { status: () => status, headers: () => headers };
+}
+
+test("a first-attempt login returns without waiting", async () => {
+  let calls = 0;
+  const started = Date.now();
+  const response = await postQaLoginWithRetry(
+    () => {
+      calls += 1;
+      return Promise.resolve(fakeResponse(204));
+    },
+    "qa-member",
+    "local",
+  );
+  assert.equal(response.status(), 204);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 1000, "no Retry-After wait on success");
+});
+
+test("a non-429 failure returns immediately for the caller to assert", async () => {
+  let calls = 0;
+  const response = await postQaLoginWithRetry(
+    () => {
+      calls += 1;
+      return Promise.resolve(fakeResponse(500));
+    },
+    "qa-member",
+    "local",
+  );
+  assert.equal(response.status(), 500);
+  assert.equal(calls, 1);
+});
+
+test("a 429 waits out Retry-After once, then the retry is admitted", async () => {
+  let calls = 0;
+  const started = Date.now();
+  const response = await postQaLoginWithRetry(
+    () => {
+      calls += 1;
+      return Promise.resolve(
+        calls === 1 ? fakeResponse(429, { "retry-after": "1" }) : fakeResponse(204),
+      );
+    },
+    "qa-moderator",
+    "local",
+  );
+  assert.equal(response.status(), 204);
+  assert.equal(calls, 2);
+  assert.ok(Date.now() - started >= 1000, "the Retry-After second was honored");
+});
+
+test("a still-throttled login fails loud after the bounded attempts", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      postQaLoginWithRetry(
+        () => {
+          calls += 1;
+          return Promise.resolve(fakeResponse(429, { "retry-after": "1" }));
+        },
+        "qa-member",
+        "local",
+      ),
+    /local QA login as qa-member refused with 429 after 3 attempt\(s\)/,
+  );
+  assert.equal(calls, QA_LOGIN_MAX_ATTEMPTS);
 });
 
 // Static guard, qa-login-budget.test.mjs style: the staging config's 30 s

@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext, type APIResponse } from "@playwri
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
+import { postQaLoginWithRetry, qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import {
   expectedKitMarker,
   kitFixtureOwnsEventDetail,
@@ -36,6 +37,11 @@ const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
 test.beforeAll(async ({ playwright }) => {
+  // The shared qa-login throttle (10/min per runner IP) still holds the
+  // journey tail when this hook logs in, so the one spend below retries a
+  // 429 across the window edge instead of flaking the handoff. One capped
+  // wait already exceeds the 30 s hook timeout, hence the raise first.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   for (const target of targets) {
     contexts.set(
       target.name,
@@ -109,7 +115,9 @@ function api(target: ParityTarget): APIRequestContext {
 // POST /auth/qa/:identity shares the qa-login throttle, so exactly one login
 // is spent here however many board fetches follow. The spend is counted at
 // the one call site and asserted in afterAll, so losing the `??=` fails the
-// run instead of quietly burning a login per fetch.
+// run instead of quietly burning a login per fetch. A 429 on the handoff
+// edge retries across it: refused logins insert no throttle row, so the wait
+// spends nothing and the retry is admitted once the journey tail slides out.
 let qaLoginCount = 0;
 let memberCookiePromise: Promise<string> | null = null;
 function honoMemberCookie(): Promise<string> {
@@ -118,10 +126,15 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    const response = await postQaLoginWithRetry(
+      () =>
+        api(hono).post("/auth/qa/qa-member", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      "qa-member",
+      "local",
+    );
     expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -176,10 +189,17 @@ async function isolatedRenewalCookie(
     if (!token) throw new Error("Missing ephemeral CI QA token");
     // Use a separate QA account: issuing a fresh session revokes other live
     // sessions for the same user and would invalidate the shared member jar.
-    const response = await login.post("/auth/qa/qa-moderator", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    // Same handoff edge as the shared login: a 429 waits out the named
+    // window and retries without spending, instead of flaking the run.
+    const response = await postQaLoginWithRetry(
+      () =>
+        login.post("/auth/qa/qa-moderator", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      "qa-moderator",
+      "local",
+    );
     expect(response.status(), "isolated QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -755,6 +775,10 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
+      // Only the Kit branch logs in (the isolated renewal below), but the
+      // ceiling is harmless for Hono: one capped Retry-After wait already
+      // exceeds the 30 s test timeout, so the raise comes before any spend.
+      test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
