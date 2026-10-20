@@ -119,10 +119,14 @@ export const HotzonesIndexPage: FC<{
       <main class="events-page" id="main" tabindex={-1}>
         <p class="strap">Activity rhythms</p>
         <h1>Hot zones</h1>
-        <p>
-          Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
-          {eventCount} scheduled gatherings.
-        </p>
+        {available ? (
+          <p>
+            Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
+            {eventCount} scheduled gatherings.
+          </p>
+        ) : (
+          <p>Aggregate activity by hour and weekday for season {season}.</p>
+        )}
         <p>
           Successful joins only (added or already a member); denied, error and degraded attempts
           never count.
@@ -215,10 +219,14 @@ export const HotzoneSignalPage: FC<{
           </p>
         ) : (
           <>
-            <p>
-              Join activity for season {season}: {total} joins
-              {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
-            </p>
+            {unavailable ? (
+              <p>Join activity for season {season}.</p>
+            ) : (
+              <p>
+                Join activity for season {season}: {total} joins
+                {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
+              </p>
+            )}
             <p>
               Successful joins only (added or already a member); denied, error and degraded attempts
               never count.

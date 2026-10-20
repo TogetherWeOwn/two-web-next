@@ -45,7 +45,11 @@ const peakLine = (peak: Peak, estimated: boolean, unit?: string): string =>
   {/snippet}
   <p class="strap">Activity rhythms</p>
   <h1>Hot zones</h1>
-  <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
+  {#if available}
+    <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
+  {:else}
+    <p>Aggregate activity by hour and weekday for season {season}.</p>
+  {/if}
   <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
   {#if retentionNote}<p>{retentionNote}</p>{/if}
   <nav aria-label="Signals">

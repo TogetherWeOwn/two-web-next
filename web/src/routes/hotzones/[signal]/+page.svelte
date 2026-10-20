@@ -48,7 +48,11 @@ const peakLine = (peak: Peak, estimated: boolean, unit?: string): string =>
   {#if estimated}
     <p>Estimated {signal} activity for season {season} (estimates until bot event-store calibration). Total estimate: {total}.</p>
   {:else}
-    <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    {#if unavailable}
+      <p>Join activity for season {season}.</p>
+    {:else}
+      <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    {/if}
     <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
