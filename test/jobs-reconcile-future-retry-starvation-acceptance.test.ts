@@ -339,13 +339,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await markClean("aaa-dirty-future");
       await sql`update events set sync_revision = sync_revision + 1 where id = ${dirtyId}`;
       await seedAttempt(dirtyId, { attempts: 0, nextAttemptAt: FUTURE });
+      // Insert eligible keys out of event-key order. The unbounded cutoff read
+      // must filter sleeping candidates and still return its due keys sorted.
       await seedPublished("zzz-ready");
+      await seedPublished("bbb-ready");
 
       const store = pgEventStore(sql);
-      expect(await store.staleEventKeys(undefined, NOW)).toEqual(["zzz-ready"]);
+      expect(await store.staleEventKeys(undefined, NOW)).toEqual(["bbb-ready", "zzz-ready"]);
       expect(await store.staleEventKeys()).toEqual([
         "aaa-dirty-future",
         "aaa-recovery-future",
+        "bbb-ready",
         "zzz-ready",
       ]);
     });
