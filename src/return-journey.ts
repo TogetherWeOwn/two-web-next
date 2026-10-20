@@ -39,8 +39,9 @@ type Ctx = Context<any>;
 const cookieOpts = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
 // Deletion repeats the set attributes (minus maxAge): a clearing Set-Cookie
 // without HttpOnly/SameSite is flagged by scanners and risks the browser
-// keeping a differently-scoped twin.
-const deleteOpts = { ...cookieOpts };
+// keeping a differently-scoped twin. Shared with the Kit profile hook core
+// so both deletions carry identical attributes.
+export const deleteOpts = { ...cookieOpts };
 
 /**
  * Explicit `?next=` on the sign-in link. A safe value rides OAuth; anything
