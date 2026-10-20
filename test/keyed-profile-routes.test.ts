@@ -13,6 +13,7 @@ import { profilesApp } from "../src/profiles/routes";
 import { createDbProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const path = `/members/${SUBJECT.userId}`;
@@ -58,6 +59,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["unwrapped", "caught", "extra-in-helper"])(
       "a new %s query in the existing retrieval cannot borrow the original read's attribution",
       async (variant) => {
+        let sabotage: unknown;
         const original = createDbProfileStore(fixture.db);
         const app = profilesApp({
           sessionStore: sessions,
@@ -76,11 +78,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
                     await query();
                     return query();
                   });
-                } catch {}
+                } catch (error) {
+                  sabotage = error;
+                }
               } else if (variant === "caught") {
                 try {
                   await query();
-                } catch {}
+                } catch (error) {
+                  sabotage = error;
+                }
               } else await query();
               return member;
             },
@@ -88,6 +94,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         });
         await denial(await request(app));
         expect(await logs()).toHaveLength(0);
+        if (variant !== "unwrapped") await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 

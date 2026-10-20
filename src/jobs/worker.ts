@@ -6,11 +6,25 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
-import { PruneBatchCapError, pruneModelTables, reconcileEvents, runScheduled } from "./cron";
+import {
+  PruneBatchCapError,
+  ReconcilePartialFailureError,
+  pruneModelTables,
+  reconcileEvents,
+  runScheduled,
+  type ReconcilePreparation,
+} from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
-import type { BotClient, QueueLedger, QueueMessage, UniqueLock } from "./types";
+import type {
+  BotClient,
+  EventStore,
+  QueueLedger,
+  QueueMessage,
+  TxClient,
+  UniqueLock,
+} from "./types";
 import { dispatchSyncEvent } from "./sync-event";
 import { pgEventStore } from "./events";
 
@@ -104,7 +118,7 @@ export async function enqueueSyncEvent(
       message.requestId,
     );
   } finally {
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 
@@ -140,14 +154,34 @@ export async function handleQueue(
       ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
+        // Late settlement stays inside Workers lifetime: dispatch rejects at
+        // the producer deadline while the underlying acquire/send (and its
+        // exact-jobId ledger compensation on fresh successor pools) may still
+        // be in flight. The hook fires before dispatch settles, so awaiting
+        // the tail here covers it; ACK timing is unchanged (the consumer still
+        // races the returned work at its own 2s bound).
+        const late: Promise<unknown>[] = [];
         const work = dispatchSyncEvent(
           trackingQueue(env.SYNC_EVENT_QUEUE, successorLedger, undefined, signal),
           successorLock,
           eventKey,
           undefined,
           signal,
+          undefined,
+          (tail) => {
+            late.push(tail);
+          },
         );
-        ctx?.waitUntil(successorLifetime(work));
+        ctx?.waitUntil(
+          successorLifetime(
+            work
+              .finally(() => Promise.allSettled(late))
+              .then(
+                () => {},
+                () => {},
+              ),
+          ),
+        );
         return work;
       },
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
@@ -158,7 +192,7 @@ export async function handleQueue(
       ledgerSql.end({ timeout: 1 }).catch(() => {}),
       cleanupSql.end({ timeout: 1 }).catch(() => {}),
     ]);
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 
@@ -170,6 +204,38 @@ const SCHEDULED_JOB_FOR_CRON: Record<string, ScheduledFailingJob> = {
   [RECONCILE_CRON]: "events:reconcile",
   [PRUNE_CRON]: "model:prune",
 };
+
+/**
+ * Server-side budget for the scheduled reconcile prepare transaction
+ * (closeFinished + materializeSeries + staleEventKeys). The dispatch pool is
+ * `max: 1`, so an unbounded prepare wedges the only scheduler connection for
+ * the whole pass while another transaction holds a conflicting row lock. Both
+ * budgets name this one 5s constant (the file's own 5s-order precedent from
+ * successorSql): a held lock cancels the prepare with 55P03 (or 57014 when
+ * the equal statement timer wins the same-instant race; the scheduled path
+ * treats both identically), a slow statement with 57014, and the pass fails
+ * fast instead of wedging. Transaction-local
+ * (`SET LOCAL` via set_config) so pooled session settings never leak to the
+ * next holder; the next scheduled pass retries from a clean connection.
+ */
+export const RECONCILE_PREPARE_DB_TIMEOUT_MS = 5000;
+
+/** Scope the prepare budgets on this transaction, before any EventStore statement. */
+export async function setReconcilePrepareTimeouts(client: TxClient | postgres.Sql): Promise<void> {
+  await client`select set_config('lock_timeout', ${`${RECONCILE_PREPARE_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${RECONCILE_PREPARE_DB_TIMEOUT_MS}ms`}, true)`;
+}
+
+/** Production writeTransaction for the scheduled reconcile pass: the prepare
+ * runs in one transaction with the budgets above, on the given pool. */
+export function reconcileWriteTransaction(
+  sql: postgres.Sql,
+): (work: (events: EventStore) => Promise<ReconcilePreparation>) => Promise<ReconcilePreparation> {
+  return (work) =>
+    sql.begin(async (tx) => {
+      await setReconcilePrepareTimeouts(tx);
+      return work(pgEventStore(tx));
+    });
+}
 
 export async function handleScheduled(
   controller: ScheduledController,
@@ -201,20 +267,34 @@ export async function handleScheduled(
     // only its real error from the catch below; the next pass re-pages the
     // cap if the backlog is still over the ceiling.
     let pruneCapped = false;
+    let pruneFailures: { error: unknown }[] = [];
+    // Resolved partial failures: the pass committed with isolated keys failed
+    // while healthy keys still dispatched. Reported here (not inside the
+    // flight) so the page fires after the flight commits, like the prune-cap
+    // precedent: a rolled-back pass pages only its real error from the catch
+    // below, and a direct reconcileEvents call stays page-free.
+    let reconcilePartialFailures = 0;
     await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
       // so parent row locks are released before unrelated external sends.
-      reconcile: () =>
-        reconcileEvents({
+      reconcile: async () => {
+        const result = await reconcileEvents({
           events: pgEventStore(dispatchClient),
-          writeTransaction: (work) => dispatchClient.begin(async (tx) => work(pgEventStore(tx))),
+          writeTransaction: reconcileWriteTransaction(dispatchClient),
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
           lock: pgUniqueLock(dispatchClient),
-        }),
+        });
+        const failed = (result as { failed?: unknown }).failed;
+        if (typeof failed === "number" && failed > 0) reconcilePartialFailures = failed;
+        return result;
+      },
       prune: async (db) => {
-        // Report the cap without paging inside the flight; the page fires
-        // below, after the transaction commits.
+        // Report the cap and any table failures without paging inside the
+        // flight; the single page fires below, after the transaction commits.
+        // Sequential drains settle every table (including the per-statement
+        // lock sweep on the dispatch pool) before the flight commits, so pool
+        // cleanup in finally never closes a client under an in-flight sweep.
         await pruneModelTables(
           {
             ...pgPruneStores(db),
@@ -223,10 +303,10 @@ export async function handleScheduled(
             // DELETE holds row locks until the whole eight-table pass commits,
             // and a concurrent acquire (INSERT .. ON CONFLICT) blocks on the
             // deleting transaction instead of superseding or inserting. Like
-            // reconcile, run it on the autocommit dispatch pool: the flight
-            // still holds the advisory lock for mutual exclusion, while each
-            // sweep batch commits (and releases its row locks) when its own
-            // statement finishes.
+            // reconcile, run it on the separate dispatch pool: each DELETE
+            // gets a short transaction for local timeouts, never a transaction
+            // spanning the whole drain. The flight still holds the advisory
+            // lock while each batch commits and releases its row locks.
             jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks,
           },
           undefined,
@@ -234,13 +314,38 @@ export async function handleScheduled(
             reportCap: (capped) => {
               pruneCapped = capped;
             },
+            reportFailures: (failures) => {
+              pruneFailures = [...failures];
+            },
           },
         );
       },
     });
-    if (pruneCapped) {
+    if (pruneFailures.length > 0) {
+      // Partial failure with healthy tables committed: resolve the handler
+      // (like the post-commit cap precedent) and page exactly once with the
+      // canonical-first failure's class only. The failure page beats the cap
+      // page when both land in one pass; a real error is never muted by it.
+      try {
+        alertScheduledFailing("model:prune", pruneFailures[0]!.error);
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    } else if (pruneCapped) {
       try {
         alertScheduledFailing("model:prune", new PruneBatchCapError());
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    }
+    if (reconcilePartialFailures > 0) {
+      // One class-only page per resolved partial pass; the pass still
+      // resolves (isolated failures are never rethrown). Healthy, skipped
+      // and lock-skipped passes keep failed at 0 and stay silent, and the
+      // all-failed throw path never reaches here so it keeps exactly its one
+      // real-class page from the catch below.
+      try {
+        alertScheduledFailing("events:reconcile", new ReconcilePartialFailureError());
       } catch {
         // A throwing alert sink must not fail a committed pass.
       }

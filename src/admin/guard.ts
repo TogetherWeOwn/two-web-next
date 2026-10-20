@@ -19,16 +19,16 @@
 // store is the session (same contract as src/index.tsx: tests inject a
 // SessionStore on the env as SESSION_STORE, runtime builds a postgres store
 // from DATABASE_URL or DB.connectionString, no binding fails closed to 503). The guard reads
-// the row — it never rotates: rotation is the site's per-view concern, and
+// and renews the row on GET — it never rotates: rotation is the site's concern, and
 // an admin read must not invalidate the cookie the moderator's other tab
 // holds. Never trust a role bit from the cookie: the moderator decision is
 // the server-side row bit only.
 
-import { getSignedCookie } from "hono/cookie";
+import { generateSignedCookie, getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
-import { databaseUnavailable, notFoundHandler } from "../errors";
+import { databaseUnavailable, forbidden, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import { prepareAuthStatus } from "../auth-status";
@@ -37,6 +37,7 @@ import {
   createPostgresSessionStore,
   hashToken,
   isValidSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -103,6 +104,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
@@ -123,6 +125,11 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     // Moderator pages run the tab-sync probe, so an expiry mid-edit raises
     // two:session-expired and the form island can keep the draft reachable.
     let attachStatus: (() => void) | null = null;
+    let renewedSession: {
+      store: SessionStore;
+      tokenHash: string;
+      sessionCookie: string;
+    } | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
@@ -132,7 +139,38 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       if (row?.moderator) actor = { id: row.userId, username: row.username };
       else if (!row) expiredGuest = true;
       if (actor && c.req.method === "GET") {
-        attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
+        // get() also admits short predecessor grace; only a current bearer
+        // has a status key and can renew. Grace reads never refresh cookies.
+        const statusKey = await resolved.statusHash(tokenHash);
+        if (statusKey) {
+          // Slide while the row is live, before rendering/audit can cross its expiry.
+          if (!(await resolved.renew(tokenHash, expiresAt))) {
+            // Rotation may have won between statusHash and renew: re-read
+            // once, mirroring readSession's lost-race fallback. A grace-valid
+            // moderator serves without renewal or cookies (a thrown re-read
+            // fails closed below); revoked/expired still bounces.
+            const graceRow = await resolved.get(tokenHash);
+            if (!graceRow) return bounceToLogin(c);
+            if (graceRow.moderator) actor = { id: graceRow.userId, username: graceRow.username };
+            else actor = null;
+          } else {
+            attachStatus = await prepareAuthStatus(c, resolved, tokenHash, statusKey);
+            // Sign before the dashboard deadline; the post-handler read gates attachment.
+            const sessionCookie = await generateSignedCookie(
+              SESSION_COOKIE,
+              token,
+              c.env.SESSION_SECRET,
+              {
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "Lax",
+                maxAge: SESSION_TTL_SECONDS,
+              },
+            );
+            renewedSession = { store: resolved, tokenHash, sessionCookie };
+          }
+        }
       }
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
@@ -142,7 +180,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     }
     if (!actor) {
       if (expiredGuest) return bounceToLogin(c);
-      return c.text("Forbidden", 403);
+      return forbidden(c);
     }
     c.set("adminActor", actor);
 
@@ -168,10 +206,33 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         },
         databaseUnavailable,
       );
-      // Only rendered documents get the probe: redirects and refusals stay
-      // cookie-free. Signed above, so attaching here never delays the page.
-      if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
-        attachStatus?.();
+      // The authorized GET already renewed the row. Redirects and refusals
+      // still omit the cookie; other results, including 404s, attach it only
+      // if the bearer survived rendering without rotation or revocation.
+      if (
+        renewedSession &&
+        !(c.res.status >= 300 && c.res.status < 400) &&
+        c.res.status !== 403 &&
+        c.res.status !== 503
+      ) {
+        try {
+          if (
+            (await renewedSession.store.get(renewedSession.tokenHash)) &&
+            (await renewedSession.store.statusHash(renewedSession.tokenHash))
+          ) {
+            c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+            // The probe must not overwrite another tab's cookie either.
+            if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
+              attachStatus?.();
+            }
+          }
+        } catch (err) {
+          console.error("admin guard could not revalidate the session; refusing.", {
+            exception: err instanceof Error ? err.name : "unknown",
+          });
+          c.res = await databaseUnavailable(c);
+          return c.res;
+        }
       }
     } else {
       await next();

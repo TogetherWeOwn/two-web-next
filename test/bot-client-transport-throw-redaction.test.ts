@@ -226,6 +226,62 @@ describe("controls: neighbouring fixed-string surfaces are already clean and sta
     expect(err.message).toBe("bot answered without an `ok` field");
   });
 
+  it.each([
+    ["a null JSON body", null],
+    ["a scalar JSON body", `bare string ${TOKEN}`],
+  ])("%s throws the fixed ok-field serialization string", async (_label, body) => {
+    // The { note } fixture above reaches only the `!("ok" in json)` disjunct;
+    // null pins `json === null` and the scalar pins `typeof json !== "object"`.
+    const err = await thrownFrom(async () => jsonResponse(200, body));
+    expect(err.message).toBe("bot answered without an `ok` field");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
+  it("an ok:true envelope without a result object throws the fixed serialization string", async () => {
+    // Premise check (2026-10-19 probe): these two serialization throws carry
+    // no `cause` by design — unlike the fetch-rejection throw ("bot
+    // unreachable", { cause }) — so the pin is exact message plus no raw-body
+    // leak into the message. No production change per card scope.
+    const err = await thrownFrom(async () =>
+      jsonResponse(200, { ok: true, request_id: "r1", note: TOKEN }),
+    );
+    expect(err.message).toBe("bot success has no result object");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
+  it("an ok:true envelope with result:null throws the fixed serialization string", async () => {
+    // typeof null === "object": the missing-result fixture above reaches only
+    // the typeof disjunct, so this pins `body.result === null`.
+    const err = await thrownFrom(async () =>
+      jsonResponse(200, { ok: true, result: null, request_id: "r1", note: TOKEN }),
+    );
+    expect(err.message).toBe("bot success has no result object");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
+  it("an ok:false envelope without an error code throws the fixed serialization string", async () => {
+    const err = await thrownFrom(async () =>
+      jsonResponse(200, { ok: false, error: { message: TOKEN }, request_id: "r1" }),
+    );
+    expect(err.message).toBe("bot failure has no error code");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
+  it.each([
+    ["missing", { ok: false, request_id: "r1", note: TOKEN }],
+    ["null", { ok: false, error: null, request_id: "r1", note: TOKEN }],
+    ["a non-object string", { ok: false, error: TOKEN, request_id: "r1", note: TOKEN }],
+  ])(
+    "an ok:false envelope with error %s throws the fixed serialization string",
+    async (_label, body) => {
+      // The error-object fixture above reaches only the `typeof error.code`
+      // disjunct; these normalize to null and pin `!error`.
+      const err = await thrownFrom(async () => jsonResponse(200, body));
+      expect(err.message).toBe("bot failure has no error code");
+      expect(err.message).not.toContain(TOKEN);
+    },
+  );
+
   it("an unknown role.assign outcome throws the fixed factory string, not the outcome", async () => {
     const err = await thrownFrom(async () =>
       jsonResponse(200, { ok: true, result: { outcome: TOKEN }, request_id: "r1" }),

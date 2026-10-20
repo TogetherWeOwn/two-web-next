@@ -37,6 +37,18 @@ function job(text: string, id: string) {
   return match?.[1] ?? "";
 }
 
+function jobPermissions(text: string) {
+  // Read the whole map, including entries after comments or blank lines.
+  const blocks = [...text.matchAll(/^ {4}permissions:\n([\s\S]*?)(?=^ {4}[\w-]+:|(?![\s\S]))/gm)];
+  expect(blocks, "one job-local permissions map").toHaveLength(1);
+  const body = blocks[0]?.[1];
+  if (body === undefined) throw new Error("missing job-local permissions map");
+  return body
+    .split("\n")
+    .map((line) => line.replace(/#.*/, "").trim())
+    .filter(Boolean);
+}
+
 describe("release on promote", () => {
   it("keeps breaking changes on minor bumps before 1.0.0", () => {
     expect(releasePleaseConfig.packages["."]?.["bump-minor-pre-major"]).toBe(true);
@@ -81,7 +93,7 @@ describe("release on promote", () => {
   it("scopes the write token to the tag job and serializes releases", () => {
     expect(release).toMatch(/^permissions: \{\}\n/m);
     const tag = job(release, "tag");
-    expect(tag).toMatch(/^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+    expect(jobPermissions(tag)).toEqual(["actions: read", "contents: write"]);
     expect(tag).toMatch(/^ {4}concurrency:\n {6}group: release\n {6}cancel-in-progress: false\n/m);
     expect(tag).toContain("fetch-depth: 0");
     expect(tag).toContain("RELEASE_SHA: ${{ inputs.sha }}");
@@ -96,7 +108,7 @@ describe("release on promote", () => {
     expect(call).toContain("sha: ${{ needs.preflight.outputs.sha }}");
     expect(call).not.toContain("github.sha");
     expect(deploy).toMatch(/^ {6}sha: \$\{\{ steps\.target\.outputs\.sha \}\}$/m);
-    expect(call).toMatch(/^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+    expect(jobPermissions(call)).toEqual(["actions: read", "contents: write"]);
   });
 
   it("passes the release-on-promote selftest", () => {

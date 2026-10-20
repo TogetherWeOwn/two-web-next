@@ -95,6 +95,20 @@ failed, and the newer run's `ci-ok` decides the merge. Main pushes and the night
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
 
+During Node 22 lint/typecheck/tests, `ci/node22-progress.mjs` emits a
+`[node22-progress]` JSON snapshot immediately and every 60 seconds, at most
+28 times (through minute 27). Each snapshot has at most 32 process rows and
+8 KiB of output. It observes the step shell's main-thread descendant tree,
+excluding itself: numeric PIDs/parents, state, cumulative CPU ticks, RSS pages,
+thread counts and process-start ticks. Compare consecutive rows for CPU or
+resource changes alongside the existing test output; these are observations,
+not proof of a particular hang or its cause. `truncated` marks incomplete tree
+reads/caps; unavailable or replaced roots stop the sampler with a fixed message.
+No argv, environment, names, test output, stack/heap dumps or database queries
+are collected. The sidecar never signals the suite, and its cleanup does not
+replace the original command's exit status or extend the 30-minute job timeout.
+Its selftests use only local proc fixtures and controlled child processes.
+
 ### What fails `pr-lint` today vs what only warns
 
 `pr-lint` is a required job, so it must pass; inside the job, some findings
@@ -155,7 +169,7 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
-The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
+The `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
 dependencies. The audit reads every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and

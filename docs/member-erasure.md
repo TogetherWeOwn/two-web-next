@@ -40,6 +40,19 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 Exit codes: 0 success, 2 usage/config/refusal (including a malformed id),
 1 driver/transaction failure (changes rolled back).
 
+## Bounded waits
+
+Like `revoke-sessions`, the command sets its own session
+`statement_timeout` (10s) and `lock_timeout` (5s) on its single connection
+only; global database policy is unchanged. If a member row or table is
+locked, the run fails bounded with exit 1 and the redacted "operation
+failed; changes rolled back" message; the transaction rolls back, so a
+timed-out run erases nothing and all member tables stay unchanged. Verify
+with a dry-run to read the per-table counts, then retry (re-run) the apply
+once the lock clears. If timeouts repeat, escalate to the DevOps &
+Reliability Engineer with the redacted error and the dry-run counts; do
+not retry in a loop and do not erase by another path.
+
 For the separate case where a moderator has lost their Discord role but their
 member account should remain, use the [moderator session-revocation procedure](moderator-admin-guide.md#a-moderator-lost-their-role). It explains the session expiry window and how to end active sessions without erasing member data.
 
@@ -53,9 +66,34 @@ For ONE Discord id, in one transaction:
 | `profiles` | `user_id` |
 | `rsvps` | `user_id` |
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
+| `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
 
+The output counts carry one key per table: `web_sessions` counts live
+session rows and `web_session_grace` counts retired predecessor records, so a
+rotated member shows 1 under each key. Dry-run includes those same rows. The
+disposable-Postgres proofs in `test/session-predecessor-grace-postgres.test.ts`
+and `test/session-predecessor-grace-erasure.test.ts` check dry-run, deletion,
+repeat apply and preservation of another member's live session and grace.
+
 A second apply is a no-op: every count returns 0.
+
+## Concurrent rotations
+
+A rotation that is already in flight when erasure reaches its session
+removal cannot smuggle its successor past the erase. The session removal
+repeats its DELETE with a fresh snapshot until one pass finds no session
+row left for the member, and the reported `web_sessions` count is the
+rows the erase itself physically deleted, accumulated across passes. A
+rotation that starts after erasure has removed its source fails on the
+missing row without minting a successor.
+
+Boundary: this converges over rotations of sessions that existed when
+erasure ran. It is not a tombstone and not a sign-in ban: a genuinely
+new session created after erasure authenticates normally, and a sign-in
+racing the final pass can land after it. Retained-table policy is
+unchanged, and nothing here authorizes running erasure outside the
+Scope below.
 
 ## What is retained and why
 
@@ -74,6 +112,39 @@ A second apply is a no-op: every count returns 0.
   after 90 days, nothing does so — that exception stays an unused safety valve.
   It records cutover and moderation evidence and is never edited per subject.
   Revisit only through the whole-schema retention ledger.
+- `agent_event_*` (`agent_event_grants`, `agent_event_idempotency_keys`,
+  `agent_event_audits`, `agent_event_hits`) are machine tables, not member
+  rows. They are keyed by machine credential grant (`agent_id`, grant id),
+  never by Discord id or user id, so erasing one member leaves them untouched:
+  there is nothing member-keyed in them to delete. Their own cleanups still
+  apply: audit and replay-key rows age out at 90 days through the daily
+  `model:prune` (`AGENT_EVENT_AUDIT_RETENTION_DAYS`,
+  `IDEMPOTENCY_KEY_RETENTION_DAYS` in `src/jobs/constants.ts`, wired in
+  `src/jobs/cron.ts`); rate-counter rows (`agent_event_hits`) are pruned
+  lazily after five minutes, like the throttle buckets below
+  (`src/agent-events/rate-limit.ts`, `src/agent-events/shield.ts`); grants
+  last until they expire or are disabled, with no age-based deletion. The
+  published [retention ledger](retention-ledger.md) has no row for these
+  tables yet, so the windows above are cited from the code, not the ledger.
+- `event_search_logs` holds aggregate search counts only: one row per search
+  with the normalized query text and how many results it returned — no user
+  id, session, or IP by design (`src/db/admin-schema.ts`). Erasure leaves it
+  because no row belongs to a member. Rows older than 90 days are deleted by
+  the daily `model:prune` (`EVENT_SEARCH_LOG_RETENTION_DAYS = 90`), as
+  published in the [retention ledger](retention-ledger.md).
+- `board_view_logs` holds aggregate board-view counts only: board key, scope,
+  season, and result count — no user id, Discord id, session, IP, or username
+  by design (`src/db/admin-schema.ts`). Erasure leaves it for the same reason.
+  Rows older than 90 days are deleted by the daily `model:prune`
+  (`BOARD_VIEW_LOG_RETENTION_DAYS = 90`), as published in the
+  [retention ledger](retention-ledger.md).
+- `web_oauth_journeys` holds short-lived login handshake rows keyed by a
+  random state hash (`state_hash`, flow, expiry) — no member columns, so
+  erasure has nothing to delete. Each handshake expires after ten minutes
+  (`OAUTH_JOURNEY_TTL_SECONDS = 600` in `src/oauth-journeys.ts`) and expired
+  rows are swept when the next login starts (`sweepExpired`, called from
+  `src/auth/routes.ts` and `src/join/route-start.ts`), as published in the
+  [retention ledger](retention-ledger.md).
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.

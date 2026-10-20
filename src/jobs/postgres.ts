@@ -1,9 +1,20 @@
 import type postgres from "postgres";
 import { PRUNE_DELETE_BATCH_SIZE } from "./constants";
 import type { SingleFlight } from "./cron";
-import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
+import type {
+  AgePrunedTable,
+  PruneStores,
+  QueueLedger,
+  SessionSweeper,
+  TxClient,
+  UniqueLock,
+} from "./types";
 
 type Sql = ReturnType<typeof postgres>;
+
+// Match the scheduled reconcile prepare budget: Postgres cancels a blocked
+// lock or slow statement, rather than leaving SQL running after a JS timeout.
+const PRUNE_DB_TIMEOUT_MS = 5000;
 
 /**
  * Transaction-scoped advisory lock: released on commit/rollback/disconnect,
@@ -37,11 +48,11 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
  * `drainPruneTable`. The general session store's `sweepExpired` keeps its
  * existing full-drain contract for non-scheduled callers.
  *
- * Every candidate select takes its rows `FOR UPDATE SKIP LOCKED`: an eligible
- * row locked by an unrelated transaction is skipped instead of stalling the
- * statement, so one held row defers to a later pass while unlocked rows in
- * every table still delete and commit. Batch bounds, cutoffs, guards and
- * exact counts are unchanged.
+ * Column-scoped prune tables use DELETE without explicit row locks. Each
+ * statement's 5-second lock and statement timeouts bound waits on held rows;
+ * a failed table drain rolls back to its savepoint and retries in a later pass.
+ * Other scheduled tables retain `FOR UPDATE SKIP LOCKED`, so held rows defer
+ * while unlocked rows still delete. Bounds, cutoffs, guards and counts stay intact.
  */
 export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
@@ -50,68 +61,116 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Append-only audit rows (drizzle/1018): the database refuses to delete one
   // unless it is strictly older than 90 days by its own clock. A caller clock
   // running ahead must skip, not raise on, the rows in between.
-  const agentEventAudits: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  //
+  // Each table drain gets one savepoint, bounding subtransaction XIDs even
+  // for a backlog of many batches. The raw operation passed to `isolate`
+  // uses the savepoint's client, so a late failure rolls back every batch of
+  // that table and postgres.js does not mark the outer flight as failed.
+  // Direct single-statement callers still get their own isolation boundary.
+  // Pool callers use a short transaction PER statement, including the separate
+  // unique-lock sweep: each batch commits and releases lease rows before the
+  // flight ends. Never wrap a pool's whole drain in one transaction.
+  const candidate = sql as unknown as {
+    savepoint?: <T>(fn: (client: TxClient | Sql) => Promise<T>) => Promise<T>;
+    begin: <T>(fn: (client: TxClient | Sql) => Promise<T>) => Promise<T>;
+  };
+  const bounded = async <T>(
+    client: TxClient | Sql,
+    work: (client: TxClient | Sql) => Promise<T>,
+  ): Promise<T> => {
+    const [previous] = await client`select current_setting('lock_timeout') as lock,
+      current_setting('statement_timeout') as statement`;
+    await client`select set_config('lock_timeout', ${`${PRUNE_DB_TIMEOUT_MS}ms`}, true),
+      set_config('statement_timeout', ${`${PRUNE_DB_TIMEOUT_MS}ms`}, true)`;
+    const result = await work(client);
+    // Successful savepoints do not undo SET LOCAL. Restore the enclosing
+    // transaction's settings before yielding to siblings. On failure, let the
+    // savepoint/transaction rollback restore them; SQL in an aborted scope
+    // would only mask the original cancellation with 25P02.
+    await client`select set_config('lock_timeout', ${previous.lock}, true),
+      set_config('statement_timeout', ${previous.statement}, true)`;
+    return result;
+  };
+  const withBoundary = <T>(work: (client: TxClient | Sql) => Promise<T>): Promise<T> => {
+    if (typeof candidate.savepoint === "function")
+      return candidate.savepoint((client) => bounded(client, work));
+    return candidate.begin((client) => bounded(client, work));
+  };
+  const ageTable = (
+    statement: (client: TxClient | Sql, at: Date) => Promise<number>,
+  ): AgePrunedTable => ({
+    pruneOlderThan: (at) => withBoundary((client) => statement(client, at)),
+    isolate:
+      typeof candidate.savepoint === "function"
+        ? (work) => withBoundary((client) => work((at) => statement(client, at)))
+        : undefined,
+  });
+  const expiryTable = (
+    statement: (client: TxClient | Sql, at: Date) => Promise<number>,
+  ): SessionSweeper => ({
+    sweepExpired: (at) => withBoundary((client) => statement(client, at)),
+    isolate:
+      typeof candidate.savepoint === "function"
+        ? (work) => withBoundary((client) => work((at) => statement(client, at)))
+        : undefined,
+  });
+  const agentEventAudits = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from agent_event_audits where id in (
+        await client`delete from agent_event_audits where id in (
           select id from agent_event_audits where created_at < ${cutoff}
             and created_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
-  };
-  const accessLog: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  );
+  const accessLog = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from member_data_access_logs where id in (
+        await client`delete from member_data_access_logs where id in (
           select id from member_data_access_logs where occurred_at < ${cutoff}
             and occurred_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
-  };
-  const joinAttempts: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  );
+  const joinAttempts = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from join_attempts where id in (
+        await client`delete from join_attempts where id in (
           select id from join_attempts where created_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
       ).length,
-  };
-  const idempotencyKeys: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  );
+  const idempotencyKeys = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from agent_event_idempotency_keys where id in (
+        await client`delete from agent_event_idempotency_keys where id in (
           select id from agent_event_idempotency_keys where created_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
-  };
-  const searchLog: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  );
+  const searchLog = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from event_search_logs where id in (
+        await client`delete from event_search_logs where id in (
           select id from event_search_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
-  };
-  const boardViews: AgePrunedTable = {
-    pruneOlderThan: async (cutoff) =>
+  );
+  const boardViews = ageTable(
+    async (client, cutoff) =>
       (
-        await sql`delete from board_view_logs where id in (
+        await client`delete from board_view_logs where id in (
           select id from board_view_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
-  };
+  );
   // Scheduled session adapter: per-statement bounded expiry sweep. Deletes
   // only rows expired by BOTH clocks — `expires_at <= now` (the read-visibility
   // predicate: expiry-exact rows go, live rows stay) AND expired by the
@@ -120,18 +179,28 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // the skew-window rows instead of over-deleting them, and never raises; a
   // caller clock running behind stays caller-bounded (AND, not DB-clock-only).
   // Deletes at most one batch per statement; the cron pass drains via
-  // `drainPruneTable` and reports exact totals plus the cap.
-  const sessions = {
-    sweepExpired: async (now: Date) =>
-      (
-        await sql`delete from web_sessions where token_hash in (
-          select token_hash from web_sessions where expires_at <= ${now}
-            and expires_at <= clock_timestamp()
-          order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
-        ) returning 1`
-      ).length,
-  };
+  // `drainPruneTable` and reports exact totals plus the cap. The predecessor
+  // grace table drains in the same budget: expired grace rows (either its
+  // fixed 10s deadline or the predecessor's own expiry, by both clocks) go
+  // with the leftover batch slots, so one call never exceeds the batch cap.
+  const sessions = expiryTable(async (client, now) => {
+    const live = await client`delete from web_sessions where token_hash in (
+        select token_hash from web_sessions where expires_at <= ${now}
+          and expires_at <= clock_timestamp()
+        order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
+        for update skip locked
+      ) returning 1`;
+    const remaining = PRUNE_DELETE_BATCH_SIZE - live.length;
+    if (remaining <= 0) return live.length;
+    const grace = await client`delete from web_session_grace where predecessor_hash in (
+        select predecessor_hash from web_session_grace
+        where (grace_expires_at <= ${now} and grace_expires_at <= clock_timestamp())
+          or (expires_at <= ${now} and expires_at <= clock_timestamp())
+        order by predecessor_hash limit ${remaining}
+        for update skip locked
+      ) returning 1`;
+    return live.length + grace.length;
+  });
   // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
   // scheduled session-sweep expiry predicate: only rows expired by BOTH
   // clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`).
@@ -146,10 +215,10 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // candidate between the subquery snapshot and the delete would otherwise
   // still match on key alone and delete the live lease. The recheck makes the
   // renewed row fail the predicate after the row-lock wait instead.
-  const jobUniqueLocks = {
-    sweepExpired: async (now: Date) =>
+  const jobUniqueLocks = expiryTable(
+    async (client, now) =>
       (
-        await sql`delete from job_unique_locks where expires_at <= ${now}
+        await client`delete from job_unique_locks where expires_at <= ${now}
           and expires_at <= clock_timestamp() and key in (
           select key from job_unique_locks where expires_at <= ${now}
             and expires_at <= clock_timestamp()
@@ -157,7 +226,7 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
           for update skip locked
         ) returning 1`
       ).length,
-  };
+  );
   return {
     agentEventAudits,
     accessLog,

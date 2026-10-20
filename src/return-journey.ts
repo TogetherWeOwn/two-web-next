@@ -39,8 +39,9 @@ type Ctx = Context<any>;
 const cookieOpts = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
 // Deletion repeats the set attributes (minus maxAge): a clearing Set-Cookie
 // without HttpOnly/SameSite is flagged by scanners and risks the browser
-// keeping a differently-scoped twin.
-const deleteOpts = { ...cookieOpts };
+// keeping a differently-scoped twin. Shared with the Kit profile hook core
+// so both deletions carry identical attributes.
+export const deleteOpts = { ...cookieOpts };
 
 /**
  * Explicit `?next=` on the sign-in link. A safe value rides OAuth; anything
@@ -74,17 +75,22 @@ export async function bounceToLogin(c: Ctx): Promise<Response> {
   if (!["GET", "HEAD"].includes(c.req.method)) return expiredWriteBounce(c);
   if (c.req.method === "GET" || c.req.method === "HEAD") {
     const url = new URL(c.req.url);
-    await setSignedCookie(
-      c,
-      LOGIN_INTENDED_COOKIE,
-      url.pathname + url.search,
-      c.env.SESSION_SECRET,
-      {
+    const dest = url.pathname + url.search;
+    // Length-bound at write time (safeNext parity): an oversized page
+    // records no live cookie — the bounce itself still enters OAuth. A
+    // rejected value also clears a stale intended cookie so the callback
+    // cannot honor another journey's return.
+    if (safeNext(dest)) {
+      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, dest, c.env.SESSION_SECRET, {
         ...cookieOpts,
         maxAge: JOURNEY_TTL_SECONDS,
-      },
-    );
+      });
+    } else {
+      deleteCookie(c, LOGIN_INTENDED_COOKIE, deleteOpts);
+    }
   }
+  c.header("cache-control", "no-store, private");
+  c.header("vary", "Cookie");
   return c.redirect("/auth/discord", 302);
 }
 

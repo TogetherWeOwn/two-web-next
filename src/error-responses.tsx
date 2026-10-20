@@ -3,6 +3,7 @@ import { accepts } from "hono/accepts";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import {
+  BadRequestPage,
   ForbiddenPage,
   GonePage,
   InternalErrorPage,
@@ -74,7 +75,7 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
 
 // Merge Accept into Vary (preserving any existing dimensions such as Origin
 // or Cookie) rather than overwriting the header.
-function varyAccept(c: Context) {
+export function varyAccept(c: Context) {
   const current = c.res.headers.get("Vary");
   if (current) {
     const dims = current.split(",").map((d) => d.trim().toLowerCase());
@@ -92,7 +93,9 @@ function varyAccept(c: Context) {
 // Wired by the RSVP writes (src/events/routes.tsx, W9). Uses the same
 // quality/specificity/q=0 selector as outageRepresentation so that explicit
 // JSON q=0, mixed-case, wildcard, and machine-only contracts behave
-// consistently; always emits private no-store + Vary: Accept.
+// consistently; always emits private no-store + Vary: Accept. Feed paths
+// keep their non-HTML contract (same branch as 403/410): a throttled feed
+// reader's parser gets plain text, never the branded page or the envelope.
 export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promise<Response> {
   const parsed = Math.floor(retryAfter);
   const n = Number.isFinite(parsed) ? Math.max(1, parsed) : 60;
@@ -100,6 +103,9 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(429);
+  if (isFeedErrorPath(c.req.path)) {
+    return c.text("Too many requests", 429);
+  }
   if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
     const requestId = supportReference(c);
     return c.json({
@@ -120,7 +126,8 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
 // Match the JSON-only event contracts before a handler can run (e.g. session
 // lookup failure). GET /events and admin/profile browser forms still negotiate.
 function jsonOnlyEventRequest(c: Context): boolean {
-  const { method, path } = c.req;
+  const path = c.req.path;
+  const method = c.req.method.toUpperCase();
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
@@ -132,7 +139,23 @@ function jsonOnlyEventRequest(c: Context): boolean {
   return false;
 }
 
-function outageRepresentation(c: Context): string {
+interface NegotiatedErrorSelection {
+  type: string;
+  htmlQ: number;
+  htmlExact: boolean;
+}
+
+// Shared quality/specificity selector for the supported error representations.
+// The most specific range determines each representation's quality, including
+// q=0 exclusions; only then compare the supported responses. Returns the
+// selected representation plus the text/html candidate's own quality and
+// whether an exact text/html range matched, so explicit-opt-in checks reuse the
+// same parsed qualities instead of treating the all-q=0 default as a preference.
+function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
+  const acceptHeader = c.req.header("Accept");
+  if (!acceptHeader) {
+    return { type: "text/html", htmlQ: 0, htmlExact: false };
+  }
   return accepts(c, {
     header: "Accept",
     supports: ["text/html", "application/json"],
@@ -158,9 +181,54 @@ function outageRepresentation(c: Context): string {
       });
       candidates.sort((a, b) => b.q - a.q || b.specificity - a.specificity || a.order - b.order);
       const preferred = candidates[0]!;
-      return preferred.q > 0 ? preferred.type : config.default;
+      const selected = preferred.q > 0 ? preferred.type : config.default;
+      const html = candidates.find((candidate) => candidate.type === "text/html")!;
+      return {
+        type: selected,
+        htmlQ: html.q,
+        htmlExact: html.specificity === 2,
+      } as unknown as string;
     },
-  });
+  }) as unknown as NegotiatedErrorSelection;
+}
+
+function outageRepresentation(c: Context): string {
+  return negotiatedErrorSelection(c).type;
+}
+
+// Existing machine refusals keep their exact bytes unless a browser explicitly
+// prefers HTML with q>0. Fetch's absent/wildcard Accept is not a browser
+// opt-in, and an explicit text/html;q=0 exclusion keeps the legacy bytes.
+// Callers merge Vary: Accept even when retaining the legacy representation.
+export function prefersHtmlError(c: Context): boolean {
+  if (jsonOnlyEventRequest(c) || c.req.path.startsWith("/api/") || isFeedErrorPath(c.req.path)) {
+    return false;
+  }
+  const selection = negotiatedErrorSelection(c);
+  return selection.htmlExact && selection.htmlQ > 0 && selection.type === "text/html";
+}
+
+// Malformed input shares the established 403/413 negotiation, while feed
+// readers retain the original plaintext upload refusal.
+export function badRequest(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(400);
+  if (isFeedErrorPath(c.req.path)) {
+    return memberReadActive()
+      ? bufferedMemberText(c, "Bad request", 400)
+      : c.text("Bad request", 400);
+  }
+  if (
+    jsonOnlyEventRequest(c) ||
+    c.req.path.startsWith("/api/") ||
+    outageRepresentation(c) === "application/json"
+  ) {
+    const body = { error: "bad_request", message: "Check your request and try again." };
+    return memberReadActive() ? bufferedMemberJson(c, body, 400) : c.json(body);
+  }
+  const page = <BadRequestPage />;
+  return memberReadActive() ? bufferedMemberHtml(c, page, 400) : c.html(page);
 }
 
 // Shared outage envelope: no session/data reads, no driver details. Explicit

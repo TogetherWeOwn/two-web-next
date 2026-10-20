@@ -11,7 +11,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
-import { events } from "../src/db/admin-schema";
+import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import { createMemorySessionStore } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { cookieFor, MODERATOR } from "./helpers/member-data";
@@ -65,6 +66,7 @@ const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
   location: past.location,
   capacity: null,
   goingCount: 7,
+  goingOccupancy: 7,
   status: "published",
   ...o,
 });
@@ -161,6 +163,67 @@ describe("md builders (pure, DB-free)", () => {
       expect(body).toContain(phrase);
     for (const leak of ["attendee", "rsvp_user", "waitlist_position", "discord_event_id"])
       expect(body.toLowerCase()).not.toContain(leak);
+  });
+
+  it("event detail exposes the complete scheduled range with endpoint offsets", () => {
+    // Overnight: the end date differs from the start; both carry their own offset.
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-06-21T03:30:00.000Z"),
+        endsAt: new Date("2026-06-21T05:15:00.000Z"),
+        timezone: "America/New_York",
+      }),
+    );
+    expect(body).toContain(
+      "- Starts: Saturday, 20 June 2026 at 23:30 GMT-04:00 (America/New_York)",
+    );
+    expect(body).toContain("- Ends: Sunday, 21 June 2026 at 01:15 GMT-04:00 (America/New_York)");
+    expect(body).not.toContain("- When:");
+  });
+
+  it("event detail distinguishes the repeated DST hour by offset", () => {
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-11-01T05:30:00.000Z"),
+        endsAt: new Date("2026-11-01T06:30:00.000Z"),
+        timezone: "America/New_York",
+      }),
+    );
+    // Same wall clock, different offsets: the range is unambiguous only with both.
+    expect(body).toContain("- Starts:");
+    expect(body).toContain("- Ends:");
+    expect(body).toContain("01:30 GMT-04:00");
+    expect(body).toContain("01:30 GMT-05:00");
+  });
+
+  it("event detail falls back to UTC for an invalid stored timezone", () => {
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-06-21T03:30:00.000Z"),
+        endsAt: new Date("2026-06-21T05:15:00.000Z"),
+        timezone: "Invalid/Timezone",
+      }),
+    );
+    expect(body).toContain("- Starts: 2026-06-21T03:30:00.000Z (UTC)");
+    expect(body).toContain("- Ends: 2026-06-21T05:15:00.000Z (UTC)");
+    expect(body).not.toContain("Invalid/Timezone");
+  });
+
+  it("signals full from seat occupancy, not the attributable count", () => {
+    // A nameless seat fills the event while the roster reads one of two:
+    // the full signal must follow occupancy, like the write path does.
+    const full = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: 2, capacity: 2 }));
+    expect(full).toContain("- Lineup: 1 going of 2 (full)");
+    const room = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: 1, capacity: 2 }));
+    expect(room).toContain("- Lineup: 1 going of 2");
+    expect(room).not.toContain("(full)");
+    // Unknown occupancy (feed rows carry no counts) never claims full.
+    const unknown = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: null, capacity: 1 }));
+    expect(unknown).toContain("- Lineup: 1 going of 1");
+    expect(unknown).not.toContain("(full)");
   });
 
   it("event collection lists published rows with canonical links", () => {
@@ -431,6 +494,44 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
       expect(mb).toContain(phrase);
     expect(hb).toContain('rel="alternate" type="text/markdown"');
     expect(hb).toContain("/e/01J0000000000000000000PXB1.md");
+  });
+
+  it.each([
+    ["empty stored name", "100000000000000207", "100000000000000209", true],
+    ["missing user row", "100000000000000208", "100000000000000210", false],
+  ])(
+    "detail .md reads full from seat occupancy when a nameless row holds a seat (%s)",
+    async (_shape, namelessId, namedId, insertNamelessUser) => {
+      // Route-level pin for the dual-count rule: one named + one nameless
+      // going row at capacity 2. Nulling the route's goingOccupancy would
+      // drop the (full) signal here while the builder unit pins still pass.
+      await ins("01J0000000000000000000MDF1", "published", { capacity: 2 });
+      const [row] = await db.select().from(events);
+      await db.insert(users).values({ id: namedId, username: "named-friend" });
+      if (insertNamelessUser) await db.insert(users).values({ id: namelessId, username: "" });
+      await db.insert(rsvps).values([
+        { eventId: row!.id, userId: namedId, status: "going" },
+        { eventId: row!.id, userId: namelessId, status: "going" },
+      ]);
+      const res = await tReq("/e/01J0000000000000000000MDF1.md");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe(MARKDOWN_MIME);
+      expect(await res.text()).toContain("- Lineup: 1 going of 2 (full)");
+    },
+  );
+
+  it("detail .md stays open when the named count leaves a seat free", async () => {
+    await ins("01J0000000000000000000MDP1", "published", { capacity: 2 });
+    const [row] = await db.select().from(events);
+    await db.insert(users).values({ id: "100000000000000211", username: "named-friend" });
+    await db
+      .insert(rsvps)
+      .values({ eventId: row!.id, userId: "100000000000000211", status: "going" });
+    const res = await tReq("/e/01J0000000000000000000MDP1.md");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("- Lineup: 1 going of 2");
+    expect(body).not.toContain("(full)");
   });
 
   it("cancelled .md is a 410 gone notice with noindex, like the HTML page", async () => {

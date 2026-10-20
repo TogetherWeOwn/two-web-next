@@ -37,7 +37,7 @@ steps against `togetherweown.com`, `www`, or
    plus the chosen known-good N version ID. Prefer the newest N
    whose sources differ on a public route; adjacent versions are
    often code-identical after workflow-only merges.
-3. Baseline: run the staging smoke (20 routes)
+3. Baseline: run the staging smoke (24 routes)
    (`node bin/smoke.mjs https://next.togetherweown.com`) and record
    the result. The rehearsal compares against this baseline.
 4. Roll back with `wrangler rollback <N_VERSION> --name two-web-next
@@ -141,7 +141,7 @@ changes. This record does not establish fully rehearsed cutover readiness.
 
 ## Pre-apply snapshot (record all six before migration or traffic changes)
 
-1. Release SHA with exact-head green CI (`check`, `gitleaks`, `pr-lint`, `ci-ok`) plus same-SHA reviewer approval.
+1. Release SHA with exact-head green CI (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`) plus same-SHA reviewer approval.
 2. Production migration **plan** receipt identifying the target database/branch, validated journal prefix and pending web migration list. Pending migrations are expected before apply; do not require zero pending here. Independently verify history retention/PITR eligibility for the actual production provider and the approved recovery procedure before writes; a timestamp alone does not prove recoverability.
 3. Worker rollback pointer: current production Worker version ID (not deployment ID), if one exists. An initial deployment needs the approved legacy recovery path rather than an invented previous version.
 4. DNS inputs: saved pre-change apex/www record sets with TTL/proxy settings and custom-domain attachment inventory, plus planned targets. Observed post-change records are captured after the change, not required in this pre-change snapshot.

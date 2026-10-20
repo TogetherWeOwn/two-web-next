@@ -24,7 +24,7 @@ const session: Session = {
   member: false,
   moderator: false,
 };
-const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString();
+const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString() as string;
 
 beforeEach(() =>
   vi.stubGlobal(
@@ -105,6 +105,19 @@ describe("homepage theme", () => {
     expect(html).not.toContain('data-testid="home-events-join"');
     expect(html.includes('data-testid="join"')).toBe(!member);
     if (member) expect(html).toContain('href="https://discord.gg/invite">Open Discord');
+  });
+
+  it.each([
+    ["guest", null],
+    ["signed-in non-member", session],
+    ["member", { ...session, member: true }],
+  ] as const)("offers the member board link to members only (%s)", (_viewer, viewer) => {
+    const nav = render({ session: viewer }).match(
+      /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/,
+    );
+    expect(nav).not.toBeNull();
+    // Guests and non-members cannot open the board, so they are not offered it.
+    expect(nav![1]!.includes('href="/leaderboards/members"')).toBe(viewer?.member === true);
   });
 
   it.each(["joined", "already_member", "join_failed", "signin_failed"])(

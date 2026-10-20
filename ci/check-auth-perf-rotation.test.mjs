@@ -95,8 +95,11 @@ function makeRotationServer() {
     journeyHeaders.set("content-type", "text/html; charset=utf-8");
     if (entry.next < entry.rot.length) {
       const nextValue = entry.rot[entry.next];
-      journeyHeaders.append("set-cookie", sessionSetCookie(nextValue));
+      // Decoy first: the jar must filter by cookie name, not take the first
+      // pair. The login path keeps session-first order, so both orders are
+      // covered across the two extraction sites.
       journeyHeaders.append("set-cookie", "other=decoy; Path=/");
+      journeyHeaders.append("set-cookie", sessionSetCookie(nextValue));
       entry.valid = nextValue;
       entry.next += 1;
       responses.push({ identity, rotated: true, stale: false });
@@ -191,8 +194,15 @@ test("runLive follows rotating cookies with one login per identity", async () =>
   const moderatorCookies = server.gets
     .filter((get) => get.identity === "qa-moderator")
     .map((get) => get.cookie);
-  assert.deepEqual(memberCookies, MEMBER_ROT.map(SESSION_PAIR));
-  assert.deepEqual(moderatorCookies, MODERATOR_ROT.map(SESSION_PAIR));
+  // The shipped budget takes five samples per journey; once the rotation is
+  // exhausted the server keeps answering with the last issued value.
+  const SAMPLES = 5;
+  const padToSamples = (rot) => [
+    ...rot,
+    ...Array(Math.max(0, SAMPLES - rot.length)).fill(rot[rot.length - 1]),
+  ];
+  assert.deepEqual(memberCookies, padToSamples(MEMBER_ROT).map(SESSION_PAIR));
+  assert.deepEqual(moderatorCookies, padToSamples(MODERATOR_ROT).map(SESSION_PAIR));
 
   // Replacement extraction: the jar carries the bare pair only, never the
   // Set-Cookie attributes or the decoy cookie.
@@ -209,8 +219,9 @@ test("runLive follows rotating cookies with one login per identity", async () =>
   const moderatorRotations = server.responses
     .filter((response) => response.identity === "qa-moderator")
     .map((response) => response.rotated);
-  assert.deepEqual(memberRotations, [true, true, false]);
-  assert.deepEqual(moderatorRotations, [true, true, false]);
+  const rotatedThenQuiet = [true, true, ...Array(SAMPLES - 2).fill(false)];
+  assert.deepEqual(memberRotations, rotatedThenQuiet);
+  assert.deepEqual(moderatorRotations, rotatedThenQuiet);
 
   // Jar isolation: neither identity ever presents the other's cookie.
   for (const cookie of memberCookies) {
@@ -237,7 +248,7 @@ test("runLive follows rotating cookies with one login per identity", async () =>
   const staleFailures = assertJourney({
     id: "member-rsvp",
     samples: [{ status: 200, contentType: "text/html", elapsedMs: 50, html: GUEST_MEMBER_HTML }],
-    budget: { maxMedianMs: 1500, maxSingleMs: 3000 },
+    budget: { maxMedianMs: 500, maxSingleMs: 1000 },
   });
   assert.ok(staleFailures.length > 0, "stale replay must fail the journey assertions");
 

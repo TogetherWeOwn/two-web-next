@@ -19,9 +19,24 @@ export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
 export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
 
+/**
+ * CI loopback override for the shared read budget. The sequential browser
+ * suites present one `anon` client key off-edge, so both loopback workers
+ * (`e2e/wrangler.jsonc` and the generated Kit fixture in
+ * `ci/kit-worker-dev.mjs`, which enforces the same bucket on the same
+ * disposable Postgres) set `E2E_PUBLIC_READ_BUDGET` and the suites stop
+ * tripping each other's windows. Positive integers only; anything else keeps
+ * the production 60 (same shape as the agent-events `routePerMinute`
+ * override).
+ */
+export function publicReadBudget(env: Env): number {
+  const override = Number(env.E2E_PUBLIC_READ_BUDGET);
+  return Number.isInteger(override) && override > 0 ? override : PUBLIC_EVENT_READS_PER_MINUTE;
+}
+
 /** One client budget across public pages and feeds, before event or session reads. */
 export async function publicReadGuard(c: Ctx): Promise<Response | null> {
-  const limited = await throttleGuard(c, "events-read", PUBLIC_EVENT_READS_PER_MINUTE);
+  const limited = await throttleGuard(c, "events-read", publicReadBudget(c.env));
   if (limited) limited.headers.set("cache-control", "no-store, private");
   return limited;
 }
@@ -48,6 +63,7 @@ export function eventJson(e: PublicEvent) {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    going_occupancy: e.goingOccupancy,
     status: e.status,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,

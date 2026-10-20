@@ -88,7 +88,7 @@ const binder = readFileSync(
 const baseEnv = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
-  DISCORD_GUILD_ID: "guild-id",
+  DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: INVITE,
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
@@ -337,7 +337,14 @@ describe("EventsCalendar review regressions", () => {
       const page = await src.request("/events", { headers: { cookie: auth.cookie } });
       expect(page.headers.get("cache-control")).toBe("private, no-store");
       expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-      expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+      // Rotation retires the active row but leaves its bounded predecessor grace.
+      expect(await auth.store.get(auth.hash)).toMatchObject({ member: true, moderator });
+      expect(await auth.store.statusHash(auth.hash)).toBeNull();
+      const replay = await src.request("/events", {
+        headers: { cookie: auth.cookie, ...fragmentHeaders },
+      });
+      expect(replay.headers.get("cache-control")).toBe("private, no-store");
+      expect(replay.headers.get("set-cookie")).toBeNull();
     },
   );
 
@@ -683,16 +690,19 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
     // Concurrent reads start together (perf(events)): the upcoming page
     // count and the past drawer read are issued synchronously, then one page
-    // of upcoming rows, then their grouped going aggregate (empty past page
-    // → no aggregate). Never a per-card query, never more than a page of rows.
+    // of upcoming rows, then their two grouped going aggregates (attributable
+    // + occupancy; empty past page → no aggregate). Never a per-card query,
+    // never more than a page of rows.
     expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
       "events",
       "events",
       "events",
       "rsvps",
+      "rsvps",
     ]);
     expect(source.queries[0]!.sql).toMatch(/^select count/i);
     expect(source.queries[3]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[4]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {

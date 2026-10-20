@@ -9,8 +9,10 @@ name: e2e
 # from ci.yml) skip the smoke below: prose that no gate, test or build reads,
 # and unit tests the journeys never execute, prove nothing about browser
 # journeys. The pull_request trigger stays unfiltered so this workflow always
-# reports, and browser-smoke is not a required check, so a skip never blocks a
-# merge.
+# reports. The required check is the `e2e-ok` aggregator below, not
+# `browser-smoke`: the live required set is `ci-ok`, `gitleaks`, `e2e-ok`,
+# `pr-lint`, plus the Paperclip Review app check. A scope-verdict skip passes
+# through the aggregator instead of blocking a merge.
 
 on:
   pull_request:

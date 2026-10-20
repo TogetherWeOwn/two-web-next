@@ -65,6 +65,16 @@ beforeEach(() => {
     "src/app.ts": "export {};\n",
     "test/app.test.ts": 'import { it } from "vitest";\n',
     "test/helpers/fixture.ts": "export {};\n",
+    // Fixture-only names (absent from the real tree), so these verdicts prove
+    // the script derives its imported set from the checked-out tree instead of
+    // matching a hardcoded list: e2e/uses-imported.spec.ts imports
+    // test/helpers/imported.ts two ways, while test/helpers/fixture.ts is only
+    // named in a comment.
+    "test/helpers/imported.ts": "export {};\n",
+    "e2e/uses-imported.spec.ts":
+      'import { a } from "../test/helpers/imported";\nimport { b } from "../test/helpers/imported.js";\n',
+    "e2e/comment.spec.ts":
+      '// parity lives in "test/helpers/fixture.ts" (unit-pinned); this spec proves the same path\n',
   };
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -153,6 +163,8 @@ describe("change-scope gate", () => {
       "ci/check-migration-history.mjs",
       "ci/check-migration-history-selftest.mjs",
       "ci/check-migration-numbers.sh",
+      "ci/check-snapshot-chain.mjs",
+      "ci/check-snapshot-chain-selftest.mjs",
       "ci/db-migrate.mjs",
       "ci/db-migrate-selftest.mjs",
     ]) {
@@ -168,6 +180,23 @@ describe("change-scope gate", () => {
     expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
   });
 
+  it.each(["ci/check-snapshot-chain.mjs", "ci/check-snapshot-chain-selftest.mjs"])(
+    "keeps snapshot-chain tooling in db on either side of a rename (%s)",
+    (path) => {
+      for (const row of [
+        [path, "docs/guide.md"],
+        ["docs/guide.md", path],
+      ]) {
+        const r = scope([row]);
+        expect({ app: r.app, db: r.db, full: r.full }, row.join(" <- ")).toEqual({
+          app: "false",
+          db: "true",
+          full: "false",
+        });
+      }
+    },
+  );
+
   it("forces a full run on lockfiles, CI, shared config and itself", () => {
     for (const path of [
       "package-lock.json",
@@ -178,6 +207,7 @@ describe("change-scope gate", () => {
       "vitest.config.ts",
       ".github/workflows/ci.yml",
       "ci/change-scope.sh",
+      "ci/e2e-test-helpers.mjs",
     ]) {
       expect(scope([[path, ""]]).full, path).toBe("true");
     }
@@ -266,6 +296,254 @@ describe("skip_e2e verdict", () => {
     // Unit tests still run the required check: docs_only stays false.
     expect(result.docsOnly).toBe("false");
     expect(result.skipE2e).toBe("true");
+  });
+
+  it("runs the smoke for a test helper the e2e tree imports", () => {
+    const result = scope([["test/helpers/imported.ts", ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("false");
+    expect(result.app).toBe("true");
+  });
+
+  it("skips the smoke for a never-imported helper e2e only names in a comment", () => {
+    const result = scope([["test/helpers/fixture.ts", ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("true");
+    expect(result.app).toBe("true");
+  });
+
+  it("runs the smoke when an imported helper meets never-imported helpers", () => {
+    const result = scope([
+      ["test/app.test.ts", ""],
+      ["test/helpers/fixture.ts", ""],
+      ["test/helpers/imported.ts", ""],
+    ]);
+    expect(result.skipE2e).toBe("false");
+  });
+
+  it("counts both names of a rename against the imported set", () => {
+    expect(scope([["test/helpers/imported.ts", "test/old-name.ts"]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/helpers/imported.ts"]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/old-name.ts"]]).skipE2e).toBe("true");
+  });
+
+  it("follows reachable helper chains and terminates on cycles", () => {
+    for (const [path, source] of Object.entries({
+      "test/helpers/imported.ts": 'export { app } from "../app";\n',
+      "test/app.ts": 'import "./helpers/imported.js";\n',
+      "test/helpers/unreachable.ts": 'import "../unreachable-leaf";\n',
+      "test/unreachable-leaf.ts": "export {};\n",
+    })) {
+      writeFileSync(join(repo, path), source);
+    }
+    git("add", ".");
+    expect(scope([["test/app.ts", ""]]).skipE2e).toBe("false");
+    expect(scope([["test/unreachable-leaf.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it.each([
+    ["extensionless", 'import { a } from "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["js suffix", 'import { a } from "../test/helpers/variant.js";\n', "test/helpers/variant.ts"],
+    ["backtick", "import(`../test/helpers/variant`);\n", "test/helpers/variant.ts"],
+    ["split line", 'import { a } from\n  "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["side effect", 'import "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["require", 'const a = require("../test/helpers/variant.js");\n', "test/helpers/variant.ts"],
+    ["re-export", 'export * from "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    [
+      "directory",
+      'import { a } from "../test/helpers/variant";\n',
+      "test/helpers/variant/index.ts",
+    ],
+    [
+      "trailing-slash directory",
+      'import { a } from "../test/helpers/variant/";\n',
+      "test/helpers/variant/index.ts",
+    ],
+    ["declaration", 'import { a } from "../test/helpers/variant";\n', "test/helpers/variant.d.ts"],
+  ])("runs the smoke for a %s import", (_label, source, helper) => {
+    mkdirSync(dirname(join(repo, helper)), { recursive: true });
+    writeFileSync(join(repo, helper), "export {};\n");
+    writeFileSync(join(repo, "e2e/variant.spec.ts"), source);
+    git("add", ".");
+    expect(scope([[helper, ""]]).skipE2e).toBe("false");
+  });
+
+  it.each([
+    "import(`../test/helpers/${helper}`);\n",
+    'import "../test/helpers/import\\u0065d";\n',
+    "const path = `../test/helpers/${helper}`; import(path);\n",
+    'const path = "../test/helpers/import\\u0065d"; import(path);\n',
+    "const path = `./${helper}`; import(path);\n",
+    "import(`../test/helpers/${\n  helper,\n}`);\n",
+    "const path = `../test/helpers/${\n  helper,\n}`;\n",
+    "const path = pick(); import(path);\n",
+    'import(("../test/helpers/variant") + "iant");\n',
+  ])("fails closed on an opaque module path: %s", (source) => {
+    writeFileSync(join(repo, "e2e/opaque.spec.ts"), source);
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(
+    ["import", "require"].flatMap((keyword) =>
+      [
+        "/**/",
+        "// comment\n",
+        "// comment\r\n",
+        "// comment\r",
+        "// comment\u2028",
+        "// comment\u2029",
+      ].map((gap) => [keyword, gap]),
+    ),
+  )("fails closed on a comment-split computed %s call (%j)", (keyword, gap) => {
+    writeFileSync(
+      join(repo, "e2e/computed.spec.ts"),
+      `function pick() { return ".." + "/test/helpers/fixture"; }\nconst path = pick(); ${keyword}${gap}(path);\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(
+    ['"', "'"].flatMap((quote) =>
+      ["\n", "\r\n", "\r", "\u2028", "\u2029"].map((newline) => [quote, newline]),
+    ),
+  )("fails closed on a continued static specifier (%j, %j)", (quote, newline) => {
+    writeFileSync(
+      join(repo, "e2e/continued.spec.ts"),
+      `import ${quote}../test/helpers/\\${newline}fixture${quote};\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(['"', "'"])("fails closed on a continued relative prefix (%j)", (quote) => {
+    writeFileSync(
+      join(repo, "e2e/continued.spec.ts"),
+      `import ${quote}.\\\n./test/helpers/fixture${quote};\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each([
+    'import("../test/helpers/" + name);\n',
+    'const path = "../test/helpers/" + name; import(path);\n',
+    'const path = "../test/" + name; import(path);\n',
+    'const path = "../test/helpers/var" /* split */ + "iant";\n',
+    'const path = "../test/helpers/var" // which helper\n  + "iant";\n',
+    'const path = ("../test/helpers/var") + "iant";\n',
+  ])("fails closed on a concatenated helper path: %s", (source) => {
+    writeFileSync(join(repo, "e2e/concatenated.spec.ts"), source);
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("scans a long run of line comments after a helper path in linear time", () => {
+    writeFileSync(
+      join(repo, "e2e/comments.spec.ts"),
+      `import "../test/helpers/imported";\n${"//".repeat(5000)}x\n`,
+    );
+    git("add", ".");
+    const started = Date.now();
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("keeps a literal dynamic import precise: only its target is imported", () => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      'export const load = () => import("../test/helpers/imported.js");\n',
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each(
+    ["import", "require"].flatMap((keyword) =>
+      ["/**/", "// comment\n"].map((gap) => [keyword, gap]),
+    ),
+  )("keeps a comment-split literal %s call precise (%j)", (keyword, gap) => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      `${keyword}${gap}("../test/helpers/imported.js");\n`,
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("scans long module-call trivia in linear time", () => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      `import${"/* trivia */".repeat(5000)}("../test/helpers/imported.js");\n`,
+    );
+    git("add", ".");
+    const started = Date.now();
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("does not parse continuation-like bytes in a binary screenshot as JS", () => {
+    writeFileSync(
+      join(repo, "e2e/screenshot.png"),
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0x5c, 0x0a]),
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("does not mistake a computed file-reader string for a module import", () => {
+    writeFileSync(join(repo, "e2e/reader.test.mjs"), "new URL(`./${file}`, import.meta.url);\n");
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it("counts deleted helpers against their old import paths", () => {
+    rmSync(join(repo, "test/helpers/imported.ts"));
+    git("add", "-A");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/helpers/imported.ts"]]).skipE2e).toBe("false");
+  });
+
+  it("skips helpers when the checked-out tree has no e2e directory", () => {
+    rmSync(join(repo, "e2e"), { recursive: true });
+    git("add", "-A");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it.each(["test/helpers/imported.ts", "test/helpers/fixture.ts"])(
+    "preserves docs_only and every area verdict for %s",
+    (helper) => {
+      const r = scope([[helper, ""]]);
+      expect([r.docsOnly, r.app, r.worker, r.db, r.full, r.draft]).toEqual([
+        "false",
+        "true",
+        "false",
+        "false",
+        "false",
+        "false",
+      ]);
+    },
+  );
+
+  it("does not match a helper whose name only shares an imported prefix", () => {
+    expect(scope([["test/helpers/imported-extra.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it("fails closed for an exotic changed helper name", () => {
+    expect(scope([["test/helpers/foo bar.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("fails closed when git cannot search the import tree", () => {
+    const outside = mkdtempSync(join(dirname(repo), "not-a-repo-"));
+    mkdirSync(join(outside, "e2e"));
+    // git grep exits 128 here: there is an e2e tree but no searchable repo.
+    const result = scope([["test/helpers/fixture.ts", ""]], 1, outside);
+    expect(result.status).toBe(0);
+    expect(result.skipE2e).toBe("false");
   });
 
   it("skips the smoke for mixed docs and test changes", () => {
@@ -540,8 +818,8 @@ describe("e2e scope gate", () => {
     // stability (docs/visual-regression.md); still GitHub-hosted Linux.
     expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
-    // check, gitleaks and pr-lint, so a docs-only or test-only skip never
-    // blocks a merge.
+    // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
+    // never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]
@@ -602,8 +880,8 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
     expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
     // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
-    // names exactly check, gitleaks and pr-lint, so a docs-only or test-only
-    // skip never blocks a merge.
+    // names exactly ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or
+    // test-only skip never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]

@@ -17,6 +17,7 @@ import {
   seed,
   SUBJECT,
 } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 describe.skipIf(!process.env.DATABASE_URL)(
@@ -254,12 +255,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["guest", "member"])(
       "refuses an added sensitive query inside the existing event handler for %s",
       async (role) => {
+        let sabotage: unknown;
         const original = reads.getPublicEvent;
         vi.spyOn(reads, "getPublicEvent").mockImplementationOnce(async (db, key) => {
           const event = await original(db, key);
           try {
             await db.select().from(users);
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return event;
         });
         const res = await request(undefined, {
@@ -268,22 +272,27 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(res.status).toBe(503);
         expect(await res.text()).not.toContain(SUBJECT.username);
         expect(await logs()).toHaveLength(0);
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
     it("refuses a newly added keyless projection even inside a keyed attendee helper", async () => {
+      let sabotage: unknown;
       const original = reads.listGoingAttendees;
       vi.spyOn(reads, "listGoingAttendees").mockImplementationOnce(async (db, eventId) => {
         const attendees = await original(db, eventId);
         try {
           await memberReads.keyedMemberRead(() => db.select({ name: users.username }).from(users));
-        } catch {}
+        } catch (error) {
+          sabotage = error;
+        }
         return attendees;
       });
       const res = await request(undefined, { headers: await headers(MEMBER) });
       expect(res.status).toBe(503);
       expect(await res.text()).not.toContain(SUBJECT.username);
       expect(await logs()).toHaveLength(0);
+      await assertDenialThrows(Promise.reject(sabotage));
     });
 
     it("one malformed attendee key refuses the whole partial set", async () => {

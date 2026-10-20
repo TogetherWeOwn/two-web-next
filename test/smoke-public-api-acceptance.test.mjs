@@ -17,7 +17,7 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //
 // Locked builder contract (this file is acceptance-owned; do not edit it
 // to make an implementation pass):
-// - Deploy smoke additionally probes exactly two session-free routes,
+// - Deploy smoke additionally probes exactly five session-free routes,
 //   with no auth, no cookies and no new CLI flags:
 //   - GET /api/public/events expects HTTP 200, Content-Type
 //     application/json, and a collection envelope in the body: a `data`
@@ -26,20 +26,39 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //     last_page (src/public-data/contracts.ts). An error envelope, a
 //     missing or truncated envelope, non-numeric paging fields, or a
 //     non-JSON body served with HTTP 200 must fail this entry.
+//   - GET /api/public/events/00000000000000000000000001 expects HTTP
+//     404, Content-Type application/json, and the missing-event error
+//     envelope: an `error` object with code "not_found" and a non-empty
+//     message (src/public-data/routes.ts). The fixed probe key is a valid
+//     PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+//     database has it and the real handler answers not_found; the probe
+//     asserts that real contract, not a success body. A 200 success body,
+//     an empty object, a collection array, a wrong error code, a missing
+//     message, or a non-JSON body served with HTTP 404 must fail this
+//     entry.
+//   - GET /api/public/community expects HTTP 200, Content-Type
+//     application/json, and the community snapshot: member_count and
+//     online_count each null (collectors down, never 0) or finite
+//     numbers, plus a ranks array of key/label/member_count rows. An
+//     error envelope, an empty object, wrong-typed counts, or a
+//     non-JSON body served with HTTP 200 must fail this entry.
+//   - GET /api/public/join expects HTTP 200, Content-Type
+//     application/json, and the join handoff: a non-empty intro plus
+//     the public HTTPS invite_url. An error envelope, an empty object,
+//     a missing or non-HTTPS invite, or a non-JSON body served with
+//     HTTP 200 must fail this entry.
 //   - GET /openapi.json expects HTTP 200, Content-Type application/json,
 //     and the OpenAPI version marker in the body. A body without the
 //     marker (or not JSON at all) served with HTTP 200 must fail it.
 // - No other route is added. In particular the session-gated
-//   /events.json stay out of deploy smoke, as do the other public
-//   endpoints (/api/public/community, /api/public/join and the
-//   single-event route).
+//   /events.json stays out of deploy smoke.
 // - A broken public entry fails only its own route: every existing
 //   entry keeps its current assertions and pass/fail behaviour.
 // - No application code, envelope schema or workflow changes: this is a
 //   probe-only addition mirroring the existing route-entry shape.
 // - Wire this file into the test:smoke script in package.json, and
 //   update the existing smoke selftest fixtures and route counts
-//   (18 -> 20) in the builder-owned test files.
+//   (20 -> 23) in the builder-owned test files.
 //
 // Hermetic only: every probe below talks to a loopback stub. No live
 // host, no workflow dispatch.
@@ -85,6 +104,23 @@ const populatedCollection = JSON.stringify({
   page: 1,
   limit: 20,
   meta: { current_page: 1, per_page: 20, total: 1, last_page: 1 },
+});
+
+// The fixed probe key exists in no database, so like the real handler
+// (src/public-data/routes.ts) the stub answers 404 not_found.
+const missingSingle = JSON.stringify({
+  error: { code: "not_found", message: "No published event with that key." },
+});
+
+const healthyCommunity = JSON.stringify({
+  member_count: 123,
+  online_count: 12,
+  ranks: [{ key: "veterans", label: "Veterans", member_count: 42 }],
+});
+
+const healthyJoin = JSON.stringify({
+  intro: "Approve once with Discord and we will add you to the server.",
+  invite_url: "https://discord.gg/fixture",
 });
 
 const healthyOpenApi = JSON.stringify({
@@ -136,7 +172,18 @@ const fixtures = {
     "<title>We cannot find that page — Together We Own</title>",
   ],
   "/api/public/events": [200, "application/json", healthyCollection],
+  "/api/public/events/00000000000000000000000001": [404, "application/json", missingSingle],
+  "/api/public/community": [200, "application/json", healthyCommunity],
+  "/api/public/join": [200, "application/json", healthyJoin],
   "/openapi.json": [200, "application/json", healthyOpenApi],
+  // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
+  // no database, so like the real handler's notFound() the stub answers the
+  // branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
 };
 
 const EXPECTED_PATHS = Object.keys(fixtures).sort();
@@ -163,6 +210,8 @@ async function stub(t, change = () => {}) {
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
         ...(request.url === "/up"
@@ -273,17 +322,30 @@ test("positive control: no probe sends a cookie or authorization header, and the
 
 // --- Failing-first: the public API probes do not exist yet.
 
-test("healthy stub: both public API entries are probed exactly once and pass, as plain anonymous GETs", async (t) => {
+test("healthy stub: all five public API entries are probed exactly once and pass, as plain anonymous GETs", async (t) => {
   const { url, requests } = await stub(t);
   const result = await run(url);
   assert.equal(result.ok, true, result.output);
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 20 routes, 0 failed assertions/, result.output);
-  // Exactly the two additions: no other public endpoint, no
-  // session-gated route, no query string, no duplicate probe.
+  assert.match(result.output, /smoke: 24 routes, 0 failed assertions/, result.output);
+  // Exactly the five additions: no session-gated route, no query string,
+  // no duplicate probe.
   assert.deepEqual(requests.map((r) => r.path).sort(), EXPECTED_PATHS, JSON.stringify(requests));
-  for (const path of ["/api/public/events", "/openapi.json"]) {
+  for (const path of [
+    "/api/public/events",
+    "/api/public/events/00000000000000000000000001",
+    "/api/public/community",
+    "/api/public/join",
+    "/openapi.json",
+  ]) {
     const hits = requests.filter((r) => r.path === path);
     assert.equal(hits.length, 1, path);
     assert.equal(hits[0].method, "GET", path);
@@ -405,15 +467,163 @@ test("a non-200 or non-JSON discovery response fails only the openapi entry", as
   }
 });
 
+test("a broken single-event error envelope served with HTTP 404 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // A success envelope where the missing-event error belongs.
+    JSON.stringify({
+      event_key: "00000000000000000000000001",
+      title: "Fixture game night",
+      status: "published",
+      rsvp_open: true,
+      synced_to_discord: false,
+      going_count: 3,
+    }),
+    "{}",
+    "[]",
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    JSON.stringify({ error: { code: "not_found" } }),
+    JSON.stringify({ error: { code: "not_found", message: "" } }),
+    "event is temporarily unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/events/00000000000000000000000001", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a 200 single-event success or a non-JSON 404 fails only that entry", async (t) => {
+  const mutations = [
+    (result) => {
+      result.status = 200;
+      result.body = JSON.stringify({
+        event_key: "00000000000000000000000001",
+        title: "Fixture game night",
+        status: "published",
+        rsvp_open: true,
+        synced_to_discord: false,
+        going_count: 3,
+      });
+    },
+    (result) => {
+      result.headers["content-type"] = "text/html; charset=UTF-8";
+      result.headers["x-robots-tag"] = "noindex, nofollow";
+    },
+  ];
+  for (const mutate of mutations) {
+    const { url } = await stub(t, serve("/api/public/events/00000000000000000000000001", mutate));
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
+  }
+});
+
+test("a not_found message variant still passes (only the code is pinned)", async (t) => {
+  const { url } = await stub(
+    t,
+    serve("/api/public/events/00000000000000000000000001", (result) => {
+      result.body = JSON.stringify({ error: { code: "not_found", message: "Gone." } });
+    }),
+  );
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+});
+
+test("a broken community snapshot served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    "{}",
+    JSON.stringify({ member_count: 123, online_count: 12, ranks: {} }),
+    JSON.stringify({ member_count: "123", online_count: 12, ranks: [] }),
+    JSON.stringify({
+      member_count: 123,
+      online_count: 12,
+      ranks: [{ key: "veterans", label: "Veterans" }],
+    }),
+    "community snapshot unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/community", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/community");
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("null community counts pass (collectors down reads as unknown, never 0)", async (t) => {
+  const { url } = await stub(
+    t,
+    serve("/api/public/community", (result) => {
+      result.body = '{"member_count":null,"online_count":null,"ranks":[]}';
+    }),
+  );
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+});
+
+test("a broken join handoff served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    JSON.stringify({ error: { code: "rate_limited", message: "Too many requests." } }),
+    "{}",
+    JSON.stringify({ intro: "Approve once with Discord and we will add you to the server." }),
+    JSON.stringify({
+      intro: "Approve once with Discord and we will add you to the server.",
+      invite_url: "http://discord.gg/fixture",
+    }),
+    "join handoff unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/join", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/join");
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
 // --- CLI surface the deploy workflows call (no new flags).
 
-test("CLI passes a healthy stub and reports both new entries, with no extra flags", async (t) => {
+test("CLI passes a healthy stub and reports all five public entries, with no extra flags", async (t) => {
   const { url } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 20 routes, 0 failed assertions/, result.output);
+  assert.match(result.output, /smoke: 24 routes, 0 failed assertions/, result.output);
 });
 
 test("CLI exits 1 when the stub serves a broken public envelope", async (t) => {

@@ -409,14 +409,16 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest
-  // (rotate resolves false for a revoked/expired/missing source — row
-  // ineligible stays guest, never an outage). Any rotation *error* is an
-  // outage, never a silent guest: classified database failures propagate as
-  // themselves, generic errors normalize to a plain Error so the callers'
-  // existing opaque-fallback boundary (plain Error => outage, named
-  // non-outage => 500) renders the honest outage treatment without leaking
-  // driver details or swallowing genuine programming errors from other reads.
+  // the old row in the same statement, keeping the immediate predecessor
+  // valid for 10s (bounded by its own expiry) while its successor stays live.
+  // A replayed cookie past grace finds no row: guest (rotate resolves false
+  // for a revoked/expired/missing source — row ineligible stays guest, never
+  // an outage). Any rotation *error* is an outage, never a silent guest:
+  // classified database failures propagate as themselves, generic errors
+  // normalize to a plain Error so the callers' existing opaque-fallback
+  // boundary (plain Error => outage, named non-outage => 500) renders the
+  // honest outage treatment without leaking driver details or swallowing
+  // genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
   let rotated: boolean;
@@ -430,7 +432,21 @@ async function readSession(
     if (isDatabaseUnavailable(err)) throw err;
     throw new Error("Session rotation unavailable");
   }
-  if (!rotated) return null;
+  if (!rotated) {
+    // Predecessor grace or a lost rotation race: re-read once. A grace row
+    // (or a concurrent winner's predecessor) authenticates without rotating,
+    // minting or extending — tab B keeps its jar until grace lapses. A
+    // revoked/expired source stays guest.
+    const graceRow = await store.get(await hashToken(token));
+    if (!graceRow) return null;
+    return {
+      id: graceRow.userId,
+      username: graceRow.username,
+      avatar: graceRow.avatar,
+      member: graceRow.member,
+      moderator: graceRow.moderator,
+    };
+  }
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
@@ -599,6 +615,7 @@ registerJoinRoutes(
           widgetUrl={props.widgetUrl}
           widgetSnapshot={props.widgetSnapshot}
           next={props.next}
+          source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
         />,
@@ -629,7 +646,7 @@ app.get("/.well-known/security.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
+app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
 // existing queue signal. A missing required secret, DB/ledger failure or

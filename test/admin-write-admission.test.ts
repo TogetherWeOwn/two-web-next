@@ -85,7 +85,15 @@ describe("admin write admission (guard bypass kill)", () => {
     ] as const) {
       const res = await app.request(path, { ...form(body), headers }, baseEnv);
       expect(res.status, `POST ${path}`).toBe(403);
-      expect(await res.text()).toContain("Forbidden");
+      const text = await res.text();
+      // Harness paths that match the shared 403 helper's machine-only
+      // event-write shapes keep the JSON envelope; the rest negotiate to
+      // the branded page (production admin paths always negotiate).
+      if (path === "/events" || path.endsWith("/publish") || path.endsWith("/cancel")) {
+        expect(JSON.parse(text), `POST ${path}`).toMatchObject({ error: "forbidden" });
+      } else {
+        expect(text, `POST ${path}`).toContain("You do not have access to this");
+      }
     }
   });
 

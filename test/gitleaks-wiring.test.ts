@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 // applies the base branch's .gitleaks.toml / .gitleaksignore, after the offline
 // self-test .github/scripts/test-gitleaks-scan.sh has run. The behaviour itself
 // is exercised by that self-test inside the job, where the verified binary
-// exists; this file only pins that nothing is rewired around it.
+// exists; this file pins that nothing is rewired around it and that the
+// session-renewal fixture exception cannot silently widen.
+const policy = readFileSync(".gitleaks.toml", "utf8");
 const workflow = readFileSync(".github/workflows/pr-gates.yml", "utf8");
 const scanScript = readFileSync(".github/scripts/gitleaks-scan.sh", "utf8");
 const selfTestScript = readFileSync(".github/scripts/test-gitleaks-scan.sh", "utf8");
@@ -22,6 +24,29 @@ const step = (name: string): string => {
   expect(found, `gitleaks job has no step named ${name}`).toBeDefined();
   return found ?? "";
 };
+
+describe("gitleaks fixture policy", () => {
+  it("keeps the session-renewal exception limited to the exact rule, path and three secrets", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Three synthetic ULID event keys in the Kit event-detail"));
+    expect(entries).toEqual([
+      String.raw`description = "Three synthetic ULID event keys in the Kit event-detail session-renewal fixture, used only by in-memory event lookup and request paths, not credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-event-detail-session-renewal\.test\.ts$''']
+regexes = [
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FBV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FCV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FZV$''',
+]`,
+    ]);
+  });
+});
 
 describe("gitleaks job wiring", () => {
   it("verifies the pinned archive before it is extracted or run", () => {

@@ -641,6 +641,24 @@ test("the sweep runs on failure, before the upload, with the token in its own en
   // A sweep that crashed or could not delete a file leaves no `swept` output,
   // and then nothing is uploaded.
   assert.match(steps[upload], /\n\s+if: failure\(\) && steps\.scrub\.outputs\.swept == 'true'\n/);
-  // The upload still covers exactly the two swept directories.
-  assert.match(steps[upload], /test-results\/\n\s+playwright-report\//);
+  // Sweep both source trees, but publish only the derived ledger: raw reports,
+  // HTML reports and traces may contain cookies or member data.
+  assert.match(steps[scrub], /test-results playwright-report/);
+  const uploads = steps.filter((step) => step.includes("actions/upload-artifact"));
+  assert.equal(uploads.length, 2, "both ledger artifact paths must be checked");
+  for (const uploadStep of uploads) {
+    assert.match(uploadStep, /staging-journey-ledger\.json/);
+    assert.match(uploadStep, /staging-journey-ledger\.md/);
+    assert.doesNotMatch(uploadStep, /staging-journeys\.json|playwright-report\/|trace\.zip|\.html/);
+    const pathBlock = uploadStep.match(/\n {10}path: \|\n([\s\S]*?)(?=\n {0,10}\S|$)/)?.[1];
+    assert.ok(pathBlock, "upload must use an explicit path list");
+    assert.deepEqual(
+      pathBlock
+        .split("\n")
+        .map((path) => path.trim())
+        .filter(Boolean),
+      ["test-results/staging-journey-ledger.json", "test-results/staging-journey-ledger.md"],
+      "both uploads must exclude every raw directory, extra file and glob",
+    );
+  }
 });

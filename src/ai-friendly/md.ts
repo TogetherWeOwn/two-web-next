@@ -5,6 +5,7 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
+import { isValidZone } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
@@ -32,8 +33,21 @@ export interface MdEvent {
   capacity: number | null;
   /** Null on collection rows (feed scope carries no counts — same as RSS). */
   goingCount: number | null;
+  /** Seat occupancy for the full signal; null where the count is unknown
+   * (collection rows) or the rollup is unavailable. */
+  goingOccupancy: number | null;
   /** Published or past: drafts/cancelled never reach the detail builder. */
   status: "published" | "past";
+}
+
+/** Lineup line with an occupancy-based full signal. The attributable count
+ * can read a free seat a nameless row already holds, so `full` comes from
+ * occupancy — the same aggregate the write path enforces. */
+function lineupLine(e: Pick<MdEvent, "goingCount" | "goingOccupancy" | "capacity">): string | null {
+  if (e.goingCount === null) return null;
+  const seats = e.capacity !== null ? ` of ${e.capacity}` : "";
+  const full = e.goingOccupancy !== null && e.capacity !== null && e.goingOccupancy >= e.capacity;
+  return `- Lineup: ${e.goingCount} going${seats}${full ? " (full)" : ""}`;
 }
 
 /** Keep author-written text inline-safe: links can never form, blocks can never start. */
@@ -165,6 +179,26 @@ function mdEventWhen(e: MdEvent): string {
   return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
 }
 
+/** Detail instant: mirror the HTML Starts/Ends cells (full date + endpoint offset, ISO on a bad zone). */
+function mdDetailInstant(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: tz,
+      timeZoneName: "longOffset",
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+}
+
+const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
+
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
     `## [${mdInlineText(e.title)}](${canonicalUrl(appUrl, `/e/${e.eventKey}`)})`,
@@ -173,8 +207,8 @@ function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   ];
   if (e.game) out.push(`- Game: ${mdInlineText(e.game)}`);
   if (e.location) out.push(`- Where: ${mdInlineText(e.location)}`);
-  if (e.goingCount !== null)
-    out.push(`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`);
+  const lineup = lineupLine(e);
+  if (lineup) out.push(lineup);
   out.push(`- Markdown: ${canonicalUrl(appUrl, `/e/${e.eventKey}.md`)}`);
   if (e.description) out.push("", mdText(e.description));
   out.push("");
@@ -203,18 +237,18 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 }
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
+  const lineup = lineupLine(e);
   return [
     `# ${mdInlineText(e.title)}`,
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
     `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
-    `- When: ${mdEventWhen(e)}`,
+    `- Starts: ${mdDetailInstant(e.startsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
+    `- Ends: ${mdDetailInstant(e.endsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
-    ...(e.goingCount !== null
-      ? [`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`]
-      : []),
+    ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",
     `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,

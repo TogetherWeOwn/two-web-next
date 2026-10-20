@@ -36,7 +36,7 @@ expect Hono for the right reason.
 | `GET /hotzones/joins` | `web/src/routes/hotzones/[signal]/+page.svelte` (`csr=false`, thin binding over `loadHotzoneSignalData` in `src/kit-hotzones.ts`, shared `renderHotzoneGrid`; locked joins/voice/games vocabulary with unknown segments 404, live joins aggregate, same 400/503/log/cache shape as the Hono handler) | public | Kit (`enabled: true`) |
 | `GET /hotzones/voice` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
 | `GET /hotzones/games` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
-| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blockers: the RSVP companion, plus the session-rotation divergence — the Kit detail load never rotates or re-stamps the sliding session (`docs/parity.md` section 12) — until the Kit detail path rotates) |
+| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocker: the RSVP companion — the detail read renews the sliding session post-release, matching Hono's re-stamp) |
 | `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
@@ -252,7 +252,21 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   artifact. The Kit visual config has its own Playwright output directory so
   the later parity run cannot clear visual actuals before artifact upload.
   When an actual and its stale committed baseline share a destination, the
-  reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
+  reviewed actual wins; distinct actuals still refuse. Inspect every expected,
+  actual and diff image in the failed run's artifact before running
+  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>`. Suite ownership uses
+  exact directory segments relative to that root: extraction folder names and
+  substring-lookalike folders do not admit or exclude images. Copies under
+  `__screenshots-kit__/` can add absent baselines or match existing bytes
+  (no rewrite), but cannot replace a differing checkout baseline without a
+  reviewed actual. Such a stale-copy conflict names the target and refuses
+  the whole plan. Use a current artifact or review the matching actual, never
+  delete the newer checkout baseline to force acceptance. All source bytes
+  and existing targets are preflighted before writes, including sources later
+  superseded by actuals; unreadable files refuse without partial application.
+  Apply-time disk failures are not rolled back. Commit only the intentional
+  changes in the same PR and explain each one; never regenerate the tree.
+  `ci/visual-accept.mjs`
   ignores actuals from both `test-results-kit-visual/` and
   `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
   An intentional redesign is a reviewed artifact

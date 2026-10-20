@@ -34,7 +34,15 @@ import {
 import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
-export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
+export type PublicEvent = typeof events.$inferSelect & {
+  goingCount: number;
+  /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
+   * `full` verdict, spots-left text and Going/waitlist CTA so the page never
+   * offers a seat the write path cannot grant. Required (not optional) so a
+   * new code path that forgets to wire it fails typecheck instead of
+   * silently regressing to the named count; `withGoing` always sets it. */
+  goingOccupancy: number;
+};
 
 export type HomeEvent = Pick<
   PublicEvent,
@@ -45,28 +53,47 @@ export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
 export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
 
+/** Two going counts per event, so the badge and the seats agree with the
+ * roster and the write path at once.
+ * `listGoingAttendees` excludes nameless rows (empty stored name, or no user
+ * row at all) so no nameless identity is ever rendered. `goingCount` joins
+ * users and counts only named rows, so it always equals the roster length
+ * (within one roster page) and drives the visible "N going" label.
+ * `goingOccupancy` counts every going row — the same shape as
+ * `waitlist.goingCount`, the write-path seat enforcement — and drives the
+ * `full` verdict, the spots-left text and the Going/waitlist CTA in
+ * `rsvp-button.tsx` (plus the Kit mirror), so the page never offers a seat
+ * the write cannot grant. Both are aggregates only; neither renders a name. */
 async function withGoing(
   db: Pick<Db, "select">,
   rows: (typeof events.$inferSelect)[],
 ): Promise<PublicEvent[]> {
   if (rows.length === 0) return [];
-  const counts = await nonSensitiveRead("going-counts", () =>
-    db
-      .select({ eventId: rsvps.eventId, n: count() })
-      .from(rsvps)
-      .where(
-        and(
-          inArray(
-            rsvps.eventId,
-            rows.map((r) => r.id),
-          ),
-          eq(rsvps.status, "going"),
-        ),
-      )
-      .groupBy(rsvps.eventId),
-  );
-  const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
-  return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
+  const ids = rows.map((r) => r.id);
+  const [named, occupied] = await Promise.all([
+    nonSensitiveRead("going-counts", () =>
+      db
+        .select({ eventId: rsvps.eventId, n: count() })
+        .from(rsvps)
+        .innerJoin(users, eq(rsvps.userId, users.id))
+        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going"), ne(users.username, "")))
+        .groupBy(rsvps.eventId),
+    ),
+    nonSensitiveRead("going-counts", () =>
+      db
+        .select({ eventId: rsvps.eventId, n: count() })
+        .from(rsvps)
+        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going")))
+        .groupBy(rsvps.eventId),
+    ),
+  ]);
+  const byNamed = new Map(named.map((c) => [c.eventId, Number(c.n)]));
+  const byOccupied = new Map(occupied.map((c) => [c.eventId, Number(c.n)]));
+  return rows.map((r) => ({
+    ...r,
+    goingCount: byNamed.get(r.id) ?? 0,
+    goingOccupancy: byOccupied.get(r.id) ?? 0,
+  }));
 }
 
 /** Title/description substring match; SQL wildcards in the query match themselves. */
@@ -713,19 +740,13 @@ export function parseAttendeePageParam(raw: string | null | undefined): number {
   return normalizeAttendeePage(Number(raw));
 }
 
-/** Native attendee page URL: page 1 stays bare so first-page links reset the
- * section, like the roster's page-one convention. */
-export function attendeePageHref(eventKey: string, page: number): string {
-  return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
-}
-
-/** Encoded variant for POST destinations built from the routed :key param:
- * the key is encoded (route input) while the page stays a validated integer,
- * so malformed/unsafe page values can never escape the local destination. */
-export function rsvpPageReturnPath(eventKey: string, page: number): string {
-  const base = `/e/${encodeURIComponent(eventKey)}`;
-  return page > 1 ? `${base}?attendees=${page}` : base;
-}
+/** Native attendee page URLs (canonical builders in ./attendee-paths, shared
+ * with the renderers and the framework-free refusal core): page 1 stays bare
+ * so first-page links reset the section, like the roster's page-one
+ * convention. The return-path variant encodes the routed key while the page
+ * stays a validated integer, so malformed/unsafe page values can never escape
+ * the local destination. */
+export { attendeePageHref, rsvpPageReturnPath } from "./attendee-paths";
 
 /** Strict native-RSVP page resolution across the submitted carriers (action
  * query values plus the body attendees value). Missing carriers are absent;
@@ -837,6 +858,17 @@ export async function listJson(
  * bounding /events.ics, /events.rss, /events.md and sitemap bytes. */
 export const FEED_EGRESS_LIMIT = 1000;
 
+function warnEgressCapacity(surface: "sitemap" | "feed", returned: number): void {
+  // A full bounded result is not proof that any further rows exist.
+  if (returned === FEED_EGRESS_LIMIT) {
+    console.warn("Event egress read reached capacity.", {
+      surface,
+      limit: FEED_EGRESS_LIMIT,
+      returned,
+    });
+  }
+}
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -844,10 +876,11 @@ export async function sitemapEvents(
     .select()
     .from(events)
     .where(eq(events.status, "published"))
-    .orderBy(asc(events.startsAt))
+    .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("sitemap", rows.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
-  // range) must not empty the sitemap via the route's `.catch(() => [])`:
+  // range) must not empty the sitemap via the route's static fallback:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
   // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
   // in JS. A DB failure still rejects here; the route degrades to the static
@@ -877,9 +910,15 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("feed", rows.length);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
-  return rows.filter(isRenderableEventWindow);
+  const renderable = rows.filter(isRenderableEventWindow);
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("listFeed skipped unrenderable rows.", { skipped });
+  }
+  return renderable;
 }
 
 export async function getEventRow(db: Db, key: string) {
@@ -890,7 +929,10 @@ export async function getEventRow(db: Db, key: string) {
   return row;
 }
 
-export type PublicApiEvent = Omit<PublicEvent, "goingCount"> & { goingCount: number | null };
+export type PublicApiEvent = Omit<PublicEvent, "goingCount" | "goingOccupancy"> & {
+  goingCount: number | null;
+  goingOccupancy?: number | null;
+};
 
 /**
  * A3 public-API collection: published-only with the same clamp-to-last-page
@@ -916,7 +958,11 @@ export async function listPublicApiEvents(
     .offset((page - 1) * opts.limit);
   const renderable = rows.filter(isRenderableEventWindow);
   const withCounts = await withGoing(db, renderable).catch(() =>
-    renderable.map((row) => ({ ...row, goingCount: null as number | null })),
+    renderable.map((row) => ({
+      ...row,
+      goingCount: null as number | null,
+      goingOccupancy: null as number | null,
+    })),
   );
   return { rows: withCounts, total: n, page };
 }
@@ -926,7 +972,7 @@ export async function getPublicApiEvent(db: Db, eventKey: string): Promise<Publi
   const row = await getEventRow(db, eventKey);
   if (!row || row.status !== PUBLIC_EVENT_STATUS) return null;
   const [withCount] = await withGoing(db, [row]).catch(() => [
-    { ...row, goingCount: null as number | null },
+    { ...row, goingCount: null as number | null, goingOccupancy: null as number | null },
   ]);
-  return withCount ?? { ...row, goingCount: null };
+  return withCount ?? { ...row, goingCount: null, goingOccupancy: null };
 }

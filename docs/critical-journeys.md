@@ -95,8 +95,8 @@ synchronization.
 - On failure, the job uploads `test-results/` traces/screenshots and the HTML
   `playwright-report/` under `e2e-failure-<run>-<attempt>` for seven days.
   Do not upload `.dev.vars`; traces can contain only disposable CI sessions.
-- Require a green `browser-smoke` result on the exact PR head, together with
-  `check`, `gitleaks`, `pr-lint`, and independent Code Reviewer approval before
+- Require a green `e2e-ok` result on the exact PR head, together with
+  `ci-ok`, `gitleaks`, `pr-lint`, and independent Code Reviewer approval before
   squash merge. A green static check does not prove the browser journeys.
 
 Scope excludes visual regression, real Discord writes and any tests against
@@ -144,9 +144,9 @@ browser contexts before that `finally` runs. Staging event journeys therefore
 have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
 moderator in fresh and cancels every `Staging E2E` event still published or draft
 (`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local
-pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`, `e2e/admin.spec.ts`) have their own backstop,
+pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`, `e2e/admin-filters.spec.ts`) have their own backstop,
 `e2e/local-global-teardown.ts`, which only uses `https://localhost:8787`, only
-matches their `E2E Waitlist `, `E2E Promotion `, `E2E Pause ` and `E2E Moderator ` fixture titles, and is guarded
+matches their `E2E Waitlist `, `E2E Promotion `, `E2E Pause `, `E2E Moderator ` and `E2E Filter ` fixture titles, and is guarded
 to run in GitHub Actions on Linux. Neither sweep crosses into the other's
 origin. Each list and final verification traverse matching pages even when a
 page contains substring lookalikes. Pagination keeps the fixed origin and
@@ -156,10 +156,10 @@ throttle waits within a shared five-minute deadline; it honors `Retry-After`
 without retrying refused credentials. The staging sweep allows four passes and
 at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
-On failure the job
-uploads `test-results/` traces/screenshots and the HTML report for seven days.
-The repo is public, so artifacts are world-readable and log masking does not
-cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
+On failure the job sweeps `test-results/` and `playwright-report/`, but uploads
+only the derived journey ledger after the sweep completes; that artifact is
+retained for seven days. The repo is public, so uploaded artifacts are
+world-readable and log masking does not cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
 transport-level request error, so token-bearing requests go through
 `e2e/qa-request.mjs`, which rethrows a reason-only message, and the one browser
 test that sends the real token records no trace. A failure-only step
@@ -197,26 +197,50 @@ staging fixture without a reason string: the ledger surfaces that reason as
 the failure evidence.
 
 Ledger statuses map Playwright report statuses one to one. `expected`
-becomes `passed` with no reason. `flaky` becomes `flaky` with no reason and
-counts toward `passed` in the headline and CLI line; the separate `flaky`
-count appears only in `counts.flaky` in the ledger JSON, while the Markdown
-table marks the row `flaky`. `unexpected` becomes `failed` with the first-line
-failure message. `skipped` becomes `skipped` with the skip annotation or result
-error, or `no reason recorded` when neither names one. Any other status —
-missing, non-string, or an unrecognized string — becomes `failed` with a
-bounded single-line `unknown test status: ...` reason, so an unknown report can
-never pass silently. Exit codes stay `0` pass, `1` failed journeys, `2`
-all-skipped or empty report.
+becomes `passed` with no reason. A flaky row preserves the
+first-attempt failure's bounded first-line reason, remains `flaky`, and does
+not count toward `passed`; it counts as a failure in the headline, CLI line
+and verdict. `counts.flaky` also records
+the number of flaky rows. The Markdown summary calls out that retries and
+report-config provenance must be checked. `unexpected` becomes `failed` with
+the first-line failure message. Failure and skip diagnostics are bounded and
+scrubbed for known credential forms, email/member identifiers, long numeric
+IDs, URLs and the configured QA token before they enter the ledger. Redaction finds complete HTTP(S) URL and configured-token spans in the original
+text and merges overlaps before inserting any redaction marker. A token, email or
+numeric ID inside a URL cannot leave its path/query tail visible, and a configured
+token crossing a URL boundary cannot retain a partial value. It covers the entire `__Host-` cookie family, including
+signed OAuth/join/return-state cookies, not only session cookies. Redaction
+handles quoted keys, including backslash-escaped keys from nested or stringified
+JSON, and compound credential names (for example `client_secret`,
+`db_password`, `secret_key`, `token_value`, private keys and session IDs), including
+underscore, hyphen and camelCase affixes and common spaced labels (`API Key`,
+`secret key`, `session id`). Member fields accept those spellings and spaces
+(`display_name`, `userId`, `member id`, `discord-id`). Standalone Bearer, Basic
+and Digest values are scrubbed too, with whitespace or a colon/equal delimiter
+(including quoted keys). A matched credential/member
+field or auth scheme withholds the remainder of the line, including any quoted
+commas/semicolons or additional Digest parameters. This is known-pattern
+redaction, not a general-purpose sanitizer for arbitrary unlabelled data. The
+configured token is removed before first-line normalization, and all redaction
+runs before the 200-character cap so truncation
+cannot retain a token prefix. `skipped`
+becomes `skipped` with the skip annotation or result error, or `no reason
+recorded` when neither names one.
+Any other status — missing, non-string, or an unrecognized string — becomes
+`failed` with a bounded single-line `unknown test status: ...` reason, so an
+unknown report can never pass silently. Exit codes are `0` for a clean pass,
+`1` for failed or flaky journeys, and `2` for an all-skipped or empty report.
 
 The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a
-report from this config cannot legitimately contain `flaky`. If a ledger row
-shows `flaky`, check for a `--retries` override or a report produced by another
-config before trusting the pass. A flaky row has no reason and does not trigger
-the failure-only traces/report upload; a green run uploads only the ledger
-files, so this workflow does not preserve the first-attempt failure evidence
-for that row. Do not treat the row or ledger artifacts as the original
-failure evidence. For a failed row, keep its first-line ledger reason and the
-`e2e-staging-failure-*` artifact, retained for seven days. For a failed run on
-`main`, follow the [documented host-flake loop](rum-web-vitals.md): it reruns
-once, then opens a private main-red card for the Web Engineer if it fails
-again. Never rerun-until-green to clear a failure.
+report from this config cannot legitimately contain `flaky`. A flaky row fails
+closed. Check for a `--retries` override or a report produced by another config;
+verify that provenance rather than trusting the row as a pass. Its first-attempt reason is a bounded, single-line
+summary in the derived ledger; it is not the raw Playwright report. The
+failure-only upload is gated on the existing QA-token scrub completing across
+`test-results/` and `playwright-report/`; a failed or incomplete scrub uploads
+nothing. The separate ledger artifact contains only the derived JSON and
+Markdown ledger, never the raw report. The `e2e-staging-failure-*` artifact, retained for seven days, contains only
+the derived ledger; the raw report, HTML report and traces are not published
+as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
+it reruns once, then opens a private main-red card for the Web Engineer if it
+fails again. Never rerun-until-green to clear a failure.

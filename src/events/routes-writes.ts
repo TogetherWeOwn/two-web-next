@@ -109,9 +109,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.post(
     "/events",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
@@ -122,7 +122,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           { id: who.id, username: who.username },
           parseEventForm(await eventBody(c)),
         );
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
+        return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
           return c.json({ error: "unsupported_media_type" }, 415);
@@ -134,9 +134,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.patch(
     "/events/:key",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
@@ -185,9 +185,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(
       `/events/:key/${action}`,
+      requestBodyLimit("action"),
       throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
       moderatorGate,
-      requestBodyLimit("action"),
       async (c) => {
         const who = c.get("eventModerator");
         const db = await dbFor(c);

@@ -21,8 +21,11 @@ import {
   isProviderOutage,
 } from "../discord";
 import type { Env } from "../env";
+import { maintenanceHandler, prefersHtmlError, varyAccept } from "../errors";
+import { inviteDestination } from "../invite";
 import { STATE_TTL_SECONDS } from "../index";
 import { safeNext } from "../join/service";
+import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
 import {
   consumeLoginReturn,
@@ -128,20 +131,24 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // Clears the state cookie and issues the session on success: every outcome is
     // per-visitor, so a shared cache must never keep one.
     c.header("cache-control", "no-store, private");
-    const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
-    if (limited) return limited;
-    const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
     const code = c.req.query("code");
     const state = c.req.query("state");
     const oauthError = c.req.query("error");
-    // Inbound length bound: refuse oversized code/state before any journey
-    // consume, exchange, or session work. Refusals keep today's path, so the
-    // error param is peeked first and oversized maps to the generic failure.
-    // Like every other stray below, an oversized hit leaves the state, next
-    // and intended cookies intact for the next real hit.
+    // Inbound length bound: refuse oversized code/state before throttle spend
+    // or any journey consume, exchange, or session work. Refusals keep today's
+    // path, so the error param is peeked first and oversized maps to the
+    // generic failure. Like every other stray below, an oversized hit leaves
+    // the state, next and intended cookies intact for the next real hit.
     if (!oauthError && hasOversizedOAuthParams(code, state)) {
+      console.warn("discord sign-in failed", {
+        exception: "OversizedOAuthParams",
+        request_id: safeRequestId(c.get("requestId")),
+      });
       return c.redirect("/?n=signin_failed", 302);
     }
+    const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
+    if (limited) return limited;
+    const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
     const store =
       state && typeof expected === "string" && state === expected
         ? await hooks.storeFor(c).catch(() => null)
@@ -205,6 +212,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         exception: meta.exception,
         kind: meta.kind,
         status: meta.status,
+        request_id: safeRequestId(c.get("requestId")),
       });
       return c.redirect(
         isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
@@ -231,6 +239,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     if (join !== "joined" && join !== "already_member")
       console.warn("guild auto-join failed", {
         request_id: c.get("requestId"),
+        guild_id: c.env.DISCORD_GUILD_ID,
         kind: join,
       });
 
@@ -254,8 +263,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     });
     // A failed auto-join keeps the recovery landing even when a destination
     // was remembered: the session is a non-member one, so a member-only gate
-    // (/profile, /members/*) would answer bare 403 and swallow the failure
-    // explanation plus the invite fallback. The intended destination is
+    // (/profile, /members/*) would answer 403 and swallow the failure
+    // explanation (the branded page keeps the invite fallback, but not the
+    // reason this join failed). The intended destination is
     // re-recorded for the retry instead of being lost. The consumed
     // expired-write notice is re-set as pending (not restored) alongside it:
     // a pending notice is neither rendered nor consumed by the intermediate
@@ -283,8 +293,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
 
   app.post(
     "/logout",
-    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
+    // Body cap before the throttle: oversized probes 413 with zero
+    // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
+    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
@@ -305,6 +317,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         } catch {
           // Authoritative, not best-effort: a failed revocation must not clear
           // this browser's cookie as if the server row were gone.
+          c.header("cache-control", "no-store, private");
+          varyAccept(c);
+          if (prefersHtmlError(c)) {
+            return maintenanceHandler(inviteDestination(c.env.DISCORD_INVITE_URL))(c);
+          }
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }
@@ -338,8 +355,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       c.set("qaFixture", fixture);
       await next();
     },
-    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
+    // Body cap before the throttle (but after the identity/token gate
+    // above): oversized probes from admitted QA callers 413 with zero
+    // `qa-login`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
+    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
     async (c) => {
       const fixture = c.get("qaFixture");
       const store = await hooks.storeFor(c);

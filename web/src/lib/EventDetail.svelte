@@ -42,10 +42,12 @@ const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>
 const goingCountIsland = '<script src="/islands/going-count.js" defer></' + "script>";
 const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' + "script>";
 
-const closed = $derived(
-  model.isDraft ? "draft" : model.isPast || Date.parse(model.endsAt) <= Date.now() ? "past" : null,
-);
-const full = $derived(model.capacity !== null && model.goingCount >= model.capacity);
+// Server-decided RSVP closure: the resolver settles the verdict from the
+// server render instant, so a fast or slow viewer clock never reopens or
+// closes this render.
+const closed = $derived(model.rsvpClosed);
+const occupancy = $derived(model.goingOccupancy);
+const full = $derived(model.capacity !== null && occupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
@@ -57,6 +59,7 @@ const rsvpAction = $derived(
 const lineup = $derived(
   renderGoingCount(model.eventKey, {
     going: model.goingCount,
+    occupancy: model.goingOccupancy,
     capacity: model.capacity,
     showSpotsLeft: true,
     announcement: null,
@@ -118,9 +121,15 @@ const lineup = $derived(
   {/if}
   <dl class="event-meta" aria-label="Event details">
     <div>
-      <dt>When</dt>
+      <dt>Starts</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+      </dd>
+    </div>
+    <div>
+      <dt>Ends</dt>
+      <dd>
+        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
     </div>
     {#if model.location}
@@ -222,10 +231,12 @@ const lineup = $derived(
       <h2 id="event-share-heading">Save the date</h2>
       <p>
         <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {" · "}
-        <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-          Google Calendar
-        </a>
+        {#if model.googleCalendarUrl}
+          {" · "}
+          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+            Google Calendar
+          </a>
+        {/if}
         {" · "}
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link

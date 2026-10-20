@@ -308,21 +308,22 @@ describe("watch companions match current production probes", () => {
     expect(runbook).toContain(`\`${app}\``);
   });
 
-  it("invokes the apex smoke with --allow-indexable over the 20-route set", () => {
+  it("invokes the apex smoke with --allow-indexable over the 24-route set", () => {
     expect(watchSpec).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
-    expect(watchSpec).toMatch(/Twenty public routes/s);
+    expect(watchSpec).toMatch(/Twenty-four public routes/s);
     for (const route of [
       "/events.rss",
       "/events.ics",
       "/sitemap_index.xml",
       "/.well-known/security.txt",
+      "/e/<key>",
       "/__smoke_unknown_route__",
     ]) {
       expect(watchSpec, `apex route set misses ${route}`).toContain(route);
     }
     expect(watchSpec).toContain("node bin/smoke.mjs https://next.togetherweown.com");
     expect(watchSpec).toMatch(/Without `--allow-indexable` the apex probe fails/s);
-    expect(smokeFixtureTests).toContain("20 routes, 0 failed assertions");
+    expect(smokeFixtureTests).toContain("24 routes, 0 failed assertions");
     expect(runbook).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
     expect(smokeSource).toContain("--allow-indexable");
   });

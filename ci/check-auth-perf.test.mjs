@@ -23,10 +23,11 @@ test("auth perf selftest passes hermetically", () => {
   assert.match(result.stdout, /guest bounce fails the admin journey/);
 });
 
-test("budget covers at least the member-RSVP and moderator-admin journeys", () => {
+test("budget covers both authenticated journeys with at least five samples", () => {
   const budget = JSON.parse(
     readFileSync(new URL("./auth-perf-budget.json", import.meta.url), "utf8"),
   );
+  assert.ok(budget.samples >= 5, "calibration requires five or more samples per journey");
   for (const id of ["member-rsvp", "moderator-admin"]) {
     const entry = budget.journeys[id];
     assert.ok(entry, `${id} must be budgeted`);
@@ -39,13 +40,13 @@ test("ceilings never relax above their shipped values (tightening stays green)",
   const budget = JSON.parse(
     readFileSync(new URL("./auth-perf-budget.json", import.meta.url), "utf8"),
   );
-  // Shipped M4.4 ceilings (ci/auth-perf-budget.json): a 10x bump must go red,
+  // Calibrated ceilings (ci/auth-perf-budget.json; evidence in docs/performance-budgets.md): a 10x bump must go red,
   // a decrease (planned tightening) must stay green, so pin an upper bound,
   // not an exact value. Threshold changes need their own reviewed PR and must
   // never relax a ceiling to make CI green.
   const SHIPPED = {
-    "member-rsvp": { maxMedianMs: 1500, maxSingleMs: 3000 },
-    "moderator-admin": { maxMedianMs: 1500, maxSingleMs: 3000 },
+    "member-rsvp": { maxMedianMs: 500, maxSingleMs: 1000 },
+    "moderator-admin": { maxMedianMs: 500, maxSingleMs: 1000 },
   };
   for (const [id, shipped] of Object.entries(SHIPPED)) {
     const entry = budget.journeys[id];

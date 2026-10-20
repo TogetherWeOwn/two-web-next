@@ -21,6 +21,7 @@ import {
   waitlistPositionCopy,
 } from "../islands/contracts";
 import type { PublicEvent, ViewerRsvp } from "./reads";
+import { rsvpActionHref } from "./attendee-paths";
 
 /** Only the session viewer's answer is supplied; no member answer collection. */
 export const RsvpButton: FC<{
@@ -50,7 +51,11 @@ export const RsvpButton: FC<{
         : e.status !== "published" || e.endsAt <= now
           ? "past"
           : null;
-  const full = e.capacity !== null && e.goingCount >= e.capacity;
+  // Seat-accurate verdict: occupancy counts every going row like the write
+  // path, so the CTA never offers a seat a nameless row already holds. The
+  // visible "N going" label stays on the attributable `goingCount`.
+  const occupancy = e.goingOccupancy;
+  const full = e.capacity !== null && occupancy >= e.capacity;
   const going = answer?.status === "going";
   const waitlisted = answer?.status === "waitlisted";
   const signIn = loginUrl(returnTo);
@@ -76,15 +81,7 @@ export const RsvpButton: FC<{
       ) : !member ? (
         <a href={signIn}>{RSVP_COPY.guestCta}</a>
       ) : (
-        <form
-          method="post"
-          action={
-            Number.isSafeInteger(attendeePage) && attendeePage > 1
-              ? `/e/${encodeURIComponent(e.eventKey)}/rsvp?attendees=${attendeePage}`
-              : `/e/${encodeURIComponent(e.eventKey)}/rsvp`
-          }
-          data-rsvp-form
-        >
+        <form method="post" action={rsvpActionHref(e.eventKey, attendeePage)} data-rsvp-form>
           {!e.rsvpOpen ? (
             <p role="status" data-testid={RSVP_PAUSED_TESTID}>
               {RSVP_COPY.paused}

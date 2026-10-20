@@ -16,12 +16,28 @@ on:
         description: Deployed commit to tag
         type: string
         required: true
+      promotion_run_id:
+        description: Untrusted producing workflow run selector; verified against GitHub
+        type: string
+        required: false
+      promotion_run_attempt:
+        description: Untrusted producing attempt selector; verified against GitHub
+        type: string
+        required: false
   workflow_dispatch:
     inputs:
       sha:
         description: Full 40-hex commit on main that is live in production
         type: string
         required: true
+      promotion_run_id:
+        description: Producing production workflow run ID (optional selector, not proof)
+        type: string
+        required: false
+      promotion_run_attempt:
+        description: Producing attempt number (required with run ID, not proof)
+        type: string
+        required: false
       dry_run:
         description: Print the version and notes without publishing
         type: boolean
@@ -34,6 +50,7 @@ jobs:
   tag:
     name: tag-release
     permissions:
+      actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
@@ -56,6 +73,8 @@ jobs:
         run: node ci/release-on-promote.cjs
         env:
           RELEASE_SHA: ${{ inputs.sha }}
+          PROMOTION_RUN_ID: ${{ inputs.promotion_run_id }}
+          PROMOTION_RUN_ATTEMPT: ${{ inputs.promotion_run_attempt }}
           DRY_RUN: ${{ inputs.dry_run == true }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

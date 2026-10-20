@@ -21,10 +21,21 @@ import { getTableColumns } from "drizzle-orm";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { boardViewLogs, eventSyncAttempts } from "../src/db/admin-schema";
+import { discordEventSnapshots, webOAuthJourneys } from "../src/db/schema";
 import {
+  DISCORD_CACHE_FRESH_MS,
+  DISCORD_CACHE_STALE_MS,
+  DISCORD_SNAPSHOT_CLEANUP_BATCH,
+  DISCORD_SNAPSHOT_MAX_KEYS,
+} from "../src/events/discord-snapshot";
+import { ERASURE_TABLES } from "../src/member-erasure";
+import { OAUTH_JOURNEY_SWEEP_BATCH_SIZE, OAUTH_JOURNEY_TTL_SECONDS } from "../src/oauth-journeys";
+import {
+  AGENT_EVENT_AUDIT_RETENTION_DAYS,
   backoffFor,
   BOARD_VIEW_LOG_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
+  IDEMPOTENCY_KEY_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
@@ -66,10 +77,21 @@ function deleteWindows(body: string, table: string): string[] {
   const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
   const symbols: Record<string, string> = {
     activity_log: "activityLog",
+    agent_event_audits: "agentEventAudits",
+    agent_event_grants: "agentEventGrants",
+    agent_event_hits: "agentEventHits",
+    agent_event_idempotency_keys: "agentEventIdempotencyKeys",
+    discord_event_snapshots: "discordEventSnapshots",
     event_sync_attempts: "eventSyncAttempts",
-    queue_jobs: "queueJobs",
-    queue_failed_jobs: "queueFailedJobs",
+    events: "events",
+    featured_contents: "featuredContents",
     job_unique_locks: "jobUniqueLocks",
+    profiles: "profiles",
+    queue_failed_jobs: "queueFailedJobs",
+    queue_jobs: "queueJobs",
+    rsvps: "rsvps",
+    users: "users",
+    web_oauth_journeys: "webOAuthJourneys",
   };
   const symbol = symbols[table];
   // Build the symbol and alias set before the SQL pass so interpolated
@@ -220,15 +242,15 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("2160 hours");
     expect(doc).toContain("member-erasure.md#what-is-retained-and-why");
     expect(doc).toContain("src/jobs/cron.ts");
-    expect(doc).toContain("src/events/rsvp.ts:243-247");
+    expect(doc).toContain("src/events/rsvp.ts:321-325");
     expect(doc).toContain("Retain indefinitely per CISO decision");
     // The cited line range must actually hold the prune: shifting rsvp.ts
     // without re-basing the citation fails here instead of going stale.
-    // Pinned per-line so a one-line shift already breaks (line 243 must open
-    // pruneThrottle, line 245 must hold the delete).
+    // Pinned per-line so a one-line shift already breaks (line 321 must open
+    // pruneThrottle, line 323 must hold the delete).
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
-    expect(rsvpLines[242]).toContain("pruneThrottle");
-    expect(rsvpLines[244]).toContain("delete from web_throttle_hits");
+    expect(rsvpLines[320]).toContain("pruneThrottle");
+    expect(rsvpLines[322]).toContain("delete from web_throttle_hits");
   });
 
   it("distinguishes the throttle age cutoff from path-dependent physical cleanup", () => {
@@ -357,7 +379,7 @@ describe("retention ledger doc rows", () => {
     expect(cron).toContain('["boardViews", boardViews.capped]');
     expect(cron).toContain('alertScheduledFailing("model:prune", new PruneBatchCapError())');
     expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
-      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
+      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
     );
     const proof = read("test/prune.test.ts");
     for (const name of [
@@ -414,6 +436,7 @@ describe("retention ledger doc rows", () => {
       "state",
       "request_attempts",
       "next_attempt_at",
+      "terminal_reason",
     ]);
     const rows = read("docs/retention-ledger.md")
       .split("\n")
@@ -433,6 +456,8 @@ describe("retention ledger doc rows", () => {
       "`deferSync`",
       "`completeSync`",
       "`failSync`",
+      "`noteTerminalIntent`",
+      "`terminal_reason`",
       "`event_sync_attempts_pending_idx`",
       "`obsolete`",
       "`needsSync`",
@@ -462,6 +487,398 @@ describe("retention ledger doc rows", () => {
       .filter((line) => line.startsWith("- "));
     expect(scope.some((line) => line.includes("`event_sync_attempts`"))).toBe(true);
     expect(read("docs/retention-ledger.md")).not.toContain("documented in a later slice");
+  });
+
+  it("publishes the web_oauth_journeys row: 10-minute TTL with bounded request-path sweep", () => {
+    expect(OAUTH_JOURNEY_TTL_SECONDS).toBe(600);
+    expect(OAUTH_JOURNEY_SWEEP_BATCH_SIZE).toBe(1000);
+    const lines = read("docs/retention-ledger.md").split("\n");
+    const rows = lines.filter((line) => /^\| `web_oauth_journeys`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated web_oauth_journeys row").toHaveLength(1);
+    // The row must render inside the GFM table: no blank line may sit between
+    // table rows, or the row drops out as a literal pipe paragraph.
+    const idx = lines.findIndex((line) => /^\| `web_oauth_journeys`(?:\s|\|)/.test(line));
+    expect(idx).toBeGreaterThan(0);
+    expect(lines[idx - 1]!.trim()).not.toBe("");
+    expect(lines[idx - 1]!.startsWith("| ")).toBe(true);
+    const row = rows[0]!;
+    for (const claim of [
+      "`web_oauth_journeys`",
+      "10-minute TTL",
+      "OAUTH_JOURNEY_TTL_SECONDS = 600",
+      "issue()` sets `expires_at = now() + 600 seconds`",
+      "10 minutes is an age cutoff, not a deletion timer",
+      "Cleanup is lazy and path-dependent",
+      "expired rows can linger on a quiet site",
+      "until a later auth or join start",
+      "never deletes on consume",
+      "No daily prune",
+      "pruneModelTables",
+      "GET /auth/discord",
+      "GET /join/discord",
+      "sweepExpired",
+      "inline before `issue()`",
+      "OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000",
+      "for update skip locked",
+      "expires_at <= now()",
+      "across repeated starts",
+      "src/oauth-journeys.ts",
+      "drizzle/1022_web-sessions-oauth-journeys.sql",
+      "src/db/schema.ts",
+      "src/auth/routes.ts",
+      "src/join/route-start.ts",
+    ]) {
+      expect(row, `journey row must pin: ${claim}`).toContain(claim);
+    }
+    // The proof cites the whole journey module, not a line range that goes
+    // stale when lines above the store shift.
+    expect(row).not.toContain("src/oauth-journeys.ts:6-13");
+    // Mechanism pins: the bounded sweep lives in the journey store, the
+    // request paths run it inline, and the daily prune never mentions it.
+    const journeys = read("src/oauth-journeys.ts");
+    expect(journeys).toContain("OAUTH_JOURNEY_TTL_SECONDS = 600");
+    expect(journeys).toContain("OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000");
+    expect(normalizeSqlWindow(journeys)).toContain(
+      "delete from web_oauth_journeys where state_hash in ( select state_hash from web_oauth_journeys where expires_at <= now() order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE} for update skip locked ) returning state_hash",
+    );
+    // The issue window is part of the documented mechanism too: expiry comes
+    // from the TTL constant, never a literal.
+    expect(normalizeSqlWindow(journeys)).toContain(
+      "insert into web_oauth_journeys (state_hash, flow, expires_at) values (${stateHash}, ${flow}, now() + ${OAUTH_JOURNEY_TTL_SECONDS} * interval '1 second')",
+    );
+    expect(read("drizzle/1022_web-sessions-oauth-journeys.sql")).toContain(
+      'CREATE TABLE IF NOT EXISTS "web_oauth_journeys"',
+    );
+    // Both starts sweep inline before issue() inside their own start handler:
+    // a swap that still contains both strings must fail here.
+    for (const [path, route, flow] of [
+      ["src/auth/routes.ts", 'app.get("/auth/discord"', "auth"],
+      ["src/join/route-start.ts", 'app.get("/join/discord"', "join"],
+    ] as const) {
+      const body = read(path);
+      const start = body.indexOf(route);
+      expect(start, `${path} start route`).toBeGreaterThanOrEqual(0);
+      const nextRoute = body.indexOf('app.get("', start + route.length);
+      const slice = nextRoute === -1 ? body.slice(start) : body.slice(start, nextRoute);
+      const sweep = slice.indexOf("await store.journeys.sweepExpired();");
+      const issue = slice.indexOf(`await store.journeys.issue(await hashToken(state), "${flow}")`);
+      expect(sweep, `${path} sweeps in the start handler`).toBeGreaterThanOrEqual(0);
+      expect(issue, `${path} issues in the start handler`).toBeGreaterThanOrEqual(0);
+      expect(sweep, `${path} sweeps before issuing`).toBeLessThan(issue);
+    }
+    expect(read("src/jobs/cron.ts")).not.toContain("web_oauth_journeys");
+    expect(read("src/jobs/postgres.ts")).not.toContain("web_oauth_journeys");
+    // Negative control: an invented row name pins nothing.
+    const invented = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `web_oauth_journeys_invented`(?:\s|\|)/.test(line));
+    expect(invented, "invented journey row must fail the pin").toHaveLength(0);
+  });
+});
+
+describe("retention ledger agent-event rows (L8a)", () => {
+  it("pins the agent-event prune windows (read-only)", () => {
+    expect(AGENT_EVENT_AUDIT_RETENTION_DAYS).toBe(90);
+    expect(IDEMPOTENCY_KEY_RETENTION_DAYS).toBe(90);
+  });
+
+  it("publishes one row per agent-event table with window, mechanism, and proof", () => {
+    const doc = read("docs/retention-ledger.md");
+    for (const table of [
+      "agent_events",
+      "agent_event_grants",
+      "agent_event_hits",
+      "agent_event_audits",
+      "agent_event_idempotency_keys",
+    ]) {
+      expect(doc, `ledger must row ${table}`).toContain(table);
+    }
+    const rows = doc.split("\n").filter((line) => line.startsWith("| `agent_"));
+    expect(rows, "one dedicated row per agent-event table").toHaveLength(5);
+    // Contiguity: no blank line may separate the agent rows from the
+    // board_view_logs row — a blank line ends the GFM table and the rows
+    // would render as raw pipe text outside it.
+    const lines = doc.split("\n");
+    const boardIdx = lines.findIndex((line) => line.startsWith("| `board_view_logs`"));
+    expect(boardIdx, "board_view_logs row precedes the agent rows").toBeGreaterThanOrEqual(0);
+    expect(lines.slice(boardIdx + 1, boardIdx + 6)).toEqual(rows);
+    for (const claim of [
+      "AGENT_EVENT_AUDIT_RETENTION_DAYS = 90",
+      "IDEMPOTENCY_KEY_RETENTION_DAYS = 90",
+      "No prune by design",
+      "never by deletion",
+      "5-minute rolling",
+      "60-second budget",
+      "literal windows in code",
+      "pruneAgentEventHits",
+      "separate transaction",
+      "without explicit row locks",
+      "try-advisory transaction lock",
+      "1 ms lock timeout",
+      "Shield lock-contention 503s do not run cleanup",
+      "order by at, id limit 1000",
+      "src/agent-events/prune-hits.ts",
+      "retired by `drizzle/1019_shared-agent-events.sql`",
+      'DROP TABLE "agent_events"',
+      "no `agentEvents` export",
+      "ON DELETE cascade",
+      "ON DELETE SET NULL",
+      "append-only trigger (`drizzle/1018`)",
+      "2160 hours",
+      "cutoff-exact rows survive",
+      "at most 1,000 rows",
+      "up to 100 batches per pass",
+      "checkGrant",
+      "grant_expired",
+      "grant_disabled",
+      "src/agent-events/grants.ts",
+      "src/agent-events/shield.ts",
+      "src/agent-events/rate-limit.ts",
+      "src/agent-events/audit.ts",
+      "bin/import/audit.mjs",
+      "../drizzle/0001_agent-events.sql",
+      "../drizzle/1008_agent-event-idempotency-prune-idx.sql",
+      "../drizzle/1019_shared-agent-events.sql",
+      "../drizzle/1023_agent-event-audits-prune-idx.sql",
+      "../src/db/schema.ts",
+      "../src/jobs/cron.ts",
+      "../src/jobs/postgres.ts",
+    ]) {
+      expect(doc, `agent-event ledger must pin: ${claim}`).toContain(claim);
+    }
+  });
+
+  it("states each agent-event window without inventing a deletion deadline", () => {
+    const line = (prefix: string): string => {
+      const row = read("docs/retention-ledger.md")
+        .split("\n")
+        .find((l) => l.startsWith(prefix));
+      expect(row, `ledger must row ${prefix}`).toBeDefined();
+      return row!;
+    };
+    // Retired table: no window at all, surviving rows live on as events rows.
+    expect(line("| `agent_events` ")).toMatch(/no longer exists/i);
+    expect(line("| `agent_events` ")).toMatch(/live on as `events` rows/i);
+    // Grants are credentials: expiry/disability rejects admission, deletes nothing.
+    expect(line("| `agent_event_grants`")).toMatch(/retain indefinitely/i);
+    expect(line("| `agent_event_grants`")).toMatch(/no app path deletes a grant/i);
+    // A grant with audit history cannot be deleted: the 1018 append-only
+    // trigger refuses the ON DELETE SET NULL rewrite; the cascade only
+    // applies when no audits remain.
+    expect(line("| `agent_event_grants`")).toMatch(/while any.*audit.*refuses the deletion/i);
+    expect(line("| `agent_event_grants`")).toMatch(
+      /only a grant with no remaining audits could cascade/i,
+    );
+    expect(line("| `agent_event_grants`")).toContain("bin/import/audit.mjs");
+    // Hits mirror the throttle row: the cutoff is an age, not a timer.
+    expect(line("| `agent_event_hits`")).toMatch(/an age cutoff, not a deletion timer/i);
+    expect(line("| `agent_event_hits`")).toMatch(
+      /linger on a quiet or contended ingress until a later successful cleanup/i,
+    );
+    // Age-pruned pair: cutoff-exact rows survive both.
+    expect(line("| `agent_event_audits`")).toMatch(/cutoff-exact rows survive/i);
+    expect(line("| `agent_event_idempotency_keys`")).toMatch(/cutoff-exact rows survive/i);
+    expect(line("| `agent_event_idempotency_keys`")).toMatch(/never deleted by the request path/i);
+    // Runtime writer plus the legacy import writer — never a sole-writer claim.
+    expect(line("| `agent_event_audits`")).toMatch(/runtime writer/i);
+    expect(line("| `agent_event_audits`")).toContain("bin/import/audit.mjs");
+    expect(line("| `agent_event_audits`")).not.toMatch(/sole writer/i);
+    expect(line("| `agent_event_idempotency_keys`")).toContain("bin/import/audit.mjs");
+  });
+
+  it("negative control: an invented row fails the pin", () => {
+    // Proves the row-presence pins above are not vacuous: a table that was
+    // never published must have no row and no mention.
+    const doc = read("docs/retention-ledger.md");
+    for (const invented of ["agent_event_merkle_roots", "agent_event_receipts"]) {
+      expect(doc, `invented table must stay unpublished: ${invented}`).not.toContain(invented);
+      const rows = doc.split("\n").filter((line) => line.startsWith(`| \`${invented}\``));
+      expect(rows, `invented table must have no row: ${invented}`).toHaveLength(0);
+    }
+  });
+
+  it("pruneModelTables age-prunes agent audits and idempotency keys at the 90-day cutoff", async () => {
+    const now = new Date("2026-09-30T00:00:00Z");
+    const tables = {
+      agentEventAudits: memTable(),
+      accessLog: memTable(),
+      joinAttempts: memTable(),
+      idempotencyKeys: memTable(),
+      searchLog: memTable(),
+      boardViews: memTable(),
+    };
+    const stores = {
+      ...tables,
+      sessions: createMemorySessionStore(() => now.getTime()),
+      jobUniqueLocks: {
+        async sweepExpired(_now: Date): Promise<number> {
+          return 0;
+        },
+      },
+    } satisfies PruneStores;
+    const old = new Date(now.getTime() - 91 * DAY);
+    const edge = new Date(now.getTime() - 90 * DAY);
+    const fresh = new Date(now.getTime() - DAY);
+    tables.agentEventAudits.at.push(old, edge, fresh);
+    tables.idempotencyKeys.at.push(old, edge, fresh);
+
+    const counts = await pruneModelTables(stores, now);
+
+    expect(counts.agentEventAudits).toBe(1);
+    expect(counts.idempotencyKeys).toBe(1);
+    expect(tables.agentEventAudits.at).toEqual([edge, fresh]);
+    expect(tables.idempotencyKeys.at).toEqual([edge, fresh]);
+    expect(tables.agentEventAudits.cutoffs).toEqual([edge, edge]);
+    expect(tables.idempotencyKeys.cutoffs).toEqual([edge, edge]);
+  });
+
+  it("pins the agent audit and idempotency prune wiring without duplicating prune proofs", () => {
+    const cron = read("src/jobs/cron.ts");
+    expect(cron).toContain("(c) => stores.agentEventAudits.pruneOlderThan(c),");
+    expect(cron).toContain("cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),");
+    expect(cron).toContain("(c) => stores.idempotencyKeys.pruneOlderThan(c),");
+    expect(cron).toContain("cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),");
+    expect(cron).toContain('["agentEventAudits", agentEventAudits.capped]');
+    expect(cron).toContain('["idempotencyKeys", idempotencyKeys.capped]');
+    const pg = normalizeSqlWindow(read("src/jobs/postgres.ts"));
+    // Scoped tables prune without explicit row locks: a held row cancels the
+    // bounded statement instead of skipping past it. These exact pins keep
+    // the age, cap, and both-clock guards, and fail if SKIP LOCKED returns.
+    expect(pg).toContain(
+      "delete from agent_event_audits where id in ( select id from agent_event_audits where created_at < ${cutoff} and created_at < clock_timestamp() - interval '2160 hours' order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
+    );
+    expect(pg).toContain(
+      "delete from agent_event_idempotency_keys where id in ( select id from agent_event_idempotency_keys where created_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
+    );
+    // Sole audit writer is insert-only; dispatch reads the trail, postgres only prunes.
+    expect(read("src/agent-events/audit.ts")).toContain("INSERT INTO agent_event_audits");
+    // Repo-wide: only the prune store may delete audit or idempotency rows,
+    // so the request path can never widen into a drain.
+    for (const table of ["agent_event_audits", "agent_event_idempotency_keys"]) {
+      const offenders = listTsFiles(join(root, "src")).filter((file) => {
+        if (file.endsWith("src/jobs/postgres.ts")) return false;
+        return deleteWindows(readFileSync(file, "utf8"), table).length > 0;
+      });
+      expect(offenders, `only postgres.ts may delete ${table}: ${offenders.join(", ")}`).toEqual(
+        [],
+      );
+    }
+    // Retired table: no Drizzle export, dropped by 1019, content carried by events.
+    expect(read("src/db/schema.ts")).not.toContain("agentEvents");
+    expect(read("drizzle/1019_shared-agent-events.sql")).toContain('DROP TABLE "agent_events"');
+    expect(read("drizzle/1019_shared-agent-events.sql")).toContain(
+      'ALTER TABLE "events" ADD COLUMN "agent_grant_id"',
+    );
+    const proof = read("test/prune.test.ts");
+    for (const name of [
+      "deletes only rows older than each cutoff; cutoff-exact rows survive",
+      "audit pruning skips only rows inside the worker/database clock-skew window",
+    ]) {
+      expect(proof, `existing prune proof: ${name}`).toContain(`it("${name}"`);
+    }
+  });
+
+  it("agent grants have no prune: expiry enforced at admission, no src delete", () => {
+    // Repo-wide: no src file may delete a grant row; expiry/disability
+    // rejects admission instead (403), never deletes.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      const body = readFileSync(file, "utf8");
+      if (deleteWindows(body, "agent_event_grants").length > 0) offenders.push(file);
+    }
+    expect(offenders, `no src file may delete agent_event_grants: ${offenders.join(", ")}`).toEqual(
+      [],
+    );
+    const grants = read("src/agent-events/grants.ts");
+    expect(grants).toContain("grant_expired");
+    expect(grants).toContain("grant_disabled");
+    expect(grants).toContain("expires_at_ms <= Date.now()");
+    expect(read("src/db/schema.ts")).toContain('"agent_event_grants"');
+    expect(read("drizzle/0001_agent-events.sql")).toContain('CREATE TABLE "agent_event_grants"');
+  });
+
+  it("agent hits prune lazily on the shield and rate-limit paths", () => {
+    // One shared bounded oldest-first cleanup, called after admission —
+    // never inline in a verdict transaction and never under a bucket lock.
+    const cleanup = read("src/agent-events/prune-hits.ts");
+    const windows = deleteWindows(cleanup, "agent_event_hits").map(normalizeSqlWindow);
+    expect(windows).toEqual([
+      "delete from agent_event_hits where id in ( select id from agent_event_hits where at < now() - interval '5 minutes' order by at, id limit ${PRUNE_BATCH_SIZE} )",
+    ]);
+    // No explicit row locks on the scoped hit table: a held row defers the
+    // batch via the 1 ms lock timeout instead of skipping past it.
+    for (const banned of ["for update", "for no key update", "for share", "for key share"]) {
+      expect(
+        windows[0]!.toLowerCase(),
+        `shared cleanup must not take row locks: ${banned}`,
+      ).not.toContain(banned);
+    }
+    expect(cleanup, "shared cleanup cap").toContain("PRUNE_BATCH_SIZE = 1000");
+    expect(cleanup, "shared cleanup lock bound").toContain("PRUNE_LOCK_TIMEOUT_MS = 1");
+    expect(cleanup, "shared cleanup lock bound").toContain("SET LOCAL lock_timeout");
+    expect(cleanup, "shared cleanup single-flight").toContain("pg_try_advisory_xact_lock");
+    expect(cleanup, "shared cleanup separate transaction").toContain(
+      "await sql.begin(async (tx) => {",
+    );
+    // Housekeeping must never flip a decided verdict: the cleanup swallows
+    // every failure instead of raising.
+    expect(cleanup, "shared cleanup never raises").not.toContain("throw");
+    // Both admission paths call the shared cleanup after deciding, and the
+    // shield's lock-contention 503 path never does.
+    for (const path of ["src/agent-events/shield.ts", "src/agent-events/rate-limit.ts"]) {
+      expect(read(path), `${path} cleanup import`).toContain(
+        'import { pruneAgentEventHits } from "./prune-hits";',
+      );
+    }
+    const shield = read("src/agent-events/shield.ts");
+    expect(shield.match(/await pruneAgentEventHits\(sql\);/g)).toHaveLength(1);
+    const shieldCall = shield.indexOf("await pruneAgentEventHits(sql);");
+    expect(shieldCall).toBeGreaterThan(shield.indexOf("INSERT INTO agent_event_hits"));
+    expect(shieldCall).toBeLessThan(shield.indexOf("} catch (err) {"));
+    const limiter = read("src/agent-events/rate-limit.ts");
+    expect(limiter.match(/await pruneAgentEventHits\(sql\);/g)).toHaveLength(2);
+    const busyCall = limiter.indexOf("await pruneAgentEventHits(sql);");
+    expect(busyCall).toBeGreaterThan(limiter.indexOf("} catch (err) {"));
+    expect(busyCall).toBeLessThan(limiter.indexOf("return busyEnvelope"));
+    const verdictCall = limiter.indexOf("await pruneAgentEventHits(sql);", busyCall + 1);
+    expect(verdictCall).toBeGreaterThan(limiter.indexOf("return busyEnvelope"));
+    expect(verdictCall).toBeLessThan(limiter.indexOf("return verdict;"));
+    // Repo-wide: only the shared cleanup may delete hit rows, so neither
+    // admission path can widen back into an inline drain.
+    const offenders = listTsFiles(join(root, "src")).filter((file) => {
+      if (file.endsWith("src/agent-events/prune-hits.ts")) return false;
+      return deleteWindows(readFileSync(file, "utf8"), "agent_event_hits").length > 0;
+    });
+    expect(
+      offenders,
+      `only prune-hits may delete agent_event_hits: ${offenders.join(", ")}`,
+    ).toEqual([]);
+    // Budget is the rows in the last 60 s; five minutes is the prune age.
+    // The budget stays on both admission paths (the verdict boundary); the
+    // age and bound live in the shared cleanup.
+    for (const path of ["src/agent-events/shield.ts", "src/agent-events/rate-limit.ts"]) {
+      const body = read(path);
+      expect(body, `${path} budget`).toContain("at > now() - interval '60 seconds'");
+      expect(body, `${path} no inline hit age`).not.toContain("at < now() - interval '5 minutes'");
+    }
+    expect(cleanup, "shared cleanup prune age").toContain("at < now() - interval '5 minutes'");
+    expect(cleanup, "shared cleanup bound").toContain("order by at, id limit ${PRUNE_BATCH_SIZE}");
+    // Live proofs stay in the behavior suites; this pin only wires them.
+    const limiterProof = read("test/agent-events-inner-limiter-prune.test.ts");
+    for (const name of [
+      "prunes expired rows on a refused call and keeps fresh rows",
+      "drains an expired backlog over refused-only calls, capped at 1000 per pass",
+      "caps the admitted call's prune at 1000 rows per pass",
+      "does not stall admission on an unrelated locked expired row",
+    ]) {
+      expect(limiterProof, `existing limiter proof: ${name}`).toContain(`it("${name}"`);
+    }
+    expect(
+      read("test/agent-events-prune-contention-acceptance.test.ts"),
+      "existing shield lazy-cleanup proof",
+    ).toContain(
+      `it("shield-only refusals drain capped oldest-first batches without authenticating"`,
+    );
   });
 });
 
@@ -687,6 +1104,14 @@ describe("retention ledger queue mechanisms (no DB)", () => {
       ["sql`truncate table ${queueJobs}`", "queue_jobs"],
       ["const { queueJobs: jobs } = schema; db.delete(jobs)", "queue_jobs"],
       ["const { queueJobs: jobs } = schema; const q2 = jobs; db.delete(q2)", "queue_jobs"],
+      // Agent-event table-object deletes ride the same symbol mapping.
+      ["db.delete(agentEventAudits)", "agent_event_audits"],
+      ["import { agentEventGrants as g } from './schema'; db.delete(g)", "agent_event_grants"],
+      ["const h = schema.agentEventHits; db.delete(h)", "agent_event_hits"],
+      [
+        "db.execute(sql`delete from ${agentEventIdempotencyKeys} where created_at < ${cutoff}`)",
+        "agent_event_idempotency_keys",
+      ],
       // Sync-attempt table-object deletes ride the same symbol mapping.
       ["db.delete(eventSyncAttempts)", "event_sync_attempts"],
       ["import { eventSyncAttempts as a } from './schema'; db.delete(a)", "event_sync_attempts"],
@@ -964,5 +1389,293 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(heir).not.toBeNull();
     expect(heir).not.toBe(stale);
     await lock.release(staleKey, heir!);
+  });
+});
+
+describe("retention ledger L8b core member tables", () => {
+  const L8B_TABLES = [
+    "users",
+    "profiles",
+    "rsvps",
+    "events",
+    "featured_contents",
+    "discord_event_snapshots",
+    "web_oauth_journeys",
+  ];
+
+  it("publishes one dedicated row per core member table", () => {
+    const doc = read("docs/retention-ledger.md");
+    for (const table of L8B_TABLES) {
+      const rows = doc
+        .split("\n")
+        .filter((line) => new RegExp(`^\\| \`${table}\`(?:\\s|\\|)`).test(line));
+      expect(rows, `one dedicated ledger row for ${table}`).toHaveLength(1);
+    }
+    const scope = doc.split("\n").filter((line) => line.startsWith("- "));
+    expect(
+      scope.some((line) => line.includes("Core member tables")),
+      "scope must name the L8b slice",
+    ).toBe(true);
+    // The cascade promise lives in two new rows (rsvps, events) plus the
+    // pre-existing sync-attempts row, so a doc-wide probe cannot see it go
+    // stale in one of them: pin it inside each extracted row instead.
+    const rowFor = (table: string): string =>
+      doc.split("\n").filter((line) => new RegExp(`^\\| \`${table}\`(?:\\s|\\|)`).test(line))[0]!;
+    expect(rowFor("rsvps"), "rsvps row must pin its never-firing cascade").toContain(
+      "ON DELETE cascade",
+    );
+    expect(rowFor("events"), "events row must pin its never-firing cascades").toContain(
+      "ON DELETE cascade",
+    );
+    for (const claim of [
+      "No age window",
+      "eraseMember",
+      "bin/erase-member.mjs",
+      "upsertRosterUser",
+      "ON CONFLICT (id) DO UPDATE",
+      "DELETE /events/:key/rsvp",
+      "src/events/routes-rsvp.tsx:150",
+      "deliberately no `deleteEvent`",
+      "no event delete anywhere on this resource",
+      "deleteFeatured",
+      "Deleting featured content is safe",
+      "DISCORD_CACHE_FRESH_MS = 60_000",
+      "DISCORD_CACHE_STALE_MS = 600_000",
+      "DISCORD_SNAPSHOT_MAX_KEYS = 128",
+      "DISCORD_SNAPSHOT_CLEANUP_BATCH = 16",
+      "OAUTH_JOURNEY_TTL_SECONDS = 600",
+      "OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000",
+      "tombstone",
+      "for update skip locked",
+      "member-erasure.md#what-is-deleted",
+      "member-erasure.md#what-is-retained-and-why",
+      "No policy or CISO decision changes in this slice",
+    ]) {
+      expect(doc, `ledger must pin L8b claim: ${claim}`).toContain(claim);
+    }
+  });
+
+  it("pins the L8b cache/journey constants (read-only)", () => {
+    expect(OAUTH_JOURNEY_TTL_SECONDS).toBe(600);
+    expect(OAUTH_JOURNEY_SWEEP_BATCH_SIZE).toBe(1000);
+    expect(DISCORD_CACHE_FRESH_MS).toBe(60_000);
+    expect(DISCORD_CACHE_STALE_MS).toBe(600_000);
+    expect(DISCORD_SNAPSHOT_MAX_KEYS).toBe(128);
+    expect(DISCORD_SNAPSHOT_CLEANUP_BATCH).toBe(16);
+    // None of the seven tables has a retention-days constant or a prune
+    // store: the daily model:prune wiring never mentions them. Constants use
+    // UPPER_SNAKE (EVENT_RETENTION_DAYS), so the constants probe is a
+    // case-insensitive per-table retention regex; singular/plural tolerant,
+    // separators flexible. The table stem must sit adjacent to retention (only
+    // separators between): a broad `events.*retention` false-positives on the
+    // pre-existing EVENT_SEARCH_LOG_RETENTION_DAYS, and a broad
+    // `retention.*events` false-positives on trailing `// config/agent-events`
+    // comments on the same line. Two tables use a shorter concept prefix in
+    // code (DISCORD_SNAPSHOT_*, OAUTH_JOURNEY_*), so those aliases are probed
+    // too; the exact-name pin below ends synonym evasion entirely.
+    const constants = read("src/jobs/constants.ts");
+    const ALIAS_STEMS: Record<string, string[]> = {
+      discord_event_snapshots: ["discord_snapshot"],
+      web_oauth_journeys: ["oauth_journey"],
+    };
+    const stemsFor = (table: string): string[] => {
+      const toStem = (name: string): string =>
+        name
+          .split("_")
+          .map((part) => part.replace(/s$/, "s?"))
+          .join(".?");
+      return [toStem(table), ...(ALIAS_STEMS[table] ?? []).map(toStem)];
+    };
+    for (const table of L8B_TABLES) {
+      for (const stem of stemsFor(table)) {
+        expect(constants, `no retention-days constant may name ${table}`).not.toMatch(
+          new RegExp(`${stem}[_\\-\\s]*retention|retention[_\\-\\s]*${stem}`, "i"),
+        );
+      }
+    }
+    // Exact-name pin: no *_RETENTION_DAYS may appear beyond the known six.
+    // A synonym (DISCORD_SNAPSHOT_RETENTION_DAYS, OAUTH_JOURNEY_RETENTION_DAYS)
+    // keeps the stem probe green when the alias list drifts; this fails it.
+    const retentionNames = [...constants.matchAll(/export const ([A-Z0-9_]*RETENTION_DAYS)\b/g)]
+      .map((m) => m[1])
+      .sort();
+    expect(retentionNames).toEqual([
+      "AGENT_EVENT_AUDIT_RETENTION_DAYS",
+      "BOARD_VIEW_LOG_RETENTION_DAYS",
+      "EVENT_SEARCH_LOG_RETENTION_DAYS",
+      "IDEMPOTENCY_KEY_RETENTION_DAYS",
+      "JOIN_ATTEMPT_RETENTION_DAYS",
+      "MEMBER_ACCESS_LOG_RETENTION_DAYS",
+    ]);
+    // Prune wiring: bare names are unambiguous except "events", which also
+    // matches ordinary prose ("stale events"), so that one is probed by its
+    // exact SQL/store shape.
+    for (const file of ["src/jobs/constants.ts", "src/jobs/cron.ts", "src/jobs/postgres.ts"]) {
+      for (const table of L8B_TABLES.filter((name) => name !== "events")) {
+        expect(read(file), `${file} must not prune ${table}`).not.toContain(table);
+      }
+      expect(read(file), `${file} must not prune events`).not.toContain("delete from events");
+      expect(read(file), `${file} must not prune events`).not.toContain("stores.events");
+    }
+  });
+
+  it("pins the erasure lifecycle: users, profiles, rsvps leave only via eraseMember", () => {
+    expect([...ERASURE_TABLES]).toEqual([
+      "users",
+      "profiles",
+      "rsvps",
+      "web_sessions",
+      "web_session_grace",
+      "join_attempts",
+    ]);
+    const erasure = read("src/member-erasure.ts");
+    expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
+    expect(erasure).toContain("delete from profiles where user_id = ${discordId} returning 1");
+    expect(erasure).toContain("delete from rsvps where user_id = ${discordId} returning 1");
+    // The roster write refreshes in place and never deletes.
+    const roster = read("src/db/roster.ts");
+    expect(roster).toContain("ON CONFLICT (id) DO UPDATE");
+    // Repo-wide: only the erasure deletes users/profiles rows. rsvps has two
+    // further member-action writers pinned below, so it is excluded here.
+    for (const table of ["users", "profiles"]) {
+      const offenders = listTsFiles(join(root, "src")).filter(
+        (file) => deleteWindows(readFileSync(file, "utf8"), table).length > 0,
+      );
+      expect(
+        offenders.map((file) => file.replace(root, "").replace(/^\/+/, "")),
+        `only member-erasure.ts may delete ${table}`,
+      ).toEqual(["src/member-erasure.ts"]);
+    }
+  });
+
+  it("pins the rsvp member-action paths and the never-firing parent cascade", () => {
+    // Member withdraw: exactly that member's row for the event, then a
+    // waitlist promotion. The waitlist re-queue deletes and recreates the
+    // same member's row to reset both FIFO keys.
+    expect(read("src/events/routes-rsvp.tsx")).toContain('app.delete("/events/:key/rsvp"');
+    const store = read("src/events/rsvp.ts");
+    expect(store).toContain(".delete(rsvps)");
+    // The event FK cascades, but no app path deletes an event row, so the
+    // cascade never fires (events row below). The live schema check is scoped
+    // to the rsvps pgTable block: a file-wide probe stays green on the
+    // unrelated event_sync_attempts cascade when the rsvps FK flips.
+    expect(read("drizzle/1002_rsvps.sql")).toContain("ON DELETE cascade");
+    const schema = read("src/db/admin-schema.ts");
+    const rsvpsStart = schema.indexOf("export const rsvps = pgTable(");
+    expect(rsvpsStart, "rsvps table must exist in admin-schema").toBeGreaterThanOrEqual(0);
+    const rsvpsEnd = schema.indexOf("\nexport const ", rsvpsStart + 1);
+    const rsvpsBlock = schema.slice(rsvpsStart, rsvpsEnd < 0 ? undefined : rsvpsEnd);
+    expect(rsvpsBlock, "rsvps event_id FK must cascade").toContain(
+      '.references(() => events.id, { onDelete: "cascade" })',
+    );
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "rsvps").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""))
+      .sort();
+    expect(offenders, "only erasure and the member-action store delete rsvps").toEqual([
+      "src/events/rsvp.ts",
+      "src/member-erasure.ts",
+    ]);
+  });
+
+  it("pins events: deliberately no delete path, retained indefinitely", () => {
+    const reads = read("src/admin/store-event-reads.ts");
+    expect(reads).toContain("There is deliberately no deleteEvent");
+    expect(read("src/admin/kit-event-edit.ts")).toContain("no event delete anywhere");
+    const erasureDoc = read("docs/member-erasure.md");
+    expect(erasureDoc).toContain("this command never deletes event rows");
+    // Repo-wide: no src file deletes an event row.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      if (deleteWindows(readFileSync(file, "utf8"), "events").length > 0) offenders.push(file);
+    }
+    expect(offenders, `no src file may delete events: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("pins featured_contents: moderator single-row delete only, audited", () => {
+    const store = read("src/admin/store-featured.ts");
+    expect(store).toContain("Deleting featured content is safe");
+    expect(store).toContain("deleted featured content ${locked.title}");
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "featured_contents").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only store-featured.ts may delete featured_contents").toEqual([
+      "src/admin/store-featured.ts",
+    ]);
+    const windows = deleteWindows(store, "featured_contents").map(normalizeSqlWindow);
+    expect(windows).toEqual([".delete(featuredContents)"]);
+  });
+
+  it("pins the discord snapshot cache: bounds, opportunistic cleanup, no prune", () => {
+    const fields = Object.values(getTableColumns(discordEventSnapshots)).map(
+      (column) => column.name,
+    );
+    expect(fields).toEqual([
+      "key",
+      "payload",
+      "succeeded_at",
+      "retry_at",
+      "lease_token",
+      "lease_expires_at",
+    ]);
+    const store = read("src/events/discord-snapshot-postgres.ts");
+    expect(store).toContain("Expiring cache bytes only: never events/audit/history");
+    expect(normalizeSqlWindow(store)).toContain(
+      "delete from discord_event_snapshots where key in ( select key from discord_event_snapshots where coalesce(succeeded_at, '-infinity'::timestamptz) <= clock_timestamp() - make_interval(secs => ${DISCORD_CACHE_STALE_MS / 1000})",
+    );
+    expect(store).toContain(
+      "order by key limit ${DISCORD_SNAPSHOT_CLEANUP_BATCH} for update skip locked",
+    );
+    expect(store).toContain("capacity.count >= DISCORD_SNAPSHOT_MAX_KEYS");
+    expect(read("drizzle/1021_discord-event-snapshots.sql")).toContain(
+      "Additive display cache only",
+    );
+    const offenders = listTsFiles(join(root, "src"))
+      .filter(
+        (file) => deleteWindows(readFileSync(file, "utf8"), "discord_event_snapshots").length > 0,
+      )
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only the snapshot store deletes snapshots").toEqual([
+      "src/events/discord-snapshot-postgres.ts",
+    ]);
+  });
+
+  it("pins the oauth journey TTL, tombstone consume, and request-path sweep", () => {
+    const fields = Object.values(getTableColumns(webOAuthJourneys)).map((column) => column.name);
+    expect(fields).toEqual(["state_hash", "flow", "expires_at", "consumed_at"]);
+    const store = read("src/oauth-journeys.ts");
+    expect(store).toContain("Keep the tombstone until expiry; never delete on consume");
+    expect(store).toContain("values (${stateHash}, ${flow}, now() + ${OAUTH_JOURNEY_TTL_SECONDS}");
+    expect(normalizeSqlWindow(store)).toContain(
+      "delete from web_oauth_journeys where state_hash in ( select state_hash from web_oauth_journeys where expires_at <= now() order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE} for update skip locked ) returning state_hash",
+    );
+    // Request-path sweep on auth/join starts, never the daily model:prune.
+    expect(read("src/auth/routes.ts")).toContain("await store.journeys.sweepExpired();");
+    expect(read("src/join/route-start.ts")).toContain("await store.journeys.sweepExpired();");
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "web_oauth_journeys").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only the journey store deletes journeys").toEqual(["src/oauth-journeys.ts"]);
+    // One batch per request: a loop draining the backlog inside one sweep
+    // would hold the auth/join start. The bound is proved by over-batch
+    // sweeps (1,001 expired rows -> 1,000 then 1 then 0), not by the SQL text.
+    const journeyProof = read("test/oauth-journeys.test.ts");
+    for (const name of [
+      "memory sweep removes at most one batch per call",
+      "postgres sweep drains a multi-batch backlog across calls, never within one request",
+    ]) {
+      expect(journeyProof, `journey batch proof: ${name}`).toContain(`it("${name}"`);
+    }
+    // The journey table carries no member key, so erasure never touches it.
+    // Scoped to the What-is-deleted section: the retained section names
+    // web_oauth_journeys (no member columns, erasure has nothing to delete),
+    // which agrees with the ledger. A doc-wide absence pin goes red on merge.
+    const erasureDoc = read("docs/member-erasure.md");
+    const deletedStart = erasureDoc.indexOf("## What is deleted");
+    const retainedStart = erasureDoc.indexOf("## What is retained");
+    expect(deletedStart).toBeGreaterThanOrEqual(0);
+    expect(retainedStart).toBeGreaterThan(deletedStart);
+    const deletedSection = erasureDoc.slice(deletedStart, retainedStart);
+    expect(deletedSection).not.toContain("web_oauth_journeys");
   });
 });

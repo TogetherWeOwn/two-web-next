@@ -204,6 +204,20 @@
       "when": 1792324473098,
       "tag": "1028_join-attempts-request-id-index",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792375795065,
+      "tag": "1029_event-sync-terminal-intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792443696928,
+      "tag": "1030_session-predecessor-grace",
+      "breakpoints": true
     }
   ]
 }

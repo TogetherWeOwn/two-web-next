@@ -14,7 +14,7 @@ import {
   usableDiscordSnapshot,
 } from "./discord-snapshot";
 import { postgresDiscordSnapshotStore } from "./discord-snapshot-postgres";
-import { liveDiscordEventsSource } from "./discord-transients-live";
+import { DiscordGuildIdConfigError, liveDiscordEventsSource } from "./discord-transients-live";
 import {
   type DiscordEventsSource,
   type DiscordSnapshotOutcome,
@@ -28,12 +28,40 @@ function safeSnapshotSqlState(error: unknown): string | undefined {
     : undefined;
 }
 
+/** A refused guild id degrades to an empty failed read, never a thrown page. */
+function refusedGuildIdSource(): DiscordEventsSource {
+  return {
+    lastReadFailed: () => true,
+    async upcoming(): Promise<DiscordTransient[]> {
+      return [];
+    },
+  };
+}
+
 /** Shared completed snapshots and atomic admission; the HTTP reader remains request-owned. */
 export function cachedDiscordEventsSource(
   env: Env,
-  inner: DiscordEventsSource = liveDiscordEventsSource(env),
+  inner?: DiscordEventsSource,
   store: DiscordSnapshotStore = postgresDiscordSnapshotStore(env),
 ): DiscordEventsSource {
+  let resolvedInner: DiscordEventsSource;
+  if (inner) {
+    resolvedInner = inner;
+  } else {
+    try {
+      resolvedInner = liveDiscordEventsSource(env);
+    } catch (err) {
+      if (err instanceof DiscordGuildIdConfigError) {
+        // Fixed key only: the refused value must never reach a log line.
+        // Degrade like any failed Discord read so /events stays 200 and the
+        // home teaser still lists canonical events; zero fetches happened.
+        console.warn("Discord guild id configuration invalid.");
+        return refusedGuildIdSource();
+      }
+      throw err;
+    }
+  }
+  const liveInner = resolvedInner;
   let failed = false;
   return {
     lastReadFailed: () => failed,
@@ -65,12 +93,12 @@ export function cachedDiscordEventsSource(
         if (claim.token) {
           let result: SnapshotCompletion = { retryMs: DISCORD_FAILURE_HOLD_MS };
           try {
-            const rows = await inner.upcoming(now);
-            if (!inner.lastReadFailed()) {
+            const rows = await liveInner.upcoming(now);
+            if (!liveInner.lastReadFailed()) {
               result = { payload: encodeDiscordSnapshot(rows) };
               liveRows = rows;
             } else {
-              const failure = inner.lastReadFailure?.();
+              const failure = liveInner.lastReadFailure?.();
               const retry = failure?.status === 429 ? failure.retryAfter : undefined;
               if (
                 typeof retry === "number" &&

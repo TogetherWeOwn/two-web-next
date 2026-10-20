@@ -234,7 +234,10 @@ describe("legitimately absent sessions keep the guest treatment", () => {
     // The row vanished between the session read and rotation (revoked or
     // expired mid-request): rotate resolves false instead of throwing.
     const home = await fixture(MEMBER);
-    vi.spyOn(home.store, "rotate").mockResolvedValue(false);
+    vi.spyOn(home.store, "rotate").mockImplementation(async (hash) => {
+      await home.store.revoke(hash);
+      return false;
+    });
     const homeRes = await app.request("/", { headers: { cookie: home.cookie } }, home.bindings);
     expect(homeRes.status).toBe(200);
     const homeBody = await homeRes.text();
@@ -243,7 +246,10 @@ describe("legitimately absent sessions keep the guest treatment", () => {
     expect(homeRes.headers.getSetCookie()).toEqual([]);
 
     const gated = await fixture(MODERATOR);
-    vi.spyOn(gated.store, "rotate").mockResolvedValue(false);
+    vi.spyOn(gated.store, "rotate").mockImplementation(async (hash) => {
+      await gated.store.revoke(hash);
+      return false;
+    });
     const gatedRes = await app.request(
       DRAFT_PATH,
       { headers: { cookie: gated.cookie } },
@@ -255,7 +261,10 @@ describe("legitimately absent sessions keep the guest treatment", () => {
 
   it("/events stays a 200 guest (not an outage) when rotation finds no live row", async () => {
     const { store, cookie, bindings } = await eventsFixture(MEMBER);
-    const rotate = vi.spyOn(store, "rotate").mockResolvedValue(false);
+    const rotate = vi.spyOn(store, "rotate").mockImplementation(async (hash) => {
+      await store.revoke(hash);
+      return false;
+    });
     const res = await app.request(EVENTS_PATH, { headers: { cookie } }, bindings);
     expect(rotate).toHaveBeenCalledOnce();
     expect(res.status).toBe(200);

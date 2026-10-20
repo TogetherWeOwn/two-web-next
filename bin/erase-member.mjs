@@ -2,7 +2,8 @@
 // Operator member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): for ONE Discord id, remove that
 // member's rows in one transaction across users, profiles, rsvps,
-// web_sessions (signs them out everywhere) and join_attempts.
+// web_sessions (signs them out everywhere), web_session_grace (retired
+// predecessor records) and join_attempts.
 //
 //   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]
 //
@@ -124,6 +125,11 @@ export function createEraseClient(postgres, raw) {
     throw new Error("Refusing: remote client requires verify-full TLS.");
   // Only parsed endpoint fields reach the driver: query parameters such as
   // sslrootcert must never become server startup parameters (Postgres 42704).
+  // Bounded operator waits: finite server-enforced statement and lock budgets
+  // on this CLI's own single connection. They cover the dry-run counts (no
+  // transaction) and every apply statement alike, without changing global
+  // database policy. A locked target fails the whole operation; never SKIP
+  // LOCKED and never report success while a member row stays unerased.
   return postgres({
     ...endpoint,
     host: [host],
@@ -132,7 +138,13 @@ export function createEraseClient(postgres, raw) {
     debug: false,
     onnotice: () => {},
     target_session_attrs: "read-write",
-    connection: { timezone: "UTC", search_path: "public", application_name: "erase-member" },
+    connection: {
+      timezone: "UTC",
+      search_path: "public",
+      application_name: "erase-member",
+      statement_timeout: 10_000,
+      lock_timeout: 5_000,
+    },
   });
 }
 

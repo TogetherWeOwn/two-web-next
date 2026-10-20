@@ -75,10 +75,12 @@ function fixture(opts: { events?: (typeof events.$inferSelect)[]; featured?: boo
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   let eventQueries = 0;
   let featuredQueries = 0;
-  let firstDbQueryAt = 0;
+  let upcomingEntered = false;
+  let featuredEntered = false;
   const db = drizzle(async (sql: string, params: unknown[]) => {
-    if (firstDbQueryAt === 0) firstDbQueryAt = Date.now();
+    void params;
     if (sql.includes('from "featured_contents"')) {
+      featuredEntered = true;
       featuredQueries += 1;
       // Positional projection: id, title, body, url, imageUrl, imageAlt,
       // startsAt, endsAt. Null bounds stay visible at every instant.
@@ -87,6 +89,13 @@ function fixture(opts: { events?: (typeof events.$inferSelect)[]; featured?: boo
           ? [[1, "Community news", "Featured body", null, null, null, null, null]]
           : [],
       };
+    }
+    // Entry signal for the upcoming read: the canonical events query plus
+    // its auxiliary reads (past-zone timezones, persisted Discord ids, RSVP
+    // aggregates) all belong to the upcoming path, so any of them proves the
+    // read started.
+    if (sql.includes('from "events"') || sql.includes('from "rsvps"')) {
+      upcomingEntered = true;
     }
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
@@ -122,7 +131,7 @@ function fixture(opts: { events?: (typeof events.$inferSelect)[]; featured?: boo
     db,
     env,
     counts: () => ({ eventQueries, featuredQueries }),
-    dbFirstQueryAt: () => firstDbQueryAt,
+    contentEntered: () => ({ upcoming: upcomingEntered, featured: featuredEntered }),
   };
 }
 
@@ -133,7 +142,7 @@ afterEach(() => {
 });
 
 describe("homepage concurrent reads", () => {
-  it("starts the guest data reads before a slow session read resolves", async () => {
+  it("starts the upcoming + featured reads before the session resolves", async () => {
     const f = fixture();
     const store = (f.env as unknown as Record<string, unknown>).SESSION_STORE as ReturnType<
       typeof createMemorySessionStore
@@ -149,13 +158,18 @@ describe("homepage concurrent reads", () => {
       expiresAt: new Date(Date.now() + 3600_000),
     });
     const origGet = store.get.bind(store);
-    let sessionResolvedAt = 0;
+    // Explicit session gate, not an elapsed-time guess: sequential code would
+    // hold every content read behind this gate, so no content entry appears
+    // until it opens.
+    let releaseSession!: () => void;
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve;
+    });
+    let sessionResolved = false;
     store.get = (async (...args: Parameters<typeof origGet>) => {
-      // Slow session storage: sequential code would hold every guest data
-      // read behind this delay.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await sessionGate;
       const row = await origGet(...args);
-      sessionResolvedAt = Date.now();
+      sessionResolved = true;
       return row;
     }) as typeof origGet;
     const cookie = await serializeSigned("__Host-two_session", token, f.env.SESSION_SECRET, {
@@ -164,11 +178,28 @@ describe("homepage concurrent reads", () => {
       httpOnly: true,
       sameSite: "Lax",
     }).then((signed) => (signed as string).split(";")[0]!);
-    const response = await app.request("/", { headers: { cookie } }, f.env);
-    expect(response.status).toBe(200);
-    // The first DB query started while the session read was still pending.
-    expect(f.dbFirstQueryAt()).toBeGreaterThan(0);
-    expect(f.dbFirstQueryAt()).toBeLessThan(sessionResolvedAt);
+    let response: Response | undefined;
+    const pending = Promise.resolve(app.request("/", { headers: { cookie } }, f.env)).then(
+      (res) => ((response = res), res),
+    );
+    try {
+      // Both content-read entries are observed while the session gate is
+      // still shut. A session-first serialization leaves at least one entry
+      // unobserved and times out here instead of passing on a lucky delay.
+      await vi.waitUntil(() => f.contentEntered().upcoming && f.contentEntered().featured, {
+        timeout: 2000,
+      });
+      expect(sessionResolved).toBe(false);
+    } finally {
+      // Always release and drain, including on assertion failure: otherwise a
+      // red run leaves the gated session (and its rotation) hanging.
+      releaseSession();
+      await pending;
+    }
+    expect(response?.status).toBe(200);
+    const html = await response!.text();
+    expect(html).toContain("member-one");
+    expect(html).toContain("Game night 1");
   });
 });
 

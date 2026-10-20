@@ -112,13 +112,13 @@ beforeEach(() => {
   }));
   vi.mocked(updateEvent).mockImplementation(async (_db, _actor, _key, input) => {
     const updated = saved(input);
-    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     return { row: updated, writeBack: null, childWriteBacks: [] };
   });
   // PATCH merges through the real pure seam against the fixture row (no SQL).
   vi.mocked(patchEvent).mockImplementation(async (_db, _actor, _key, patch) => {
     const updated = saved(mergePatchInput(row, patch));
-    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     return { row: updated, writeBack: null, childWriteBacks: [] };
   });
 });

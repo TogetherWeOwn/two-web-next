@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
 import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../ci/a11y-policy.mjs";
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
+import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
 
 const WCAG_AA_TAGS = gateTags as string[];
 const assertNoViolations = gateAssert as (
@@ -69,6 +70,10 @@ const INVITE_LINK: ExpectedLink = {
 };
 
 const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
+  {
+    code: 400,
+    links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+  },
   {
     code: 404,
     links: [
@@ -188,6 +193,8 @@ export function renderErrorShell(code) {
     afterAll(async () => {
       await browser?.close();
     });
+
+    registerPastArchiveBrowserAcceptance(() => browser);
 
     async function loadShell(code: KitErrorStatus): Promise<void> {
       // The shell offers recovery with no session, DB or network reads: rendering

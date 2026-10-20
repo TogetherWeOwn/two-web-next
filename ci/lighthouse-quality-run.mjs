@@ -28,12 +28,21 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
+const { sampleMatrix, evidenceLines } = require("./lighthouse-samples.cjs");
 
 const QUALITY_DIR = ".lighthouseci/quality";
 const LHCI_DIR = ".lighthouseci";
@@ -100,6 +109,7 @@ export function expectedLhrs({ env = process.env } = {}) {
     delete require.cache[require.resolve("./lighthouserc.quality.cjs")];
     const { ci } = require("./lighthouserc.quality.cjs");
     return {
+      collect: structuredClone(ci.collect),
       expected: ci.collect.url.length * ci.collect.numberOfRuns,
       runsPerRoute: ci.collect.numberOfRuns,
       mode: process.env.QUALITY_ORIGIN ? `deployed (${process.env.QUALITY_ORIGIN})` : "fixture",
@@ -155,6 +165,24 @@ function readLhrFiles(dir, accept) {
   return lhrs;
 }
 
+export function loadAssertions(dir = LHCI_DIR) {
+  const path = join(dir, "assertion-results.json");
+  if (!existsSync(path)) return [];
+  try {
+    const assertions = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      !Array.isArray(assertions) ||
+      assertions.some((entry) => !entry || typeof entry !== "object")
+    ) {
+      throw new Error("Invalid assertion results");
+    }
+    return assertions.filter((entry) => entry.passed !== true);
+  } catch {
+    // Malformed assertion evidence must not silently become an empty success.
+    return [{ level: "error", auditId: "unreadable-assertion-results", readError: true }];
+  }
+}
+
 // Fresh evidence for every attempt: stale quality reports AND stale saved LHRs
 // (from the mobile `lhci autorun` step sharing this checkout, or an earlier
 // invocation) must never count toward the new attempt. Mirrors lhci's own
@@ -169,7 +197,12 @@ export function clearAttemptEvidence({ qualityDir = QUALITY_DIR, lhciDir = LHCI_
     return;
   }
   for (const name of names) {
-    if (!LHR_FILE_REGEX.test(name) && !LHR_HTML_REGEX.test(name)) continue;
+    if (
+      !LHR_FILE_REGEX.test(name) &&
+      !LHR_HTML_REGEX.test(name) &&
+      name !== "assertion-results.json"
+    )
+      continue;
     try {
       rmSync(join(lhciDir, name));
     } catch {
@@ -178,15 +211,10 @@ export function clearAttemptEvidence({ qualityDir = QUALITY_DIR, lhciDir = LHCI_
   }
 }
 
-export function shortfalls(lhrs, { runsPerRoute }) {
-  const byRoute = new Map();
-  for (const lhr of lhrs) {
-    const route = routeOf(lhr.finalDisplayedUrl || lhr.requestedUrl || "");
-    byRoute.set(route, (byRoute.get(route) ?? 0) + 1);
-  }
-  return [...byRoute.entries()]
-    .filter(([, count]) => count < runsPerRoute)
-    .sort(([a], [b]) => (a < b ? -1 : 1));
+export function shortfalls(lhrs, collect) {
+  return sampleMatrix(lhrs, collect)
+    .rows.filter((row) => row.runs.length < row.quota)
+    .map((row) => [row.url, row.runs.length]);
 }
 
 export function buildDiagnosis({ mode, expected, attempts }) {
@@ -200,32 +228,26 @@ export function buildDiagnosis({ mode, expected, attempts }) {
     ...attempts.map((a) => `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs`),
   ];
   let verdict;
-  if (collected >= expected && last.assertFailed) {
+  if (last.matrix.complete && last.assertFailed) {
     verdict =
       "BUDGET BREACH: full evidence collected and an assertion vs " +
       "ci/quality-budget.json missed. See quality-summary.md for the route and " +
       "the failing audits. Fix the cause; do not lower the floors.";
-  } else if (collected >= expected) {
+  } else if (last.matrix.complete) {
     verdict =
-      "UNCLASSIFIED STEP FAILURE: full evidence collected but `lhci autorun` " +
-      "exited non-zero with no evaluated assertion failure, so no floor breach " +
+      "UNCLASSIFIED STEP FAILURE: full evidence collected but process or assertion evidence " +
+      "did not establish success. No evaluated assertion failure, so no floor breach " +
       "was evidenced. The failure came from a collect, upload or config step — " +
       "read the tails below. Do not lower ci/quality-budget.json.";
   } else {
     verdict =
-      `COLLECT FAILURE (transient/infra suspected): only ${collected}/${expected} LHRs ` +
-      "collected, so no floor breach is evidenced. Re-run the failed step; do not " +
+      `COLLECT FAILURE (transient/infra suspected): ${collected}/${expected} LHR files, ` +
+      "but the planned per-URL sample quotas were not met. Re-run the failed step; do not " +
       "lower ci/quality-budget.json. If this recurs, the tail below names the " +
       "collect error (Chrome crash, NO_NAVSTART, timeout) to chase next.";
   }
   lines.push(`- verdict: ${verdict}`, "");
-  const short = shortfalls(last.lhrObjects, { runsPerRoute: last.runsPerRoute });
-  if (short.length) {
-    lines.push("### Routes short of evidence", "");
-    for (const [route, count] of short)
-      lines.push(`- ${route}: ${count}/${last.runsPerRoute} runs`);
-    lines.push("");
-  }
+  lines.push("### Planned URL evidence", "", ...evidenceLines(last.matrix), "");
   lines.push("### Collect-error tails (last lines of each attempt)", "");
   for (const a of attempts) {
     lines.push(`#### Attempt ${a.n} (exit ${a.exitCode})`, "", "```", a.tail.trimEnd(), "```", "");
@@ -245,7 +267,7 @@ export async function main(
     log = console.log,
   } = {},
 ) {
-  const { expected, runsPerRoute, mode } = expectedLhrs({ env });
+  const { collect, expected, runsPerRoute, mode } = expectedLhrs({ env });
   const extraArgs = argv.filter((a) => a !== "--selftest");
   mkdirSync(join(logFile, ".."), { recursive: true });
   writeFileSync(logFile, "");
@@ -282,31 +304,42 @@ export async function main(
       flag: "a",
     });
     const lhrObjects = loadCollectedLhrs(lhciDir);
+    const matrix = sampleMatrix(lhrObjects, collect);
+    const assertions = loadAssertions(lhciDir);
+    const assertFailed =
+      hasAssertFailure(output) ||
+      assertions.some((failure) => failure.level === "error" && !failure.readError);
     attempts.push({
+      matrix,
       n,
       exitCode,
       lhrs: lhrObjects.length,
       lhrObjects,
       runsPerRoute,
-      assertFailed: hasAssertFailure(output),
+      assertFailed,
       tail: output.split("\n").slice(-DIAGNOSIS_TAIL_LINES).join("\n"),
     });
-    if (exitCode === 0) {
+    if (
+      exitCode === 0 &&
+      matrix.complete &&
+      !assertFailed &&
+      !assertions.some((failure) => failure.readError)
+    ) {
       log(`Collect complete: exit 0 with ${lhrObjects.length}/${expected} LHRs in ${elapsed}s.`);
       return 0;
     }
-    if (lhrObjects.length >= expected) {
+    if (matrix.complete) {
       const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
       writeFileSync(diagnosisFile, text);
       log(verdict);
-      return exitCode;
+      return exitCode === 0 ? 1 : exitCode;
     }
     if (n === MAX_ATTEMPTS) {
       const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
       writeFileSync(diagnosisFile, text);
       log(verdict);
       log(`Diagnosis written to ${diagnosisFile}; full output in ${logFile}.`);
-      return exitCode;
+      return exitCode === 0 ? 1 : exitCode;
     }
   }
   return 1;
@@ -344,18 +377,29 @@ function selftest() {
 
   // loadLhrs counts only parsed reports carrying categories.
   const dir = mkdtempSync(join(tmpdir(), "lh-quality-"));
-  const lhr = (url) => ({ requestedUrl: url, categories: { performance: { score: 1 } } });
+  const lhr = (url) => ({
+    requestedUrl: url,
+    categories: Object.fromEntries(
+      ["performance", "accessibility", "best-practices", "seo"].map((id) => [id, { score: 1 }]),
+    ),
+  });
   writeFileSync(join(dir, "a-report.json"), JSON.stringify(lhr("https://h/")));
   writeFileSync(join(dir, "manifest.json"), "{}");
   writeFileSync(join(dir, "half.json"), "{truncated");
   assert.equal(loadLhrs(dir).length, 1);
   assert.equal(loadLhrs(join(dir, "missing")).length, 0);
   assert.deepEqual(
-    shortfalls([lhr("https://h/"), lhr("https://h/")], { runsPerRoute: 3 }).map(([r]) => r),
-    ["/"],
+    shortfalls([lhr("https://h/"), lhr("https://h/")], {
+      url: ["https://h/"],
+      numberOfRuns: 3,
+    }).map(([r]) => r),
+    ["https://h/"],
   );
   assert.deepEqual(
-    shortfalls([lhr("https://h/"), lhr("https://h/"), lhr("https://h/")], { runsPerRoute: 3 }),
+    shortfalls([lhr("https://h/"), lhr("https://h/"), lhr("https://h/")], {
+      url: ["https://h/"],
+      numberOfRuns: 3,
+    }),
     [],
   );
 
@@ -430,12 +474,10 @@ function selftest() {
     return { code, calls, caseDir };
   };
   // 8 fixture routes x 3 runs; 7 staging routes x 3 runs.
-  const fixtureUrls = Array.from({ length: 8 }, (_, r) =>
-    Array.from({ length: 3 }, () => `https://h/f${r}/`),
-  ).flat();
-  const stagingUrls = Array.from({ length: 7 }, (_, r) =>
-    Array.from({ length: 3 }, () => `https://h/s${r}/`),
-  ).flat();
+  const urlsFor = ({ collect }) =>
+    collect.url.flatMap((url) => Array.from({ length: collect.numberOfRuns }, () => url));
+  const fixtureUrls = urlsFor(fixture);
+  const stagingUrls = urlsFor(staging);
   const stagingEnv = { env: { QUALITY_ORIGIN: "https://next.togetherweown.com" } };
 
   (async () => {
@@ -463,7 +505,8 @@ function selftest() {
         logFile: join(probe, "collect.log"),
         diagnosisFile: join(probe, "diagnosis.md"),
       });
-      assert.equal(code, 0);
+      assert.equal(code, 1);
+      assert.match(readFileSync(join(probe, "diagnosis.md"), "utf8"), /COLLECT FAILURE/);
       assert.equal(loadCollectedLhrs(lhci).length, 0);
     }
     // A spawn failure becomes a failed attempt (not a crash): short evidence

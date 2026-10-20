@@ -43,6 +43,7 @@ import {
 } from "../src/kit-session";
 import {
   dispatchHookRequest,
+  ROUTE_MANIFEST,
   type HookDispatchDeps,
   type HookEventLike,
 } from "../src/route-ownership";
@@ -485,6 +486,42 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(res.status).toBe(200);
   });
 
+  it("a throwing probe never fails an authorized admin render: 200 with no Set-Cookie", async () => {
+    const body = "<h1>admin</h1>";
+    const resolve = vi.fn(
+      async () => new Response(body, { headers: { "content-type": "text/html" } }),
+    );
+    const authStatusCookieFor = vi.fn(async (_event: HookEventLike) => {
+      throw new Error("probe unavailable");
+    });
+    const deps = depsFor({
+      manifest: [{ method: "GET", path: "/admin", enabled: true, reads: "public" as const }],
+      authStatusCookieFor,
+      resolve,
+    });
+    const request = new Request("https://next.example.test/admin", {
+      headers: { host: "next.example.test" },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const res = await dispatchHookRequest(event, deps);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(body);
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
   it("an untrusted host bypasses the bridge straight to Hono", async () => {
     const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
     const event = eventFor("/events/past", [], "evil.test");
@@ -652,6 +689,57 @@ describe("kitSessionBridge (production hook composition)", () => {
     expect((seen[0]!.locals as KitLocals).session?.userId).toBe(viewer);
     expect(res.status).toBe(200);
     expect(audited).toHaveLength(1);
+  });
+
+  it("preserves a valid join flash on a released non-profile member page", async () => {
+    const store = createMemorySessionStore();
+    const viewer = "100000000000000101";
+    const { token } = await seedSession(store, { userId: viewer });
+    const request = new Request("https://next.example.test/leaderboards/members", {
+      headers: {
+        host: "next.example.test",
+        cookie: [await pair(SESSION_COOKIE, token), await pair(JOIN_RESULT_COOKIE, "added")].join(
+          "; ",
+        ),
+      },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/leaderboards/members" },
+    };
+    const audited: AccessEntry[] = [];
+    const res = await dispatchHookRequest(event, {
+      appUrl: "https://next.example.test",
+      honoFetch: async () => new Response("hono", { status: 200 }),
+      manifest: ROUTE_MANIFEST,
+      resolve: async () =>
+        new Response(
+          await keyedMemberRead(async () => {
+            memberQueryPermit();
+            declareMemberResult(["100000000000000102"]);
+            return "<html>members</html>";
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        ),
+      sessionFor: kitSessionBridge(bridgeEnvFor(store)),
+      accessSink: async () => async (entry) => {
+        audited.push(entry);
+        return true;
+      },
+    });
+
+    expect((event.locals as KitLocals).status).toBe("authenticated");
+    expect((event.locals as KitLocals).joinResult).toBe("added");
+    expect(res.status).toBe(200);
+    expect(audited).toHaveLength(1);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.startsWith(`${JOIN_RESULT_COOKIE}=`)),
+    ).toBe(false);
   });
 });
 

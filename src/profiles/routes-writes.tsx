@@ -1,10 +1,19 @@
 // PATCH /members/:user and its form-override POST: the profile save. Split out
-// of src/profiles/routes.tsx. Admission (throttle, owner only) runs first, then
-// the body limit, then the save.
+// of src/profiles/routes.tsx. The body limit runs first, then the session
+// gate, then admission (throttle, owner only), then the save — an oversized
+// body 413s with zero throttle spend and no session/store read.
 import { requestBodyLimit } from "../body-limit";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
+import {
+  BadRequestPage,
+  InternalErrorPage,
+  badRequest,
+  databaseUnavailable,
+  prefersHtmlError,
+  varyAccept,
+} from "../errors";
+import { inviteDestination } from "../invite";
 import {
   PROFILE_COPY,
   PROFILE_HONEY_FIELD,
@@ -13,6 +22,7 @@ import {
 } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { admitWrite } from "./routes-admission";
+import { memberGate } from "./routes-gate";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import { requestRoute, safeRequestId } from "../request-log";
@@ -47,6 +57,9 @@ export function registerWriteRoutes(
   { storeFor, statsFor }: ProfileStores,
 ) {
   const admit = admitWrite(deps);
+  // Same gate the global middleware runs for reads, here explicitly after
+  // the limiter: the global gate skips writes so the cap decides first.
+  const writeGate = memberGate(deps);
 
   const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
     const id = c.req.param("user") ?? "";
@@ -66,13 +79,14 @@ export function registerWriteRoutes(
         input = { ...(await c.req.parseBody({ all: true })) };
       } else {
         c.header("cache-control", "private, no-store");
+        varyAccept(c);
+        if (prefersHtmlError(c)) return c.html(<BadRequestPage code="415" />, 415);
         return c.text("Unsupported Media Type", 415);
       }
     } catch {
-      return c.text("Bad request", 400);
+      return badRequest(c);
     }
-    if (typeof input !== "object" || input === null || Array.isArray(input))
-      return c.text("Bad request", 400);
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return badRequest(c);
     // `games` must be present (legacy `present|array`). Only a plain form
     // submission treats absence as a blank list; JSON must say so with `games: []`,
     // otherwise an omitted key would silently wipe the stored list.
@@ -137,6 +151,17 @@ export function registerWriteRoutes(
         request_id: safeRequestId(c.get("requestId")),
       });
       if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
+      c.header("cache-control", "no-store, private");
+      varyAccept(c);
+      if (prefersHtmlError(c)) {
+        return c.html(
+          <InternalErrorPage
+            inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
+            supportReference={safeRequestId(c.get("requestId"))}
+          />,
+          500,
+        );
+      }
       return c.text("Could not save your profile.", 500);
     }
     if (acceptsJson(c.req.header("accept"))) {
@@ -145,9 +170,9 @@ export function registerWriteRoutes(
     return c.redirect(`/members/${id}`, 303);
   };
 
-  app.patch("/members/:user", admit, requestBodyLimit("form"), (c) => patch(c));
+  app.patch("/members/:user", requestBodyLimit("form"), writeGate, admit, (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
-  app.post("/members/:user", admit, requestBodyLimit("form"), async (c) => {
+  app.post("/members/:user", requestBodyLimit("form"), writeGate, admit, async (c) => {
     if (isFormMediaType(c.req.header("content-type"))) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);
       if (body && body._method === "PATCH") {

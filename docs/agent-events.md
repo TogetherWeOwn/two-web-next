@@ -17,16 +17,25 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   on agent-owned rows, so an older agent update cannot overwrite a human correction. Lifecycle decisions
   share the event-row lock across both writers; a cancelled event cannot be republished by a racing moderator.
 - Inputs/reads retain naive `YYYY-MM-DD HH:MM` wall strings and their IANA zone; storage uses UTC instants
-  through the human form's DST resolver. Gaps are refused; fresh fold times use the first occurrence.
-  An unchanged wall string **and** zone preserve each stored endpoint exactly (including a migrated second
-  fold and sub-minute precision); changed walls/zones resolve afresh, with UTC end-after-start validation.
+  through the human form's DST resolver. Gaps are refused; fresh fold times use the second occurrence.
+  On update, an unchanged wall string **and** zone preserve each stored endpoint exactly (including either
+  fold occurrence and sub-minute precision); changed walls/zones resolve afresh. Duration is checked on
+  those effective UTC instants, so a positive stored interval survives even when its minute-only read
+  values look reversed across an autumn fold or equal within one minute. Create still requires strictly
+  increasing wall times; updates still refuse a resolved end at or before the start.
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
   `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
   deliveries execute once and all get the original answer (`replayed: true`). Rate budgets are rows in
   `agent_event_hits` (per grant 10 mutating / 30 read per minute, service 60 / 300), also lock-serialised. No KV.
 - The outer per-credential route shield (`AGENT_EVENTS_ROUTE_PER_MINUTE`, default 60/min) counts every hit
-  per credential hash (anonymous per IP) before auth and the audit write; refused hits write nothing.
+  per credential hash (anonymous per IP) before auth and the audit write; refused hits write no hit row.
+  Over-budget 429s audit on a ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE`): each sampled row carries the
+  refusal's own request_id, bucket class only (credential sha256 vs anonymous marker, never raw identity),
+  `denied`/`rate_limited`. Every refusal increments an in-memory per-class counter surfaced on the sampled
+  `agent-events.shield.refusal_sampled` warn (`bucket_class`, running `refusals`, `request_id`); to estimate
+  flood volume, multiply sampled rows by ~100 or read the latest warn count. Grantless (missing/unknown
+  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s keep an exact audit.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
   earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.
@@ -67,7 +76,7 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1019_shared-agent-events.sql` is the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorts last)
+`1019_shared-agent-events.sql` landed as the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorted last at the time — later migrations have since landed, and the Drizzle journal is the source of truth for current ordering)
 and copies **every** temporary
 `agent_events` row into `events`, preserving keys, ownership, markers, versions, status and timestamps,
 then drops the temporary table. Audit/replay
