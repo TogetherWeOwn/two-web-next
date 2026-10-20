@@ -22,7 +22,11 @@ const discord = {
   upcoming: vi.fn(async () => []),
   lastReadFailed: () => true,
 };
-const env = { APP_URL: "https://calendar.example.test", ADMIN_DB: db, DISCORD_EVENTS: discord } as Env;
+const env = {
+  APP_URL: "https://calendar.example.test",
+  ADMIN_DB: db,
+  DISCORD_EVENTS: discord,
+} as unknown as Env;
 const app = new Hono<{ Bindings: Env }>();
 registerEventRoutes(
   app,
@@ -31,7 +35,9 @@ registerEventRoutes(
 );
 
 function notices(html: string): string[] {
-  return [...html.matchAll(/<(p|div|aside|section)\b[^>]*role="(?:status|alert)"[^>]*>([\s\S]*?)<\/\1>/g)]
+  return [
+    ...html.matchAll(/<(p|div|aside|section)\b[^>]*role="(?:status|alert)"[^>]*>([\s\S]*?)<\/\1>/g),
+  ]
     .map((match) => match[2]!)
     .filter((body) => /Discord[\s\S]*missing/i.test(body.replace(/<[^>]*>/g, " ")));
 }
@@ -62,7 +68,12 @@ describe("partial-source empty month", () => {
   });
 
   it("never claims rows are shown where an out-of-range page renders none", async () => {
-    vi.mocked(listUpcoming).mockResolvedValue({ rows: [], hasMore: false, totalPages: 2, total: 25 });
+    vi.mocked(listUpcoming).mockResolvedValue({
+      rows: [],
+      hasMore: false,
+      totalPages: 2,
+      total: 25,
+    });
     const response = await app.request("/events?q=chess&page=9", undefined, env);
     expect(response.status).toBe(200);
     const html = await response.text();
