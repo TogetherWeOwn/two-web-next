@@ -28,7 +28,7 @@ The [browser report](browser-report.json) records all eight fixture visits: no h
 
 ## Regression proof
 
-The acceptance-owned `test/kit-gone-alternatives-acceptance.test.ts` was consumed unchanged (SHA-256 `0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3`). Its initial run had 5 expected failures and 3 passing controls; after implementation all 8 passed. The Hono 410 fixture still hashes to `a0fb41f7d8f241a514fe373690a03377e48838eb2d95c22e1ac0744a1b467878`; missing suggestions and empty recovery controls pass.
+The acceptance-owned `test/kit-gone-alternatives-acceptance.test.ts` was consumed at `9be20305` (SHA-256 `0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3`). Its initial run had 5 expected failures and 3 passing controls; after implementation all 8 passed. A later helper-only edit replaced the regex tag-strip with an output-equivalent token-walk to clear CodeQL (assertions unchanged); the file now hashes to `ba725090c128d814e135f68afdad55e8cae64aea46535b7e047074f6c21c2d29`. The Hono 410 fixture still hashes to `a0fb41f7d8f241a514fe373690a03377e48838eb2d95c22e1ac0744a1b467878`; missing suggestions and empty recovery controls pass.
 
 Run the focused regression set with database variables unset:
 

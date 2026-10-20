@@ -1050,8 +1050,10 @@ describe("Kit detail presentation", () => {
 
 describe("event-detail gone presentation", () => {
   it("carries the branded gone model: alternatives, ICS entry and structured data", async () => {
+    const startsAt = new Date("2030-02-01T19:00:00.456Z");
     const store = fakeStore({
       event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+      related: [{ ...RELATED[0]!, startsAt }],
     });
     const attendeesFn = vi.fn(store.attendeesFn);
     const viewerRsvpFn = vi.fn(store.viewerRsvpFn);
@@ -1077,6 +1079,7 @@ describe("event-detail gone presentation", () => {
       location: "The lobby",
     });
     expect(model.related[0]!.whenText).toContain("2030");
+    expect(model.related[0]!.datetime).toBe("2030-02-01T19:00:00.456Z");
     expect(model.jsonLd).toContain("https://schema.org/EventCancelled");
     expect(model.jsonLd).toContain("Chess night");
     expect(model.siteJsonLd).toContain("Together We Own");

@@ -2,7 +2,8 @@
   "sourceBase": "ce1ade0c4",
   "fixture": "compiled real EventGone and EventMissing with built Kit CSS and local public assets; no hydration or full Worker runtime",
   "activeLoaderParity": true,
-  "protectedAcceptanceSha256": "0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3",
+  "protectedAcceptanceSha256": "ba725090c128d814e135f68afdad55e8cae64aea46535b7e047074f6c21c2d29",
+  "protectedAcceptanceNote": "consumed at 9be20305 (0a81ca9b...); helper-only regex-to-token-walk edit, assertions unchanged",
   "reports": [
     {
       "state": "before",
