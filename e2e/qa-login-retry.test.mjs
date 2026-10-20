@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   parseRetryAfterSeconds,
+  postQaLoginWithRetry,
   qaLoginRetryBudgetMs,
   qaLoginThrottleError,
   QA_LOGIN_MAX_ATTEMPTS,
@@ -106,4 +107,107 @@ test("every staging spec login raises its block timeout by the retry budget firs
     }
   }
   assert.ok(logins > 0, "no staging spec logins found — the guard would pass vacuously");
+});
+
+// Bounded 429 retry for local Playwright QA logins: kit-parity's logins land
+// while journey-tail spends slide out of the shared 60 s bucket, so a 429
+// there means seconds of wait, not a blown budget. Each wait clamps to the
+// single-wait cap so the bounded attempts fit a 30 s test/hook timeout.
+function fakeQaResponse(status, retryAfter) {
+  return {
+    status: () => status,
+    headers: () => (retryAfter === undefined ? {} : { "retry-after": String(retryAfter) }),
+  };
+}
+
+test("a 204 first try returns without waiting", async () => {
+  const waits = [];
+  let sends = 0;
+  const login = await postQaLoginWithRetry(
+    async () => {
+      sends++;
+      return fakeQaResponse(204);
+    },
+    "qa-member",
+    { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
+  );
+  assert.equal(login.status(), 204);
+  assert.equal(sends, 1);
+  assert.deepEqual(waits, []);
+});
+
+test("a 429 then 204 waits out Retry-After and returns the session", async () => {
+  const waits = [];
+  let sends = 0;
+  const login = await postQaLoginWithRetry(
+    async () => {
+      sends++;
+      return sends === 1 ? fakeQaResponse(429, 2) : fakeQaResponse(204);
+    },
+    "qa-member",
+    { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
+  );
+  assert.equal(login.status(), 204);
+  assert.equal(sends, 2);
+  assert.deepEqual(waits, [2000]);
+});
+
+test("each Retry-After wait clamps to the single-wait cap", async () => {
+  const waits = [];
+  let sends = 0;
+  const login = await postQaLoginWithRetry(
+    async () => {
+      sends++;
+      return sends === 1 ? fakeQaResponse(429, 60) : fakeQaResponse(204);
+    },
+    "qa-moderator",
+    {
+      label: "isolated QA login issues a session",
+      singleWaitCapSeconds: 5,
+      wait: async (ms) => void waits.push(ms),
+    },
+  );
+  assert.equal(login.status(), 204);
+  assert.deepEqual(waits, [5000]);
+});
+
+test("persistent 429s fail loud with the budget error after maxAttempts", async () => {
+  let sends = 0;
+  const waits = [];
+  await assert.rejects(
+    () =>
+      postQaLoginWithRetry(
+        async () => {
+          sends++;
+          return fakeQaResponse(429, 1);
+        },
+        "qa-moderator",
+        {
+          label: "isolated QA login issues a session",
+          wait: async (ms) => void waits.push(ms),
+        },
+      ),
+    /local QA login as qa-moderator refused with 429 after 3 attempt\(s\)/,
+  );
+  assert.equal(sends, QA_LOGIN_MAX_ATTEMPTS);
+  assert.equal(waits.length, QA_LOGIN_MAX_ATTEMPTS - 1);
+});
+
+test("a non-429 refusal fails loud with the caller label and no retry", async () => {
+  let sends = 0;
+  const waits = [];
+  await assert.rejects(
+    () =>
+      postQaLoginWithRetry(
+        async () => {
+          sends++;
+          return fakeQaResponse(500);
+        },
+        "qa-member",
+        { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
+      ),
+    /QA login issues a session: answered 500, expected 204/,
+  );
+  assert.equal(sends, 1);
+  assert.deepEqual(waits, []);
 });

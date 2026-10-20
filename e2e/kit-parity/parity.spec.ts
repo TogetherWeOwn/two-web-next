@@ -17,6 +17,7 @@ import {
   scrubSecrets,
   type ParityTarget,
 } from "../kit-parity";
+import { postQaLoginWithRetry } from "../qa-login-retry.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
 // against BOTH the Hono worker and the built Kit Worker in one run, and
@@ -109,7 +110,10 @@ function api(target: ParityTarget): APIRequestContext {
 // POST /auth/qa/:identity shares the qa-login throttle, so exactly one login
 // is spent here however many board fetches follow. The spend is counted at
 // the one call site and asserted in afterAll, so losing the `??=` fails the
-// run instead of quietly burning a login per fetch.
+// run instead of quietly burning a login per fetch. Both parity logins retry
+// a 429 across the server's Retry-After (clamped): the journey tail and the
+// sweep teardown slide out of the shared 60 s bucket while parity runs, so a
+// refusal means seconds of wait, not a blown budget.
 let qaLoginCount = 0;
 let memberCookiePromise: Promise<string> | null = null;
 function honoMemberCookie(): Promise<string> {
@@ -118,11 +122,15 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
-    expect(response.status(), "QA login issues a session").toBe(204);
+    const response = await postQaLoginWithRetry(
+      () =>
+        api(hono).post("/auth/qa/qa-member", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      "qa-member",
+      { label: "QA login issues a session" },
+    );
     const setCookie = (await response.headersArray()).find(
       (header) =>
         header.name.toLowerCase() === "set-cookie" &&
@@ -176,11 +184,15 @@ async function isolatedRenewalCookie(
     if (!token) throw new Error("Missing ephemeral CI QA token");
     // Use a separate QA account: issuing a fresh session revokes other live
     // sessions for the same user and would invalidate the shared member jar.
-    const response = await login.post("/auth/qa/qa-moderator", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
-    expect(response.status(), "isolated QA login issues a session").toBe(204);
+    const response = await postQaLoginWithRetry(
+      () =>
+        login.post("/auth/qa/qa-moderator", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      "qa-moderator",
+      { label: "isolated QA login issues a session" },
+    );
     const setCookie = (await response.headersArray()).find(
       (header) =>
         header.name.toLowerCase() === "set-cookie" &&

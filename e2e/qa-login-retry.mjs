@@ -61,6 +61,51 @@ export function sleep(ms) {
 }
 
 /**
+ * POST one QA login through an injected sender, honoring Retry-After on 429
+ * instead of failing the spec on the first refusal. The local browser smoke
+ * shares one `qa-login` bucket (10/min sliding per runner IP) across the
+ * journey specs, the fixture-sweep teardown, and kit-parity: the parity
+ * logins land while journey-tail spends slide out, so a 429 there means
+ * seconds of wait, not a blown budget. Each wait clamps to
+ * `singleWaitCapSeconds` so the bounded attempts fit a 30 s test/hook
+ * timeout; past the attempts — or on any non-204/429 status — it fails loud
+ * with the caller label or the shared-budget error.
+ *
+ * @template T the sender's response type (Playwright APIResponse at call sites)
+ * @param {() => Promise<T>} send injected POST returning a status()/headers() response
+ * @param {string} identity "qa-member" | "qa-moderator" (throttle-error context only)
+ * @param {object} [opts]
+ * @param {string} [opts.label] caller assertion label for non-retryable refusals
+ * @param {number} [opts.maxAttempts] default QA_LOGIN_MAX_ATTEMPTS
+ * @param {number} [opts.singleWaitCapSeconds] per-wait clamp, default 5
+ * @param {(ms: number) => Promise<void>} [opts.wait] default sleep (injectable for tests)
+ * @param {string} [opts.scope] throttle-error scope, default "local"
+ * @returns {Promise<T>} the 204 response
+ */
+export async function postQaLoginWithRetry(send, identity, opts = {}) {
+  const {
+    label = `QA login as ${identity} issues a session`,
+    maxAttempts = QA_LOGIN_MAX_ATTEMPTS,
+    singleWaitCapSeconds = 5,
+    wait = sleep,
+    scope = "local",
+  } = opts;
+  let retryAfterSeconds = 0;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await send();
+    const status = response.status();
+    if (status === 204) return response;
+    if (status !== 429) {
+      throw new Error(`${label}: answered ${status}, expected 204`);
+    }
+    retryAfterSeconds = parseRetryAfterSeconds(response.headers());
+    if (attempt === maxAttempts) break;
+    await wait(Math.min(retryAfterSeconds, singleWaitCapSeconds) * 1000);
+  }
+  throw qaLoginThrottleError(identity, retryAfterSeconds, maxAttempts, scope);
+}
+
+/**
  * Longest the Retry-After waits can take across `loginCount` sequential
  * logins: each login sleeps at most QA_LOGIN_MAX_ATTEMPTS - 1 times, bounded
  * by QA_LOGIN_RETRY_AFTER_CAP_SECONDS. Callers running under a test or hook
