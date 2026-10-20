@@ -196,6 +196,12 @@ const lineup = $derived(
   </div>
   <div class="event-detail-grid">
     <div>
+      {#if model.purpose?.trim()}
+        <section class="event-purpose" aria-labelledby="event-purpose-heading">
+          <h2 id="event-purpose-heading">Purpose</h2>
+          <p>{model.purpose.trim()}</p>
+        </section>
+      {/if}
       {#if model.description}
         <section class="event-description" aria-labelledby="event-description-heading">
           <h2 id="event-description-heading">About this event</h2>

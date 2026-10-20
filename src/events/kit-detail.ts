@@ -100,6 +100,7 @@ export interface KitEventDetailModel {
   game: string | null;
   /** Raw organizer copy: the About section renders only when set. */
   description: string | null;
+  purpose: string | null;
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
   location: string | null;
@@ -425,6 +426,7 @@ export async function resolveKitEventDetail(
           title: event.title,
           game: event.game,
           description: event.description,
+          purpose: event.purpose,
           shareDescription: event.description || "An event at Together We Own.",
           location: event.location,
           status: event.status,

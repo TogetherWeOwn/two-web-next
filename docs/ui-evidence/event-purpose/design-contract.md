@@ -11,4 +11,11 @@
 
 ## Verification status
 
-This is an implementation checkpoint, not a completed visual or release sign-off. Hono detail rendering and moderator persistence are implemented. Kit and Markdown parity, acceptance-author fixture updates, final screenshot review, and full verification remain required before a ready pull request.
+The optional purpose field is wired through moderator persistence, Hono and Kit event details, and the per-event Markdown alternate. The public Markdown collection, other event serializers, publication policy, and RSVP flow remain unchanged.
+
+- Captured and visually opened local fixture screenshots for the admin create form (before at desktop/mobile, after at desktop), the shared edit form at mobile, edit-length errors at desktop/mobile, and published-purpose plus legacy-blank detail at desktop/mobile. The edit form shares the same field component as create.
+- `npm test -- test/event-purpose-acceptance.test.ts test/kit-event-detail.test.ts test/ai-friendly-md.test.ts test/event-purpose-parity.test.ts` with the disposable `agent-testdb` schema fixture: 4 files passed; 105 tests passed.
+- `npm run check --prefix web`, `npm run lint`, `npm run standards` (8 routes; 21 internal links), `npm run kit-parity:test` (67 tests), `npm run budget`, `npx wrangler deploy --dry-run --outdir dist`, and `npm run worker-budget` passed.
+- `npm run check` reached the full Vitest run, where 720 files passed and 97 skipped; 6 tests in `test/workflow-migration-auth.test.ts` failed because the local fixture Git fetch could not read its baseline. All earlier check stages passed; later stages were not reached by that command.
+- Automated browser gates remain unverified locally: `npm run a11y` cannot launch Chromium because `libglib-2.0.so.0` is missing; `npm run lighthouse` and `npm run lighthouse:quality` report Chrome installation missing (0/24 quality reports collected). The E2E visual spec was not run because it writes/deletes seeded DB rows and this run has no fresh run-owned visual-test database. No thresholds or baselines were changed.
+- Staging has not been checked because this branch is not deployed there. Hono gates do not exercise the Kit route; the opened desktop/mobile screenshots are the Kit visual evidence.
