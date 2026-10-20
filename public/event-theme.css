@@ -18,7 +18,7 @@
 .event-theme .event-rsvp > section { display: flex; flex-direction: column; align-items: center; gap: .75rem; border: 0; padding: 0; text-align: center; }
 .event-theme .event-rsvp form { display: flex; flex-direction: column; align-items: center; gap: .75rem; margin: 0; }
 .event-theme .event-rsvp p { margin: 0; }
-.event-theme .event-rsvp > section > a, .event-theme .event-rsvp button {
+.event-theme .event-rsvp > section > a, .event-theme .event-rsvp p > a, .event-theme .event-rsvp button {
   display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .65rem 1.8rem; border: 1px solid var(--brand);
   background: var(--brand); color: var(--paper); font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; text-decoration: none; cursor: pointer;
 }
