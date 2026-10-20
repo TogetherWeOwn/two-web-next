@@ -82,7 +82,11 @@ differs by call site:
   [`internalErrorHandler`](../src/error-responses.tsx)). The outage matrix pins
   the classified case: `GET /join/discord` and `GET /join/callback` answer 503
   on a refused Postgres socket (see
-  [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+  [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)). Non-error
+  oversized callbacks skip the throttle but run a read-only availability query
+  before the expired-link recovery, preserving that classified-outage 503 with
+  no count, lock, hit insertion or prune. Missing stores still allow recovery;
+  unclassified query failures are ignored without logging their details.
 - Profile write allows store failures:
   [`admitWrite`](../src/profiles/routes-admission.ts) catches any throw from
   the throttle check and allows, and a missing database URL allows without a

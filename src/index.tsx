@@ -599,6 +599,7 @@ registerJoinRoutes(
           widgetUrl={props.widgetUrl}
           widgetSnapshot={props.widgetSnapshot}
           next={props.next}
+          source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
         />,

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Revoke one Discord member's active web sessions.
 //
-//   node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target production]
+//   node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]
 //
 // Dry-run is the default and prints counts only. DATABASE_URL is env-only;
-// remote database URLs require the explicit --target production flag.
+// Remote URLs require --target staging or --target production;
+// production-looking URLs require exactly --target production.
 // Exit 0 on success, 2 on usage/config/refusal, 1 on driver/transaction failure.
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
@@ -13,7 +14,7 @@ import { assertDiscordId, InvalidMemberIdError } from "../src/member-erasure.ts"
 import { revokeMemberSessions } from "../src/session-revocation.ts";
 
 const USAGE =
-  "Usage: node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target production]. Connection settings come from env only.";
+  "Usage: node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]. Connection settings come from env only.";
 
 export function parseRevokeArgs(args) {
   if (!Array.isArray(args)) throw new Error(USAGE);
@@ -56,7 +57,8 @@ export function parseRevokeArgs(args) {
     hasDiscordId = true;
     discordId = arg;
   }
-  if (target !== undefined && target !== "production") throw new Error(USAGE);
+  if (target !== undefined && target !== "staging" && target !== "production")
+    throw new Error(USAGE);
   assertDiscordId(discordId);
   return { discordId, mode, target };
 }
@@ -88,8 +90,10 @@ export function validateRevokeEnvironment(env, target) {
   }
   const host = endpoint.host[0].toLowerCase().replace(/\.$/, "");
   const knownLocalHost = new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]).has(host);
-  if ((isProductionDatabaseUrl(raw) || !knownLocalHost) && target !== "production")
-    throw new Error("Refusing: remote database without --target production.");
+  if (isProductionDatabaseUrl(raw) && target !== "production")
+    throw new Error("Refusing: production database without --target production.");
+  if (!knownLocalHost && target !== "staging" && target !== "production")
+    throw new Error("Refusing: remote database needs --target staging or --target production.");
   const url = new URL(raw);
   if (
     !knownLocalHost &&

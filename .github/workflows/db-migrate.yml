@@ -80,6 +80,11 @@ jobs:
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
+      - name: Migration snapshot chain (local files, no credentials)
+        shell: bash
+        run: |
+          node ci/check-snapshot-chain.mjs
+          node --test ci/check-snapshot-chain-selftest.mjs
       - name: Dry-run listing (read-only journal diff, no DDL)
         run: node ci/db-migrate.mjs plan
         env: &migration-env

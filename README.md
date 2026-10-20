@@ -286,9 +286,11 @@ PR or release. Automatic runs promote only a staging green that soaked 30
 minutes with no newer red staging run, skip cleanly when production already
 serves the target (`/up` revision marker) or there is nothing soaked and green,
 and stop with a clear error when the target journal has entries production
-lacks (automatic migration waits on the least-privilege migrator). A manual
-re-dispatch with `migrations_applied: true` records an audited continuation
-once `db-migrate.yml` (target production) has applied those entries. Repo
+lacks (automatic migration waits on the least-privilege migrator). An unknown
+live commit after three `/up` reads also stops promotion. A manual re-dispatch
+with `migrations_applied: true` records an audited continuation past either stop
+once `db-migrate.yml` (target production) has applied the target's migrations;
+automatic runs ignore that input and halt on either condition. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
 promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable

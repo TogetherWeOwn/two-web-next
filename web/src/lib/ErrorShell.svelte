@@ -11,10 +11,9 @@ let {
 } = $props();
 
 const copy = $derived(kitErrorCopy(code));
-const title = $derived(copy.title);
 </script>
 
-<Shell {title} robots="noindex, nofollow" theme="home">
+<Shell title={copy.title} robots="noindex, nofollow" theme="home">
   <section class="hero recovery-hero" aria-labelledby="error-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>
@@ -36,30 +35,14 @@ const title = $derived(copy.title);
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
-    {:else if code === 403}
-      <!-- 403: You do not have access -->
-      <p class="recovery-actions">
-        <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
-          Use the Discord invite instead
-        </a>
-        <a href="/" data-testid="error-home">Back to the homepage</a>
-      </p>
-    {:else if code === 410}
-      <!-- 410: This page is gone -->
+    {:else if code === 400 || code === 410}
+      <!-- 400/410 share recovery links; each keeps its status-specific copy. -->
       <p class="recovery-actions">
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
-    {:else if code === 429}
-      <!-- 429: Slow down a little -->
-      <p class="recovery-actions">
-        <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
-          Use the Discord invite instead
-        </a>
-        <a href="/" data-testid="error-home">Back to the homepage</a>
-      </p>
-    {:else if code === 500}
-      <!-- 500: Something broke on our side -->
+    {:else if code === 403 || code === 429 || code === 500}
+      <!-- These statuses share invite recovery, not their headings or lead copy. -->
       <p class="recovery-actions">
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
           Use the Discord invite instead

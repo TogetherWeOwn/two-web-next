@@ -148,6 +148,8 @@ test("local sweep matches only its named fixture titles", () => {
     row("01ARZ3NDEKTSV4RRFFQ69G5FAW", "E2E Promotion fixture"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAA", "E2E Pause fixture"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAD", "E2E Moderator Game Night"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAE", "E2E Filter Draft 1760860000000"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAF", "E2E Filter Paused 1760860000000"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAB", "E2E Waitlistish unrelated"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAC", "Staging E2E event"),
   ].join("");
@@ -163,7 +165,46 @@ test("local sweep matches only its named fixture titles", () => {
   assert.deepEqual(parseLocalFixtureRows(html, "E2E Moderator "), [
     { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD", title: "E2E Moderator Game Night" },
   ]);
+  assert.deepEqual(parseLocalFixtureRows(html, "E2E Filter "), [
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAE", title: "E2E Filter Draft 1760860000000" },
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAF", title: "E2E Filter Paused 1760860000000" },
+  ]);
   assert.throws(() => localSweepListPath("Staging E2E ", "draft"), /invalid list filter/);
+});
+
+test("local sweep lists and deletes E2E Filter fixtures in both swept statuses", async () => {
+  assert.ok(LOCAL_FIXTURE_TITLE_PREFIXES.includes("E2E Filter "));
+  const draftKey = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+  const publishedKey = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+  const cancelled = new Set();
+  const seen = [];
+  const api = {
+    async get(path) {
+      seen.push(path);
+      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
+      if (query.get("q") !== "E2E Filter") return response(200);
+      if (query.get("status") === "draft" && !cancelled.has(draftKey)) {
+        return response(200, row(draftKey, "E2E Filter Draft 1760860000000"));
+      }
+      if (query.get("status") === "published" && !cancelled.has(publishedKey)) {
+        return response(200, row(publishedKey, "E2E Filter Paused 1760860000000"));
+      }
+      return response(200);
+    },
+    async post(path) {
+      cancelled.add(path.split("/")[3]);
+      return response(303);
+    },
+  };
+  assert.equal(await sweepLocalFixtures(api), 2);
+  assert.deepEqual([...cancelled].sort(), [draftKey, publishedKey].sort());
+  const listed = (status) =>
+    seen.some((path) => {
+      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
+      return query.get("q") === "E2E Filter" && query.get("status") === status;
+    });
+  assert.ok(listed("draft"), "sweep lists E2E Filter fixtures with status=draft");
+  assert.ok(listed("published"), "sweep lists E2E Filter fixtures with status=published");
 });
 
 test("local pagination rejects staging and other non-local origins", () => {
