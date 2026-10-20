@@ -340,6 +340,23 @@ const workflow = parse(
   readFileSync(join(repo, ".github/workflows/mutation-roles-wall-time.yml"), "utf8"),
 );
 
+test("workflow parser is a pinned direct development dependency in both package manifests", () => {
+  const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+  const lock = JSON.parse(readFileSync(join(repo, "package-lock.json"), "utf8"));
+  assert.equal(pkg.devDependencies.yaml, "2.9.1");
+  assert.equal(lock.packages[""].devDependencies.yaml, pkg.devDependencies.yaml);
+  assert.equal(lock.packages["node_modules/yaml"].version, pkg.devDependencies.yaml);
+});
+
+test("workflow runs on pull requests, merge groups, main pushes and manual dispatch", () => {
+  assert.deepEqual(workflow.on, {
+    pull_request: { types: ["opened", "synchronize", "reopened", "ready_for_review"] },
+    merge_group: { types: ["checks_requested"] },
+    push: { branches: ["main"] },
+    workflow_dispatch: null,
+  });
+});
+
 test("workflow is one bounded existing-runner WARN job, with no services, secrets or required consumers", () => {
   assert.deepEqual(Object.keys(workflow.jobs), ["focused-mutation"]);
   const job = workflow.jobs["focused-mutation"];
@@ -350,6 +367,10 @@ test("workflow is one bounded existing-runner WARN job, with no services, secret
   assert.equal(job.needs, undefined);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.doesNotMatch(JSON.stringify(workflow), /secrets\./);
+  const install = job.steps.find((step) => step.id === "install");
+  assert.ok(install, "dependency installation step must exist");
+  assert.equal(install.run, "npm ci --include=dev --no-audit --no-fund");
+  assert.equal(install["continue-on-error"], true);
   const signal = job.steps.find((step) => step.id === "signal");
   assert.equal(signal.run, "npm run mutation:roles-wall-time");
   assert.equal(signal.if, "always()");
