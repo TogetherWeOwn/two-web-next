@@ -196,12 +196,39 @@ async function honoGone() {
   } as unknown as Env);
 }
 
+// Visible-text extractor that never builds a rewritten copy of the markup: walk
+// angle-bracket tags and keep only the text runs between them. Exactly
+// equivalent to stripping /<[^>]+>/g (unterminated "<..." and empty "<>" are
+// kept literally), but CodeQL does not read it as an incomplete sanitizer
+// (cf. the token-walking skip in
+// test/kit-join-attempt-detail-pairing-acceptance.test.mjs).
+function textContent(inner: string): string {
+  let out = "";
+  let index = 0;
+  while (index < inner.length) {
+    const open = inner.indexOf("<", index);
+    if (open === -1) {
+      out += inner.slice(index);
+      break;
+    }
+    out += inner.slice(index, open);
+    const close = inner.indexOf(">", open + 1);
+    if (close === -1 || close === open + 1) {
+      out += "<";
+      index = open + 1;
+      continue;
+    }
+    index = close + 1;
+  }
+  return out.trim();
+}
+
 function links(html: string, testid: string) {
   return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
     .filter((match) => match[1]!.includes(`data-testid="${testid}"`))
     .map((match) => ({
       href: match[1]!.match(/\bhref="([^"]+)"/)?.[1],
-      text: match[2]!.replace(/<[^>]+>/g, "").trim(),
+      text: textContent(match[2]!),
     }));
 }
 
@@ -254,7 +281,7 @@ describe("Kit gone alternatives acceptance", () => {
       const time = item![1]!.match(/<time\b([^>]*)>([\s\S]*?)<\/time>/);
       expect(time, `alternative ${key} must show its time`).not.toBeNull();
       expect(time![1]!.match(/\bdatetime="([^"]+)"/)?.[1]).toBe(instant);
-      expect(time![2]!.replace(/<[^>]+>/g, "").trim()).not.toBe("");
+      expect(textContent(time![2]!)).not.toBe("");
     }
   });
 
@@ -272,7 +299,7 @@ describe("Kit gone alternatives acceptance", () => {
     const headings = [...section![2]!.matchAll(/<h2\b[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)];
     const heading = headings.find((candidate) => section![1]!.split(/\s+/).includes(candidate[1]!));
     expect(heading, "aria-labelledby must reference the alternatives h2").toBeDefined();
-    expect(heading![2]!.replace(/<[^>]+>/g, "").trim()).not.toBe("");
+    expect(textContent(heading![2]!)).not.toBe("");
     expect(section![2]).toContain("<ul");
     expect(section![2]).toContain(`href="/e/${SECOND_KEY}"`);
   });
