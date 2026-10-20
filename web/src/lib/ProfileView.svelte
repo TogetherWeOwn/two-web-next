@@ -360,12 +360,26 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               value={form.timezone}
               placeholder="Europe/London"
               aria-invalid={errors?.timezone ? "true" : undefined}
-              aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+              aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : "profile-timezone-help"}
             />
           </label>
           {#if errors?.timezone}
             <p id={PROFILE_ERROR_IDS.timezone} class="error">{errors.timezone}</p>
           {/if}
+          <p id="profile-timezone-help" class="profile-hint">{PROFILE_COPY.timezoneHelp}</p>
+          <div data-device-timezone hidden>
+            <button
+              class="btn profile-secondary"
+              type="button"
+              data-device-timezone-use
+              aria-describedby="profile-device-timezone-help"
+            >
+              {PROFILE_COPY.deviceTimezone}
+            </button>
+            <p id="profile-device-timezone-help" class="profile-hint">
+              {PROFILE_COPY.deviceTimezoneHelp}
+            </p>
+          </div>
           <div aria-hidden="true" class="sr-only">
             <label>
               Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />
