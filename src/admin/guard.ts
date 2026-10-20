@@ -125,7 +125,12 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     // Moderator pages run the tab-sync probe, so an expiry mid-edit raises
     // two:session-expired and the form island can keep the draft reachable.
     let attachStatus: (() => void) | null = null;
-    let sessionCookie: string | null = null;
+    let renewedSession: {
+      store: SessionStore;
+      tokenHash: string;
+      expiresAt: Date;
+      sessionCookie: string;
+    } | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
@@ -135,15 +140,21 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       if (row?.moderator) actor = { id: row.userId, username: row.username };
       else if (!row) expiredGuest = true;
       if (actor && c.req.method === "GET") {
-        if (!(await resolved.renew(tokenHash, expiresAt))) return bounceToLogin(c);
         attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
-        sessionCookie = await generateSignedCookie(SESSION_COOKIE, token, c.env.SESSION_SECRET, {
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "Lax",
-          maxAge: SESSION_TTL_SECONDS,
-        });
+        // Sign before the dashboard deadline; the post-handler read gates attachment.
+        const sessionCookie = await generateSignedCookie(
+          SESSION_COOKIE,
+          token,
+          c.env.SESSION_SECRET,
+          {
+            path: "/",
+            secure: true,
+            httpOnly: true,
+            sameSite: "Lax",
+            maxAge: SESSION_TTL_SECONDS,
+          },
+        );
+        renewedSession = { store: resolved, tokenHash, expiresAt, sessionCookie };
       }
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
@@ -179,11 +190,37 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         },
         databaseUnavailable,
       );
-      if (c.res.status === 200 && sessionCookie) {
-        c.header("set-cookie", sessionCookie, { append: true });
+      // Redirects and refusals intentionally omit the session cookie, so do
+      // not renew those responses. Other authorized GET results, including 404s,
+      // renew after rendering and revalidate before the cookie is attached.
+      if (
+        renewedSession &&
+        !(c.res.status >= 300 && c.res.status < 400) &&
+        c.res.status !== 403 &&
+        c.res.status !== 503
+      ) {
+        try {
+          const renewed = await renewedSession.store.renew(
+            renewedSession.tokenHash,
+            renewedSession.expiresAt,
+          );
+          if (!renewed && (await renewedSession.store.get(renewedSession.tokenHash))) {
+            c.res = await bounceToLogin(c);
+            return c.res;
+          }
+          if (renewed && (await renewedSession.store.get(renewedSession.tokenHash))) {
+            c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+          }
+        } catch (err) {
+          console.error("admin guard could not renew or revalidate the session; refusing.", {
+            exception: err instanceof Error ? err.name : "unknown",
+          });
+          c.res = await databaseUnavailable(c);
+          return c.res;
+        }
       }
       // Only rendered documents get the probe: redirects and refusals stay
-      // cookie-free. Signed above, so attaching here never delays the page.
+      // cookie-free.
       if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
         attachStatus?.();
       }

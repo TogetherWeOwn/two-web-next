@@ -3,7 +3,7 @@
 // recorded in that file's header. registerGate must run before any profile
 // route is registered: the middleware only covers routes added after it.
 import type { Next } from "hono";
-import { getSignedCookie, setSignedCookie } from "hono/cookie";
+import { generateSignedCookie, getSignedCookie } from "hono/cookie";
 import { sessionStoreFor } from "../admin/guard";
 import { enableAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
@@ -12,7 +12,12 @@ import { databaseUnavailable, forbidden } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
-import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS } from "../sessions";
+import {
+  hashToken,
+  isValidSessionToken,
+  SESSION_TTL_SECONDS,
+  type SessionStore,
+} from "../sessions";
 import { requestRoute, safeRequestId } from "../request-log";
 import type { Ctx, ProfileApp, ProfileDeps, Viewer } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
@@ -56,6 +61,11 @@ export function memberGate(deps: ProfileDeps) {
     // before any hash/store call).
     if (!isValidSessionToken(token)) return bounceToLogin(c);
     let viewer: Viewer | null = null;
+    let renewedSession: {
+      sessions: SessionStore;
+      tokenHash: string;
+      sessionCookie: string;
+    } | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
@@ -65,13 +75,20 @@ export function memberGate(deps: ProfileDeps) {
         if (row.member && c.req.method === "GET") {
           if (!(await sessions.renew(tokenHash, expiresAt))) return bounceToLogin(c);
           await enableAuthStatus(c, sessions, tokenHash);
-          await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
-            path: "/",
-            secure: true,
-            httpOnly: true,
-            sameSite: "Lax",
-            maxAge: SESSION_TTL_SECONDS,
-          });
+          // Sign before the route's read deadline; attach only after revalidating below.
+          const sessionCookie = await generateSignedCookie(
+            SESSION_COOKIE,
+            token,
+            c.env.SESSION_SECRET,
+            {
+              path: "/",
+              secure: true,
+              httpOnly: true,
+              sameSite: "Lax",
+              maxAge: SESSION_TTL_SECONDS,
+            },
+          );
+          renewedSession = { sessions, tokenHash, sessionCookie };
         }
         viewer = {
           id: row.userId,
@@ -98,6 +115,22 @@ export function memberGate(deps: ProfileDeps) {
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
     await next();
+    // Another tab may rotate this bearer while the route is rendering. Never
+    // let a slower response restore a token that is no longer live.
+    if (renewedSession) {
+      try {
+        if (await renewedSession.sessions.get(renewedSession.tokenHash)) {
+          c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+        }
+      } catch (err) {
+        console.error("profiles could not revalidate the session; refusing.", {
+          exception: err instanceof Error ? err.constructor.name : "unknown",
+        });
+        c.res = await databaseUnavailable(c);
+        c.header("cache-control", "private, no-store");
+        return c.res;
+      }
+    }
     c.header("cache-control", "private, no-store");
   };
 }
