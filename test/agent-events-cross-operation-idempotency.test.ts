@@ -13,7 +13,7 @@ import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
 import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
 import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
 import syncRevisions from "../drizzle/1020_event-sync-revisions.sql?raw";
-import accessibilityNotes from "../drizzle/1030_event-accessibility-notes.sql?raw";
+import accessibilityNotes from "../drizzle/1031_event-accessibility-notes.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -88,7 +88,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // retired rows exist in this fresh schema), then the sync-revision
       // outbox columns from 1020 (without its triggers — the current service
       // selects sync_revision/synced_revision on every shared-row read), and
-      // the accessibility notes column from 1030.
+      // the accessibility notes column from 1031.
       const columnAdds = sharedAgentColumns
         .split("--> statement-breakpoint")
         .slice(0, 5)
