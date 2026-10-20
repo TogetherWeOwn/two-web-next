@@ -980,8 +980,13 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(replacements).toHaveLength(1);
     const replacement = replacements[0]!.split(";")[0]!;
     expect(replacement).not.toBe(cookie);
+    expect(await sessions.get(tokenHash)).toMatchObject({ moderator: true });
+    expect(await sessions.statusHash(tokenHash)).toBeNull();
+    // Grace cannot extend the original one-second expiry, even though the
+    // successor has received the ordinary 120-minute sliding renewal.
+    now += 1000;
     expect(await sessions.get(tokenHash)).toBeNull();
-    now += 1100;
+    now += 100;
     const again = await app.request(
       `/e/${ev.eventKey}`,
       { headers: { cookie: replacement } },

@@ -117,9 +117,8 @@ describe("attendees-live fragment session", () => {
     const html = await fragment.text();
     expect(html).toContain('data-testid="event-attendees"');
     expect(html).not.toContain('data-testid="event-join-pitch"');
-    // Non-rotating: no replacement cookie, and the presented bearer still
-    // opens the plain page view afterwards (a rotating fragment read racing
-    // that reload would leave exactly one winner and render the loser guest).
+    // Non-rotating: no replacement cookie or reliance on predecessor grace
+    // when the fragment races a plain page reload.
     expect(fragment.headers.get("set-cookie")).toBeNull();
     expect(await source.store.get(auth.tokenHash)).not.toBeNull();
     const page = await app.request(
@@ -131,7 +130,8 @@ describe("attendees-live fragment session", () => {
     );
     expect(page.status).toBe(200);
     expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-    expect(await source.store.get(auth.tokenHash)).toBeNull();
+    expect(await source.store.get(auth.tokenHash)).toMatchObject({ member: true });
+    expect(await source.store.statusHash(auth.tokenHash)).toBeNull();
   });
 
   it("still rotates plain page views and unknown island headers", async () => {

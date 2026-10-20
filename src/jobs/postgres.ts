@@ -184,18 +184,28 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // the skew-window rows instead of over-deleting them, and never raises; a
   // caller clock running behind stays caller-bounded (AND, not DB-clock-only).
   // Deletes at most one batch per statement; the cron pass drains via
-  // `drainPruneTable` and reports exact totals plus the cap.
-  const sessions = expiryTable(
-    async (client, now) =>
-      (
-        await client`delete from web_sessions where token_hash in (
-          select token_hash from web_sessions where expires_at <= ${now}
-            and expires_at <= clock_timestamp()
-          order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
-        ) returning 1`
-      ).length,
-  );
+  // `drainPruneTable` and reports exact totals plus the cap. The predecessor
+  // grace table drains in the same budget: expired grace rows (either its
+  // fixed 10s deadline or the predecessor's own expiry, by both clocks) go
+  // with the leftover batch slots, so one call never exceeds the batch cap.
+  const sessions = expiryTable(async (client, now) => {
+    const live = await client`delete from web_sessions where token_hash in (
+        select token_hash from web_sessions where expires_at <= ${now}
+          and expires_at <= clock_timestamp()
+        order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
+        for update skip locked
+      ) returning 1`;
+    const remaining = PRUNE_DELETE_BATCH_SIZE - live.length;
+    if (remaining <= 0) return live.length;
+    const grace = await client`delete from web_session_grace where predecessor_hash in (
+        select predecessor_hash from web_session_grace
+        where (grace_expires_at <= ${now} and grace_expires_at <= clock_timestamp())
+          or (expires_at <= ${now} and expires_at <= clock_timestamp())
+        order by predecessor_hash limit ${remaining}
+        for update skip locked
+      ) returning 1`;
+    return live.length + grace.length;
+  });
   // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
   // scheduled session-sweep expiry predicate: only rows expired by BOTH
   // clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`).

@@ -1474,6 +1474,7 @@ describe("retention ledger L8b core member tables", () => {
       "profiles",
       "rsvps",
       "web_sessions",
+      "web_session_grace",
       "join_attempts",
     ]);
     const erasure = read("src/member-erasure.ts");

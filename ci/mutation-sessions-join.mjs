@@ -95,7 +95,7 @@ export const MUTANTS = [
     id: "S4-revoke-noop",
     file: "src/sessions.ts",
     note: "revocation deletes the row: revoked tokens stay readable",
-    find: "async revoke(hash) {\n      rows.delete(hash);\n    },",
+    find: "async revoke(hash) {\n      rows.delete(hash);\n      dropGraceForToken(hash);\n    },",
     replace: "async revoke(hash) {\n    },",
   },
   {

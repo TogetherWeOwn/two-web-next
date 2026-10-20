@@ -47,7 +47,7 @@ Like `revoke-sessions`, the command sets its own session
 only; global database policy is unchanged. If a member row or table is
 locked, the run fails bounded with exit 1 and the redacted "operation
 failed; changes rolled back" message; the transaction rolls back, so a
-timed-out run erases nothing and all five tables stay unchanged. Verify
+timed-out run erases nothing and all member tables stay unchanged. Verify
 with a dry-run to read the per-table counts, then retry (re-run) the apply
 once the lock clears. If timeouts repeat, escalate to the DevOps &
 Reliability Engineer with the redacted error and the dry-run counts; do
@@ -66,7 +66,15 @@ For ONE Discord id, in one transaction:
 | `profiles` | `user_id` |
 | `rsvps` | `user_id` |
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
+| `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+
+The output counts carry one key per table: `web_sessions` counts live
+session rows and `web_session_grace` counts retired predecessor records, so a
+rotated member shows 1 under each key. Dry-run includes those same rows. The
+disposable-Postgres proofs in `test/session-predecessor-grace-postgres.test.ts`
+and `test/session-predecessor-grace-erasure.test.ts` check dry-run, deletion,
+repeat apply and preservation of another member's live session and grace.
 
 A second apply is a no-op: every count returns 0.
 
