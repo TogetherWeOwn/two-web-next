@@ -204,11 +204,14 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
 };
 
 export function latestWireUpdatedAt(rows: EventRow[]): Date {
-  return rows.reduce(
-    (latest, row) =>
-      isWireInstant(row.updatedAt) && row.updatedAt > latest ? row.updatedAt : latest,
-    new Date(0),
+  const latest = rows.reduce<Date | undefined>(
+    (selected, row) =>
+      isWireInstant(row.updatedAt) && (!selected || row.updatedAt > selected)
+        ? row.updatedAt
+        : selected,
+    undefined,
   );
+  return latest ?? new Date(0);
 }
 
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {

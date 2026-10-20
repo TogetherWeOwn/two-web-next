@@ -144,6 +144,18 @@ describe("feed builders (byte fixtures)", () => {
     );
   });
 
+  it.each([
+    ["0000-01-02T03:04:05Z", "Sun, 02 Jan 0000 03:04:05 +0000"],
+    ["0500-01-02T03:04:05Z", "Sat, 02 Jan 0500 03:04:05 +0000"],
+    ["0999-01-02T03:04:05Z", "Wed, 02 Jan 0999 03:04:05 +0000"],
+  ])("pads RSS item and channel years for %s", (instant, expected) => {
+    const date = new Date(instant);
+    const body = eventsRss([row({ startsAt: date })], APP_URL, date);
+    expect(body).toContain(`<pubDate>${expected}</pubDate>`);
+    expect(body).toContain(`<lastBuildDate>${expected}</lastBuildDate>`);
+    expect(body.match(/<item>/g)).toHaveLength(1);
+  });
+
   it("Google Calendar link is RFC3986-encoded UTC", () => {
     expect(googleCalendarUrl(row())).toBe(
       "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Friday%20night%20Helldivers&dates=20260715T180000Z%2F20260715T200000Z&details=Bring%20stims.&location=Voice%3A%20General",
@@ -250,6 +262,40 @@ describe("feed builders (byte fixtures)", () => {
     expect(body).toContain("DTSTAMP:00000102T030405Z");
     expect(body).toContain("DTSTART:00000203T040506Z");
     expect(body).toContain("DTEND:00000304T050607Z");
+  });
+});
+
+describe("latestWireUpdatedAt", () => {
+  it.each([
+    ["empty", [], "1970-01-01T00:00:00Z"],
+    [
+      "all poison",
+      [Number.NaN, "+010000-01-01T00:00:00Z", "-000001-01-01T00:00:00Z"],
+      "1970-01-01T00:00:00Z",
+    ],
+    ["year zero only", ["0000-01-02T03:04:05Z"], "0000-01-02T03:04:05Z"],
+    [
+      "unsorted pre-epoch with poison",
+      [
+        Number.NaN,
+        "+010000-01-01T00:00:00Z",
+        "0000-01-02T03:04:05Z",
+        "1960-01-01T00:00:00Z",
+        "0500-01-02T03:04:05Z",
+      ],
+      "1960-01-01T00:00:00Z",
+    ],
+    [
+      "unsorted modern dates",
+      ["2000-01-01T00:00:00Z", "2030-01-01T00:00:00Z", "2020-01-01T00:00:00Z"],
+      "2030-01-01T00:00:00Z",
+    ],
+  ] as const)("selects the latest wire instant: %s", (_label, instants, expected) => {
+    const rows = instants.map((instant) => row({ updatedAt: new Date(instant) }));
+    expect(latestWireUpdatedAt(rows)).toEqual(new Date(expected));
+    expect(rows.map((row) => row.updatedAt.getTime())).toEqual(
+      instants.map((instant) => new Date(instant).getTime()),
+    );
   });
 });
 
