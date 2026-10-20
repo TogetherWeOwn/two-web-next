@@ -61,6 +61,8 @@ function adminWriteReturn(path: string): string | null {
 
 export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Response> {
   const next = writeReturn(c);
+  c.header("cache-control", "no-store, private");
+  c.header("vary", "Cookie");
   // JSON callers keep 401, with an explicit recovery link, never an OAuth redirect.
   // JSON-only routes pass jsonOnly: a header-less fetch must not follow a 303 to a 200 page.
   // Accept uses exact media-range matching (shared with profile saves); Content-Type
@@ -95,6 +97,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
         inviteUrl: "/discord",
       },
       honoRecoveryRenderer,
+      { headers: { "cache-control": "no-store, private", vary: "Cookie" } },
     ),
   );
 }

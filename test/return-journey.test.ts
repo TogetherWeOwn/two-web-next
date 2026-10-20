@@ -291,6 +291,8 @@ describe("bounceToLogin (auth-gate records the intended page)", () => {
   it("a guest GET records pathname plus search and enters OAuth", async () => {
     const bounce = await app.request("/bounce?from=card", {}, env);
     expect(bounce.status).toBe(302);
+    expect(bounce.headers.get("cache-control")).toBe("no-store, private");
+    expect(bounce.headers.get("vary")).toBe("Cookie");
     expect(bounce.headers.get("location")).toBe("/auth/discord");
     expect(jarFrom(bounce)[LOGIN_INTENDED_COOKIE]).toBeTruthy();
   });
@@ -298,6 +300,8 @@ describe("bounceToLogin (auth-gate records the intended page)", () => {
   it("a HEAD bounce records the page the same way", async () => {
     const bounce = await app.request("/bounce?from=card", { method: "HEAD" }, env);
     expect(bounce.status).toBe(302);
+    expect(bounce.headers.get("cache-control")).toBe("no-store, private");
+    expect(bounce.headers.get("vary")).toBe("Cookie");
     expect(bounce.headers.get("location")).toBe("/auth/discord");
     expect(jarFrom(bounce)[LOGIN_INTENDED_COOKIE]).toBeTruthy();
   });
