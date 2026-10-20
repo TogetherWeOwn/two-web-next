@@ -12,8 +12,12 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
+import { discordEventsSource } from "../../src/events/discord-transients";
 import { listPast, type PublicEvent } from "../../src/events/reads";
+import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
+import { renderEventsHtml } from "../../src/kit-events-html";
 import { dispatchPastArchiveRequest, loadPastArchivePage } from "../../src/kit-past-events";
+import { kitEventsJourneyFor, kitEventsSessionFor } from "../../src/kit-session";
 import app from "../app";
 
 export const ARCHIVE_ORIGIN = "https://archive.example.test";
@@ -159,16 +163,18 @@ export function archiveReadFixture() {
   };
 }
 
+const kitDependencies = {
+  dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
+  listPast,
+  loadPastArchivePage,
+  loadEventsPage,
+  renderEventsHtml,
+  kitEventsSessionFor,
+  kitEventsJourneyFor,
+  discordEventsSource,
+};
 type KitBinding = {
-  request: (
-    request: Request,
-    env: Env,
-    deps: {
-      dbFor: (c: { env: Env }) => Promise<Db | null>;
-      listPast: typeof listPast;
-      loadPastArchivePage: typeof loadPastArchivePage;
-    },
-  ) => Promise<Response>;
+  request: (request: Request, env: Env, deps: typeof kitDependencies) => Promise<Response>;
 };
 
 // Compile the real Kit loader AND Svelte page. Only the Workers env binding and
@@ -183,17 +189,35 @@ export async function compileArchiveKit() {
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "archive-acceptance-"),
   );
   const outfile = join(scratch, "kit.mjs");
-  await build({
+  const dependencyExports = new Map([
+    [join(root, "src/admin/db.ts"), ["dbFor"]],
+    [join(root, "src/events/reads.ts"), ["listPast"]],
+    [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage"]],
+    [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
+    [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
+    [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
+    [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
+  ]);
+  const result = await build({
+    metafile: true,
     stdin: {
       contents: `
         import { render } from "svelte/server";
         import Page from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.svelte"))};
         import { load } from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.server.ts"))};
+        import { GET } from ${JSON.stringify(join(root, "web/src/routes/events/+server.ts"))};
         import { bind } from "acceptance:bindings";
         export async function request(request, env, deps) {
           bind(env, deps);
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
+            if (new URL(request.url).pathname === "/events") {
+              return await GET({request, url: new URL(request.url), cookies: {delete() {
+                throw new Error("Anonymous calendar fixture unexpectedly consumed a cookie");
+              }}, setHeaders: next => {
+                for (const [key, value] of Object.entries(next)) headers.set(key, value);
+              }});
+            }
             const data = await load({url: new URL(request.url), setHeaders: next => {
               for (const [key, value] of Object.entries(next)) {
                 if (headers.has(key)) throw new Error("duplicate setHeaders: " + key);
@@ -231,26 +255,25 @@ export async function compileArchiveKit() {
             path: "env",
             namespace: "acceptance",
           }));
-          plugin.onResolve(
-            { filter: /src\/(admin\/db|events\/reads|kit-past-events)$/ },
-            (args) => {
-              // The binding's real dependencies are injected from the test process,
-              // keeping the same cache generation and Drizzle fixture as Hono.
-              const name = args.path.endsWith("admin/db")
-                ? "dbFor"
-                : args.path.endsWith("events/reads")
-                  ? "listPast"
-                  : "loadPastArchivePage";
-              return { path: name, namespace: "acceptance" };
-            },
-          );
+          plugin.onLoad({ filter: /\.ts$/ }, (args) => {
+            // Match resolved files rather than import spelling, so aliases and
+            // explicit extensions keep the same cache/read dependency identity.
+            const names = dependencyExports.get(args.path);
+            if (!names) return;
+            return {
+              contents:
+                'import {deps} from "acceptance:bindings";' +
+                names
+                  .map((name) => `export const ${name}=(...args)=>deps.${name}(...args);`)
+                  .join("\n"),
+              loader: "js",
+            };
+          });
           plugin.onLoad({ filter: /.*/, namespace: "acceptance" }, (args) => ({
             contents:
               args.path === "bindings"
                 ? "export let env, deps; export function bind(e,d){env=e;deps=d;}"
-                : args.path === "env"
-                  ? 'export {env} from "acceptance:bindings";'
-                  : `import {deps} from "acceptance:bindings"; export const ${args.path}=(...args)=>deps.${args.path}(...args);`,
+                : 'export {env} from "acceptance:bindings";',
             loader: "js",
           }));
           plugin.onLoad({ filter: /\.svelte$/ }, (args) => ({
@@ -266,16 +289,32 @@ export async function compileArchiveKit() {
       },
     ],
   });
+  const duplicateCache = Object.values(result.metafile.outputs).some((output) =>
+    Object.entries(output.inputs).some(
+      ([path, input]) => path.endsWith("src/events/anon-cache.ts") && input.bytesInOutput > 0,
+    ),
+  );
+  if (duplicateCache) {
+    rmSync(scratch, { recursive: true, force: true });
+    throw new Error("Acceptance binding drift: Kit bundled a second anon-cache instance");
+  }
   const kit = (await import(pathToFileURL(outfile).href)) as KitBinding;
   return {
-    request: (request: Request, env: Env) =>
-      kit.request(request, env, {
-        dbFor: async (c) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
-        listPast,
-        loadPastArchivePage,
-      }),
+    request: (request: Request, env: Env) => kit.request(request, env, kitDependencies),
     dispose: () => rmSync(scratch, { recursive: true, force: true }),
   };
+}
+
+export async function requestCalendar(
+  twin: ArchiveTwin,
+  path: string,
+  env: Env,
+  kit: Awaited<ReturnType<typeof compileArchiveKit>>,
+): Promise<Response> {
+  const request = new Request(new URL(path, ARCHIVE_ORIGIN));
+  return twin === "Hono"
+    ? app.request(request, {}, env)
+    : dispatchEventsRequest(request, env, () => kit.request(request, env));
 }
 
 export async function requestArchive(

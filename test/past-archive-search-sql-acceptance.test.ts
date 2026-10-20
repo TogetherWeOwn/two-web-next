@@ -23,13 +23,16 @@ import {
 let fixture: MemberDataFixture;
 let countedDb: Db;
 let statements: string[] = [];
+let rowLimits: number[] = [];
 beforeAll(async () => {
   fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
   countedDb = drizzle(fixture.client, {
     schema: { ...schema, ...adminSchema },
     logger: {
-      logQuery: (sql) => {
+      logQuery: (sql, params) => {
         statements.push(sql);
+        const limit = /\blimit \$(\d+)/i.exec(sql);
+        if (limit) rowLimits.push(Number(params[Number(limit[1]) - 1]));
       },
     },
   });
@@ -57,6 +60,7 @@ beforeEach(async () => {
   ];
   await fixture.db.insert(events).values([...archiveRows(), ...excluded]);
   statements = [];
+  rowLimits = [];
 });
 afterEach(() => vi.useRealTimers());
 
@@ -69,9 +73,13 @@ describe("real SQL archive-search acceptance controls", () => {
     expect(one).toMatchObject({ totalPages: 2, hasMore: true });
     expect(two).toMatchObject({ totalPages: 2, hasMore: false });
     expect(new Set([...one.rows, ...two.rows].map((row) => row.id)).size).toBe(25);
-    // Count + bounded row read + two aggregate reads per nonempty page; never N+1.
-    expect(statements).toHaveLength(8);
-    expect(statements.filter((sql) => sql.includes(" limit "))).toHaveLength(2);
+    // Preserve the current maximum (count, rows, two aggregates per page),
+    // while allowing equivalent batching to reduce the number of statements.
+    expect(statements.length).toBeLessThanOrEqual(8);
+    expect(rowLimits).toHaveLength(2);
+    expect(
+      rowLimits.every((limit) => Number.isSafeInteger(limit) && limit > 0 && limit <= 21),
+    ).toBe(true);
   });
 
   it("orders starts before ids rather than treating a larger id as always newer", async () => {
@@ -141,7 +149,7 @@ describe("real SQL archive-search acceptance controls", () => {
       const result = await listPast(countedDb, page, ARCHIVE_NOW, ARCHIVE_QUERY);
       expect(result).toEqual({ rows: [], hasMore: false, totalPages: 2 });
       expect(statements).toHaveLength(1);
-      expect(statements[0]).toMatch(/^select count\(\*\)/);
+      expect(statements[0]).toMatch(/\bcount\s*\(/i);
       expect(statements[0]).not.toContain(" offset ");
     },
   );

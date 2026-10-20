@@ -3,12 +3,9 @@
 // Independent acceptance: extending the bounded preview, not changing its old cap.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
-import { renderEventsHtml } from "../src/kit-events-html";
 import { PAST_EVENTS_COPY, PAST_EVENTS_OUT_OF_RANGE_TESTID } from "../src/islands/contracts";
-import app from "./app";
 import {
   ARCHIVE_NOW,
-  ARCHIVE_ORIGIN,
   ARCHIVE_QUERY,
   archiveReadFixture,
   archiveRow,
@@ -20,6 +17,7 @@ import {
   lastMatchKeys,
   linksIn,
   requestArchive,
+  requestCalendar,
 } from "./helpers/past-archive-search-acceptance";
 
 vi.mock("../src/events/search-log", async (original) => ({
@@ -294,41 +292,16 @@ describe("calendar search continuation", () => {
     "%s keeps the past preview bounded and links to the same filtered archive",
     async (twin) => {
       const source = archiveReadFixture();
-      const html =
-        twin === "Hono"
-          ? await (
-              await app.request(
-                `/events?${new URLSearchParams({ q: ARCHIVE_QUERY, past: "1" })}`,
-                {},
-                source.env,
-              )
-            ).text()
-          : (
-              await renderEventsHtml(
-                {
-                  state: { view: "list", month: "2030-06", q: ARCHIVE_QUERY, past: true, page: 1 },
-                  upcoming: [],
-                  past: archiveRows()
-                    .filter((row) => row.eventKey.startsWith("archive-match-"))
-                    .slice(0, 20),
-                  zone: "UTC",
-                  now: ARCHIVE_NOW,
-                  totalPages: 0,
-                  emptyState: null,
-                  discordFailed: false,
-                  member: false,
-                  moderator: false,
-                  queryTooLong: false,
-                  inviteUrl: "https://discord.gg/example",
-                  appUrl: ARCHIVE_ORIGIN,
-                  canonical: `${ARCHIVE_ORIGIN}/events`,
-                  loginReturnTo: "/events",
-                  joinResult: null,
-                } as never,
-                { "cache-control": "private, no-store" },
-              )
-            ).body;
-      expect(eventKeys(html)).toHaveLength(20);
+      const response = await requestCalendar(
+        twin,
+        `/events?${new URLSearchParams({ q: ARCHIVE_QUERY, past: "1" })}`,
+        source.env,
+        kit,
+      );
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(eventKeys(html)).toEqual(firstMatchKeys);
+      expect(response.headers.get("cache-control")).toContain("no-store");
       const continuation = linksIn(html).filter((link) => link.url.pathname === "/events/past");
       expect(
         continuation.some((link) => queryMeaning(link.url.searchParams.get("q")) === "raid  night"),
