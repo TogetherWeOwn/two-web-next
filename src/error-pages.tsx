@@ -30,8 +30,8 @@ const ErrorShell: FC<
   </RecoveryShell>
 );
 
-export const BadRequestPage: FC = () => (
-  <ErrorShell code="400" title="Check your request">
+export const BadRequestPage: FC<{ code?: "400" | "415" }> = ({ code = "400" }) => (
+  <ErrorShell code={code} title="Check your request">
     <p class="lead">Check the address or filters and try again.</p>
     <p class="recovery-actions">
       <a class="btn" href="/events" data-testid="error-events">

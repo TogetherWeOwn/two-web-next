@@ -38,6 +38,7 @@ import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./que
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
+import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
@@ -137,6 +138,13 @@ function errorPage(
 ) {
   c.status(status);
   return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+}
+
+function writeUnavailable(c: Context<Vars>) {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  if (prefersHtmlError(c)) return errorPage(c, 503, "Admin temporarily unavailable");
+  return c.text("Admin temporarily unavailable", 503);
 }
 
 /** Validation errors re-render the form (422). */
@@ -381,9 +389,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       let recurrence;
       try {
@@ -449,12 +457,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const key = c.req.param("key");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -511,7 +519,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       async (c) => {
         const db = await dbOr503(c);
-        if (!db) return c.text("Admin temporarily unavailable", 503);
+        if (!db) return writeUnavailable(c);
         try {
           const actor = c.get("adminActor");
           const key = c.req.param("key");
@@ -602,9 +610,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -667,11 +675,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -715,7 +723,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);

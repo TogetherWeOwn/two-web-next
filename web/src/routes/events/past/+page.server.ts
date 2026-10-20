@@ -4,6 +4,8 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
 import { listPast } from "../../../../../src/events/reads";
 import { loadPastArchivePage } from "../../../../../src/kit-past-events";
+import { MAX_QUERY_LENGTH } from "../../../../../src/events/search-log";
+import { EVENTS_SEARCH_TOO_LONG_COPY } from "../../../../../src/islands/contracts";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block. The archive island stays the
@@ -18,10 +20,16 @@ export const csr = false;
 // error(503) proves what Kit sends, since SvelteKit ignores the helper's
 // status:503 Error property.
 export const load: PageServerLoad = async ({ url, setHeaders }) => {
+  // Admission stays outside the outage catch: 422 is not a database failure.
+  if ([...(url.searchParams.get("q") ?? "")].length > MAX_QUERY_LENGTH) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(422, EVENTS_SEARCH_TOO_LONG_COPY);
+  }
   try {
     return await loadPastArchivePage({
       env,
       pageParam: url.searchParams.get("page"),
+      queryParam: url.searchParams.get("q"),
       setHeaders,
       dbForFn: dbFor,
       listPastFn: listPast,
