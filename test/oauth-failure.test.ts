@@ -61,6 +61,18 @@ const cookiesFrom = (res: Response) =>
     .map((c) => c.split(";")[0])
     .join("; ");
 
+const mergeCookies = (...headers: string[]) => {
+  const cookies = new Map<string, string>();
+  for (const header of headers) {
+    for (const pair of header.split(/;\s*/)) {
+      const separator = pair.indexOf("=");
+      if (separator <= 0) throw new Error("invalid fixture cookie pair");
+      cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+    }
+  }
+  return [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+};
+
 const JOIN_LOG = "discord token exchange failed on the join journey";
 const LOGIN_LOG = "discord sign-in failed";
 
@@ -83,8 +95,20 @@ const recordsFor = (logs: DiagnosticRecord[], message: string) =>
 /** Nothing a member or an operator can read may carry a synthetic secret. */
 const leakFree = (...surfaces: unknown[]) => {
   const text = surfaces.map((s) => JSON.stringify(s) ?? String(s)).join("\n");
-  expect(text.includes(TOK), "synthetic token in a member-facing surface").toBe(false);
-  expect(text.includes(SECRET), "synthetic secret in a member-facing surface").toBe(false);
+  expect(text.includes(TOK), "synthetic token in a response or recorded surface").toBe(false);
+  expect(text.includes(SECRET), "synthetic secret in a response or recorded surface").toBe(false);
+};
+
+const responseSurface = (res: Response) => ({
+  status: res.status,
+  headers: [...res.headers],
+  setCookies: res.headers.getSetCookie(),
+});
+
+const safeText = async (res: Response) => {
+  const body = await res.clone().text();
+  leakFree(body, responseSurface(res));
+  return body;
 };
 
 /** Stub that answers only the given URL and fails the test on anything else. */
@@ -103,9 +127,10 @@ function stubFetch(handler: (url: string) => Response | Promise<Response>) {
 }
 
 // In-memory Sql double: understands exactly the queries the join journey emits.
-function fakeSql() {
+function fakeSql(attemptError?: unknown) {
   const throttle: { bucket: string; at: number }[] = [];
   const attempts: Record<string, unknown>[] = [];
+  const attemptedWrites: Record<string, unknown>[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
     if (head.includes("count(*)")) {
@@ -118,23 +143,27 @@ function fakeSql() {
     }
     if (head.includes("DELETE FROM web_throttle_hits")) return [];
     if (head.includes("INSERT INTO join_attempts")) {
-      attempts.push({
+      expect(values.length, "join_attempts bind count").toBe(4);
+      const row = {
         outcome: values[0],
         source: values[1],
         requestId: values[2],
         discordId: values[3],
-      });
+      };
+      attemptedWrites.push(row);
+      if (attemptError !== undefined) throw attemptError;
+      attempts.push(row);
       return [];
     }
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
-  return { sql: withThrottleTx(sql), attempts };
+  return { sql: withThrottleTx(sql), attempts, attemptedWrites };
 }
 
 /** Env with a memory session store + the fake journey store. */
-function isolatedJoin() {
-  const fake = fakeSql();
+function isolatedJoin(attemptError?: unknown) {
+  const fake = fakeSql(attemptError);
   const store = createMemorySessionStore();
   const e = {
     ...env,
@@ -157,7 +186,26 @@ async function joinRoundTrip(e: Env, handler: (url: string) => Response | Promis
     },
     e,
   );
-  return { logs, calls, res, html: await res.text() };
+  return { logs, calls, res, html: await safeText(res) };
+}
+
+async function joinErrorRoundTrip(
+  e: Env,
+  oauthError: string,
+  { admitted = true }: { admitted?: boolean } = {},
+) {
+  const calls = stubFetch(() => new Response("unexpected exchange", { status: 500 }));
+  const start = await app.request("/join/discord", {}, e);
+  const expectedState = new URL(start.headers.get("location")!).searchParams.get("state")!;
+  const state = admitted ? expectedState : `${expectedState}x`;
+  const description = encodeURIComponent(`provider detail ${TOK} ${SECRET}`);
+  const logs = captureDiagnosticStream();
+  const res = await app.request(
+    `/join/callback?error=${encodeURIComponent(oauthError)}&error_description=${description}&state=${state}`,
+    { headers: { cookie: cookiesFrom(start) } },
+    e,
+  );
+  return { logs, calls, res, html: await safeText(res) };
 }
 
 async function loginRoundTrip(
@@ -176,6 +224,7 @@ async function loginRoundTrip(
     },
     e,
   );
+  await safeText(res);
   return { logs, calls, res };
 }
 
@@ -431,12 +480,14 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
           },
         ],
       ]);
-      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+      expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
       const requestId = res.headers.get("x-request-id");
-      expect(fake.attempts).toEqual([
+      expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
         { outcome: "error", source: null, requestId, discordId: null },
       ]);
-      expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+      expect(
+        res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+      ).toBe(false);
       streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
       leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
@@ -456,15 +507,148 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
       expect(recordsFor(logs, LOGIN_LOG).map((r) => r.args)).toEqual([
         [LOGIN_LOG, { ...rejectedUserMeta, request_id: res.headers.get("x-request-id") }],
       ]);
-      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
-      expect(fake.attempts).toEqual([]);
-      expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-      const html = await (await app.request("/?n=signin_failed", {}, e)).text();
+      expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+      expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+      expect(
+        res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+      ).toBe(false);
+      const home = await app.request("/?n=signin_failed", {}, e);
+      const html = await safeText(home);
       expect(html).toContain("Sign in with Discord");
       streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
       leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
+});
+
+describe("OAuth callback length refusals keep canaries out of response and diagnostics", () => {
+  const oversized = `${TOK}${"x".repeat(8192)}${SECRET}`;
+
+  it.each([
+    ["join", "code"],
+    ["join", "state"],
+    ["login", "code"],
+    ["login", "state"],
+  ] as const)(
+    "%s callback rejects canary-bearing oversized %s before exchange",
+    async (flow, param) => {
+      const { fake, env: e } = isolatedJoin();
+      const startPath = flow === "join" ? "/join/discord" : "/auth/discord";
+      const callbackPath = flow === "join" ? JOIN_ROUTE : LOGIN_ROUTE;
+      const warning = flow === "join" ? JOIN_LOG : LOGIN_LOG;
+      const start = await app.request(startPath, {}, e);
+      const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+      const sessionStore = (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE;
+      const sessionCalls: string[] = [];
+      (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE = new Proxy(sessionStore, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            sessionCalls.push(String(property));
+            return Reflect.apply(value, target, args);
+          };
+        },
+      });
+      const logs = captureDiagnosticStream();
+      const calls = stubFetch(() => new Response("unexpected exchange", { status: 500 }));
+      const query =
+        param === "code"
+          ? `code=${encodeURIComponent(oversized)}&state=${encodeURIComponent(state)}`
+          : `code=abc&state=${encodeURIComponent(oversized)}`;
+      const res = await app.request(
+        `${callbackPath}?${query}`,
+        { headers: { cookie: cookiesFrom(start) } },
+        e,
+      );
+      const body = await safeText(res);
+      const requestId = res.headers.get("x-request-id");
+      const metadata =
+        flow === "join"
+          ? {
+              exception: "OversizedOAuthParams",
+              source: null,
+              outcome: "expired",
+              request_id: requestId,
+            }
+          : { exception: "OversizedOAuthParams", request_id: requestId };
+
+      leakFree(body, responseSurface(res), fake.attempts, fake.attemptedWrites);
+      expect(calls).toEqual([]);
+      expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+      expect(withheld(fake.attemptedWrites, [TOK, SECRET])).toEqual([]);
+      expect(sessionCalls).toEqual([]);
+      expect(
+        res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+      ).toBe(false);
+      if (flow === "join") {
+        expect(res.status).toBe(200);
+        expect(body).toContain("Join link expired");
+      } else {
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe("/?n=signin_failed");
+      }
+      expect(recordsFor(logs, warning).map((record) => record.args)).toEqual([[warning, metadata]]);
+      expect(channelCounts(logs)).toEqual({ log: 1, info: 0, debug: 0, warn: 1, error: 0 });
+      streamClean(logs, callbackPath, [warning]);
+
+      const home = flow === "login" ? await app.request("/?n=signin_failed", {}, e) : undefined;
+      leakFree(
+        body,
+        res.headers.get("location"),
+        responseSurface(res),
+        home && (await safeText(home)),
+        home && responseSurface(home),
+        fake.attempts,
+        fake.attemptedWrites,
+      );
+    },
+  );
+});
+
+describe("join callback: consent errors stay out of response, attempts and diagnostics", () => {
+  it.each([
+    ["explicit denial", "access_denied", "Join cancelled"],
+    ["unrecognized provider error", "unexpected_provider_error", "Join didn&#39;t complete"],
+  ])(
+    "records %s as a denial without echoing provider details",
+    async (_name, oauthError, title) => {
+      const { fake, env: e } = isolatedJoin();
+      const { logs, calls, res, html } = await joinErrorRoundTrip(e, oauthError);
+      expect(res.status).toBe(200);
+      expect(html).toContain(title);
+      expect(calls).toEqual([]);
+      const requestId = res.headers.get("x-request-id");
+      expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+        { outcome: "denied", source: null, requestId, discordId: null },
+      ]);
+      expect(recordsFor(logs, JOIN_LOG)).toEqual([]);
+      expect(channelCounts(logs)).toEqual({ log: 1, info: 0, debug: 0, warn: 0, error: 0 });
+      streamClean(logs, JOIN_ROUTE);
+      leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
+    },
+  );
+
+  it("unadmitted provider error ignores canary description and records no denial", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinErrorRoundTrip(e, "access_denied", {
+      admitted: false,
+    });
+    expect(res.status).toBe(200);
+    expect(html).toContain("Join link expired");
+    expect(calls).toEqual([]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    const requestId = res.headers.get("x-request-id");
+    expect(recordsFor(logs, JOIN_LOG).map((record) => record.args)).toEqual([
+      [
+        JOIN_LOG,
+        { exception: "InvalidState", source: null, outcome: "expired", request_id: requestId },
+      ],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 1, info: 0, debug: 0, warn: 1, error: 0 });
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+    leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
+  });
 });
 
 describe("join callback: expired recovery versus outage 503", () => {
@@ -492,7 +676,9 @@ describe("join callback: expired recovery versus outage 503", () => {
 
     // The funnel row is the legacy enum's error row; its four columns carry no secret.
     const requestId = res.headers.get("x-request-id");
-    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "error", source: null, requestId, discordId: null },
+    ]);
     streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
     leakFree(html, fake.attempts, res.headers.getSetCookie());
   });
@@ -523,13 +709,38 @@ describe("join callback: expired recovery versus outage 503", () => {
         request_id: res.headers.get("x-request-id"),
       });
       const requestId = res.headers.get("x-request-id");
-      expect(fake.attempts).toEqual([
+      expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
         { outcome: "error", source: null, requestId, discordId: null },
       ]);
       streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
       leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
+
+  it("exchange 429 rejects a marker-bearing Retry-After value", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, () =>
+      Response.json(
+        { error: "rate_limited", error_description: `provider detail ${SECRET}` },
+        { status: 429, headers: { "Retry-After": TOK } },
+      ),
+    );
+    expect(res.status).toBe(503);
+    expect(html).toContain("Discord is unreachable");
+    expect(res.headers.get("Retry-After") === null).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      {
+        outcome: "error",
+        source: null,
+        requestId: res.headers.get("x-request-id"),
+        discordId: null,
+      },
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+    leakFree(html, responseSurface(res), fake.attempts);
+  });
 
   it("transport failure with the token inside the raw message: 503, bounded log", async () => {
     const { env: e } = isolatedJoin();
@@ -588,7 +799,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     const calls = stubFetch(() => new Response("{}", { status: 200 }));
     const res = await app.request("/join/callback?code=abc&state=forged", {}, e);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("Join link expired");
+    expect(await safeText(res)).toContain("Join link expired");
     expect(recordsFor(logs, JOIN_LOG)[0]!.args[1]).toMatchObject({
       exception: "InvalidState",
       outcome: "expired",
@@ -621,6 +832,38 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
     throw new Error("unexpected Discord call");
   };
 
+  it("bot 429 rejects a marker-bearing Retry-After value from response surfaces", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, (url) => {
+      if (url.endsWith("/oauth2/token")) return Response.json({ access_token: TOK });
+      if (url.endsWith("/users/@me"))
+        return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
+      if (url.includes("/members/42"))
+        return Response.json(
+          { message: `rate limited ${SECRET}` },
+          { status: 429, headers: { "Retry-After": TOK } },
+        );
+      throw new Error("unexpected Discord call");
+    });
+    expect(res.status).toBe(200);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(res.headers.get("Retry-After") === null).toBe(true);
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+    ).toBe(false);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "rate_limited", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(calls.map((url) => new URL(url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      "/api/v10/guilds/326474832151838730/members/42",
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 0, error: 0 });
+    streamClean(logs, JOIN_ROUTE);
+    leakFree(html, responseSurface(res), fake.attempts);
+  });
+
   it("bot refusal with a marker-bearing body: 200 recovery, no session, one degraded attempt, clean stream", async () => {
     const { fake, env: e } = isolatedJoin();
     const { logs, calls, res, html } = await joinRoundTrip(e, botRefusalWithMarkers);
@@ -630,8 +873,10 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
     expect(html).toContain('href="/join/discord"');
     expect(html).toContain("Try again");
     expect(html).toContain("https://discord.gg/invite");
-    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-    expect(fake.attempts).toEqual([
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+    ).toBe(false);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
       { outcome: "degraded", source: null, requestId: null, discordId: "42" },
     ]);
     expect(calls.map((url) => new URL(url).pathname)).toEqual([
@@ -639,7 +884,7 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
       "/api/v10/users/@me",
       "/api/v10/guilds/326474832151838730/members/42",
     ]);
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, JOIN_ROUTE);
     leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
   });
@@ -653,8 +898,10 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
     expect(html).toContain('href="/join/discord"');
     expect(html).toContain("Try again");
     expect(html).toContain("https://discord.gg/invite");
-    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-    expect(fake.attempts).toEqual([
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+    ).toBe(false);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
       { outcome: "degraded", source: null, requestId: null, discordId: "42" },
     ]);
     expect(calls.map((url) => new URL(url).pathname)).toEqual([
@@ -662,7 +909,7 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
       "/api/v10/users/@me",
       "/api/v10/guilds/326474832151838730/members/42",
     ]);
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, JOIN_ROUTE);
     leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
   });
@@ -747,10 +994,11 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       { headers: { cookie: cookiesFrom(start) } },
       e,
     );
+    await safeText(res);
     return { logs, calls, res };
   }
 
-  it("moderator transport throw after a successful bot add: 302, non-moderator session, clean stream", async () => {
+  it("moderator transport throw after a successful bot add: 302, non-moderator session, bounded stream", async () => {
     const { fake, env: e } = isolatedJoin();
     const created = captureIssuedSessions(e);
     const { logs, calls, res } = await postBotRoundTrip(e, () => {
@@ -765,18 +1013,18 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       MEMBER_PATH,
     ]);
     expect(calls[2]!.method).toBe("PUT");
-    expect(fake.attempts).toEqual([
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
       { outcome: "added", source: null, requestId: null, discordId: "42" },
     ]);
     const setCookie = res.headers.getSetCookie().join("\n");
     expect(setCookie).toMatch(/__Host-two_session=[^;]/);
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
     const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
-    expect(await home.text()).toContain("Rick");
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    expect(await safeText(home)).toContain("Rick");
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, JOIN_ROUTE);
     leakFree(
-      await res.text(),
+      await safeText(res),
       res.headers.get("location"),
       [...res.headers],
       setCookie,
@@ -802,22 +1050,172 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       MEMBER_PATH,
       MEMBER_PATH,
     ]);
-    expect(fake.attempts).toEqual([
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
       { outcome: "added", source: null, requestId: null, discordId: "42" },
     ]);
     expect(recordsFor(logs, MODERATOR_LOOKUP_LOG).map((r) => r.args)).toEqual([
       [MODERATOR_LOOKUP_LOG, { status: 500, guild_id: "326474832151838730" }],
     ]);
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
     const setCookie = res.headers.getSetCookie().join("\n");
     expect(setCookie).toMatch(/__Host-two_session=[^;]/);
     streamClean(logs, JOIN_ROUTE, [MODERATOR_LOOKUP_LOG]);
     leakFree(
-      await res.text(),
+      await safeText(res),
       res.headers.get("location"),
       [...res.headers],
       setCookie,
+      fake.attempts,
+      created,
+    );
+  });
+
+  it("moderator malformed JSON after a successful bot add: non-moderator session, bounded warning", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(
+      e,
+      () => new Response(`not JSON ${TOK} ${SECRET}`, { status: 200 }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(calls[3]!.method).toBe("GET");
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(
+      recordsFor(logs, "moderator recompute lookup returned non-JSON").map((r) => r.args),
+    ).toEqual([
+      ["moderator recompute lookup returned non-JSON", { guild_id: env.DISCORD_GUILD_ID }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    streamClean(logs, JOIN_ROUTE, ["moderator recompute lookup returned non-JSON"]);
+    leakFree(
+      await safeText(res),
+      res.headers.get("location"),
+      [...res.headers],
+      res.headers.getSetCookie(),
+      fake.attempts,
+      created,
+    );
+  });
+
+  it("attempt-write failure after a successful bot add: sign-in continues with a bounded warning", async () => {
+    const failure = new Error(`insert failed ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+    const { fake, env: e } = isolatedJoin(failure);
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(e, () =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(withheld(fake.attemptedWrites, [TOK, SECRET])).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    expect(recordsFor(logs, "join attempt write failed").map((r) => r.args)).toEqual([
+      ["join attempt write failed", { exception: "Error", outcome: "added" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    streamClean(logs, JOIN_ROUTE, ["join attempt write failed"]);
+    leakFree(
+      await safeText(res),
+      res.headers.get("location"),
+      [...res.headers],
+      res.headers.getSetCookie(),
+      fake.attempts,
+      created,
+    );
+  });
+
+  it("roster write failure after a successful bot add: session issues with a bounded warning", async () => {
+    const { fake, env: baseEnv } = isolatedJoin();
+    const throwingRoster = (async () => {
+      throw new Error(`roster insert ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+    }) as unknown as Sql;
+    const e = { ...baseEnv, ROSTER_STORE: throwingRoster } as Env;
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(e, () =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(recordsFor(logs, "roster upsert failed").map((r) => r.args)).toEqual([
+      ["roster upsert failed", { request_id: res.headers.get("x-request-id"), exception: "Error" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    streamClean(logs, JOIN_ROUTE, ["roster upsert failed"]);
+    leakFree(
+      await safeText(res),
+      res.headers.get("location"),
+      [...res.headers],
+      res.headers.getSetCookie(),
+      fake.attempts,
+      created,
+    );
+  });
+
+  it("prior-session sweep failure after a successful bot add: session issues with a bounded warning", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const store = (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE;
+    (store as unknown as { revokeUserSessions: () => Promise<never> }).revokeUserSessions =
+      async () => {
+        throw new Error(`session sweep ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+      };
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(e, () =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(recordsFor(logs, "prior session sweep failed").map((r) => r.args)).toEqual([
+      [
+        "prior session sweep failed",
+        { request_id: res.headers.get("x-request-id"), exception: "Error" },
+      ],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    streamClean(logs, JOIN_ROUTE, ["prior session sweep failed"]);
+    leakFree(
+      await safeText(res),
+      res.headers.get("location"),
+      [...res.headers],
+      res.headers.getSetCookie(),
       fake.attempts,
       created,
     );
@@ -848,7 +1246,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       { headers: { cookie: cookiesFrom(start) } },
       e,
     );
-    const html = await res.text();
+    const html = await safeText(res);
     expect(res.status).toBe(500);
     expect(html).toContain("Something broke on our side");
     expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
@@ -857,14 +1255,14 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       MEMBER_PATH,
       MEMBER_PATH,
     ]);
-    expect(fake.attempts).toEqual([
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
       { outcome: "added", source: null, requestId: null, discordId: "42" },
     ]);
     const setCookie = res.headers.getSetCookie().join("\n");
     expect(setCookie).not.toContain("__Host-two_session=");
     const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
-    expect(await home.text()).not.toContain("Rick");
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 1 });
+    expect(await safeText(home)).not.toContain("Rick");
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 1 });
     streamClean(logs, JOIN_ROUTE);
     const alertArgs = withheld(logs.find((r) => r.channel === "error")!.args, [
       TOK,
@@ -880,6 +1278,77 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       route: JOIN_ROUTE,
     });
     leakFree(html, [...res.headers], setCookie, fake.attempts);
+  });
+
+  it("session-replace throw after a successful bot add: bounded alert, no new session cookie", async () => {
+    __resetAlertRateLimitForTests();
+    const { fake, env: e } = isolatedJoin();
+    stubSignInDiscord();
+    const loginStart = await app.request("/auth/discord", {}, e);
+    const loginState = new URL(loginStart.headers.get("location")!).searchParams.get("state")!;
+    const login = await app.request(
+      `/auth/discord/callback?code=abc&state=${loginState}`,
+      { headers: { cookie: cookiesFrom(loginStart) } },
+      e,
+    );
+    const priorCookie = cookiesFrom(login);
+    expect(priorCookie).toContain("__Host-two_session=");
+
+    const joinStart = await app.request("/join/discord", { headers: { cookie: priorCookie } }, e);
+    const state = new URL(joinStart.headers.get("location")!).searchParams.get("state")!;
+    const priorCookies = priorCookie.split(/;\s*/);
+    const joinCookies = cookiesFrom(joinStart).split(/;\s*/);
+    const callbackCookie = mergeCookies(priorCookie, joinCookies.join("; "));
+    const callbackCookies = callbackCookie.split(/;\s*/);
+    const sessionCookie = priorCookies.find((cookie) => cookie.startsWith("__Host-two_session="));
+    expect(sessionCookie !== undefined).toBe(true);
+    expect(callbackCookies.includes(sessionCookie!)).toBe(true);
+    expect(joinCookies.length).toBeGreaterThan(0);
+    expect(joinCookies.every((cookie) => callbackCookies.includes(cookie))).toBe(true);
+    const logs = captureDiagnosticStream();
+    const store = (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE;
+    store.replace = async () => {
+      throw new Error(`session replace ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+    };
+    const calls = stubPostBotDiscord(() =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: callbackCookie } },
+      e,
+    );
+    const html = await safeText(res);
+    expect(res.status).toBe(500);
+    expect(html).toContain("Something broke on our side");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
+    ).toBe(false);
+    expect(channelCounts(logs)).toEqual({ log: 1, info: 0, debug: 0, warn: 0, error: 1 });
+    streamClean(logs, JOIN_ROUTE);
+    const alertArgs = withheld(logs.find((r) => r.channel === "error")!.args, [
+      TOK,
+      SECRET,
+    ]) as unknown[];
+    expect(alertArgs).toHaveLength(1);
+    expect(JSON.parse(alertArgs[0] as string)).toMatchObject({
+      level: "critical",
+      event: "error.alert",
+      fingerprint: `Error@${JOIN_ROUTE}`,
+      exception: "Error",
+      method: "GET",
+      route: JOIN_ROUTE,
+    });
+    leakFree(html, [...res.headers], res.headers.getSetCookie(), fake.attempts);
   });
 
   it("negative control: a planted post-bot-success marker fails the same inspection without printing marker bytes", async () => {
@@ -903,7 +1372,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
 
 describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failure rows)", () => {
   it("renders the denied banner for access_denied and never echoes the description", async () => {
-    const { env: e } = isolatedJoin();
+    const { fake, env: e } = isolatedJoin();
     const { logs, calls, res } = await loginRoundTrip(
       e,
       () => new Response("{}", { status: 200 }),
@@ -912,30 +1381,40 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_denied");
     const home = await app.request("/?n=signin_denied", {}, e);
-    const html = await home.text();
+    const html = await safeText(home);
     expect(html).toContain("You cancelled the Discord sign-in");
     expect(html).not.toContain("did not answer");
     expect(calls).toHaveLength(0); // no exchange is attempted for a consent refusal
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
-    leakFree(html, res.headers.get("location"));
+    leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
 
   it("renders the generic banner for any other OAuth error", async () => {
-    const { env: e } = isolatedJoin();
-    const { logs, res } = await loginRoundTrip(
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res } = await loginRoundTrip(
       e,
       () => new Response("{}", { status: 200 }),
       `error=server_error&error_description=${encodeURIComponent(`upstream says ${SECRET}`)}`,
     );
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    expect(calls).toHaveLength(0);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    const home = await app.request("/?n=signin_failed", {}, e);
+    const html = await safeText(home);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
-    leakFree(res.headers.get("location"));
+    leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
 
   it("expired grant on login: generic banner, bounded log", async () => {
-    const { env: e } = isolatedJoin();
-    const { logs, res } = await loginRoundTrip(e, () => invalidGrant(400));
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res } = await loginRoundTrip(e, () => invalidGrant(400));
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    expect(calls).toHaveLength(1);
+    const home = await app.request("/?n=signin_failed", {}, e);
+    const html = await safeText(home);
     const signLine = recordsFor(logs, LOGIN_LOG);
     expect(signLine).toHaveLength(1);
     expect(signLine[0]!.args[1]).toEqual({
@@ -944,31 +1423,62 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       status: 400,
       request_id: res.headers.get("x-request-id"),
     });
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
-    leakFree(res.headers.get("location"));
+    leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
 
   it("outage on login: the unavailable banner says it is on Discord, not you", async () => {
-    const { env: e } = isolatedJoin();
-    const { logs, res } = await loginRoundTrip(e, () => invalidGrant(503));
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res } = await loginRoundTrip(e, () => invalidGrant(503));
     expect(res.headers.get("location")).toBe("/?n=signin_unavailable");
+    expect(calls).toHaveLength(1);
     const home = await app.request("/?n=signin_unavailable", {}, e);
-    const html = await home.text();
+    const html = await safeText(home);
     expect(html).toContain("Discord did not answer just now");
     expect(html).toContain("This is on Discord, not you");
-    expect(recordsFor(logs, LOGIN_LOG)).toHaveLength(1);
+    expect(recordsFor(logs, LOGIN_LOG).map((record) => record.args)).toEqual([
+      [
+        LOGIN_LOG,
+        {
+          exception: "DiscordError",
+          kind: "provider_outage",
+          status: 503,
+          request_id: res.headers.get("x-request-id"),
+        },
+      ],
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
-    leakFree(html);
+    leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
 
   it("transport failure on login: unavailable banner, token dropped from the log", async () => {
-    const { env: e } = isolatedJoin();
-    const { logs, res } = await loginRoundTrip(e, () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res } = await loginRoundTrip(e, () => {
       throw new TypeError(`failed sending ${TOK}`);
     });
     expect(res.headers.get("location")).toBe("/?n=signin_unavailable");
+    expect(calls).toHaveLength(1);
+    const home = await app.request("/?n=signin_unavailable", {}, e);
+    const html = await safeText(home);
+    expect(recordsFor(logs, LOGIN_LOG).map((record) => record.args)).toEqual([
+      [
+        LOGIN_LOG,
+        {
+          exception: "DiscordError",
+          kind: "transport_failure",
+          status: 0,
+          request_id: res.headers.get("x-request-id"),
+        },
+      ],
+    ]);
+    expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
-    leakFree(res.headers.get("location"));
+    leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
 });
 
@@ -1086,7 +1596,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(res.headers.get("cache-control")).toContain("private");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie()).toEqual([]);
-    const body = await res.text();
+    const body = await safeText(res);
     expect(body).toContain('<a class="brand" href="/"');
     expect(body).not.toMatch(/ECONNREFUSED|postgres:\/\/|db\.internal/);
     expect(body).not.toContain(SECRET);
