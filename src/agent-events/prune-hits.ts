@@ -15,7 +15,7 @@ export async function pruneAgentEventHits(sql: Sql): Promise<void> {
       await tx`delete from agent_event_hits where id in (
         select id from agent_event_hits
         where at < now() - interval '5 minutes'
-        order by id limit ${PRUNE_BATCH_SIZE}
+        order by at, id limit ${PRUNE_BATCH_SIZE}
       )`;
     });
   } catch {
