@@ -117,11 +117,16 @@ function expectArchiveSeo(html: string, canonical: string) {
   expect(html).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(html).not.toContain("/rsvp");
   // Header/footer chrome is tolerated outside the archive section; the
-  // section itself must carry zero RSVP surface and zero controls.
+  // section itself must carry zero RSVP surface and exactly one control: the
+  // GET archive search form. Strip it before asserting nothing else remains.
   const section = archiveSection(html);
   expect(section).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(section).not.toContain("/rsvp");
-  expect(section).not.toMatch(/<button|<form/);
+  const withoutSearch = section.replace(
+    /<form[^>]*action="\/events\/past"[^>]*>[\s\S]*?<\/form>/,
+    "",
+  );
+  expect(withoutSearch).not.toMatch(/<button|<form/);
   expect(scripts(html)).toEqual(["/islands/past-events.js"]);
 }
 

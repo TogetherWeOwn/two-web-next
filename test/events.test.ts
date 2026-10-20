@@ -809,7 +809,13 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
     expect(html).toContain('data-total-pages="2"');
     expect(html).not.toContain("excluded-");
-    expect(html).not.toMatch(/data-island="rsvp-button"|<button|<form/);
+    // The archive section carries exactly one control (the GET search form);
+    // strip it before asserting zero RSVP surface and no other controls.
+    const withoutSearch = html.replace(
+      /<form[^>]*action="\/events\/past"[^>]*>[\s\S]*?<\/form>/,
+      "",
+    );
+    expect(withoutSearch).not.toMatch(/data-island="rsvp-button"|<button|<form/);
     const second = await (await req("/events/past?page=2")).text();
     expect(keys(second)).toEqual(["archive-5", "archive-4", "archive-3", "archive-2", "archive-1"]);
     expect(second).not.toContain(">Older</a>");

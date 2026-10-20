@@ -46,6 +46,14 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
       <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
     </p>
+    <!-- Plain GET navigation outside the binder's swapped zones: submitting
+        starts from page 1 with JS off, and fragment turns never swallow it.
+        Same shape as the calendar search form. -->
+    <form method="get" action="/events/past" role="search">
+      <label class="sr-only" for="past-events-search-input">Search past events</label>
+      <input id="past-events-search-input" type="search" name="q" value={q} placeholder="Search past events" />
+      <button class="btn" type="submit">Search</button>
+    </form>
     <div data-archive-state>
       {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
@@ -62,7 +70,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#each rows as e (e.eventKey)}<EventCard {e} />{/each}</ul>
-    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
+    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>Page {page} of {totalPages}</span>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
     <p><a href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>

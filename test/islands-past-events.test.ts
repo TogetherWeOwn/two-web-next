@@ -116,7 +116,13 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain('src="/islands/past-events.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
     expect(html).toContain('href="/events/past?page=2"');
-    expect(html).not.toMatch(
+    // The archive section carries exactly one control (the GET search form);
+    // strip it before asserting zero RSVP surface and no other controls.
+    const withoutSearch = html.replace(
+      /<form[^>]*action="\/events\/past"[^>]*>[\s\S]*?<\/form>/,
+      "",
+    );
+    expect(withoutSearch).not.toMatch(
       /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-)|<button|<form/,
     );
   });
