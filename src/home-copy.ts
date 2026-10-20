@@ -29,6 +29,9 @@ export type HomeNotice = keyof typeof HOME_NOTICES;
 
 /** The `?n=` value Hono accepts: exactly one of the six keys, else no notice. */
 export function parseHomeNotice(value: string | null): HomeNotice | null {
+  // Own-key check, not a module-level key Set: the same accept/reject answers
+  // (prototype names still rejected) with no module state for bundlers to
+  // retain in graphs that only need the copy tables below.
   if (!value || !Object.hasOwn(HOME_NOTICES, value)) return null;
   return value as HomeNotice;
 }
@@ -63,9 +66,15 @@ export const HOME_JOIN_RESULT_COPY = {
 
 // The ladder names its ranks even when the bot views are dark: ranks stack,
 // so an unnumbered stack still reads as the trust ladder, never as zeros.
-export const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map(
-  (label) => ({ key: label.toLowerCase(), label, memberCount: null }),
-);
+// Plain literal, not a mapped construction: the same five rows, with no call
+// for bundlers to retain in graphs that only need the copy tables.
+export const FALLBACK_RANKS: Rank[] = [
+  { key: "prospect", label: "Prospect", memberCount: null },
+  { key: "member", label: "Member", memberCount: null },
+  { key: "soldier", label: "Soldier", memberCount: null },
+  { key: "veteran", label: "Veteran", memberCount: null },
+  { key: "legend", label: "Legend", memberCount: null },
+];
 
 // Kit homepage decision core (SvelteKit migration; zero behavior change).
 //
