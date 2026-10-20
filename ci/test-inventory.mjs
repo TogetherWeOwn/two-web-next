@@ -6,7 +6,8 @@
 // - test/** matches the vitest `include` globs, except the files the config
 //   `exclude`s (parsed live from vitest.config.ts, never mirrored by hand:
 //   literals plus `*`/`**` globs expanded against the files on disk; any
-//   other glob magic fails the gate loudly instead of reading as reachable).
+//   other glob magic or non-canonical paths fail loudly instead of reading
+//   as reachable; matches on ancestor directories prune their descendants).
 //   An excluded file runs via `npm run test:smoke` instead, and counts as
 //   reachable only while that command still names it (a mention anywhere
 //   else is not a run).
@@ -14,7 +15,7 @@
 //   `npm run test:tier0`); reachable only while that wiring names it.
 // - ci/** and e2e/** have no glob runner: each file must be named in a
 //   package.json script or a .github/workflows/*.yml step.
-// - test/helpers/** and other non-*.test.* files are fixtures, not tests.
+// - Non-*.test.* files are fixtures, not tests.
 //
 // Modes: default prints ::warning:: per orphan and exits 0 (triage runs).
 // --strict exits 1 on any orphan; CI runs --strict (HARD).
@@ -39,56 +40,63 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const VITEST_TEST_DIRS = ["test"];
 
-// The body of the `exclude: [ … ]` array in <root>/vitest.config.ts, with
-// comments stripped. Scanned quote-aware (brackets inside a quoted entry,
-// e.g. a `[ab]` character class, must not end the array early and silently
-// drop the entry) and comment-aware (an apostrophe in a `//` comment must
-// not open a quote that swallows the closing bracket, and a quoted path
-// inside a `/* */` comment is prose, not an exclude).
+// Keep two offset-aligned views: comments become whitespace in both, and
+// quoted strings become whitespace only in `code`. Key/bracket discovery
+// uses code; the entry parser gets the original strings without comments.
+// This also prevents removing a comment from joining two separate tokens.
 function excludeArrayBody(text, configPath) {
-  const key = text.indexOf("exclude:");
-  assert.ok(key !== -1, `${configPath} has no exclude block`);
-  const open = text.indexOf("[", key);
-  assert.ok(open !== -1, `${configPath} exclude block never opens`);
-  let i = open + 1;
+  let clean = "";
+  let code = "";
   let quote = null;
-  let depth = 1;
-  let out = "";
-  while (i < text.length && depth > 0) {
+  for (let i = 0; i < text.length; i += 1) {
     const c = text[i];
     if (quote) {
-      if (c === "\\") {
-        out += text.slice(i, i + 2);
-        i += 2;
-        continue;
+      clean += c;
+      code += " ";
+      if (c === "\\" && i + 1 < text.length) {
+        clean += text[++i];
+        code += " ";
+      } else if (c === quote) {
+        quote = null;
       }
-      if (c === quote) quote = null;
-      out += c;
-    } else if (c === "/" && text[i + 1] === "/") {
-      const nl = text.indexOf("\n", i);
-      i = nl === -1 ? text.length : nl;
-      continue;
-    } else if (c === "/" && text[i + 1] === "*") {
-      const endC = text.indexOf("*/", i + 2);
-      assert.ok(endC !== -1, `${configPath} exclude block has an unclosed comment`);
-      i = endC + 2;
-      continue;
+    } else if (c === "/" && (text[i + 1] === "/" || text[i + 1] === "*")) {
+      let end;
+      if (text[i + 1] === "/") {
+        end = i + 2;
+        while (end < text.length && ![10, 13, 0x2028, 0x2029].includes(text.charCodeAt(end)))
+          end += 1;
+      } else {
+        const close = text.indexOf("*/", i + 2);
+        assert.ok(close !== -1, `${configPath} exclude block has an unclosed comment`);
+        end = close + 2;
+      }
+      const blank = " ".repeat(end - i);
+      clean += blank;
+      code += blank;
+      i = end - 1;
     } else if (c === '"' || c === "'" || c === "`") {
       quote = c;
-      out += c;
-    } else if (c === "[") {
-      depth += 1;
-      out += c;
-    } else if (c === "]") {
-      depth -= 1;
-      if (depth > 0) out += c;
+      clean += c;
+      code += " ";
     } else {
-      out += c;
+      clean += c;
+      code += c;
     }
-    i += 1;
   }
-  assert.ok(depth === 0, `${configPath} exclude block never closes`);
-  return out;
+  assert.ok(quote === null, `${configPath} has an unclosed string`);
+  const keys = [...code.matchAll(/\bexclude\s*:/g)];
+  assert.equal(keys.length, 1, `${configPath} must have exactly one unquoted exclude block`);
+  const start = keys[0].index + keys[0][0].length;
+  const gap = code.slice(start).match(/^\s*/)[0].length;
+  const open = start + gap;
+  assert.equal(code[open], "[", `${configPath} exclude block must be an array`);
+  let depth = 1;
+  for (let i = open + 1; i < code.length; i += 1) {
+    if (code[i] === "[") depth += 1;
+    else if (code[i] === "]") depth -= 1;
+    if (depth === 0) return clean.slice(open + 1, i);
+  }
+  assert.fail(`${configPath} exclude block never closes`);
 }
 
 // Consume complete comma-separated entries, not just quoted substrings:
@@ -129,32 +137,35 @@ function assertSupportedExcludes(entries, root) {
       /^[\w\-./*]+$/.test(e),
       `${join(root, "vitest.config.ts")} has an exclude this gate cannot expand (${e}): use a literal or a * / ** glob`,
     );
+    // tinyglobby normalizes patterns before matching. Rather than partially
+    // reimplement normalization (especially around glob/.. segments), reject
+    // non-canonical spellings before either literal or glob expansion.
+    assert.ok(
+      e.split("/").every((part) => part && part !== "." && part !== ".."),
+      `${join(root, "vitest.config.ts")} has a non-canonical exclude (${e}): use root-relative paths without empty, . or .. segments`,
+    );
   }
 }
 
-// The test/** files vitest skips, parsed from the `exclude` array in
-// <root>/vitest.config.ts. Derived, not mirrored, so the gate cannot drift
-// from the config. Literals land here; `*` globs are expanded against the
-// files on disk by vitestExcludeGlobs (a glob-excluded suite needs smoke
-// wiring too, never a silent vitest-reachable). A root without the config
-// (hermetic fixtures) excludes nothing.
+// The test/** files vitest skips, derived from the live exclude array.
+// tinyglobby prunes directories matching an ignore pattern, so literals
+// and globs must match both the file and each ancestor directory. Entries
+// matching nothing (node_modules, dist) expand to the empty set.
 export function vitestExcludedTests(root = repoRoot) {
   const entries = rawVitestExcludes(root);
   assertSupportedExcludes(entries, root);
-  const files = entries
-    .filter((f) => /\.test\.(?:ts|mjs)$/.test(f))
-    .filter((f) => f.startsWith("test/") && !f.includes("*"));
-  return new Set(files);
-}
-
-// Every `*`/`**` entry in the vitest `exclude` array. Expanded against the
-// discovered test files so a glob-excluded suite cannot read as
-// vitest-reachable, however the glob is prefixed (`test/…`, `**/…`).
-// Entries matching nothing (node_modules, dist) expand to the empty set.
-export function vitestExcludeGlobs(root = repoRoot) {
-  const entries = rawVitestExcludes(root);
-  assertSupportedExcludes(entries, root);
-  return entries.filter((g) => g.includes("*"));
+  const patterns = entries.map(globToRegExp);
+  return new Set(
+    listTestFiles(root, "test").filter((file) => {
+      const parts = file.split("/");
+      while (parts.length) {
+        const path = parts.join("/");
+        if (patterns.some((pattern) => pattern.test(path))) return true;
+        parts.pop();
+      }
+      return false;
+    }),
+  );
 }
 
 function listTestFiles(root, dir) {
@@ -228,13 +239,6 @@ export function inventory(root = repoRoot) {
   const smokeCmd = smokeCommand(root);
   const testFiles = VITEST_TEST_DIRS.flatMap((d) => listTestFiles(root, d));
   const smokeExcluded = vitestExcludedTests(root);
-  // Glob excludes (e.g. "test/smoke-*.test.mjs") expand against the files on
-  // disk: a glob-excluded suite needs test:smoke wiring like a literal one,
-  // instead of silently reading as vitest-reachable.
-  const excludeGlobs = vitestExcludeGlobs(root);
-  for (const file of testFiles) {
-    if (excludeGlobs.some((g) => globToRegExp(g).test(file))) smokeExcluded.add(file);
-  }
   const files = [
     ...testFiles,
     ...listTestFiles(root, "tier0"),
@@ -577,6 +581,74 @@ function selftest() {
       assert.match(ghost.via, /vitest include/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Each fixture keeps a non-excluded sibling to catch over-broad directory
+  // matching as well as a silently reachable excluded suite.
+  const excludeFixture = (config, error) => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      writeFileSync(join(dir, "vitest.config.ts"), config);
+      mkdirSync(join(dir, "test", "helpers", "unit"), { recursive: true });
+      writeFileSync(join(dir, "test/helpers/unit/ghost.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test/plain.test.ts"), "vitest placeholder\n");
+      if (error) {
+        assert.throws(() => inventory(dir), error);
+      } else {
+        const { orphans, reachable } = inventory(dir);
+        assert.deepEqual(orphans, ["test/helpers/unit/ghost.test.mjs"]);
+        assert.match(reachable.find((r) => r.file === "test/plain.test.ts").via, /vitest include/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  check("non-canonical vitest exclude paths fail closed", () => {
+    for (const entry of [
+      "./test/helpers/unit/ghost.test.mjs",
+      "test//helpers/unit/ghost.test.mjs",
+      "test/./helpers/unit/ghost.test.mjs",
+      "test/../test/helpers/unit/ghost.test.mjs",
+      "test/helpers/unit/ghost.test.mjs/",
+      "./test/**/*.test.mjs",
+      "test/helpers/",
+    ]) {
+      excludeFixture(
+        `export default { test: { exclude: [${JSON.stringify(entry)}] } };`,
+        /non-canonical/,
+      );
+    }
+  });
+
+  check("directory excludes prune descendants but not siblings", () => {
+    for (const entry of ["test/helpers", "**/helpers", "test/helpers/*", "test/*/unit"]) {
+      excludeFixture(`export default { test: { exclude: [${JSON.stringify(entry)}] } };`);
+    }
+  });
+
+  check("exclude key search skips comments and strings", () => {
+    for (const prefix of [
+      "/* exclude: [] */\n",
+      "// exclude: []\n",
+      'const note = "exclude: []";\n',
+      "const note = 'exclude: []';\n",
+      "const note = `exclude: []`;\n",
+      "const notexclude = [];\n",
+    ]) {
+      excludeFixture(
+        `${prefix}export default { test: { exclude: ["test/helpers/unit/ghost.test.mjs"] } };`,
+      );
+    }
+  });
+
+  check("line comments end at every ECMAScript line terminator", () => {
+    for (const end of ["\n", "\r", String.fromCodePoint(0x2028), String.fromCodePoint(0x2029)]) {
+      excludeFixture(
+        `export default { test: { exclude: [// note${end}"test/helpers/unit/ghost.test.mjs",\n] } };`,
+      );
     }
   });
 
