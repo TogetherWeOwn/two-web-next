@@ -2,12 +2,12 @@
 //
 // Reads the Playwright JSON report written by `playwright.staging.config.ts`,
 // records per-journey pass/skip/fail accounting as JSON + Markdown, prints the
-// ledger to the log, and fails loud when nothing passed: an all-skipped (or
-// empty) run exits non-zero with every skipped journey and its reason named,
-// so it can never report a quiet green. Runs only on the runner against
-// report files; it never touches staging or any secret.
+// ledger to the log, and fails loud for flaky, failed, all-skipped, or empty
+// runs. Flaky results retain their first-attempt reason and require retries/config
+// provenance to be checked. Runs only on the runner against report files; it
+// never contacts staging and uses the QA token only for diagnostic redaction.
 //
-// Exit codes: 0 pass, 1 journeys failed, 2 all-skipped or empty report.
+// Exit codes: 0 pass, 1 failed or flaky journeys, 2 all-skipped or empty report.
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -43,7 +43,7 @@ export function runGate({
     return 2;
   }
 
-  const summary = summarizeJourneys(report);
+  const summary = summarizeJourneys(report, { qaAuthToken: process.env.QA_AUTH_TOKEN });
   const ledgerJson = `${JSON.stringify(summary, null, 2)}\n`;
   const ledgerMd = formatLedgerMarkdown(summary);
   mkdirSync(dirname(resolve(ledgerJsonPath)), { recursive: true });
