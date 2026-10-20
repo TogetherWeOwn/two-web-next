@@ -179,11 +179,14 @@ describe("featured form rejects control and invisible characters with the event 
         { label: "BOM only", value: BOM, trimHides: true },
         { label: "BOM behind whitespace", value: ` ${BOM}Game night`, trimHides: true },
         { label: "BOM with trailing whitespace", value: `Game night${BOM} `, trimHides: true },
-      ])("rejects a $label with the event copy (raw text, trim hides BOM)", ({ value, trimHides }) => {
-        if (trimHides) expect(value.trim()).not.toContain(BOM);
-        else expect(value.trim()).toContain(BOM);
-        expectOnlyEventCopy({ ...base, [input]: value }, input);
-      });
+      ])(
+        "rejects a $label with the event copy (raw text, trim hides BOM)",
+        ({ value, trimHides }) => {
+          if (trimHides) expect(value.trim()).not.toContain(BOM);
+          else expect(value.trim()).toContain(BOM);
+          expectOnlyEventCopy({ ...base, [input]: value }, input);
+        },
+      );
     });
   }
 
