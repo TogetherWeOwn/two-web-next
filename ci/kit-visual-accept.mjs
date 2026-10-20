@@ -91,14 +91,19 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     console.error("Usage: node ci/kit-visual-accept.mjs <unzipped artifact dir>");
     process.exitCode = 2;
   } else {
-    const result = acceptBaselines(artifactDir);
-    if (!result.ok) {
-      console.error(result.message);
+    try {
+      const result = acceptBaselines(artifactDir);
+      if (!result.ok) {
+        console.error(result.message);
+        process.exitCode = 1;
+      } else {
+        console.log(
+          `kit-visual-accept: accepted ${result.accepted.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${result.accepted.join(", ")}`,
+        );
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
-    } else {
-      console.log(
-        `kit-visual-accept: accepted ${result.accepted.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${result.accepted.join(", ")}`,
-      );
     }
   }
 }
