@@ -40,7 +40,10 @@ for (const twin of ["Hono", "Kit"] as const) {
             `https://period.example.test${path}`,
           );
           expect(control.name).toBe("season");
-          expect(control.value.toLowerCase()).toBe(value);
+          // Exact match: the quarter grammar is uppercase-Q only (season.ts
+          // QUARTER_RE), so a case-insensitive comparison would accept invalid
+          // input and a one-sided toLowerCase() can never pass for quarters.
+          expect(control.value).toBe(value);
           expect(label).toMatch(/period|season/i);
           expect(control.disabled).toBe(false);
           expect(help).toMatch(/\ball\b/i);
