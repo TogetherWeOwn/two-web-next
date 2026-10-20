@@ -1,0 +1,96 @@
+{
+  "sourceBase": "ce1ade0c4",
+  "fixture": "compiled real EventGone and EventMissing with built Kit CSS and local public assets; no hydration or full Worker runtime",
+  "activeLoaderParity": true,
+  "protectedAcceptanceSha256": "0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3",
+  "reports": [
+    {
+      "state": "before",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "after",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "empty",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "missing",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "httpStatus": 404,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "before",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "after",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "empty",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "httpStatus": 410,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    },
+    {
+      "state": "missing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "httpStatus": 404,
+      "overflow": false,
+      "errors": [],
+      "axeViolations": []
+    }
+  ]
+}
