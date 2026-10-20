@@ -153,6 +153,8 @@ describe("change-scope gate", () => {
       "ci/check-migration-history.mjs",
       "ci/check-migration-history-selftest.mjs",
       "ci/check-migration-numbers.sh",
+      "ci/check-snapshot-chain.mjs",
+      "ci/check-snapshot-chain-selftest.mjs",
       "ci/db-migrate.mjs",
       "ci/db-migrate-selftest.mjs",
     ]) {
@@ -167,6 +169,23 @@ describe("change-scope gate", () => {
     const other = scope([["ci/db-backup-selftest.sh", ""]]);
     expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
   });
+
+  it.each(["ci/check-snapshot-chain.mjs", "ci/check-snapshot-chain-selftest.mjs"])(
+    "keeps snapshot-chain tooling in db on either side of a rename (%s)",
+    (path) => {
+      for (const row of [
+        [path, "docs/guide.md"],
+        ["docs/guide.md", path],
+      ]) {
+        const r = scope([row]);
+        expect({ app: r.app, db: r.db, full: r.full }, row.join(" <- ")).toEqual({
+          app: "false",
+          db: "true",
+          full: "false",
+        });
+      }
+    },
+  );
 
   it("forces a full run on lockfiles, CI, shared config and itself", () => {
     for (const path of [

@@ -566,6 +566,12 @@ jobs:
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
+      - name: Migration snapshot chain (local files, no credentials)
+        shell: bash
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
+        run: |
+          node ci/check-snapshot-chain.mjs
+          node --test ci/check-snapshot-chain-selftest.mjs
       - name: Pre-flip probe selftests (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
