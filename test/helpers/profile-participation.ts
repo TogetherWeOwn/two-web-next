@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { serializeSigned } from "hono/utils/cookie";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import type { AccessEntry } from "../../src/access-log";
 import type { Env } from "../../src/env";
 import type { KitLocals } from "../../src/kit-session";
@@ -306,11 +307,46 @@ export async function participationFixture(
   return { request, path, cookie, operations, statsReads, audit, store, app };
 }
 
-export function navigationLinks(html: string) {
+export async function navigationLinks(html: string) {
   const primary = html.match(/<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/i)?.[1] ?? "";
-  return [...primary.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((match) => ({
-    href: match[1]!.match(/\bhref="([^"]*)"/)?.[1],
-    label: match[2]!.replace(/<[^>]+>/g, "").trim(),
-    attributes: match[1]!,
-  }));
+  const matches = [...primary.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)];
+  // Read parser text tokens, never a regex-rewritten HTML fragment. Text remains
+  // serialized (including entities), as in the existing navigation assertions.
+  const parser = new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      compatibilityDate: "2026-09-29",
+      outboundService: async () => {
+        throw new Error("External network forbidden in label parser");
+      },
+      script: `export default {
+        async fetch(request) {
+          const labels = [];
+          for (const fragment of await request.json()) {
+            let text = "";
+            const parsed = new HTMLRewriter().onDocument({
+              text(chunk) { text += chunk.text; }
+            }).transform(new Response(fragment));
+            await parsed.text();
+            labels.push(text.trim());
+          }
+          return Response.json(labels);
+        }
+      };`,
+    }),
+  );
+  try {
+    const response = await parser.dispatchFetch("https://label.example.test", {
+      method: "POST",
+      body: JSON.stringify(matches.map((match) => match[2]!)),
+    });
+    const labels = (await response.json()) as string[];
+    return matches.map((match, index) => ({
+      href: match[1]!.match(/\bhref="([^"]*)"/)?.[1],
+      label: labels[index]!,
+      attributes: match[1]!,
+    }));
+  } finally {
+    await parser.dispose();
+  }
 }

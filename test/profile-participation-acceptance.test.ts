@@ -15,6 +15,22 @@ const presentations: Presentation[] = ["new owner", "completed owner", "other me
 const renderers: Renderer[] = ["Hono", "Kit"];
 afterEach(() => vi.unstubAllGlobals());
 
+describe("participation navigation label extraction", () => {
+  it.each([
+    { fragment: "  E<strong>ven<em>t</em></strong>s  ", label: "Events" },
+    { fragment: '<span title="games > 2">Events</span>', label: "Events" },
+    { fragment: "Pick < 3 players > 0", label: "Pick < 3 players > 0" },
+    { fragment: "Events<!-- > not label text -->", label: "Events" },
+    { fragment: "&lt;script&gt;", label: "&lt;script&gt;" },
+  ])("extracts text without rewriting markup: $fragment", async ({ fragment, label }) => {
+    const html = `<nav aria-label="Other"><a href="/other">Ignore</a></nav>
+<nav aria-label="Primary"><a href="/events">${fragment}</a></nav>`;
+    expect(await navigationLinks(html)).toEqual([
+      { href: "/events", label, attributes: ' href="/events"' },
+    ]);
+  });
+});
+
 for (const renderer of renderers) {
   describe(`${renderer} profile participation: dispatched server-rendered HTML`, () => {
     it.each(presentations)(
@@ -36,7 +52,7 @@ for (const renderer of renderers) {
         expect(fixture.operations).toEqual([{ method: "find", args: [OWNER] }]);
         expect(fetch).not.toHaveBeenCalled();
         expect(fixture.statsReads).toEqual(renderer === "Kit" ? [OWNER] : []);
-        expect(navigationLinks(html).some((link) => link.href === "/profile")).toBe(true);
+        expect((await navigationLinks(html)).some((link) => link.href === "/profile")).toBe(true);
         expect(html.includes('data-testid="profile-admin-link"')).toBe(
           presentation === "moderator",
         );
@@ -64,7 +80,7 @@ for (const renderer of renderers) {
         const response = await fixture.request(renderer);
         expect(response.status).toBe(200);
         const html = await response.text();
-        const eventLinks = navigationLinks(html).filter((link) => link.label === "Events");
+        const eventLinks = (await navigationLinks(html)).filter((link) => link.label === "Events");
         expect(
           eventLinks,
           "Primary navigation must offer Events, not just an onboarding CTA",
