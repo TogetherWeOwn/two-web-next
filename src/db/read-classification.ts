@@ -114,5 +114,25 @@ export function rawMemberOwner(statement: string): string | undefined {
     )
   )
     return "user_id";
+  // Relative-scope member board (src/leaderboards/members.ts): the same
+  // grouped aggregate nested in derived tables (never a WITH prefix, which
+  // the read classifier refuses), ranked by the same
+  // `count DESC, user_id ASC` key via row_number(). The rank lookup returns
+  // the viewer's single ranked row; the window read returns at most
+  // 2 * RELATIVE_NEIGHBORS + 1 rows around the bound viewer rank. Bound
+  // params are dates/game/viewer-id/viewer-rank only; the neighbor bounds
+  // are the literal RELATIVE_NEIGHBORS, never a bound limit.
+  if (
+    /^select ranked\.user_id as user_id, ranked\.rank as rank from \( select grouped\.user_id as user_id, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id \) grouped \) ranked where ranked\.user_id = \$\d+$/.test(
+      query,
+    )
+  )
+    return "user_id";
+  if (
+    /^select ranked\.user_id as user_id, ranked\.username as username, ranked\.count as count, ranked\.rank as rank from \( select grouped\.user_id as user_id, grouped\.username as username, grouped\.count as count, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username \) grouped \) ranked where ranked\.rank between \$\d+ - 5 and \$\d+ \+ 5 order by ranked\.rank asc$/.test(
+      query,
+    )
+  )
+    return "user_id";
   return owners.get(query);
 }

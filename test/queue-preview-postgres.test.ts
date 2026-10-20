@@ -249,9 +249,30 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
     try {
       const before = await state();
       const preview = await previewFailedJobWithSql(monitored, failureId, STAGING_APP_URL);
-      const sourceReads = queries.filter((query) => /^select\b/i.test(query.trim()));
+      const selects = queries.filter((query) => /^select\b/i.test(query.trim()));
+      // Timeout setting reads, setup and restoration carry no source table or
+      // clock marker, so they are not part of the five evidence reads.
+      const isTimeoutControl = (query: string) =>
+        /(?:set_config|current_setting)\s*\(\s*'(?:lock_timeout|statement_timeout)'/i.test(query);
+      const timeoutControls = selects.filter(isTimeoutControl);
+      const sourceReads = selects.filter((query) => !isTimeoutControl(query));
       expect(sourceReads).toHaveLength(5);
       for (const query of sourceReads) expect(query).toContain("clock_timestamp()");
+      expect(timeoutControls.length).toBeGreaterThan(0);
+      for (const query of timeoutControls) {
+        const settings = [
+          ...query.matchAll(/(?:set_config|current_setting)\s*\(\s*'([^']+)'/gi),
+        ].map((match) => match[1]);
+        expect(settings.length).toBeGreaterThan(0);
+        expect(
+          settings.every((name) => name === "lock_timeout" || name === "statement_timeout"),
+        ).toBe(true);
+        const writes = [...query.matchAll(/set_config\s*\(/gi)].length;
+        expect(query.match(/,\s*true\s*\)/g) ?? []).toHaveLength(writes);
+        expect(query).not.toMatch(/\bfrom\b/i);
+        expect(query).not.toContain("clock_timestamp()");
+        expect(query).not.toContain("preview_read_at");
+      }
       expect(preview!.disposition.action).toBe("discard-stale");
       expect(JSON.stringify(preview)).not.toContain("preview_read_at");
       expect(await state()).toEqual(before);

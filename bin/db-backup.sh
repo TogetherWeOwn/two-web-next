@@ -33,7 +33,8 @@
 #
 # Usage:
 #   ./bin/db-backup.sh backup [branch]
-#     Dumps branch (default: staging) with pg_dump -Fc to a temp file, uploads
+#     Dumps DATABASE_URL (branch defaults to BACKUP_TARGET, otherwise staging)
+#     with pg_dump -Fc to a temp file, uploads
 #     it and a digest receipt to the branch prefix, verifies read-back bytes,
 #     then rewrites and re-downloads the manifest as the publication proof.
 #     Never leaves a partial file under the final name: the dump lands in a
@@ -68,6 +69,10 @@
 #   BACKUP_BUCKET (default two-web-next-backups),
 #   BACKUP_JURISDICTION (default eu),
 #   BACKUP_PREFIX (default neon).
+#   BACKUP_TARGET (staging|production): declare the DATABASE_URL target for
+#     branch correspondence checks on every command. Empty/omitted branch
+#     defaults to that target (otherwise staging); overrides must equal the
+#     target or start with test-. Unset retains legacy local branch behavior.
 # Every `wrangler r2 object` call below passes
 # `--jurisdiction "$BACKUP_JURISDICTION"` so member-data dumps address the
 # EU-pinned bucket explicitly, never the default jurisdiction.
@@ -94,7 +99,7 @@ shift || true
 
 DRY_RUN=0
 REQUIRE_VERIFIED=0
-BRANCH="staging"
+BRANCH=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
@@ -113,6 +118,9 @@ if [ "$DRY_RUN" = 1 ] && [ "$CMD" != "rotate" ]; then
   echo "db-backup: --dry-run is only supported for 'rotate'" >&2
   usage
 fi
+
+# Refuse mislabeling before connection checks, temp files, or any storage I/O.
+BRANCH="$(python3 "$ROOT/bin/backup/branch-target-helper" "${BACKUP_TARGET:-}" "$BRANCH")"
 
 # DATABASE_URL comes from the environment only. No .env parsing, no defaults:
 # a dump must never guess which database it is reading.

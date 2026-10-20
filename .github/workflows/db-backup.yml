@@ -32,7 +32,7 @@ on:
         type: choice
         options: [staging, production]
       branch:
-        description: "Branch prefix override (default per target)"
+        description: "Branch prefix: empty (default per target), equal to target, or test-*; other values refuse"
         default: ""
         required: false
         type: string
@@ -56,11 +56,17 @@ jobs:
     environment: ${{ inputs.target || 'staging' }}
     env:
       TARGET: ${{ inputs.target || 'staging' }}
+      BACKUP_TARGET: ${{ inputs.target || 'staging' }}
       BRANCH: ${{ inputs.branch || (inputs.target == 'production' && 'production' || 'staging') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Validate branch and target
+        run: |
+          set -euo pipefail
+          python3 bin/backup/branch-target-helper "$BACKUP_TARGET" "$BRANCH" >/dev/null
 
       - id: probe
         name: Probe provisioning

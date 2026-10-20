@@ -162,6 +162,10 @@ function fakeSql(attemptMode: AttemptMode) {
   const attempts: AttemptRow[] = [];
   let attemptInsertTries = 0;
   let deferred: DeferredQuery | null = null;
+  let markAttemptStarted!: () => void;
+  const attemptStarted = new Promise<void>((resolve) => {
+    markAttemptStarted = resolve;
+  });
   // Statements are recorded per channel: the outer `sql` handle and each
   // distinct `tx` handle handed to a `begin` callback log separately.
   // Aliasing `tx` to `sql` would let a regression that runs the analytics
@@ -172,6 +176,7 @@ function fakeSql(attemptMode: AttemptMode) {
 
   const attemptInsert = (values: unknown[]) => {
     attemptInsertTries += 1;
+    markAttemptStarted();
     if (attemptMode === "throwing")
       return Promise.reject(new Error(`join_attempts insert failed: ${INSERT_PROBE}`));
     const [outcome, source, requestId, discordId] = values as [
@@ -239,6 +244,7 @@ function fakeSql(attemptMode: AttemptMode) {
   return {
     sql,
     attempts,
+    attemptStarted,
     outerStatements,
     txTransactions,
     get attemptInsertTries() {
@@ -273,12 +279,14 @@ type DiscordStubOpts = {
   joinStatus?: number;
   retryAfterSeconds?: number;
   tokenMode?: "ok" | "expired_grant" | "outage" | "rate_limited";
+  beforeTokenResponse?: () => Promise<void>;
 };
 
 function mockDiscord({
   joinStatus = 201,
   retryAfterSeconds,
   tokenMode = "ok",
+  beforeTokenResponse,
 }: DiscordStubOpts = {}) {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.stubGlobal(
@@ -286,6 +294,7 @@ function mockDiscord({
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
       if (url.endsWith("/oauth2/token")) {
+        if (beforeTokenResponse) await beforeTokenResponse();
         if (tokenMode === "expired_grant")
           return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
         if (tokenMode === "outage") return new Response("bad", { status: 500 });
@@ -391,8 +400,8 @@ function expectStatementBounded(fake: Fake) {
 }
 
 // Drive a callback (or a direct recordAttempt) whose analytics INSERT is
-// deferred: flush microtasks until the INSERT is initiated, prove the
-// caller is genuinely waiting, then advance the fake clock in 100ms steps
+// deferred: await its explicit rendezvous (or an early caller settlement),
+// prove the caller is genuinely waiting, then advance the fake clock in 100ms steps
 // up to the ceiling. Each fake advance is paired with real event-loop yields
 // plus a short real sleep so wall-clock work (crypto.subtle digests/HMAC,
 // Response body streams, session issuance) completes without consuming fake
@@ -411,10 +420,10 @@ async function driveBounded<T>(pendingInput: Promise<T> | T, fake: Fake): Promis
       settled = true;
     },
   );
-  for (let round = 0; round < 1000 && fake.attemptInsertTries === 0 && !settled; round++) {
-    await vi.advanceTimersByTimeAsync(0);
-    await realYield();
-  }
+  // A turn count is not a readiness signal: real crypto/stream work can
+  // outlast it under load. Keep fake time frozen until SQL actually starts;
+  // racing the caller also makes an omitted INSERT fail instead of hanging.
+  await Promise.race([fake.attemptStarted, pending]);
   expect(fake.attemptInsertTries).toBe(1);
   expect(settled, "caller must actually wait for the analytics write, not drop it").toBe(false);
 
@@ -689,6 +698,76 @@ describe("join callback with a never-settling analytics INSERT", () => {
     expectNoLeak(lines, "");
   });
 
+  it("waits for the INSERT rendezvous when expired-token work outlasts the old preparation loop", async () => {
+    const lines = captureLogs();
+    const { fake, env: e } = isolated("deferred");
+    let releaseToken!: () => void;
+    const tokenGate = new Promise<void>((resolve) => {
+      releaseToken = resolve;
+    });
+    let markTokenRequested!: () => void;
+    const tokenRequested = new Promise<void>((resolve) => {
+      markTokenRequested = resolve;
+    });
+    const calls = mockDiscord({
+      tokenMode: "expired_grant",
+      beforeTokenResponse: async () => {
+        markTokenRequested();
+        await tokenGate;
+      },
+    });
+    const { state, cookie } = await startJoin(e);
+    vi.useFakeTimers();
+    const before = Date.now();
+    const callback = finishJoinCb(e, state!, cookie);
+    // Observe a driver failure immediately, but release and drain the real
+    // callback before rethrowing it so a RED run cannot pollute the next clock.
+    const driven = driveBounded(callback, fake).then(
+      (res) => ({ ok: true, res }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    let responseReturned = false;
+    try {
+      await tokenRequested;
+      // A controlled prerequisite stays pending for more turns than the old
+      // 1000-round preparation loop. No wall-clock sleep or fake-time budget
+      // increase: the analytics INSERT cannot exist until this gate opens.
+      for (let round = 0; round < 1001; round++) {
+        await vi.advanceTimersByTimeAsync(0);
+        await realYield();
+      }
+      expect(fake.attemptInsertTries).toBe(0);
+      expect(Date.now()).toBe(before);
+      releaseToken();
+      const result = await driven;
+      if (!result.ok) throw result.error;
+      responseReturned = true;
+      const { res } = result;
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Join approval expired");
+      expect(sessionCookies(res)).toEqual([]);
+      expect(fake.attemptInsertTries).toBe(1);
+      expect(fake.attempts).toEqual([]);
+      expectStatementBounded(fake);
+      expect(calls).toHaveLength(1);
+      expectNoLeak(lines, html);
+
+      await rejectLate(fake);
+      expect(fake.attemptInsertTries).toBe(1);
+      expect(calls).toHaveLength(1);
+      expectNoLeak(lines, "");
+    } finally {
+      releaseToken();
+      if (!responseReturned) {
+        await Promise.race([fake.attemptStarted, callback]);
+        fake.resolveAttemptInsert();
+        await callback;
+      }
+      await driven;
+    }
+  });
+
   it("a Discord outage keeps its 503 recovery status within the bound", async () => {
     const lines = captureLogs();
     const { fake, env: e } = isolated("deferred");
@@ -891,10 +970,7 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     }).then(() => {
       settled = true;
     });
-    for (let round = 0; round < 1000 && fake.attemptInsertTries === 0; round++) {
-      await vi.advanceTimersByTimeAsync(0);
-      await realYield();
-    }
+    await Promise.race([fake.attemptStarted, pending]);
     expect(fake.attemptInsertTries).toBe(1);
     expect(settled).toBe(false);
     fake.resolveAttemptInsert();
@@ -957,6 +1033,25 @@ describe("checkJoinThrottle with a never-settling prune DELETE (direct)", () => 
     expect(fake.deleteTries).toBe(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expectNoLeak([JSON.stringify(warn.mock.calls)], "");
+  });
+});
+
+describe("analytics driver readiness control", () => {
+  it("rejects an early expired-link answer with no INSERT instead of hanging at the rendezvous", async () => {
+    const lines = captureLogs();
+    const { fake, env: e } = isolated("deferred");
+    const calls = mockDiscord();
+    vi.useFakeTimers();
+    const callback = finishJoinCb(e, "unadmitted-state", "");
+    await expect(driveBounded(callback, fake)).rejects.toMatchObject({ actual: 0, expected: 1 });
+    const res = await callback;
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Join link expired");
+    expect(sessionCookies(res)).toEqual([]);
+    expect(fake.attemptInsertTries).toBe(0);
+    expect(calls).toHaveLength(0);
+    expectNoLeak(lines, html);
   });
 });
 

@@ -9,8 +9,12 @@
 // Negotiation mirrors src/error-responses.tsx (quality/specificity/q=0,
 // machine-only contracts win, feeds stay non-HTML) but operates on a plain
 // Request, so the Kit hook and Svelte loads can use it without a Hono Context.
+//
+// 400 is the one status without a RecoveryShell counterpart: its Hono twin is
+// the member-shell board-filter page (src/leaderboards/pages.tsx), so the
+// title and lead below are Kit's own client-error copy, never outage copy.
 
-export type KitErrorStatus = 404 | 403 | 410 | 429 | 500 | 503;
+export type KitErrorStatus = 400 | 404 | 403 | 410 | 429 | 500 | 503;
 
 export interface KitErrorCopy {
   code: string;
@@ -19,6 +23,11 @@ export interface KitErrorCopy {
 }
 
 const COPY: Record<KitErrorStatus, KitErrorCopy> = {
+  400: {
+    code: "400",
+    title: "Check your request",
+    lead: "Check the address or filters and try again.",
+  },
   404: {
     code: "404",
     title: "We cannot find that page",
@@ -52,14 +61,7 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
 };
 
 export function isKitErrorStatus(status: number): status is KitErrorStatus {
-  return (
-    status === 404 ||
-    status === 403 ||
-    status === 410 ||
-    status === 429 ||
-    status === 500 ||
-    status === 503
-  );
+  return Object.hasOwn(COPY, status);
 }
 
 export function kitErrorCopy(status: KitErrorStatus): KitErrorCopy {

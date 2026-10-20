@@ -61,22 +61,111 @@ export type BoardRow = RankedMember & { rank: number };
 export const OVERALL_CAP = 100;
 
 type AggregateRow = { user_id: string; username: string; count: number | string };
+type RankRow = { user_id: string; rank: number | string };
+type WindowRow = AggregateRow & { rank: number | string };
+
+/**
+ * The relative window, answered from the database in two bounded statements
+ * (a viewer rank lookup, then the window around it): at most
+ * 2 * RELATIVE_NEIGHBORS + 2 rows cross the driver no matter how many members
+ * rank. Each statement runs under its own keyed-read permit (exactly one
+ * statement per permit), and both match the raw-member-owner guard in
+ * src/db/read-classification.ts. Rows carry their board rank from SQL: a
+ * fetched window cannot self-number, and an unranked viewer (no rank row)
+ * gets no rows. Counting, filters and tie order match the overall read.
+ */
+async function loadRelativeWindow(
+  db: Db,
+  dateFilter: ReturnType<typeof sql>,
+  gameFilter: ReturnType<typeof sql>,
+  viewerId: string,
+): Promise<BoardRow[]> {
+  // No WITH prefix: the read classifier only admits statements that start
+  // with SELECT (a CTE can hide a mutation), so both reads nest derived
+  // tables instead. Literals, not bound params, for the neighbor bounds: the
+  // guard matches the exact statement shape (see OVERALL_CAP below).
+  const neighbor = sql.raw(String(RELATIVE_NEIGHBORS));
+  const rankRows = (await keyedMemberRead(() =>
+    db.execute(sql`
+      select ranked.user_id as user_id, ranked.rank as rank
+      from (
+        select grouped.user_id as user_id,
+          row_number() over (order by grouped.count desc, grouped.user_id asc)::int as rank
+        from (
+          select rsvps.user_id as user_id, count(*)::int as count
+          from rsvps
+          inner join events on events.id = rsvps.event_id
+          inner join users on users.id = rsvps.user_id
+          left join profiles on profiles.user_id = rsvps.user_id
+          where rsvps.status = 'going'
+            and events.status = 'published'
+            and users.member = true
+            and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
+            ${dateFilter}
+            ${gameFilter}
+          group by rsvps.user_id
+        ) grouped
+      ) ranked
+      where ranked.user_id = ${viewerId}
+    `),
+  )) as unknown as RankRow[];
+  const viewerRank = Number(rankRows[0]?.rank);
+  if (!Number.isSafeInteger(viewerRank) || viewerRank <= 0) return [];
+  const rows = (await keyedMemberRead(() =>
+    db.execute(sql`
+      select ranked.user_id as user_id, ranked.username as username, ranked.count as count, ranked.rank as rank
+      from (
+        select grouped.user_id as user_id, grouped.username as username, grouped.count as count,
+          row_number() over (order by grouped.count desc, grouped.user_id asc)::int as rank
+        from (
+          select rsvps.user_id as user_id, users.username as username, count(*)::int as count
+          from rsvps
+          inner join events on events.id = rsvps.event_id
+          inner join users on users.id = rsvps.user_id
+          left join profiles on profiles.user_id = rsvps.user_id
+          where rsvps.status = 'going'
+            and events.status = 'published'
+            and users.member = true
+            and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
+            ${dateFilter}
+            ${gameFilter}
+          group by rsvps.user_id, users.username
+        ) grouped
+      ) ranked
+      where ranked.rank between ${viewerRank} - ${neighbor} and ${viewerRank} + ${neighbor}
+      order by ranked.rank asc
+    `),
+  )) as unknown as WindowRow[];
+  return rows.flatMap((row) => {
+    if (typeof row.user_id !== "string" || typeof row.username !== "string") return [];
+    const count = Number(row.count);
+    const rank = Number(row.rank);
+    if (!Number.isSafeInteger(count) || count <= 0) return [];
+    if (!Number.isSafeInteger(rank) || rank <= 0) return [];
+    return [{ userId: row.user_id, username: row.username, count, rank }];
+  });
+}
 
 /**
  * One keyed read: DB-side GROUP BY + COUNT with a deterministic
  * `count DESC, userId ASC` order. The overall scope caps at OVERALL_CAP via
- * LIMIT; the relative scope reads the full grouped ranking (one row per
- * ranked member, never one row per RSVP) so a viewer below #100 keeps their
- * ±5 window. Counting matches the old per-RSVP fold exactly: only `going`
- * RSVPs for published events inside the season window count, with the same
- * `?activity=` game filter, opt-out and member filters. `db = null` (no
- * database configured) yields no rows.
+ * LIMIT; the relative scope answers from a bounded rank lookup plus window
+ * read (see loadRelativeWindow) and needs the viewer's id. Counting matches
+ * the old per-RSVP fold exactly: only `going` RSVPs for published events
+ * inside the season window count, with the same `?activity=` game filter,
+ * opt-out and member filters. `db = null` (no database configured) yields
+ * no rows.
+ *
+ * Relative rows additionally carry their board rank (BoardRow): the window
+ * is already the board slice, so callers use it directly instead of
+ * boardRows, which keeps numbering full rankings for the overall scope.
  */
 export async function loadMemberRanking(
   db: Db | null,
   window: SeasonWindow,
   game: string | null,
   scope: MemberScope = "overall",
+  viewerId?: string,
 ): Promise<RankedMember[]> {
   if (!db) return [];
   // Raw sql`` interpolation does not serialize Date bounds the way the
@@ -87,10 +176,14 @@ export async function loadMemberRanking(
       ? sql`and events.starts_at >= ${window.start.toISOString()} and events.starts_at < ${window.end.toISOString()}`
       : sql``;
   const gameFilter = game === null ? sql`` : sql`and lower(trim(events.game)) = ${game}`;
+  if (scope === "relative") {
+    if (!viewerId) throw new Error("loadMemberRanking: the relative scope needs a viewer id");
+    return loadRelativeWindow(db, dateFilter, gameFilter, viewerId);
+  }
   // LIMIT is a literal cap, not a bound param: the raw-member-owner guard
   // matches the exact statement shape (see src/db/read-classification.ts).
   // Built from OVERALL_CAP so the constant stays the single source of truth.
-  const limitClause = scope === "overall" ? sql.raw(`limit ${OVERALL_CAP}`) : sql``;
+  const limitClause = sql.raw(`limit ${OVERALL_CAP}`);
   const rows = (await keyedMemberRead(() =>
     db.execute(sql`
       select rsvps.user_id as user_id, users.username as username, count(*)::int as count

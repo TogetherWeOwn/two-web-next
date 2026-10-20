@@ -1,3 +1,6 @@
+import type { Context } from "hono";
+import { deleteCookie } from "hono/cookie";
+import { serializeSigned } from "hono/utils/cookie";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import { alertRequestError } from "./alerts";
@@ -10,6 +13,7 @@ import {
   type RecordBoardView,
 } from "./hotzones/board-log";
 import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
+import { safeNext } from "./join/service";
 import {
   boardRows,
   loadMemberRanking,
@@ -18,6 +22,7 @@ import {
   type BoardRow,
   type RankedMember,
 } from "./leaderboards/members";
+import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE } from "./return-journey";
 
 // Framework-free core of the Kit member-board load
 // (web/src/routes/leaderboards/members/+page.server.ts). The SvelteKit module
@@ -53,6 +58,7 @@ export type LoadRanking = (
   window: SeasonWindow,
   game: string | null,
   scope?: "overall" | "relative",
+  viewerId?: string,
 ) => Promise<RankedMember[]>;
 
 export type { BoardViewEntry, QueueBoardView, RecordBoardView };
@@ -81,6 +87,10 @@ export interface MembersBoardArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadRankingFn?: LoadRanking;
   queueBoardViewFn?: QueueBoardView;
+  /** Full request URL (url.href from the binding): the guest bounce records
+   * its pathname+search as the signed return destination. Optional: a legacy
+   * call without it resolves the plain branded 302. */
+  url?: string;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -88,8 +98,84 @@ function branded(message: string, status: number): Error & { status: number } {
 }
 
 /** Guest: the binding maps this to the OAuth bounce, like memberGate. */
-export function membersGuestBounce(): Error & { status: number } {
-  return branded("Signed out", 302);
+export function membersGuestBounce(
+  intendedCookie?: string,
+): Error & { status: number; intendedCookie?: string } {
+  const err = branded("Signed out", 302) as Error & {
+    status: number;
+    intendedCookie?: string;
+  };
+  if (intendedCookie !== undefined) err.intendedCookie = intendedCookie;
+  return err;
+}
+
+// Same cookie attributes as the Hono journey (src/return-journey.ts): the
+// differential pins the Kit serialization byte-for-byte against bounceToLogin.
+const intendedCookieOpts = {
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  sameSite: "Lax",
+} as const;
+
+/**
+ * Signed return destination for the guest bounce (bounceToLogin parity).
+ * A safe pathname+search becomes the live login_intended cookie; a rejected
+ * (hostile, oversized), unparseable or unsignable destination clears stale
+ * intended state so the callback cannot honor another journey's return. Only
+ * pathname+search is ever recorded — a foreign-origin url contributes its
+ * rooted path+search, never its host. No url, or no signer secret, resolves
+ * undefined for the plain branded 302 (no signing attempt, no crash).
+ */
+async function guestIntendedCookie(
+  url: string | undefined,
+  secret: unknown,
+): Promise<string | undefined> {
+  if (url === undefined) return undefined;
+  if (typeof secret !== "string" || secret === "") return undefined;
+  let dest: string | null = null;
+  try {
+    const parsed = new URL(url);
+    dest = safeNext(parsed.pathname + parsed.search);
+  } catch {
+    dest = null;
+  }
+  if (dest) {
+    try {
+      return await serializeSigned(LOGIN_INTENDED_COOKIE, dest, secret, {
+        ...intendedCookieOpts,
+        maxAge: JOURNEY_TTL_SECONDS,
+      });
+    } catch {
+      // Signing must never crash the bounce; fall through to clearing.
+    }
+  }
+  return clearIntendedCookie();
+}
+
+// Clearing serialization for a rejected (hostile, oversized), unparseable or
+// unsignable destination: empty value with immediate expiry, same attributes. This goes
+// through the same deleteCookie the Hono journey uses (bounceToLogin's
+// rejection arm), not a hand-rolled maxAge literal — every maxAge in src is
+// pinned to a named lifetime constant (test/privacy-policy-numbers.test.ts),
+// and clears are not lifetimes. This core is framework-free, so a minimal
+// header sink harvests the Set-Cookie string deleteCookie emits; it touches
+// only deleteCookie's documented surface (one header write, one request
+// cookie read), and the guest-bounce differential fails loudly if a hono
+// upgrade ever changes that surface.
+function clearIntendedCookie(): string {
+  let cleared = "";
+  deleteCookie(
+    {
+      req: { raw: { headers: new Headers() } },
+      header: (name: string, value: string) => {
+        if (name.toLowerCase() === "set-cookie") cleared = value;
+      },
+    } as unknown as Context,
+    LOGIN_INTENDED_COOKIE,
+    { ...intendedCookieOpts },
+  );
+  return cleared;
 }
 
 /** Signed-in non-member: the binding maps this to error(403). */
@@ -140,7 +226,9 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   // Same gate order as the Hono handler: session gate before any grammar,
   // grammar before any read.
   if (args.session.status === "unknown") throw membersSessionUnknown();
-  if (args.session.status !== "authenticated" || !args.session.userId) throw membersGuestBounce();
+  if (args.session.status !== "authenticated" || !args.session.userId) {
+    throw membersGuestBounce(await guestIntendedCookie(args.url, args.env.SESSION_SECRET));
+  }
   if (!args.session.member) throw membersForbidden();
   const season = parseSeasonParam(args.seasonParam);
   if (!season) throw branded("Unknown season", 400);
@@ -157,15 +245,23 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
       season,
       activity.game,
       scope.scope,
+      args.session.userId,
     );
   } catch (err) {
     reportBoardFailure(err, args);
   }
+  // The relative read already returns its SQL-numbered window (BoardRow):
+  // only the overall ranking still needs numbering from the full list.
+  const windowed: BoardRow[] =
+    scope.scope === "relative"
+      ? (ranked as BoardRow[])
+      : boardRows(ranked, scope.scope, args.session.userId);
   // Strip every Discord ID here: mark the viewer's own row server-side so
   // neither the HTML props nor the __data.json payload carry an ID.
-  const rows: MembersBoardRow[] = boardRows(ranked, scope.scope, args.session.userId).map(
-    ({ userId, ...row }) => ({ ...row, isViewer: userId === args.session.userId }),
-  );
+  const rows: MembersBoardRow[] = windowed.map(({ userId, ...row }) => ({
+    ...row,
+    isViewer: userId === args.session.userId,
+  }));
   // Queue only (see the header): the write itself runs after the member-read
   // boundary releases this board, outside its capture. Only a served (200)
   // board records a view, and queueing is fail-open like the Hono write.

@@ -448,7 +448,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // inputs and is repeated in the log line below, so the continuation
       // stays audited. Unknown live (unreadable /up) cannot prove pending:
       // the read is retried, then automatic runs halt for a later retry
-      // while manual dispatch keeps its override and proceeds with a warning.
+      // while manual dispatch requires the same audited confirmation.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
@@ -470,7 +470,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
             "Live production commit unknown after 3 /up reads; halting automatic promotion for a later retry",
           );
         }
-        console.log("Live production commit unknown; migration comparison skipped");
+        if (
+          eventName !== "workflow_dispatch" ||
+          (process.env.MIGRATIONS_APPLIED ?? "") !== "true"
+        ) {
+          throw new Error(
+            `Live production commit unknown after 3 /up reads; restore the live commit read or confirm db-migrate.yml (target production) applied the target's migrations, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
+          );
+        }
+        console.log(
+          `Manual continuation with live production commit unknown after 3 /up reads: db-migrate.yml (target production) must have applied the target's migrations already — proceeding on operator confirmation (migrations_applied=true) for ${deploySha} vs live unknown`,
+        );
       } else {
         const pending = await pendingProductionMigrations({
           repository: process.env.GITHUB_REPOSITORY,

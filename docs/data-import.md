@@ -1,15 +1,28 @@
 # Legacy data import and verification
 
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../README.md#database-and-migrations) and
+> [current database topology](db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
 `bin/import/verify.mjs` compares the configured legacy → Next projections; it
 **does not import data**. It reads `LEGACY_DATABASE_URL` and `DATABASE_URL` from
 the environment only. It never accepts connection strings as arguments, prints
 connection strings, or includes compared member fields in either report.
 
-This work ships the verification tool, not real-data cutover proof. All local
-verification uses synthetic data in disposable schemas on `agent-testdb`,
-database `two_web_next`; hosted CI uses its disposable Postgres service.
+The retained verification tool is not real-data cutover proof. Local fixture
+verification uses synthetic data in disposable schemas on the README-approved
+test service; hosted CI uses its disposable Postgres service.
 **Do not run tests against production, staging, or the real legacy database.**
-Actual legacy/Neon verification is a separately authorized operator cutover step.
+Real legacy/Neon verification is historical cutover scope, not a pending operator
+step under the current fresh-start directive.
 
 ## Coverage and source of truth
 
@@ -118,6 +131,11 @@ omitted fields or domains.
 
 ### Retention selection
 
+This section records historical import selection and reconciliation requirements,
+not a change to current member erasure or audit-retention policy. Its cutover
+writer/prune holds are historical prerequisites, not instructions to pause live
+retention jobs under the current fresh-start directive.
+
 Use one explicit `--cutoff` UTC instant **shared with the importer**, normally the
 import anchor minus 90 days. Where a map has no importer-defined disposition it
 selects `timestamp IS NULL OR timestamp >= cutoff` on both sides, so cutoff-exact
@@ -128,7 +146,8 @@ deterministic disposition in the finalized map (including how Next's NOT NULL
 columns are populated). Every age-filtered baseline table follows its importer's
 disposition instead, below.
 
-The content/funnel tables carry that disposition from `content-funnel.mjs`. Both
+The content/funnel tables carry that disposition from `content-funnel.mjs`
+([historical guide](../bin/import/README.md)). Both
 sides are keyed on the preserved source id (`legacy.id::text` against Next
 `legacy_id`), and the Next side selects only `legacy_id IS NOT NULL`, so rows
 created natively on Next after cutover are never extras. Join attempts and search
@@ -158,6 +177,11 @@ Freeze retention jobs as well as writers during verification; otherwise the two
 independent snapshots can legitimately differ.
 
 ## Configuration and invocation
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+The connection requirements and CLI examples below remain reference for the
+retained tool. Only synthetic-fixture maintenance within the linked safe-test
+rules is in scope; a read-only mode does not authorize real legacy access.
 
 Environment: `LEGACY_DATABASE_URL`, `DATABASE_URL`. Explicit DSN user, host,
 database, port (or 5432) and password are pinned; an empty password does not fall
@@ -242,7 +266,7 @@ previous invocation: always check the current exit status, not just file presenc
 Two database snapshots are not atomic across servers. Freeze writes/prunes and
 record the importer SHA, verifier SHA, map, fixed cutoff and both database backup
 references with operator cutover evidence. This task does not grant that access.
-The production step is
+The historical, non-actionable cutover record is
 [Final import and reconcile](runbook.md#final-import-and-reconcile).
 
 ## Tests
