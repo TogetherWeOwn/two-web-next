@@ -15,9 +15,9 @@
 // retry enabled and focus restored to that control (disabling it in flight
 // drops focus to BODY). Response-less transport requires SSR
 // recovery with mutations disabled; 401/419/302-to-login shows
-// the session-expired notice with the recovery link (or SSR guest login link),
-// never the update endpoint, board-8135, board-9254) — never the native confirm
-// (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
+// the session-expired notice with the recovery link (or SSR guest login link).
+// Both carry a page return path, never the update endpoint (board-8135, board-9254)
+// or the native confirm (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
 // page reloads into the fresh SSR (board-7419 clock-ended hole stays shut).
 // Sync notes mirror the contract copy: a fresh write answers
 // `synced_to_discord_at: null`, so success shows "Saved. Syncing to
