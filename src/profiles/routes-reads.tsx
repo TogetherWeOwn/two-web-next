@@ -3,6 +3,7 @@
 // member-gated and access-logged by routes-gate.ts.
 import { NotFoundPage } from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, declareMemberResult } from "../member-reads";
+import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import { readJoinResult } from "../return-journey";
 import { ProfilePage } from "./pages";
 import { type Ctx, type ProfileApp, SNOWFLAKE } from "./routes-shared";
@@ -10,13 +11,22 @@ import type { ProfileStores } from "./routes-stores";
 
 export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: ProfileStores) {
   const render = async (c: Ctx, id: string) => {
-    if (!SNOWFLAKE.test(id)) return bufferedMemberHtml(c, <NotFoundPage />, 404);
+    // Same per-isolate, DB-source-scoped cached guest snapshot as ordinary
+    // 404s and event-detail 404s: one fill per TTL, never one Postgres
+    // transaction per probe.
+    const notFound = async () =>
+      bufferedMemberHtml(
+        c,
+        <NotFoundPage suggestions={await cachedNotFoundSuggestions(c.env, c.req.path)} />,
+        404,
+      );
+    if (!SNOWFLAKE.test(id)) return notFound();
     const store = await storeFor(c);
     if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
     // Borrowed non-SQL stores declare retrieved keys, never the requested id.
     declareMemberResult(member ? [member.id] : []);
-    if (!member) return bufferedMemberHtml(c, <NotFoundPage />, 404);
+    if (!member) return notFound();
     const viewer = c.get("viewer");
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
