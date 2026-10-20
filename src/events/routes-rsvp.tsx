@@ -175,14 +175,14 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     const response = await (input.status === "withdraw"
       ? deleteRsvp(c, input, readFragmentSession)
       : putRsvp(c, input, readFragmentSession));
-    // Aliases land on the canonical page: every return path below (success,
-    // login next, refusal link) rebuilds from this key, never the raw alias.
+    // Success, guest login and refusal links rebuild from the canonical key.
+    // Expired-bearer recovery keeps the shared safe return journey above.
     const rawKey = c.req.param("key") ?? "";
     const key = canonicalEventKey(rawKey) ?? rawKey;
-    // Native page context comes only from the validated action-query and body
-    // carriers (both normalized, agreement required); the Referer is never a
-    // carrier. Invalid/unsafe values fall back to the bare event page, and the
-    // destination is rebuilt locally so nothing submitted can escape it.
+    // For those paths, native page context comes only from the validated
+    // action-query and body carriers (both normalized, agreement required),
+    // never the Referer. Invalid values fall back to the bare event page;
+    // nothing submitted can escape the locally rebuilt destination.
     const attendeePage = resolveNativeRsvpPage(
       new URL(c.req.url).searchParams.getAll("attendees"),
       input["attendees"],
