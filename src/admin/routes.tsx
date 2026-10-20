@@ -34,7 +34,7 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
-import { queueRedispatchHandler } from "./queue-redispatch";
+import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
@@ -184,11 +184,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   // Action-class admin write: the wire cap runs before the shared throttle
   // (oversized attempts 413 without spending the bucket), the cap refuses
   // before parsing, and the handler itself never parses a payload
-  // (dispatch always starts from the reconciled source). Only the dedicated
+  // (dispatch always starts from the reconciled source). The two I/O-free
+  // refusals (non-operator 403, malformed id/query 422) run between the cap
+  // and the throttle with zero spend, even under an exhausted budget; the
+  // handler keeps the same checks as idempotent defense. Only the dedicated
   // staging operator principal can reach the handler.
   admin.post(
     "/queue/failed/:id/redispatch",
     requestBodyLimit("action"),
+    queueRedispatchPreThrottleRefusal,
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     queueRedispatchHandler,
   );

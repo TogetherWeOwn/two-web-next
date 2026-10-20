@@ -441,6 +441,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
     "never forwards a signed POST across a %s redirect (loopback only)",
     async (status) => {
       let forwarded = 0;
+      let redirected = 0;
       const destination = createServer((_req, res) => {
         forwarded++;
         res.writeHead(200, { "content-type": "application/json" });
@@ -450,6 +451,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
       await once(destination, "listening");
       const address = destination.address() as { port: number };
       const redirect = createServer((_req, res) => {
+        redirected++;
         res.writeHead(status, { location: `http://127.0.0.1:${address.port}/internal/actions` });
         res.end();
       });
@@ -457,10 +459,20 @@ describe("createBotClient (ported InternalActionClient)", () => {
       await once(redirect, "listening");
       try {
         const source = redirect.address() as { port: number };
-        const client = createBotClient({ ...opts, url: `http://127.0.0.1:${source.port}` });
-        await expect(client.assignRole({ userId: "1", roleKey: "r" })).rejects.toThrow(
-          BotTransportError,
+        // The client fetches only https: endpoints, so it gets one. This fetch
+        // hands the same request, init untouched, to the real runtime fetch on
+        // the plaintext loopback server: the redirect handling stays the
+        // runtime's own.
+        const fetchFn = (url: string, init: RequestInit) =>
+          fetch(url.replace(opts.url, `http://127.0.0.1:${source.port}`), init);
+        const client = createBotClient({ ...opts, fetchFn: fetchFn as unknown as typeof fetch });
+        const attempt = client.assignRole({ userId: "1", roleKey: "r" });
+        await expect(attempt).rejects.toThrow(BotTransportError);
+        // The 3xx reached the redirect refusal, not the endpoint guard.
+        await expect(attempt).rejects.toThrow(
+          `bot answered with a redirect (${status}); not followed`,
         );
+        expect(redirected).toBe(1);
         expect(forwarded).toBe(0);
       } finally {
         for (const server of [redirect, destination]) {
@@ -470,6 +482,23 @@ describe("createBotClient (ported InternalActionClient)", () => {
       }
     },
   );
+
+  const urlUser = "fixture-user";
+  const urlPass = "fixture-pass";
+  it.each([
+    ["plaintext", "http://bot-staging.internal.example"],
+    ["credentialed", `https://${urlUser}:${urlPass}@bot-staging.internal.example`],
+    ["unparseable", "bot-staging.internal.example"],
+  ])("a refused %s endpoint carries no cause: the raw URL rides nowhere", async (_label, url) => {
+    const fetchFn = vi.fn();
+    const client = createBotClient({ ...opts, url, fetchFn: fetchFn as unknown as typeof fetch });
+    const error = await client.assignRole({ userId: "1", roleKey: "r" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BotTransportError);
+    expect((error as Error).message).toBe("bot unreachable");
+    // A URL parser error would carry the raw input, credentials included.
+    expect((error as { cause?: unknown }).cause).toBeUndefined();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 
   it("validates event times locally (ends after starts)", async () => {
     const { client, fetchFn } = clientWith([]);

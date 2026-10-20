@@ -10,7 +10,7 @@ import { dbFor } from "../admin/db";
 import { databaseUnavailable } from "../errors";
 import { parseSeasonParam } from "../hotzones/season";
 import { recordBoardView } from "../hotzones/board-log";
-import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { bufferedMemberHtml, memberReadBoundary } from "../member-reads";
 import { memberGate } from "../profiles/routes-gate";
 import type { Ctx, ProfileApp, ProfileDeps } from "../profiles/routes-shared";
 import type { ProfileStores } from "../profiles/routes-stores";
@@ -21,7 +21,7 @@ import {
   parseScopeParam,
   type BoardRow,
 } from "./members";
-import { MemberLeaderboardPage } from "./pages";
+import { MemberBoardFilterErrorPage, MemberLeaderboardPage } from "./pages";
 
 export const MEMBER_BOARD_PATH = "/leaderboards/members";
 const BOARD_KEY = "members";
@@ -32,13 +32,22 @@ export function registerMemberLeaderboardRoutes(
   { sinkFor }: Pick<ProfileStores, "sinkFor">,
 ) {
   const render = async (c: Ctx) => {
-    const window = parseSeasonParam(c.req.query("season") ?? null);
-    if (!window) return bufferedMemberText(c, "Unknown season", 400);
-    const scope = parseScopeParam(c.req.query("scope") ?? null);
-    if (!scope.ok) return bufferedMemberText(c, scope.message, 400);
-    const activity = parseActivityParam(c.req.query("activity") ?? null);
-    if (!activity.ok) return bufferedMemberText(c, activity.message, 400);
+    // The gate set the viewer with no database read; the refusal page needs
+    // it for the signed-in header, still before any read or log write.
     const viewer = c.get("viewer");
+    const session = { ...viewer, avatar: null };
+    const refused = (problem: string) =>
+      bufferedMemberHtml(
+        c,
+        <MemberBoardFilterErrorPage session={session} problem={problem} />,
+        400,
+      );
+    const window = parseSeasonParam(c.req.query("season") ?? null);
+    if (!window) return refused("Unknown season");
+    const scope = parseScopeParam(c.req.query("scope") ?? null);
+    if (!scope.ok) return refused(scope.message);
+    const activity = parseActivityParam(c.req.query("activity") ?? null);
+    if (!activity.ok) return refused(activity.message);
     const db = await dbFor(c);
     const ranked = await loadMemberRanking(db, window, activity.game, scope.scope, viewer.id);
     // The relative read already returns its SQL-numbered window (BoardRow):

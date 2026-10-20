@@ -13,6 +13,7 @@ import type { Hono } from "hono";
 import type { Env } from "./env";
 import { dbFor } from "./admin/db";
 import { sitemapEvents } from "./events/reads";
+import { publicReadGuard } from "./events/routes-shared";
 import { cspReportsRoute } from "./csp-reports";
 import { Privacy } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
@@ -41,6 +42,8 @@ export function registerSeoLeaves(app: Hono<{ Bindings: Env }>): void {
   // published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
   // W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
   app.get("/sitemap_index.xml", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     c.header("content-type", "application/xml; charset=UTF-8");
     c.header("cache-control", "public, max-age=3600");
     // Published events only; a DB outage degrades to the static entries, never a 500.
