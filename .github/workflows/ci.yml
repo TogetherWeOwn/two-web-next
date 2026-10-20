@@ -254,7 +254,7 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
-      - name: Event start device timezone (Hono and hydrated Kit, local fixtures)
+      - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
         run: |

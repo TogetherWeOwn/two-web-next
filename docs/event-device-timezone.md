@@ -37,7 +37,7 @@ keeps the host presentation. The Kit detail route is server-rendered with
 handler. Navigating to another event loads a fresh comparison.
 
 Required evidence: desktop 1280×800 and mobile 390×844 before/default, converted
-and unavailable states in Hono and hydrated Kit. Hono a11y/Lighthouse/visual gates
+and unavailable states in Hono and Kit. Hono a11y/Lighthouse/visual gates
 do not exercise the Kit route; Kit needs its own real-browser fixture proof and
 release-build budget check. Visual baseline updates require reviewed CI failure
 artifacts; no wider masks or threshold changes are part of this feature.
