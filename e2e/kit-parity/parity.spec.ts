@@ -402,12 +402,12 @@ for (const target of targets) {
         expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
         expect(body).toContain("<table>");
         expect(body).toContain('<meta name="robots" content="noindex, follow"');
-        // Account chrome differs by renderer: the Hono pages pass an
-        // Open-Discord child into SiteHeader (src/hotzones/pages.tsx),
-        // which replaces the guest chrome (src/page-shell.tsx), while the
-        // Kit pages render the shell default. Either way nobody is signed in.
-        if (target.name === "kit") expect(body).toContain("Welcome, guest");
-        else expect(body).toContain("Open Discord");
+        // Both renderers replace guest sign-in with the direct Discord action.
+        const header = body.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
+        expect(header).toContain('href="/discord"');
+        expect(header).toContain("Open Discord");
+        expect(header).not.toContain("Sign in with Discord");
+        expect(header).not.toContain("/join/discord");
         expect(body).not.toContain("Sign out");
         expect(body).not.toMatch(/discord_id|created_at/i);
         expect(body).toContain('<link rel="canonical"');
