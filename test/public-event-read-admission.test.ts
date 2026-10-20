@@ -97,11 +97,19 @@ describe("public event read admission", () => {
       expect(response.status, path).toBe(429);
       expect(response.headers.get("retry-after")).toBe("60");
       expect(response.headers.get("cache-control")).toBe("no-store, private");
-      expect(await response.json()).toEqual({
-        reason: "rate_limited",
-        message: "Too many requests. Try again in 60 seconds.",
-        retry_after: 60,
-      });
+      if (path.endsWith(".rss") || path.endsWith(".ics")) {
+        // Throttled feed reads keep the non-HTML contract even for an
+        // explicit JSON Accept: plain text, never the envelope or the
+        // branded page (same branch shape as the 403/410 feed refusals).
+        expect(response.headers.get("content-type")).toMatch(/text\/plain/);
+        expect(await response.text()).toBe("Too many requests");
+      } else {
+        expect(await response.json()).toEqual({
+          reason: "rate_limited",
+          message: "Too many requests. Try again in 60 seconds.",
+          retry_after: 60,
+        });
+      }
     }
     expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
     expect(new Set(f.hits.map((hit) => hit.bucket))).toEqual(new Set([`events-read:${IP}`]));
