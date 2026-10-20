@@ -321,6 +321,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
         web_session_grace: 0,
         join_attempts: 1,
       },
+      passes: 0,
+      deletesPerPass: [],
     });
     const seeded = {
       users: 1,
@@ -334,7 +336,12 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
 
     const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
     expect(applied.status).toBe(0);
-    expect(JSON.parse(applied.stdout)).toEqual({ mode: "apply", counts: seeded });
+    expect(JSON.parse(applied.stdout)).toEqual({
+      mode: "apply",
+      counts: seeded,
+      passes: 1,
+      deletesPerPass: [2],
+    });
     const empty = {
       users: 0,
       profiles: 0,
@@ -348,7 +355,12 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
 
     const again = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
     expect(again.status).toBe(0);
-    expect(JSON.parse(again.stdout)).toEqual({ mode: "apply", counts: empty });
+    expect(JSON.parse(again.stdout)).toEqual({
+      mode: "apply",
+      counts: empty,
+      passes: 1,
+      deletesPerPass: [0],
+    });
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
 
     // Budgets are this CLI session's own settings, never database- or
@@ -420,7 +432,12 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_session_grace: 0,
       join_attempts: 1,
     };
-    expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: seeded });
+    expect(JSON.parse(result.stdout)).toEqual({
+      mode: "apply",
+      counts: seeded,
+      passes: 1,
+      deletesPerPass: [2],
+    });
     expect(await countsFor(MEMBER_A)).toEqual({
       users: 0,
       profiles: 0,

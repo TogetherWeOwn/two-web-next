@@ -85,7 +85,12 @@ describe("revoke-sessions CLI safety", () => {
     expect(options).toMatchObject({ host: ["::1"], port: [5432], ssl: false });
     createRevokeClient(capture, "postgres://fixture@localhost/test?sslrootcert=system");
     expect(options).toMatchObject({ host: ["localhost"], port: [5432], ssl: "verify-full" });
-    createRevokeClient(capture, "postgres://fixture@db.example.test/neondb");
+    // The shared floor throws for remote URLs without verify-full instead of
+    // silently defaulting them; the verify-full twin below still builds.
+    expect(() => createRevokeClient(capture, "postgres://fixture@db.example.test/neondb")).toThrow(
+      "verify-full",
+    );
+    createRevokeClient(capture, "postgres://fixture@db.example.test/neondb?sslmode=verify-full");
     expect(options).toMatchObject({ host: ["db.example.test"], port: [5432], ssl: "verify-full" });
     // The raw URL must never reach postgres.js: its query string would be
     // forwarded as server startup parameters (sslrootcert -> Postgres 42704).
@@ -142,7 +147,8 @@ describe("revoke-sessions CLI safety", () => {
   });
 
   it("refuses production-looking URLs unless explicitly targeted and never prints URLs", () => {
-    const production = "postgres://fixture:synthetic-password@db.production.test/neondb";
+    const production =
+      "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
     expect(isProductionDatabaseUrl(production)).toBe(true);
     expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, undefined)).toThrow(
       "--target production",
@@ -296,6 +302,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     expect(await countActiveMemberSessions(sql, MEMBER_A)).toEqual({ web_sessions: 1 });
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: true })).toEqual({
       web_sessions: 1,
+      passes: 0,
+      stampsPerPass: [],
     });
     expect(await counts(MEMBER_A)).toBe(1);
     expect(await counts(MEMBER_B)).toBe(1);
@@ -305,6 +313,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     const sql = fixture.client as unknown as Parameters<typeof revokeMemberSessions>[0];
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: false })).toEqual({
       web_sessions: 1,
+      passes: 1,
+      stampsPerPass: [1],
     });
     const [rows] = await fixture.client<{ n: number }[]>`select count(*)::int as n from web_sessions
       where user_id = ${MEMBER_A} and revoked_at is not null`;
@@ -313,6 +323,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     expect(await counts(MEMBER_B)).toBe(1);
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: false })).toEqual({
       web_sessions: 0,
+      passes: 1,
+      stampsPerPass: [0],
     });
   });
 
@@ -374,7 +386,14 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
         await waitForBlocked("update web_sessions");
       });
       expect(await rotation).toBe(true);
-      expect(await revocation).toEqual({ web_sessions: 1 });
+      // Pass count depends on the race interleaving, so pin the count plus
+      // the pass invariants rather than an exact pass array.
+      const revoked = await revocation;
+      expect(revoked).toMatchObject({ web_sessions: 1 });
+      expect(revoked!.passes).toBe(revoked!.stampsPerPass.length);
+      expect(revoked!.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        revoked!.web_sessions,
+      );
       expect(await counts(MEMBER_A)).toBe(0);
       expect(await counts(MEMBER_B)).toBe(1);
     } finally {

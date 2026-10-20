@@ -266,18 +266,33 @@ describe.skipIf(!ambientUrl)(
       const dry = await startCli([`--discord-id=${MEMBER_A}`], cliEnv());
       expect(dry.timedOut).toBe(false);
       expect(dry.status).toBe(0);
-      expect(JSON.parse(dry.stdout)).toEqual({ mode: "dry-run", counts: { web_sessions: 1 } });
+      expect(JSON.parse(dry.stdout)).toEqual({
+        mode: "dry-run",
+        counts: { web_sessions: 1 },
+        passes: 0,
+        stampsPerPass: [],
+      });
       expect(await activeCount(MEMBER_A)).toBe(1);
 
       const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(applied.status).toBe(0);
-      expect(JSON.parse(applied.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(JSON.parse(applied.stdout)).toEqual({
+        mode: "apply",
+        counts: { web_sessions: 1 },
+        passes: 1,
+        stampsPerPass: [1],
+      });
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
 
       const again = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(again.status).toBe(0);
-      expect(JSON.parse(again.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 0 } });
+      expect(JSON.parse(again.stdout)).toEqual({
+        mode: "apply",
+        counts: { web_sessions: 0 },
+        passes: 1,
+        stampsPerPass: [0],
+      });
       expect(await activeCount(MEMBER_B)).toBe(1);
 
       // Budgets are this CLI session's own settings, never database- or
@@ -336,7 +351,12 @@ describe.skipIf(!ambientUrl)(
       const result = await running!;
       expect(result.timedOut).toBe(false);
       expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(JSON.parse(result.stdout)).toEqual({
+        mode: "apply",
+        counts: { web_sessions: 1 },
+        passes: 1,
+        stampsPerPass: [1],
+      });
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
     }, 60_000);
@@ -370,7 +390,19 @@ describe.skipIf(!ambientUrl)(
       const result = await running!;
       expect(result.timedOut).toBe(false);
       expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      // Pass count depends on the race interleaving, so pin the counts plus
+      // the pass invariants rather than an exact pass array.
+      const parsed = JSON.parse(result.stdout) as {
+        mode: string;
+        counts: { web_sessions: number };
+        passes: number;
+        stampsPerPass: number[];
+      };
+      expect(parsed).toMatchObject({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(parsed.passes).toBe(parsed.stampsPerPass.length);
+      expect(parsed.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        parsed.counts.web_sessions,
+      );
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
     }, 60_000);
