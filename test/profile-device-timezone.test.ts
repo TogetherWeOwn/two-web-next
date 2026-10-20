@@ -90,7 +90,7 @@ let renderKit: (props: Record<string, unknown>) => string;
 let browser: Browser;
 let contexts: BrowserContext[] = [];
 beforeAll(async () => {
-  const worktree = fileURLToPath(new URL("../", import.meta.url));
+  const worktree = fileURLToPath(new URL("../", import.meta.url).href);
   const scratchRoot =
     process.env.PAPERCLIP_RUN_SCRATCH_DIR ??
     process.env.PAPERCLIP_SCRATCH_DIR ??
@@ -101,7 +101,7 @@ beforeAll(async () => {
   const scratch = mkdtempSync(join(scratchRoot, "device-timezone-ssr-"));
   const entry = join(scratch, "entry.mjs");
   const outfile = join(scratch, "view.mjs");
-  const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+  const webRequire = createRequire(new URL("../web/package.json", import.meta.url).href);
   const { compile } = webRequire("svelte/compiler");
   writeFileSync(
     entry,
@@ -493,8 +493,9 @@ describe.each<Editor>(["Hono", "Kit"])("%s device timezone acceptance", (editor)
     });
     const writes = requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toMatchObject({ method: "PATCH", path: `/members/${ID}` });
-    expect(JSON.parse(writes[0].body!)).toMatchObject({ timezone: DEVICE });
+    const write = writes[0]!;
+    expect(write).toMatchObject({ method: "PATCH", path: `/members/${ID}` });
+    expect(JSON.parse(write.body!)).toMatchObject({ timezone: DEVICE });
     await page.getByTestId("profile-edit-again").click();
     expect((await state(page)).dirty).toBe(false);
     await timezoneField(page).fill("America/New_York");
