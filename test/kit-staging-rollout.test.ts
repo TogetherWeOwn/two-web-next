@@ -118,6 +118,70 @@ describe("Kit staging route rollout", () => {
     );
   });
 
+  it("keeps a manifest-disabled family entry on Hono under archive-static (rollback)", () => {
+    // Kills the `enabled: familyEnabled` mutant: returning /about to
+    // enabled:false must restore Hono even when the static stage is on.
+    const manifest = stagingManifestFor(
+      { APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true", KIT_ROUTE_STATIC: "true" },
+      [{ method: "GET", path: "/about", enabled: false }],
+    );
+    expect(manifest?.[0]?.enabled).toBe(false);
+    expect(resolveRouteOwner({ method: "GET", path: "/about" }, manifest ?? [])).toBe("hono");
+  });
+
+  it("enables exactly the reviewed families per flag combination at manifest level", () => {
+    // Kills family-widening mutants (for example matching /events or
+    // /leaderboards/members under archive): the restrictive manifest is the
+    // boundary that keeps unreviewed Kit routes off staging.
+    const enabledPaths = (manifest: ReturnType<typeof stagingManifestFor>) =>
+      (manifest ?? [])
+        .filter((entry) => entry.enabled)
+        .map((entry) => `${entry.method} ${entry.path}`);
+    expect(
+      enabledPaths(stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_ARCHIVE: "true" })),
+    ).toEqual(["GET /events/past"]);
+    expect(
+      enabledPaths(
+        stagingManifestFor({
+          APP_URL: STAGING_APP_URL,
+          KIT_ROUTE_ARCHIVE: "true",
+          KIT_ROUTE_STATIC: "true",
+        }),
+      ),
+    ).toEqual(["GET /events/past", "GET /about", "GET /faq"]);
+    expect(
+      enabledPaths(stagingManifestFor({ APP_URL: STAGING_APP_URL, KIT_ROUTE_STATIC: "true" })),
+    ).toEqual([]);
+    expect(enabledPaths(stagingManifestFor({ APP_URL: STAGING_APP_URL })) ?? []).toEqual([]);
+  });
+
+  it.each([
+    ["archive only", { archive: "true" }, ["/events/past"]],
+    ["archive-static", { archive: "true", static: "true" }, ["/events/past", "/about", "/faq"]],
+  ] as const)(
+    "keeps every unselected Kit route on Hono under %s",
+    async (_name, flags, kitPaths) => {
+      // Exhaustive flags-on negative coverage: the flags-off loop above plus
+      // one sampled sibling per stage left widening mutants green.
+      const kitEnabled = ROUTE_MANIFEST.filter((entry) => entry.enabled);
+      expect(kitEnabled.length).toBeGreaterThan(0);
+      for (const route of kitEnabled) {
+        const path = route.path.replace(":id", "1").replace(":key", "event");
+        const expectKit = (kitPaths as readonly string[]).includes(route.path);
+        const { deps, response } = await dispatchAt(path, flags);
+        if (expectKit) {
+          expect(deps.resolve, path).toHaveBeenCalledOnce();
+          expect(deps.honoFetch, path).not.toHaveBeenCalled();
+          expect(response.headers.get(KIT_RENDERER_HEADER), path).toBe(KIT_RENDERER_VALUE);
+        } else {
+          expect(deps.honoFetch, path).toHaveBeenCalledOnce();
+          expect(deps.resolve, path).not.toHaveBeenCalled();
+          expect(response.headers.get(KIT_RENDERER_HEADER), path).toBeNull();
+        }
+      }
+    },
+  );
+
   it.each([
     ["archive only", { archive: "true" }, "/events/past", "kit"],
     ["archive does not enable static leaves", { archive: "true" }, "/about", "hono"],
