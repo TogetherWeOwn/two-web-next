@@ -5,8 +5,10 @@
 // The server validator (src/admin/validation-featured-form.ts) trims each
 // value, then counts Unicode code points for headline/body/image description
 // and UTF-16 units for the two URLs. featuredCountUsed mirrors that count
-// exactly; the form shows the budget before Save instead of only refusing at
-// Save. The island never blocks submission (no setCustomValidity: an
+// exactly, including the wire format: browsers serialize textarea line breaks
+// as CRLF (two code points per break) while .value holds a single LF, so the
+// code-points branch counts breaks as submitted. The form shows the budget
+// before Save instead of only refusing at Save. The island never blocks submission (no setCustomValidity: an
 // over-budget draft must still POST and receive the server's 422 field
 // errors), never truncates, never fetches, and never touches the homepage
 // preview. Feedback nodes are plain hints, never a live region or alert, so
@@ -18,7 +20,11 @@
 // immediately and mutates nothing, so it is safe either way.
 export function featuredCountUsed(value, units) {
   const trimmed = String(value ?? "").trim();
-  return units === "utf16" ? trimmed.length : [...trimmed].length;
+  if (units === "utf16") return trimmed.length;
+  // Count as submitted, like admin-event-text-limits: normalize to LF first
+  // so a pre-existing CRLF is not double-expanded, then expand each break to
+  // CRLF before counting. Single-line inputs never contain breaks.
+  return [...trimmed.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n")].length;
 }
 
 function unitWord(units) {

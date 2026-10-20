@@ -253,6 +253,12 @@ jobs:
         run: |
           npx vitest run test/featured-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/featured-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/featured-native-length.json "native featured headline and image description" 36
+      - name: Featured editorial-limits counter regressions (intercepted fixtures, no network or DB)
+        env:
+          FEATURED_NATIVE_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/featured-editorial-limits-counter.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/featured-editorial-limits-counter.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/featured-editorial-limits-counter.json "featured editorial-limits counter in Chromium" 3
       - name: Calendar search native Unicode input regressions (real Chromium typing and paste, mocked reads)
         env:
           CALENDAR_SEARCH_BROWSER_TESTS: "true"

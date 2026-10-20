@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
 
 const source = readFileSync(
   new URL("../public/islands/admin-featured-editorial-limits.js", import.meta.url),
@@ -42,8 +43,57 @@ describe("featured editorial-limits binder (minified bytes)", () => {
       used: 22,
     },
     { label: "blank trims to zero", value: " \t  ", units: "code-points", used: 0 },
+    {
+      // 997 + CRLF (2) + 1: the textarea holds one LF, the server sees two.
+      label: "line break counts as submitted CRLF",
+      value: `${"x".repeat(997)}\nx`,
+      units: "code-points",
+      used: 1000,
+    },
+    {
+      // 998 + CRLF (2) + 1: over by one as submitted, not "1000 of 1000".
+      label: "interior break tips the body over at 1001 submitted",
+      value: `${"x".repeat(998)}\nx`,
+      units: "code-points",
+      used: 1001,
+    },
+    {
+      label: "pre-existing CRLF is not double-expanded",
+      value: `${"x".repeat(997)}\r\nx`,
+      units: "code-points",
+      used: 1000,
+    },
+    {
+      label: "lone CR counts as one submitted break",
+      value: `${"x".repeat(997)}\rx`,
+      units: "code-points",
+      used: 1000,
+    },
+    {
+      label: "breaks count after surrounding whitespace trims",
+      value: "  x\ny  ",
+      units: "code-points",
+      used: 4,
+    },
   ])("$label", ({ value, units, used }) => {
     expect(featuredCountUsed(value, units)).toBe(used);
+  });
+
+  it("body line-break counts agree with the server verdict on the submitted bytes", () => {
+    for (const value of [`${"x".repeat(997)}\nx`, `${"x".repeat(998)}\nx`]) {
+      // Browsers serialize textarea LF as CRLF on submit; the counter must
+      // match the code points the validator actually sees.
+      const submitted = value.trim().replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n");
+      expect(featuredCountUsed(value, "code-points")).toBe([...submitted].length);
+      let bodyError: string | undefined;
+      try {
+        parseFeaturedForm({ title: "Game night", body: submitted });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        bodyError = (error as ValidationError).fields.body;
+      }
+      expect(featuredCountUsed(value, "code-points") > 1000).toBe(bodyError !== undefined);
+    }
   });
 
   it("states the current count, budget and code-point unit in budget", () => {
@@ -63,6 +113,22 @@ describe("featured editorial-limits binder (minified bytes)", () => {
     expect(text).toMatch(/\b1001\b/);
     expect(text).toMatch(/\b1000\b/);
     expect(text).toMatch(/over|exceed|too long|too many|-[1-9]\d*/i);
+  });
+
+  it.each([
+    { used: 255, limit: 255, units: "code-points" },
+    { used: 1000, limit: 1000, units: "code-points" },
+    { used: 255, limit: 255, units: "utf16" },
+  ])("at exactly $used of $limit states no over-budget wording", ({ used, limit, units }) => {
+    const text = featuredCountText(used, limit, units, false);
+    expect(text).toMatch(new RegExp(`\\b${used}\\b`));
+    expect(text).toMatch(new RegExp(`\\b${limit}\\b`));
+    // No -N alternative: "UTF-16" would false-positive it.
+    expect(text).not.toMatch(/over|exceed|too long|too many/i);
+  });
+
+  it("one over the limit names a single unit over", () => {
+    expect(featuredCountText(256, 255, "code-points", false)).toMatch(/\b1 over the limit\b/);
   });
 
   it("names a missing image description while an image URL is set", () => {
