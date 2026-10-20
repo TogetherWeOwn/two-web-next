@@ -422,10 +422,10 @@
   function jumpUrl(formEl) {
     var url = new URL("/events", window.location.origin);
     url.searchParams.set("view", "calendar");
-    var month = formEl.querySelector('[name="month"]');
-    if (month && month.value) url.searchParams.set("month", month.value);
-    var past = formEl.querySelector('[name="past"]');
-    if (past && past.value) url.searchParams.set("past", past.value);
+    ["month", "past"].forEach(function (name) {
+      var field = formEl.querySelector('[name="' + name + '"]');
+      if (field && field.value) url.searchParams.set(name, field.value);
+    });
     return url;
   }
 
