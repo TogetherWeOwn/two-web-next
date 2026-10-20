@@ -101,7 +101,12 @@ describe("attendee page builders", () => {
 describe("renderer parity", () => {
   it("renders the shared form action on the RSVP button", () => {
     const e = publicEvent();
-    const page1 = RsvpButton({ e, member: true, answer: null, returnTo: `/e/${KEY}` })!.toString() as string;
+    const page1 = RsvpButton({
+      e,
+      member: true,
+      answer: null,
+      returnTo: `/e/${KEY}`,
+    })!.toString() as string;
     expect(formAction(page1)).toBe(`/e/${KEY}/rsvp`);
     const page2 = RsvpButton({
       e,

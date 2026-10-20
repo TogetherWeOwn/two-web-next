@@ -1,11 +1,10 @@
 // Native attendee-page URL builders, shared across renderers.
 //
-// The Hono form action, the detail-page refresh link, the POST redirect and
-// the refusal return link all rebuild the same rooted destinations from a
-// routed event key plus a page number. Page 1 stays bare so first-page links
-// reset the section; later pages carry ?attendees=<n>. Keys from route input
-// are encoded, while the page stays a validated integer so malformed or
-// unsafe values can never escape the local destination.
+// Page 1 stays bare so first-page links reset the section; later pages carry
+// ?attendees=<n>. attendeePageHref preserves the existing contract for canonical
+// stored event keys and caller-normalized pages. The RSVP action and return
+// builders instead accept route-input keys: they encode the key and fall back
+// to page 1 for malformed or unsafe page numbers.
 //
 // Framework-free: this module imports nothing, so the refusal core and the
 // Svelte/Kit renderers can share it without pulling in the reads layer.
