@@ -58,6 +58,7 @@ jobs:
             "ci/featured-proof/**" \
             "src/admin/pages.tsx" \
             "src/admin/pages/**" \
+            "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
