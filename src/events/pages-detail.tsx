@@ -6,6 +6,7 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { attendeePageHref } from "./attendee-paths";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
@@ -115,7 +116,7 @@ export const EventPage: FC<{
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
-          <dt>When</dt>
+          <dt>Starts</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
@@ -123,10 +124,18 @@ export const EventPage: FC<{
             </time>
           </dd>
           <dd class="event-device-timezone" data-event-device-timezone>
-            <button type="button" hidden aria-controls="event-device-timezone-result">
+            <button type="button" hidden>
               Show in my device timezone
             </button>
-            <p id="event-device-timezone-result" role="status" aria-live="polite"></p>
+            <p role="status" aria-live="polite"></p>
+          </dd>
+        </div>
+        <div>
+          <dt>Ends</dt>
+          <dd>
+            <time datetime={e.endsAt.toISOString()}>
+              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
           </dd>
         </div>
         {e.location ? (
@@ -263,7 +272,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeesPaging.page <= 1 ? path : `${path}?attendees=${attendeesPaging.page}`}
+              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees

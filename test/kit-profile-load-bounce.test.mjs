@@ -101,6 +101,7 @@ async function bounce(route, suffix, status = "guest") {
   const request = new Request(url);
   const state = cookieRuntime.get_cookies(request, url);
   state.set_trailing_slash("ignore");
+  const headers = new Headers();
   let refusal;
   try {
     await loads.get(route)({
@@ -108,7 +109,9 @@ async function bounce(route, suffix, status = "guest") {
       url,
       cookies: state.cookies,
       params: { user: USER },
-      setHeaders: () => {},
+      setHeaders: (values) => {
+        for (const [name, value] of Object.entries(values)) headers.set(name, value);
+      },
     });
   } catch (e) {
     refusal = e;
@@ -116,7 +119,6 @@ async function bounce(route, suffix, status = "guest") {
     delete globalThis.__profileLoadDeps;
     delete globalThis.__profileLoadResolve;
   }
-  const headers = new Headers();
   cookieRuntime.add_cookies_to_headers(headers, [...state.new_cookies.values()]);
   return { refusal, headers, storeReads };
 }
@@ -129,6 +131,8 @@ for (const route of ["/profile", `/members/${USER}`]) {
         const { refusal, headers, storeReads } = await bounce(route, suffix);
         expect(refusal).toEqual({ status: 302, location: "/auth/discord" });
         expect(storeReads).toBe(0);
+        expect(headers.get("cache-control")).toBe("no-store, private");
+        expect(headers.get("vary")).toBe("Cookie");
         const cookies = headers.getSetCookie();
         expect(cookies).toHaveLength(1);
         expect(cookies[0]).toMatch(/; Path=\/; HttpOnly; Secure; SameSite=Lax/i);
@@ -148,6 +152,8 @@ for (const route of ["/profile", `/members/${USER}`]) {
       const { refusal, headers, storeReads } = await bounce(route, `?q=${"a".repeat(513)}`);
       expect(refusal).toEqual({ status: 302, location: "/auth/discord" });
       expect(storeReads).toBe(0);
+      expect(headers.get("cache-control")).toBe("no-store, private");
+      expect(headers.get("vary")).toBe("Cookie");
       expect(headers.getSetCookie()).toHaveLength(1);
       expect(headers.getSetCookie()[0]).toContain(`${LOGIN_INTENDED_COOKIE}=; Max-Age=0`);
     });

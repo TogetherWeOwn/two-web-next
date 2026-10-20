@@ -56,3 +56,33 @@ four actuals with `node ci/visual-accept.mjs <artifact-dir>`, as prescribed by t
 No local recapture, test-code edit, new mask or threshold change was used. This
 acceptance updates expected screenshots; it is not a passing rerun, deployment
 or independent approval.
+
+## Integrated native-island proof
+
+The original capture set above records the initial implementation. After
+integrating the independently shipped Starts/Ends schedule and replacing the
+Kit hydration handler with the shared native island, captured and opened the
+following twelve states on 2026-10-20. Same synthetic event and viewports; Kit
+runs **without hydration**, matching its `csr=false` route. Each state has zero
+serious/critical axe violations in `.event-meta`, no horizontal overflow and no
+page errors. Keyboard activation retains focus and changes only the comparison.
+These are local-fixture evidence, not pinned visual baselines or deployment proof.
+
+| View / viewport | Default | Converted | Unavailable |
+| --- | --- | --- | --- |
+| Hono desktop | [Default](integrated-hono-1280-default.png) | [Converted](integrated-hono-1280-converted.png) | [Fallback](integrated-hono-1280-fallback.png) |
+| Hono mobile | [Default](integrated-hono-390-default.png) | [Converted](integrated-hono-390-converted.png) | [Fallback](integrated-hono-390-fallback.png) |
+| Kit desktop | [Default](integrated-kit-1280-default.png) | [Converted](integrated-kit-1280-converted.png) | [Fallback](integrated-kit-1280-fallback.png) |
+| Kit mobile | [Default](integrated-kit-390-default.png) | [Converted](integrated-kit-390-converted.png) | [Fallback](integrated-kit-390-fallback.png) |
+
+The shared island is loaded once per full page, and five deferred island tags
+share one markup block in their original execution order. The formatter is no
+longer duplicated in Kit's structural client chunk. The adjacent polite status
+region needs no document-global identifier; both renderers retain the same
+button name, keyboard behavior and live announcement.
+
+The merge conflict in the four visual baselines retained this branch's
+previously artifact-accepted bytes. The new combined Starts/Ends layout still
+needs exact-head pinned-runner comparison and, if intentional differences are
+reported, acceptance through the failure artifact. No local image above was
+copied into a test baseline, and no mask or ceiling changed.

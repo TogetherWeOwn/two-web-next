@@ -1,5 +1,4 @@
 <script lang="ts">
-import { eventStartInDeviceTimezone } from "../../../assets/event-device-timezone";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
@@ -35,23 +34,20 @@ import {
 // Attendees render only when the model carries them — the resolver discloses
 // them to members alone, so anonymous HTML can never hold member names.
 let { model }: { model: KitEventDetailModel } = $props();
-let deviceTimezoneText = $state("");
-function enableDeviceTimezone(button: HTMLButtonElement) {
-  button.hidden = false;
-}
-// A client-side navigation must not carry the previous event's comparison forward.
-$effect(() => {
-  model.eventKey;
-  model.timeDatetime;
-  deviceTimezoneText = "";
-});
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
-const rsvpIsland = '<script src="/islands/rsvp-button.js" defer></' + "script>";
-const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
-const goingCountIsland = '<script src="/islands/going-count.js" defer></' + "script>";
-const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' + "script>";
+// This route is csr=false. Share one native-island block in execution order;
+// every deferred script runs after parsing, with all of its mount nodes present.
+const detailIslands = [
+  "event-device-timezone",
+  "rsvp-button",
+  "copy-link",
+  "going-count",
+  "attendees-live",
+]
+  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
+  .join("");
 
 // Server-decided RSVP closure: the resolver settles the verdict from the
 // server render instant, so a fast or slow viewer clock never reopens or
@@ -132,19 +128,19 @@ const lineup = $derived(
   {/if}
   <dl class="event-meta" aria-label="Event details">
     <div>
-      <dt>When</dt>
+      <dt>Starts</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
       </dd>
-      <dd class="event-device-timezone">
-        <button
-          type="button"
-          hidden
-          use:enableDeviceTimezone
-          aria-controls="event-device-timezone-result"
-          onclick={() => { deviceTimezoneText = eventStartInDeviceTimezone(model.timeDatetime); }}
-        >Show in my device timezone</button>
-        <p id="event-device-timezone-result" role="status" aria-live="polite">{deviceTimezoneText}</p>
+      <dd class="event-device-timezone" data-event-device-timezone>
+        <button type="button" hidden>Show in my device timezone</button>
+        <p role="status" aria-live="polite"></p>
+      </dd>
+    </div>
+    <div>
+      <dt>Ends</dt>
+      <dd>
+        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
     </div>
     {#if model.location}
@@ -214,7 +210,6 @@ const lineup = $derived(
         </form>
       {/if}
     </section>
-    {@html rsvpIsland}
   </div>
   <div class="event-detail-grid">
     <div>
@@ -312,9 +307,7 @@ const lineup = $derived(
       </p>
     </section>
   {/if}
-  {@html copyLinkIsland}
-  {@html goingCountIsland}
-  {@html attendeesLiveIsland}
+  {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">
