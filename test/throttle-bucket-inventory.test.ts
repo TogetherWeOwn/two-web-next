@@ -101,13 +101,17 @@ describe("throttle bucket inventory", () => {
   });
 
   it("pins join, profile-write and rsvp-write buckets to their call sites", () => {
-    const service = readFileSync(resolve(root, "src/join/service.ts"), "utf8");
+    const service = stripComments(readFileSync(resolve(root, "src/join/service.ts"), "utf8"));
     expect(service).toContain('JOIN_THROTTLE_BUCKET = "join"');
-    const routeShared = readFileSync(resolve(root, "src/join/route-shared.ts"), "utf8");
+    const routeShared = stripComments(
+      readFileSync(resolve(root, "src/join/route-shared.ts"), "utf8"),
+    );
     expect(routeShared).toContain("${JOIN_THROTTLE_BUCKET}:");
-    const admission = readFileSync(resolve(root, "src/profiles/routes-admission.ts"), "utf8");
+    const admission = stripComments(
+      readFileSync(resolve(root, "src/profiles/routes-admission.ts"), "utf8"),
+    );
     expect(admission).toContain("profile-write:${viewer.id}");
-    const rsvp = readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8");
+    const rsvp = stripComments(readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8"));
     expect(rsvp.match(/rsvp-write:/g)?.length).toBe(3);
   });
 
@@ -156,7 +160,7 @@ describe("throttle bucket inventory", () => {
   it("documents the MCP cap-before-throttle order in docs/body-limits.md", () => {
     expect(bodyLimitsDoc).toContain("POST /mcp");
     expect(bodyLimitsDoc).toContain("src/mcp/routes.ts");
-    const mcp = readFileSync(resolve(root, "src/mcp/routes.ts"), "utf8");
+    const mcp = stripComments(readFileSync(resolve(root, "src/mcp/routes.ts"), "utf8"));
     const capAt = mcp.indexOf('requestBodyLimit("mcp")');
     const admitAt = mcp.indexOf("admitted(c)");
     expect(capAt).toBeGreaterThanOrEqual(0);
