@@ -12,7 +12,7 @@ the current admin shell, typography, paper/ink palette, headings and links remai
 One native section sits between Save and Status and wraps naturally on mobile.
 No new CSS, framework, token, endpoint, sharing permission or mutation is added.
 
-**Required states:** saved/new, draft/published/cancelled, missing location,
+**Required states:** saved/new, draft/published/cancelled/past, missing location,
 strict before/equal/after-end advice, unsaved edits and rejected saves. Readiness
 is advisory; Publish remains a separate native form, validated under its existing
 server lock. See the [moderator workflow](../../moderator-admin-guide.md#save--review--publish).
@@ -39,7 +39,7 @@ These images do not claim full Kit hydration, deployed traffic or a live Publish
 - Timestamp and advisory paragraphs wrap within the existing mobile column;
   no horizontal document overflow was observed at either width.
 - Blank-location and ended guidance has native links back to its existing input.
-  Published/cancelled copy does not imply that another Publish is available.
+  Published/cancelled/past copy does not imply that another Publish is available.
 - Rejected-save fields retain the attempted input while provenance still identifies
   the stored record. New and rejected-save routes remain Hono-owned even when
   reached from the Kit editor; these are not new Kit mutation implementations.

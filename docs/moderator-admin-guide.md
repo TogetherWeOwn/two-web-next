@@ -303,7 +303,8 @@ leave-page warning for unsaved changes (including after a rejected Save).
    strictly before the page's rendering time is already ended; exact equality
    is allowed by publication validation (unlike the live-RSVP boundary). Use the
    correction links, then Save. Published events are already public under their
-   existing visibility rules; cancelled events cannot be republished.
+   existing visibility rules; cancelled events cannot be republished. Past
+   events have ended and cannot be published as-is.
 5. For a saved draft, use **Publish** only after review. Advice is a snapshot, not
    authorization: it does not disable or submit Publish. The server still locks
    and rechecks the current saved status, end time and location. If it refuses,
