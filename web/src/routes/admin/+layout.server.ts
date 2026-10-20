@@ -15,12 +15,15 @@ export const csr = false;
 //
 // The hook attaches the shared signed auth-status probe only to successful
 // moderator admin documents; this read-only guard never writes session cookies.
-export const load: LayoutServerLoad = async ({ locals, url }) => {
+export const load: LayoutServerLoad = async ({ locals, url, setHeaders }) => {
   const decision = decideKitAdminGuard(
     { status: locals.status, session: locals.session },
     `${url.pathname}${url.search}`,
   );
-  if (decision.kind === "guest") redirect(302, decision.location);
+  if (decision.kind === "guest") {
+    setHeaders({ "cache-control": "no-store, private", vary: "Cookie" });
+    redirect(302, decision.location);
+  }
   if (decision.kind === "forbidden") error(403, "Forbidden");
   if (decision.kind === "unavailable") error(503, "Admin temporarily unavailable");
   return { actor: decision.actor };

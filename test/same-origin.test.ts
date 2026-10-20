@@ -92,7 +92,7 @@ describe("mounted route same-origin audit", () => {
   });
 
   it.each(guarded)(
-    "refuses cross-origin $method $path with the one envelope before sessions",
+    "refuses cross-origin JSON $method $path with the one envelope before sessions",
     async ({ method, path }) => {
       const store = createMemorySessionStore();
       const cookie = await cookieFor(store, MODERATOR);
@@ -108,7 +108,8 @@ describe("mounted route same-origin audit", () => {
           headers: {
             cookie,
             origin: "https://evil.test",
-            accept: "text/html",
+            // Pin the unchanged machine envelope; browser refusals now negotiate.
+            accept: "application/json",
             "content-type": "application/json",
           },
           body: JSON.stringify({ website: "spam", status: "going" }),

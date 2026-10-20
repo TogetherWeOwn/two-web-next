@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { validationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
 // Markup contract of EventFormPage mode="edit"
@@ -36,9 +37,20 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 <section>
   <h1>Edit {view.title}</h1>
   {#if hasErrors}
-    <p class="notice" role="alert" data-testid="form-errors">
-      Check the highlighted fields and try again.
-    </p>
+    <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
+      <p>Check the highlighted fields and try again.</p>
+      <ul>
+        {#each validationSummary(errors, "event", "edit") as entry (entry.key)}
+          <li>
+            {#if entry.target}
+              <a href={`#${entry.target}`}>{entry.label}: {entry.message}</a>
+            {:else}
+              {entry.message}
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
   <form
     method="post"
