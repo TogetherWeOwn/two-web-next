@@ -129,8 +129,8 @@ function honoMemberCookie(): Promise<string> {
           maxRedirects: 0,
         }),
       "qa-member",
-      { label: "QA login issues a session" },
     );
+    expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
         header.name.toLowerCase() === "set-cookie" &&
@@ -191,8 +191,8 @@ async function isolatedRenewalCookie(
           maxRedirects: 0,
         }),
       "qa-moderator",
-      { label: "isolated QA login issues a session" },
     );
+    expect(response.status(), "isolated QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
         header.name.toLowerCase() === "set-cookie" &&

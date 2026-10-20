@@ -129,7 +129,7 @@ test("a 204 first try returns without waiting", async () => {
       return fakeQaResponse(204);
     },
     "qa-member",
-    { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
+    { wait: async (ms) => void waits.push(ms) },
   );
   assert.equal(login.status(), 204);
   assert.equal(sends, 1);
@@ -145,7 +145,7 @@ test("a 429 then 204 waits out Retry-After and returns the session", async () =>
       return sends === 1 ? fakeQaResponse(429, 2) : fakeQaResponse(204);
     },
     "qa-member",
-    { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
+    { wait: async (ms) => void waits.push(ms) },
   );
   assert.equal(login.status(), 204);
   assert.equal(sends, 2);
@@ -162,7 +162,6 @@ test("each Retry-After wait clamps to the single-wait cap", async () => {
     },
     "qa-moderator",
     {
-      label: "isolated QA login issues a session",
       singleWaitCapSeconds: 5,
       wait: async (ms) => void waits.push(ms),
     },
@@ -182,10 +181,7 @@ test("persistent 429s fail loud with the budget error after maxAttempts", async 
           return fakeQaResponse(429, 1);
         },
         "qa-moderator",
-        {
-          label: "isolated QA login issues a session",
-          wait: async (ms) => void waits.push(ms),
-        },
+        { wait: async (ms) => void waits.push(ms) },
       ),
     /local QA login as qa-moderator refused with 429 after 3 attempt\(s\)/,
   );
@@ -193,21 +189,18 @@ test("persistent 429s fail loud with the budget error after maxAttempts", async 
   assert.equal(waits.length, QA_LOGIN_MAX_ATTEMPTS - 1);
 });
 
-test("a non-429 refusal fails loud with the caller label and no retry", async () => {
+test("a non-429 refusal returns at once for the caller to assert on", async () => {
   let sends = 0;
   const waits = [];
-  await assert.rejects(
-    () =>
-      postQaLoginWithRetry(
-        async () => {
-          sends++;
-          return fakeQaResponse(500);
-        },
-        "qa-member",
-        { label: "QA login issues a session", wait: async (ms) => void waits.push(ms) },
-      ),
-    /QA login issues a session: answered 500, expected 204/,
+  const login = await postQaLoginWithRetry(
+    async () => {
+      sends++;
+      return fakeQaResponse(500);
+    },
+    "qa-member",
+    { wait: async (ms) => void waits.push(ms) },
   );
+  assert.equal(login.status(), 500);
   assert.equal(sends, 1);
   assert.deepEqual(waits, []);
 });

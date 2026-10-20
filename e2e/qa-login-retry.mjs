@@ -68,23 +68,22 @@ export function sleep(ms) {
  * logins land while journey-tail spends slide out, so a 429 there means
  * seconds of wait, not a blown budget. Each wait clamps to
  * `singleWaitCapSeconds` so the bounded attempts fit a 30 s test/hook
- * timeout; past the attempts — or on any non-204/429 status — it fails loud
- * with the caller label or the shared-budget error.
+ * timeout; past the attempts it fails loud with the shared-budget error.
+ * A non-429 answer returns at once — the caller asserts the 204 in its own
+ * spec, so the status contract stays a spec assertion, not a helper throw.
  *
  * @template T the sender's response type (Playwright APIResponse at call sites)
  * @param {() => Promise<T>} send injected POST returning a status()/headers() response
  * @param {string} identity "qa-member" | "qa-moderator" (throttle-error context only)
  * @param {object} [opts]
- * @param {string} [opts.label] caller assertion label for non-retryable refusals
  * @param {number} [opts.maxAttempts] default QA_LOGIN_MAX_ATTEMPTS
  * @param {number} [opts.singleWaitCapSeconds] per-wait clamp, default 5
  * @param {(ms: number) => Promise<void>} [opts.wait] default sleep (injectable for tests)
  * @param {string} [opts.scope] throttle-error scope, default "local"
- * @returns {Promise<T>} the 204 response
+ * @returns {Promise<T>} the final response: 204, or a non-429 refusal for the caller to assert on
  */
 export async function postQaLoginWithRetry(send, identity, opts = {}) {
   const {
-    label = `QA login as ${identity} issues a session`,
     maxAttempts = QA_LOGIN_MAX_ATTEMPTS,
     singleWaitCapSeconds = 5,
     wait = sleep,
@@ -94,10 +93,7 @@ export async function postQaLoginWithRetry(send, identity, opts = {}) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const response = await send();
     const status = response.status();
-    if (status === 204) return response;
-    if (status !== 429) {
-      throw new Error(`${label}: answered ${status}, expected 204`);
-    }
+    if (status !== 429) return response;
     retryAfterSeconds = parseRetryAfterSeconds(response.headers());
     if (attempt === maxAttempts) break;
     await wait(Math.min(retryAfterSeconds, singleWaitCapSeconds) * 1000);
