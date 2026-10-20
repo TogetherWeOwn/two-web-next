@@ -7,7 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { build } from "esbuild";
 import type { Env } from "../src/env";
 import { loadMembersBoardData } from "../src/kit-members";
-import { consumeLoginReturn, LOGIN_INTENDED_COOKIE } from "../src/return-journey";
+import {
+  consumeLoginReturn,
+  JOURNEY_TTL_SECONDS,
+  LOGIN_INTENDED_COOKIE,
+} from "../src/return-journey";
 
 const SESSION_SECRET = "binding-test-session-secret-at-least-32-bytes";
 const APP = "https://next.example.test";
@@ -113,7 +117,13 @@ describe("Kit member-board binding cookie emission", () => {
     const [name, value, options] = emitted[0]!;
     expect(name).toBe(LOGIN_INTENDED_COOKIE);
     expect(value).not.toContain("%2Fleaderboards");
-    expect(options).toMatchObject({ path: "/", secure: true, httpOnly: true, sameSite: "lax" });
+    expect(options).toEqual({
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: JOURNEY_TTL_SECONDS,
+    });
 
     const response = await consume(`${name}=${encodeURIComponent(value)}`);
     expect(await response.text()).toBe(DESTINATION);
