@@ -38,3 +38,21 @@ For the design contract and member guidance, see
 [Compare an event start with your device timezone](../../event-device-timezone.md).
 The independent browser proof is `test/event-device-timezone.test.ts`, executed
 with `A11Y_BROWSER_TESTS=true`; CI verifies all 30 browser cases actually ran.
+
+## Pinned-runner baseline acceptance
+
+[Browser-smoke run 39470046957](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39470046957)
+rendered head `ce93e312cb009f883f8e347322e76d8bca8c3d8f` on the pinned runner.
+Its `e2e-failure-39470046957-1` artifact contains four intentional baseline
+changes: `event-desktop.png`, `event-mobile.png`, `event-paused-desktop.png` and
+`event-paused-mobile.png`. Each page grows by 52 pixels for the new explicit
+comparison action under the unchanged host schedule. The content below moves
+down without other layout or content changes. The cancelled-page baselines do
+not change.
+
+Opened all four expected, actual and diff image sets, then accepted only these
+four actuals with `node ci/visual-accept.mjs <artifact-dir>`, as prescribed by the
+[visual-regression guide](../../visual-regression.md#when-a-diff-is-intentional).
+No local recapture, test-code edit, new mask or threshold change was used. This
+acceptance updates expected screenshots; it is not a passing rerun, deployment
+or independent approval.
