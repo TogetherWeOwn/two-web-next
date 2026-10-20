@@ -1,4 +1,4 @@
-// Calendar month-jump + empty-month acceptance (TOG-34011 Test Author handoff).
+// Calendar month-jump + empty-month acceptance (Test Author handoff).
 //
 // Failing-first contract for: a server-derived This month anchor, a labelled
 // native GET month-jump form, and month-local empty guidance with an
