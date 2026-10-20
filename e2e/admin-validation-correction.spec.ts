@@ -109,7 +109,7 @@ for (const name of rejectedNames) {
       const summary = page.getByTestId("form-errors");
       await expect(summary).toBeVisible();
       expect(["-1", "0"]).toContain(await summary.getAttribute("tabindex"));
-      expect(await summary.evaluate((el) => el === document.activeElement)).toBe(true);
+      expect(await summary.evaluate((el) => el === el.ownerDocument.activeElement)).toBe(true);
       expect(
         await summary.evaluate(
           (el) =>
@@ -222,7 +222,7 @@ for (const name of cleanNames) {
         await expect(summary).toBeVisible();
         expect(await summary.locator('a[href^="#"]').count()).toBeGreaterThan(1);
         if (javaScriptEnabled) {
-          expect(await summary.evaluate((el) => el === document.activeElement)).toBe(true);
+          expect(await summary.evaluate((el) => el === el.ownerDocument.activeElement)).toBe(true);
           // Correction and BFCache/cancelled-navigation events cannot turn the
           // rejected document into a saved baseline or clear the newer draft.
           await page.locator('[name="title"]').fill("A newer correction <keep>");
