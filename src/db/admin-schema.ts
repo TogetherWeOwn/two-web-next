@@ -32,7 +32,7 @@ import { agentEventGrants } from "./schema";
 //   roster, so an FK would reject every admin write with 23503. The W-auth
 //   slice owns the roster question; this slice stores the snowflake.
 
-export const events = pgTable(
+const eventsTable = pgTable(
   "events",
   {
     id: serial("id").primaryKey(),
@@ -49,6 +49,9 @@ export const events = pgTable(
     // truth; this is how they render back.
     timezone: text("timezone").notNull().default("UTC"),
     location: text("location"),
+    organizer_name: text("organizer_name"),
+    join_url: text("join_url"),
+    join_instructions: text("join_instructions"),
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
@@ -76,7 +79,7 @@ export const events = pgTable(
     recurrenceEndsOn: timestamp("recurrence_ends_on"),
     // The self-reference needs the column type spelled out (drizzle self-FK
     // inference cycle — tsc rejects the bare `() => events.id` form).
-    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, {
+    parentEventId: integer("parent_event_id").references((): AnyPgColumn => eventsTable.id, {
       onDelete: "set null",
     }),
     recurrenceIndex: integer("recurrence_index"),
@@ -93,6 +96,20 @@ export const events = pgTable(
     index("events_starts_at_id_index").on(t.startsAt, t.id),
   ],
 );
+
+type EventSelect = Omit<
+  typeof eventsTable.$inferSelect,
+  "organizer_name" | "join_url" | "join_instructions"
+> & {
+  /** Optional for older in-memory row fixtures; live database rows include these nullable columns. */
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
+};
+
+export const events = eventsTable as Omit<typeof eventsTable, "$inferSelect"> & {
+  readonly $inferSelect: EventSelect;
+};
 
 // An attempted request is immutable for the lifetime of its idempotency key.
 // One pending attempt per event also orders requests when retries outlive the

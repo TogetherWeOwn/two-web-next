@@ -903,7 +903,11 @@ export async function sitemapEvents(
 }
 
 /** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
-export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
+export async function listFeed(
+  db: Db,
+  statuses: ("published" | "cancelled")[],
+  now = new Date(),
+): Promise<Array<typeof events.$inferSelect>> {
   const rows = await db
     .select()
     .from(events)
@@ -921,7 +925,7 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
   return renderable;
 }
 
-export async function getEventRow(db: Db, key: string) {
+export async function getEventRow(db: Db, key: string): Promise<typeof events.$inferSelect | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   // Same refusal as the collection/single reads: a per-event export of an
   // unrenderable window would serve corrupt `NaN` instants, so it 404s.

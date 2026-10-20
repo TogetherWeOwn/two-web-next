@@ -70,6 +70,9 @@ export async function createEvent(
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
         location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
         capacity: input.capacity,
         status: "draft",
         createdBy: actor.id,
@@ -156,6 +159,9 @@ export async function materializeMissingInstances(
         endsAt: when.endsAt,
         timezone: parent.timezone,
         location: parent.location,
+        organizer_name: parent.organizer_name,
+        join_url: parent.join_url,
+        join_instructions: parent.join_instructions,
         capacity: parent.capacity,
         status: "draft",
         createdBy: parent.createdBy,
@@ -221,7 +227,17 @@ export async function updateEvent(
 
 export type PatchBase = Pick<
   EventRow,
-  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+  | "title"
+  | "game"
+  | "description"
+  | "timezone"
+  | "location"
+  | "organizer_name"
+  | "join_url"
+  | "join_instructions"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
 >;
 
 /**
@@ -239,6 +255,9 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
     description: base.description,
     timezone: base.timezone,
     location: base.location,
+    organizer_name: base.organizer_name,
+    join_url: base.join_url,
+    join_instructions: base.join_instructions,
     capacity: base.capacity,
     ...patch,
   } as Record<string, unknown>;
@@ -318,6 +337,9 @@ async function commitLockedUpdate(
       endsAt: input.endsAtUtc,
       timezone: input.timezone,
       location: input.location,
+      organizer_name: input.organizer_name ?? null,
+      join_url: input.join_url ?? null,
+      join_instructions: input.join_instructions ?? null,
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
