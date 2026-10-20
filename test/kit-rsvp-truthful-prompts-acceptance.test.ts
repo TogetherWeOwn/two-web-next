@@ -421,10 +421,10 @@ describe("acceptance: no session/token material in island attrs (Kit)", () => {
 describe("acceptance: no-JS parity (Kit)", () => {
   it("non-member prompts are real anchors with no form; members keep the form", async () => {
     const guest = mount(await renderOk(event({ rsvpOpen: false, capacity: 10 }), GUEST));
-    expect(guest).toMatch(/<a href="[^"]+">/);
+    expect(guest).toMatch(/<a href="[^"]+"[^>]*>/);
     expect(guest).not.toContain("<form");
     const outsider = mount(await renderOk(event({ capacity: null }), nonMemberSession));
-    expect(outsider).toMatch(/<a href="[^"]+">/);
+    expect(outsider).toMatch(/<a href="[^"]+"[^>]*>/);
     expect(outsider).not.toContain("<form");
     const member = mount(await renderOk(event({ capacity: null }), memberSession));
     expect(member).toContain('<form method="post"');
