@@ -95,6 +95,15 @@ failed, or still **in progress** inside its release call. Repair still works:
 only its completed successful deploy job and post-smoke proof authorize the new
 tag, not global workflow success. Failed/skipped/in-progress smoke never does.
 
+Do not use **Re-run failed jobs** to repair publication: it increments the current
+`github.run_attempt` without repeating the successful deploy, while that deploy's
+job, artifact and receipt remain bound to the original producing attempt. The
+ordinary release caller supplies the current attempt, so that rerun deliberately
+refuses new-tag proof rather than combining attempts. Instead, dispatch
+`release.yml` on `main` using the command above with the exact deployed SHA and
+original producing run/attempt. **Re-run all jobs** is not release repair: it may
+redeploy production and must follow the independent deployment gates.
+
 Receipts are retained for **30 days** (subject to repository retention limits).
 Runs from before this protocol have no receipt. Expired, deleted or missing proof
 refuses new-tag repair; the workflow never redeploys, rolls back or manufactures
