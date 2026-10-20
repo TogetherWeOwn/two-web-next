@@ -124,12 +124,19 @@ describe.each(flows)("%s callback journey failure classification", (flow) => {
       expect(f.consume).toHaveBeenCalledExactlyOnceWith(await hashToken(f.state), flow);
       assertNoAdmission(f, res);
       assertCookies(flow, res);
-      const logs = JSON.stringify([
-        f.warn.mock.calls,
-        f.error.mock.calls,
-        f.info.mock.calls,
-        f.log.mock.calls,
-      ]);
+      const logs = JSON.stringify(
+        [f.warn.mock.calls, f.error.mock.calls, f.info.mock.calls, f.log.mock.calls],
+        (_key, value) =>
+          value instanceof Error
+            ? {
+                ...value,
+                name: value.name,
+                message: value.message,
+                stack: value.stack,
+                cause: value.cause,
+              }
+            : value,
+      );
       expect(logs).not.toContain("InvalidState");
       for (const value of [
         raw,
