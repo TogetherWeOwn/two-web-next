@@ -1,22 +1,56 @@
 // Native fixture proof for the saved-event review acceptance. Runs in the
 // existing Playwright spec path, never in browser-less Vitest CI jobs.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
-import {
-  FIELDS,
-  KEY,
-  ORIGIN,
-  UPDATED,
-  root,
-  savedEventFixture,
-} from "../test/helpers/saved-event-review-fixture.mjs";
+import { build } from "esbuild";
+
+type FixtureModule = typeof import("../test/helpers/saved-event-review-fixture.mjs");
+const root = resolve(".");
+let FIELDS: FixtureModule["FIELDS"];
+let KEY: FixtureModule["KEY"];
+let ORIGIN: FixtureModule["ORIGIN"];
+let UPDATED: FixtureModule["UPDATED"];
 
 test.describe.configure({ mode: "default" });
-let fixture: Awaited<ReturnType<typeof savedEventFixture>>;
+let fixture: Awaited<ReturnType<FixtureModule["savedEventFixture"]>>;
 
 test.beforeAll(async () => {
-  fixture = await savedEventFixture();
+  // Playwright does not transform the fixture's transitive TS/TSX/JSON graph.
+  // Bundle local sources only; keep real dependencies and all runtime behavior.
+  const entry = join(root, "test/helpers/saved-event-review-fixture.mjs");
+  const require = createRequire(entry);
+  const { outputFiles } = await build({
+    entryPoints: [entry],
+    absWorkingDir: root,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    write: false,
+    // Both fixture modules live in test/helpers; preserve their relative paths
+    // to the real root and migrations instead of resolving against a data URL.
+    define: { "import.meta.url": JSON.stringify(pathToFileURL(entry).href) },
+    plugins: [
+      {
+        name: "saved-event-review-native-dependencies",
+        setup(plugin) {
+          plugin.onResolve({ filter: /^[^./]/ }, ({ path }) => ({
+            path: path.startsWith("node:") ? path : pathToFileURL(require.resolve(path)).href,
+            external: true,
+          }));
+        },
+      },
+    ],
+  });
+  const output = outputFiles[0];
+  if (!output) throw new Error("Saved-event review fixture bundle is missing");
+  const loaded: FixtureModule = await import(
+    `data:text/javascript;base64,${Buffer.from(output.text).toString("base64")}`
+  );
+  ({ FIELDS, KEY, ORIGIN, UPDATED } = loaded);
+  fixture = await loaded.savedEventFixture();
 });
 test.afterAll(async () => {
   await fixture?.dispose();
