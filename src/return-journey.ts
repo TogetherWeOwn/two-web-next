@@ -89,6 +89,8 @@ export async function bounceToLogin(c: Ctx): Promise<Response> {
       deleteCookie(c, LOGIN_INTENDED_COOKIE, deleteOpts);
     }
   }
+  c.header("cache-control", "no-store, private");
+  c.header("vary", "Cookie");
   return c.redirect("/auth/discord", 302);
 }
 

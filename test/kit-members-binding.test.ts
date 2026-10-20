@@ -80,12 +80,15 @@ function loadEvent(
     set: (name: string, value: string, options: Record<string, unknown>) => void;
     delete: (name: string, options: Record<string, unknown>) => void;
   },
+  headers: Headers,
 ) {
   return {
     url,
     locals: { status: "guest", session: null },
     cookies,
-    setHeaders() {},
+    setHeaders(values: Record<string, string>) {
+      for (const [name, value] of Object.entries(values)) headers.set(name, value);
+    },
   };
 }
 
@@ -99,6 +102,7 @@ describe("Kit member-board binding cookie emission", () => {
   it("executes the binding and emits a cookie the login-return consumer verifies", async () => {
     const emitted: Array<[string, string, Record<string, unknown>]> = [];
     const removed: Array<[string, Record<string, unknown>]> = [];
+    const headers = new Headers();
     const cookies = {
       set: (name: string, value: string, options: Record<string, unknown>) =>
         emitted.push([name, value, options]),
@@ -106,12 +110,14 @@ describe("Kit member-board binding cookie emission", () => {
     };
 
     await expect(
-      kitLoad(loadEvent(new URL(`${APP}${DESTINATION}`), cookies)),
+      kitLoad(loadEvent(new URL(`${APP}${DESTINATION}`), cookies, headers)),
     ).rejects.toMatchObject({
       status: 302,
       location: "/auth/discord",
     });
 
+    expect(headers.get("cache-control")).toBe("no-store, private");
+    expect(headers.get("vary")).toBe("Cookie");
     expect(removed).toEqual([]);
     expect(emitted).toHaveLength(1);
     const [name, value, options] = emitted[0]!;
@@ -132,6 +138,7 @@ describe("Kit member-board binding cookie emission", () => {
   it("executes the binding clearing path for a rejected destination", async () => {
     const emitted: Array<[string, string, Record<string, unknown>]> = [];
     const removed: Array<[string, Record<string, unknown>]> = [];
+    const headers = new Headers();
     const cookies = {
       set: (name: string, value: string, options: Record<string, unknown>) =>
         emitted.push([name, value, options]),
@@ -139,9 +146,13 @@ describe("Kit member-board binding cookie emission", () => {
     };
 
     await expect(
-      kitLoad(loadEvent(new URL(`${APP}/leaderboards/members?x=${"a".repeat(600)}`), cookies)),
+      kitLoad(
+        loadEvent(new URL(`${APP}/leaderboards/members?x=${"a".repeat(600)}`), cookies, headers),
+      ),
     ).rejects.toMatchObject({ status: 302, location: "/auth/discord" });
 
+    expect(headers.get("cache-control")).toBe("no-store, private");
+    expect(headers.get("vary")).toBe("Cookie");
     expect(emitted).toEqual([]);
     expect(removed).toEqual([
       [LOGIN_INTENDED_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "lax" }],
