@@ -68,6 +68,8 @@
     going: "rsvp-going",
     withdraw: "rsvp-withdraw",
     confirmed: "rsvp-confirmed",
+    maybe: "rsvp-maybe",
+    notGoing: "rsvp-not-going",
     check: "rsvp-check",
     closed: "rsvp-closed",
     paused: "rsvp-paused",
@@ -354,7 +356,19 @@
     controls.appendChild(el);
   }
 
+  function removeSoft() {
+    // A settled write supersedes the stored soft answer: the neutral line
+    // goes with the source controls so a stale answer can never survive
+    // beside the new state.
+    [TESTID.maybe, TESTID.notGoing].forEach(function (t) {
+      var n = root.querySelector('[data-testid="' + t + '"]');
+      if (n && n.parentNode) n.parentNode.removeChild(n);
+      else if (n && n.remove) n.remove();
+    });
+  }
+
   function paintConfirmed() {
+    removeSoft();
     // Claim path: a going PUT from the waitlist position swaps the position
     // line for the confirmation and removes the claim/leave controls.
     var claimed = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
@@ -433,6 +447,7 @@
     // Join path: a waitlisted PUT swaps the join CTA(s) for the position
     // line; confirmed/withdraw leftovers from a re-answer are dropped too.
     // A settled place in line supersedes the full-event join invitation.
+    removeSoft();
     [TESTID.going, TESTID.waitlistJoin, TESTID.confirmed, TESTID.withdraw, TESTID.full].forEach(
       function (t) {
         var n = root.querySelector('[data-testid="' + t + '"]');
@@ -562,7 +577,13 @@
       });
     }
     var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
-    if (full && join) {
+    // The soft branch deliberately omits the full notice at SSR (a soft
+    // answer holds no seat); a capacity refresh must not paint what SSR
+    // omits. The change control above still tracks capacity either way.
+    var soft = root.querySelector(
+      '[data-testid="' + TESTID.maybe + '"],[data-testid="' + TESTID.notGoing + '"]',
+    );
+    if (full && join && !soft) {
       if (!message) {
         message = document.createElement("p");
         message.setAttribute("role", "status");
@@ -578,10 +599,23 @@
   });
 
   function paintWithdrawn() {
+    // The soft line anchors the join-CTA replacement exactly like the
+    // confirmed/position lines; the soft change control (a going- or
+    // waitlist-testidd button) goes with the other source controls.
     var conf = root.querySelector(
-      '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]',
+      '[data-testid="' +
+        TESTID.confirmed +
+        '"],[data-testid="' +
+        TESTID.waitlistPosition +
+        '"],[data-testid="' +
+        TESTID.maybe +
+        '"],[data-testid="' +
+        TESTID.notGoing +
+        '"]',
     );
     [
+      TESTID.going,
+      TESTID.waitlistJoin,
       TESTID.waitlistClaim,
       TESTID.waitlistLeave,
       TESTID.withdraw,

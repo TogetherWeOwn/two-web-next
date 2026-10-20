@@ -11,6 +11,8 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
@@ -50,6 +52,8 @@ const occupancy = $derived(model.goingOccupancy);
 const full = $derived(model.capacity !== null && occupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
+const isMaybe = $derived(model.answer?.status === "maybe");
+const soft = $derived(isMaybe || model.answer?.status === "not_going");
 const signIn = $derived(loginUrl(model.joinReturnTo));
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
@@ -179,6 +183,20 @@ const lineup = $derived(
               <button type="submit" name="status" value="going" data-testid={WAITLIST_CLAIM_TESTID} data-action="going">{RSVP_COPY.waitlistClaim}</button>
             {/if}
             <button type="submit" name="status" value="withdraw" data-testid={WAITLIST_LEAVE_TESTID} data-action="withdraw">{RSVP_COPY.waitlistLeave}</button>
+          {:else if soft}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the soft-answer notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
+            <p role="status" tabindex={-1} data-testid={isMaybe ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}>
+              {isMaybe ? RSVP_COPY.maybe : RSVP_COPY.notGoing}
+            </p>
+            {#if !model.rsvpOpen}
+              <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
+            {:else if full}
+              <button type="submit" name="status" value="waitlisted" data-testid={WAITLIST_JOIN_TESTID} data-action="waitlisted">{RSVP_COPY.waitlistJoin}</button>
+              <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
+            {:else}
+              <button type="submit" name="status" value="going" data-testid={RSVP_GOING_TESTID} data-action="going">{RSVP_COPY.cta}</button>
+              <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
+            {/if}
           {:else if !model.rsvpOpen}
             <!-- paused with no answer: the notice above is the whole state -->
           {:else if full}
