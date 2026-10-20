@@ -22,7 +22,7 @@ const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
 // Only the joins signal reads the database, so only it renders the outage.
-const unavailable = !available && !estimated;
+const unavailable = $derived(!available && !estimated);
 
 // Peak summary copy mirrors the Hono PeakLine exactly (src/hotzones/pages.tsx).
 type Peak = { weekday: number; hour: number; count: number };
