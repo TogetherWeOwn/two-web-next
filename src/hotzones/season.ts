@@ -13,6 +13,15 @@ const YEAR_RE = /^(\d{4})$/;
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const QUARTER_RE = /^(\d{4})-Q([1-4])$/;
 
+// Date.UTC maps years 0..99 to 1900..1999; setUTCFullYear restores the
+// literal year. All call sites build month boundaries (day 1), so the
+// Feb-29 overflow hazard of setUTCFullYear cannot trigger here.
+function utcMonthStart(year: number, monthIndex: number): Date {
+  const d = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0));
+  d.setUTCFullYear(year);
+  return d;
+}
+
 // Parse the raw `?season=` query value. `null`/`undefined` = absent = `all`.
 // Returns `null` when the value is present but invalid (caller answers 400,
 // never a silent fallback window). Empty string is invalid, not absent.
@@ -24,8 +33,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const year = Number(m[1]);
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0)),
-      end: new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0)),
+      start: utcMonthStart(year, 0),
+      end: utcMonthStart(year + 1, 0),
       label: raw,
     };
   }
@@ -35,10 +44,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const month = Number(m[2]);
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0)),
-      end: new Date(
-        Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1, 0, 0, 0, 0),
-      ),
+      start: utcMonthStart(year, month - 1),
+      end: utcMonthStart(month === 12 ? year + 1 : year, month === 12 ? 0 : month),
       label: raw,
     };
   }
@@ -49,8 +56,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const startMonth = (quarter - 1) * 3;
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, startMonth, 1, 0, 0, 0, 0)),
-      end: new Date(Date.UTC(year, startMonth + 3, 1, 0, 0, 0, 0)),
+      start: utcMonthStart(year, startMonth),
+      end: startMonth + 3 === 12 ? utcMonthStart(year + 1, 0) : utcMonthStart(year, startMonth + 3),
       label: raw,
     };
   }
