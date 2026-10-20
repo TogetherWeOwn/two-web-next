@@ -139,6 +139,16 @@ const lineup = $derived(
           <p data-testid="event-venue">{model.location}</p>
         </dd>
       </div>
+    {:else}
+      <!-- Venue-less detail names the gap instead of hiding the row; list cards stay clean. -->
+      <div>
+        <dt>Where</dt>
+        <dd>
+          <p data-testid="event-venue-tbd">
+            Venue TBD — check <a href="/discord">Discord</a> for updates.
+          </p>
+        </dd>
+      </div>
     {/if}
     <div>
       <dt>The lineup</dt>
@@ -295,6 +305,33 @@ const lineup = $derived(
         Attendees shown at page load.{" "}
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
       </p>
+    </section>
+  {:else if !model.viewerMember && !model.viewerUsername}
+    <!-- Guest: the lineup count shows above, so the roster names itself and points at
+         sign-in with this event as ?next= instead of vanishing. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
+      <h2 id="event-roster-heading">Who's going</h2>
+      <p>
+        {model.goingCount} going —
+        <a href={loginUrl(model.path)}>sign in to see who's in</a>.
+      </p>
+    </section>
+  {:else if !model.viewerMember}
+    <!-- Signed-in non-member: members-only explainer with the join path. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-members-only">
+      <h2 id="event-roster-heading">Who's going</h2>
+      <p>
+        Members only —
+        <a href="/join?next={encodeURIComponent(model.path)}">join the Discord</a>
+        to see who's in.
+      </p>
+    </section>
+  {:else}
+    <!-- Member on an empty page-1 roster: honest empty state. Page>1 keeps the existing
+         stale-page copy above. None of these states carries the attendees-live mount. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
+      <h2 id="event-roster-heading">Who's going (0)</h2>
+      <p>No RSVPs yet — RSVP to start the list.</p>
     </section>
   {/if}
   {@html copyLinkIsland}
