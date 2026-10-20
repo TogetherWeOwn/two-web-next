@@ -411,6 +411,37 @@ for (const suite of ACCEPTANCE_SUITES) {
     assert.deepEqual(baselineBytes(dest), { "page.png": "reviewed-page" });
   });
 
+  test(`${suite.name}: actual-looking files in baseline dirs remain copies`, (t) => {
+    const absent = acceptanceFixture(t, suite);
+    writeBytes(join(absent.artifact, suite.snapshots, "page-actual.png"), "copy-bytes");
+
+    const absentResult = attemptAcceptance(suite, absent.artifact, absent.workspace);
+
+    assert.equal(absentResult.ok, true, absentResult.message);
+    assert.deepEqual(baselineBytes(absent.dest), { "page-actual.png": "copy-bytes" });
+    assert.equal(
+      baselineBytes(absent.dest)["page.png"],
+      undefined,
+      "a baseline-directory filename must not grant reviewed-actual authority",
+    );
+
+    const differing = acceptanceFixture(t, suite);
+    writeBytes(join(differing.dest, "page-actual.png"), "checkout-bytes");
+    writeBytes(join(differing.artifact, suite.snapshots, "page-actual.png"), "copy-bytes");
+    writeBytes(join(differing.artifact, suite.actuals, "other-actual.png"), "reviewed-other");
+    const before = baselineBytes(differing.dest);
+
+    const differingResult = attemptAcceptance(suite, differing.artifact, differing.workspace);
+
+    assert.equal(differingResult.ok, false, "a differing checkout target must be refused");
+    assert.match(differingResult.message, /page-actual\.png/);
+    assert.deepEqual(
+      baselineBytes(differing.dest),
+      before,
+      "the stale-copy refusal must not apply the unrelated reviewed actual",
+    );
+  });
+
   test(`${suite.name}: conflicting actuals abort unrelated additions and replacements`, (t) => {
     const { workspace, artifact, dest } = acceptanceFixture(t, suite);
     writeBytes(join(dest, "a-replace.png"), "checkout-page");
