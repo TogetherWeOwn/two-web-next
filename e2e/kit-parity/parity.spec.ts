@@ -1418,7 +1418,19 @@ test.describe("kit: member-board visuals", () => {
       const context = await browser.newContext({
         baseURL: kit.origin,
         ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
-        extraHTTPHeaders: { cookie },
+        // Keep the session in the jar so a later status probe shares one
+        // Cookie header with it. Raw extra headers collide with jar cookies
+        // on the second navigation. Preserve the issued cookie's attributes.
+        storageState: {
+          cookies: (await api(hono).storageState()).cookies
+            .filter((session) => session.name === "__Host-two_session")
+            .map((session) => ({
+              ...session,
+              domain: new URL(kit.origin).hostname,
+              value: cookie.slice(cookie.indexOf("=") + 1),
+            })),
+          origins: [],
+        },
       });
       const pageErrors: string[] = [];
       try {
@@ -1435,6 +1447,20 @@ test.describe("kit: member-board visuals", () => {
           await page.setViewportSize(viewport.size);
           const response = await page.goto(path);
           expect(response?.status(), `kit ${path} @ ${viewport.name}`).toBe(200);
+          const cookieHeaders = (await response!.request().headersArray()).filter(
+            (header) => header.name.toLowerCase() === "cookie",
+          );
+          expect(cookieHeaders.length, "one browser Cookie header").toBe(1);
+          const cookieNames = cookieHeaders[0]!.value
+            .split(/;\s*/)
+            .map((pair) => pair.slice(0, pair.indexOf("=")));
+          expect(cookieNames.filter((name) => name === "__Host-two_session")).toHaveLength(1);
+          if (viewport.name === "mobile") {
+            expect(
+              cookieNames.filter((name) => name === "__Host-two_session_status"),
+              "second navigation replays the status probe alongside the session",
+            ).toHaveLength(1);
+          }
           await expect(page.getByRole("heading", { name: "Member leaderboard" })).toBeVisible();
           await expect(page.getByRole("navigation", { name: "Board scope" })).toBeVisible();
           await page.waitForLoadState("networkidle");
