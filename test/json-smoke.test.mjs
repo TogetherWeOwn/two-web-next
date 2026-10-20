@@ -9,6 +9,7 @@ import { test } from "node:test";
 import {
   JSON_SMOKE_CHECKS,
   JSON_SMOKE_EXPOSURE_GUARDS,
+  PREDECESSOR_GRACE_MS,
   clearedCookieProblems,
   jsonSmoke,
   parseSetCookie,
@@ -666,6 +667,14 @@ test("fails rotation when the page view leaves the old cookie authenticating", a
   // The unrotated cookie is still the live one, so logout is judged on its own.
   assert.ok(result.output.includes("PASS logout revokes session"), result.output);
   assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+test("pins the production predecessor grace default to the product window", () => {
+  // The deploy CLI is the only caller that uses this default (tests override
+  // it with a scaled window), so pin it to src/sessions.ts
+  // SESSION_PREDECESSOR_GRACE_SECONDS = 10: drift to 0 would reintroduce
+  // instant-death false-red deploys, and a large value would tolerate replay.
+  assert.equal(PREDECESSOR_GRACE_MS, 10_000);
 });
 
 test("passes rotation when the old cookie dies once predecessor grace ends", async (t) => {

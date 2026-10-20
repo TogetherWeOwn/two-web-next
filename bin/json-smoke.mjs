@@ -754,7 +754,13 @@ export async function jsonSmoke(
       let old = await authenticates(cookie);
       while (graceApplies && old.verdict === true) {
         const remaining = rotatedAt + predecessorGraceMs - Date.now();
-        if (remaining <= 0) break;
+        if (remaining <= 0) {
+          // The last probe may have started inside the window and returned
+          // a pre-deadline verdict after it; judge one fresh post-deadline
+          // probe instead of that stale verdict.
+          old = await authenticates(cookie);
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, Math.min(replayPollMs, remaining)));
         old = await authenticates(cookie);
       }
