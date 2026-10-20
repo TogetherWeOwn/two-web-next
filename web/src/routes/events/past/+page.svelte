@@ -14,7 +14,6 @@ import {
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
-import { subscriptionHelpHtml } from "../../../../../src/events/subscription-help";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -47,7 +46,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
       <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
     </p>
-    {@html subscriptionHelpHtml(appUrl)}
+    {@html data.subscriptionHelp}
     <div data-archive-state>
       {#if rows.length === 0}
         {#if totalPages === 0}
