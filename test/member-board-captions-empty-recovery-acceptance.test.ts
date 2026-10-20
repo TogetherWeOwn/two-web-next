@@ -245,7 +245,7 @@ for (const twin of TWINS) {
     it("relative-empty links the overall scope for the same season and game", () => {
       const query: BoardQuery = { season: "2026-09", scope: "relative", activity: "chess" };
       const region = boardRegion(renderTwin(twin, query, []), `${twin} relative-empty`);
-      expect(region).toContain(`href="${boardPath({ ...query, scope: "overall" })}"`);
+      expect(region).toContain(`href="${boardPath({ ...query, scope: "overall" }).replace(/&/g, "&amp;")}"`);
     });
 
     it("relative-empty names the ranked path and links events", () => {
