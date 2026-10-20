@@ -72,12 +72,17 @@ test("the sequential smoke holds at most one throttle window of QA logins", () =
 // their spec to satisfy this pin.
 function countQaLoginPosts(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
-  return (source.match(/\.post\(\s*"\/auth\/qa\//g) ?? []).length;
+  return (source.match(/\.post\(\s*["`]\/auth\/qa\//g) ?? []).length;
 }
 
-function countDirectQaLoginPosts(relativePath) {
+// Absolute QA URLs (staging-style `${origin}/auth/qa/...`) would evade the
+// inline counter above while spending the same throttle budget, so they are
+// pinned to zero across this window: keep window QA logins inline or behind
+// the qaLogin helper. (A variable-held QA path still evades static counting —
+// treat any new post(variable) in this window as a budget question in review.)
+function countAbsoluteQaLoginPosts(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
-  return (source.match(/\.post\(\s*["`]\/auth\/qa\//g) ?? []).length;
+  return (source.match(/\.post\(\s*["`]https?:\/\/[^"`]*\/auth\/qa\//g) ?? []).length;
 }
 
 test("teardown and parity QA logins stay pinned inside the throttle window", () => {
@@ -99,7 +104,14 @@ test("teardown and parity QA logins stay pinned inside the throttle window", () 
     .map((row) => `${row.file}: ${row.count}`)
     .join(", ");
   const directSites = countLogins()
-    .map((row) => ({ file: row.file, count: countDirectQaLoginPosts(`./${row.file}`) }))
+    .map((row) => ({ file: row.file, count: countQaLoginPosts(`./${row.file}`) }))
+    .filter((row) => row.count > 0);
+  const absoluteSites = [
+    "./local-global-teardown.ts",
+    ...countLogins().map((row) => `./${row.file}`),
+    ...parityPerFile.map((row) => `./${row.file}`),
+  ]
+    .map((file) => ({ file, count: countAbsoluteQaLoginPosts(file) }))
     .filter((row) => row.count > 0);
 
   assert.equal(
@@ -123,6 +135,13 @@ test("teardown and parity QA logins stay pinned inside the throttle window", () 
     `journey specs must log in through qaLogin (counted by the sibling test), not direct POSTs: ` +
       `${directSites.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
       `Route the new login through qaLogin so the budget counts it.`,
+  );
+  assert.deepEqual(
+    absoluteSites,
+    [],
+    `QA logins in this window must use inline /auth/qa/ paths (counted above), not absolute URLs: ` +
+      `${absoluteSites.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
+      `An absolute QA URL spends the same throttle budget invisibly.`,
   );
   // Green-run window: journeys + parity, with the DB-gated teardown at 0.
   // 12 is the restored pre-marginal-login ceiling against the 10/min sliding
