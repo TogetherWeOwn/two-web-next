@@ -221,12 +221,19 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
 // configuration means a no-op upsert so DB-free sign-in tests still work.
 // No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
 // the migrate workflow.
-async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
+function rosterSqlFor(c: Context<{ Bindings: Env }>): {
+  sql: Sql | null;
+  close?: () => Promise<void>;
+} {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
-  if (injected) return injected;
+  if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
-  if (!url) return null;
-  return postgres(url, databaseOptions) as unknown as Sql;
+  if (!url) return { sql: null };
+  const client = postgres(url, databaseOptions);
+  return {
+    sql: client as unknown as Sql,
+    close: () => client.end({ timeout: 0 }),
+  };
 }
 
 /** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
@@ -316,12 +323,19 @@ async function issueSession(
   // carries no moderator field — `users` has no such column, and the flag is
   // recomputed from Discord role IDs into the session row only.
   try {
-    await upsertRosterUser(await rosterSqlFor(c), {
-      id: row.userId,
-      username: row.username,
-      avatar: row.avatar,
-      member: row.member,
-    });
+    const roster = rosterSqlFor(c);
+    try {
+      await upsertRosterUser(roster.sql, {
+        id: row.userId,
+        username: row.username,
+        avatar: row.avatar,
+        member: row.member,
+      });
+    } finally {
+      // Dedicated optional client only: never close injected/shared or session
+      // storage. SQL limits cancel backend work; end also settles pending I/O.
+      await roster.close?.();
+    }
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
