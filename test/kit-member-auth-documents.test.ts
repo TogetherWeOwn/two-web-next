@@ -5,7 +5,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { resolveRouteOwner } from "../src/route-ownership";
 import { SESSION_COOKIE } from "../src/session-cookie";
-import { SESSION_TTL_SECONDS, hashToken, newSessionToken } from "../src/sessions";
+import {
+  SESSION_PREDECESSOR_GRACE_SECONDS,
+  SESSION_TTL_SECONDS,
+  hashToken,
+  newSessionToken,
+} from "../src/sessions";
 import {
   BOARD,
   SELF,
@@ -318,38 +323,58 @@ describe.each([
 
 describe("member-issued probe reads are authority-neutral", () => {
   it("survives token rotation without a new cookie, then reports real revocation without writes", async () => {
-    const f = kitMemberAuthFixture(render);
-    const login = await f.login();
-    const document = await f.request(BOARD, { headers: { cookie: login.cookie } });
-    expect(probe(document)).toBeDefined();
-    const cookie = pair(probe(document)!);
-    const replacementHash = await hashToken(newSessionToken());
-    expect(
-      await f.sessions.rotate(login.tokenHash, {
-        tokenHash: replacementHash,
+    vi.useFakeTimers();
+    try {
+      const f = kitMemberAuthFixture(render);
+      const login = await f.login();
+      const document = await f.request(BOARD, { headers: { cookie: login.cookie } });
+      expect(probe(document)).toBeDefined();
+      const cookie = pair(probe(document)!);
+      const replacementHash = await hashToken(newSessionToken());
+      expect(
+        await f.sessions.rotate(login.tokenHash, {
+          tokenHash: replacementHash,
+          userId: MEMBER,
+          username: "Fixture member",
+          avatar: null,
+          member: true,
+          moderator: false,
+          expiresAt: new Date(Date.now() + 3600_000),
+        }),
+      ).toBe(true);
+      // Predecessor grace: the rotated predecessor stays readable while the
+      // successor lineage is live, then refuses once the 10s window lapses.
+      expect(await f.sessions.get(login.tokenHash)).toMatchObject({
         userId: MEMBER,
-        username: "Fixture member",
-        avatar: null,
         member: true,
-        moderator: false,
-        expiresAt: new Date(Date.now() + 3600_000),
-      }),
-    ).toBe(true);
-    expect(await f.sessions.get(login.tokenHash)).toBeNull();
-    const writes = mutations(f);
-    const status = await f.request("/auth/status", { headers: { cookie } });
-    expect(await status.json()).toEqual({ authenticated: true });
-    expect(status.headers.getSetCookie()).toEqual([]);
-    // A probe alone can check a lineage, but cannot enter a member document.
-    const refused = await f.request(BOARD, { headers: { cookie } });
-    expect(refused.status).toBe(302);
-    expect(refused.headers.getSetCookie()).toEqual([]);
-    for (const write of writes) expect(write).not.toHaveBeenCalled();
-    await f.sessions.revoke(replacementHash);
-    const revoked = await f.request("/auth/status", { headers: { cookie } });
-    expect(revoked.status).toBe(200);
-    expect(await revoked.json()).toEqual({ authenticated: false });
-    expect(revoked.headers.getSetCookie()).toEqual([]);
+      });
+      expect(await f.sessions.get(replacementHash)).toMatchObject({
+        userId: MEMBER,
+        member: true,
+      });
+      vi.setSystemTime(Date.now() + SESSION_PREDECESSOR_GRACE_SECONDS * 1000 + 1);
+      expect(await f.sessions.get(login.tokenHash)).toBeNull();
+      expect(await f.sessions.get(replacementHash)).toMatchObject({
+        userId: MEMBER,
+        member: true,
+      });
+      const writes = mutations(f);
+      const status = await f.request("/auth/status", { headers: { cookie } });
+      expect(await status.json()).toEqual({ authenticated: true });
+      expect(status.headers.getSetCookie()).toEqual([]);
+      // A probe alone can check a lineage, but cannot enter a member document.
+      const refused = await f.request(BOARD, { headers: { cookie } });
+      expect(refused.status).toBe(302);
+      expect(refused.headers.getSetCookie()).toEqual([]);
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      await f.sessions.revoke(replacementHash);
+      const revoked = await f.request("/auth/status", { headers: { cookie } });
+      expect(revoked.status).toBe(200);
+      expect(await revoked.json()).toEqual({ authenticated: false });
+      expect(revoked.headers.getSetCookie()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a store outage is unknown (503), and an expired member lineage is false, never a cookie mutation", async () => {
