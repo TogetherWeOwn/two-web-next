@@ -205,7 +205,11 @@ the number of flaky rows. The Markdown summary calls out that retries and
 report-config provenance must be checked. `unexpected` becomes `failed` with
 the first-line failure message. Failure and skip diagnostics are bounded and
 scrubbed for known credential forms, email/member identifiers, long numeric
-IDs, URLs and the configured QA token before they enter the ledger. Redaction
+IDs, URLs and the configured QA token before they enter the ledger. Redaction finds complete HTTP(S) URL and configured-token spans in the original
+text and merges overlaps before inserting any redaction marker. A token, email or
+numeric ID inside a URL cannot leave its path/query tail visible, and a configured
+token crossing a URL boundary cannot retain a partial value. It covers the entire `__Host-` cookie family, including
+signed OAuth/join/return-state cookies, not only session cookies. Redaction
 handles quoted keys and compound credential names (for example `client_secret`,
 `db_password`, `secret_key`, `token_value`, private keys and session IDs), including
 underscore, hyphen and camelCase affixes and common spaced labels (`API Key`,

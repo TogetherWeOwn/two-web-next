@@ -277,7 +277,55 @@ for (const [label, message, expected] of [
   });
 }
 
+const hostCookieKeys = [
+  "__Host-two_session",
+  "__Host-two_session_status",
+  "__Host-two_oauth_state",
+  "__Host-two_join_state",
+  "__Host-two_join_next",
+  "__Host-two_join_result",
+  "__Host-two_join_source",
+  "__Host-two_login_next",
+  "__Host-two_login_intended",
+  "__Host-two_expired_write",
+  "__Host-future_state",
+];
+
+const urlDiagnostics = [
+  "https://example.com/members/fixture@example.com/profile?code=fixture-url-canary",
+  "https://example.com/members/123456789012345678/profile?code=fixture-url-canary",
+  "https://example.com/callback?qa=qa-token-canary-value&code=fixture-url-canary",
+  "https://example.com/qa-token-canary-value/profile?code=fixture-url-canary",
+  "https://fixture@example.com/callback?code=fixture-url-canary",
+  "HTTP://example.com/members/123456789012345678901?signature=fixture-url-canary",
+];
+
+for (const url of urlDiagnostics) {
+  test(`URL redaction removes the complete original span: ${url}`, () => {
+    const summary = summarizeJourneys(
+      reportWith([flakySpec("flaky journey", `Timeout: GET ${url}`)]),
+      { qaAuthToken: "qa-token-canary-value" },
+    );
+    assert.equal(summary.journeys[0].reason, "Timeout: GET [redacted url]");
+  });
+}
+
+test("overlapping URL and configured-token spans cannot leave either one's tail", () => {
+  for (const [message, token] of [
+    ["prefixhttps://example.com/path?code=fixture-url-canary", "prefixhttps://example.com"],
+    ["https://example.com/path suffix-canary", "path suffix-canary"],
+    ["https://example.com/a between https://example.org/b", "a between https://example.org"],
+  ]) {
+    const summary = summarizeJourneys(
+      reportWith([flakySpec("flaky journey", `Timeout: ${message}`)]),
+      { qaAuthToken: token },
+    );
+    assert.equal(summary.journeys[0].reason, "Timeout: [redacted url]");
+  }
+});
+
 const compoundCredentialKeys = [
+  ...hostCookieKeys,
   "client_secret",
   "db_password",
   "user_password",
@@ -724,6 +772,53 @@ test("gate scrubs compound fields and auth schemes on every diagnostic path and 
       assert.ok(output.includes(expected), "each output must contain the exact scrubbed reason");
     }
     assert.ok(!streams.err.includes("fixture-canary-value"));
+  }
+});
+
+test("gate removes whole URLs and host cookie values on every diagnostic path and output", () => {
+  const previousToken = process.env.QA_AUTH_TOKEN;
+  try {
+    process.env.QA_AUTH_TOKEN = "qa-token-canary-value";
+    for (const [message, expected] of [
+      ...urlDiagnostics.map((url) => [`GET ${url}`, "GET [redacted url]"]),
+      ...hostCookieKeys.map((key) => [
+        `${key}=fixture-cookie-canary`,
+        "[redacted credential data]",
+      ]),
+    ]) {
+      const paths = gateScratch("journey-gate-url-cookie-");
+      const failed = flakySpec("failed journey", message);
+      failed.tests[0].status = "unexpected";
+      writeReport(
+        paths.reportPath,
+        reportWith([
+          flakySpec("flaky journey", message),
+          failed,
+          skippedSpec("skipped journey", message),
+          statusSpec("unknown journey", message),
+        ]),
+      );
+      const streams = gateStreams();
+      assert.equal(runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr }), 1);
+      const json = readFileSync(paths.ledgerJsonPath, "utf8");
+      assert.deepEqual(
+        JSON.parse(json).journeys.map((journey) => journey.reason),
+        [expected, expected, expected, `unknown test status: ${expected}`],
+      );
+      for (const output of [
+        json,
+        readFileSync(paths.ledgerMdPath, "utf8"),
+        readFileSync(paths.stepSummaryPath, "utf8"),
+        streams.out,
+      ]) {
+        assert.doesNotMatch(output, /fixture-(?:url|cookie)-canary|qa-token-canary-value/);
+        assert.ok(output.includes(expected), "each output contains the exact scrubbed reason");
+      }
+      assert.doesNotMatch(streams.err, /fixture-(?:url|cookie)-canary|qa-token-canary-value/);
+    }
+  } finally {
+    if (previousToken === undefined) delete process.env.QA_AUTH_TOKEN;
+    else process.env.QA_AUTH_TOKEN = previousToken;
   }
 });
 

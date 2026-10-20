@@ -37,14 +37,39 @@ function skipReason(test, qaAuthToken) {
 
 function scrubDiagnosticReason(value, qaAuthToken) {
   if (typeof value !== "string") return "";
-  // Scrub before normalization or truncation can split a configured token.
-  const tokenScrubbed =
-    typeof qaAuthToken === "string" && qaAuthToken
-      ? value.split(qaAuthToken).join("[redacted token]")
-      : value;
-  return cleanReason(tokenScrubbed)
+  // Find URL/token spans in the original text: replacing either first can split
+  // the other and leave a tail. Merge overlaps before inserting any markers.
+  const spans = Array.from(value.matchAll(/https?:\/\/\S+/gi), (match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    marker: "[redacted url]",
+  }));
+  if (typeof qaAuthToken === "string" && qaAuthToken) {
+    for (
+      let start = value.indexOf(qaAuthToken);
+      start !== -1;
+      start = value.indexOf(qaAuthToken, start + 1)
+    ) {
+      spans.push({ start, end: start + qaAuthToken.length, marker: "[redacted token]" });
+    }
+  }
+  spans.sort((a, b) => a.start - b.start);
+  let scrubbed = "";
+  let cursor = 0;
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    while (i + 1 < spans.length && spans[i + 1].start < span.end) {
+      const next = spans[++i];
+      span.end = Math.max(span.end, next.end);
+      if (next.marker === "[redacted url]") span.marker = next.marker;
+    }
+    scrubbed += value.slice(cursor, span.start) + span.marker;
+    cursor = span.end;
+  }
+  // Normalization and truncation must not split a configured token either.
+  return cleanReason(scrubbed + value.slice(cursor))
     .replace(
-      /["']?\b[\w-]*(?:authorization|cookie|x-two-qa-auth|token|password|passwd|api[_\s-]*key|secret|private[_\s-]*key|session)[\w\s-]*["']?\s*[:=].*$/i,
+      /["']?\b[\w-]*(?:__Host-[\w-]*|authorization|cookie|x-two-qa-auth|token|password|passwd|api[_\s-]*key|secret|private[_\s-]*key|session)[\w\s-]*["']?\s*[:=].*$/i,
       "[redacted credential data]",
     )
     .replace(
@@ -57,7 +82,6 @@ function scrubDiagnosticReason(value, qaAuthToken) {
       "[redacted member data]",
     )
     .replace(/\b\d{17,}\b/g, "[redacted id]")
-    .replace(/https?:\/\/\S+/gi, "[redacted url]")
     .slice(0, MAX_REASON_LENGTH);
 }
 
