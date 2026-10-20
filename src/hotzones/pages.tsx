@@ -98,78 +98,81 @@ export const HotzonesIndexPage: FC<{
   const voicePeak = peakCell(voice);
   const gamesPeak = peakCell(games);
   return (
-  <Layout
-    title="Hot zones — Together We Own"
-    canonical={canonicalUrl(appUrl, season === "all" ? "/hotzones" : `/hotzones?season=${season}`)}
-    shareDescription="When the community is most active, by hour and weekday."
-    robots="noindex, follow"
-    theme="schedule"
-  >
-    <SiteHeader
-      active="events"
-      loginReturnTo={season === "all" ? "/hotzones" : `/hotzones?season=${season}`}
+    <Layout
+      title="Hot zones — Together We Own"
+      canonical={canonicalUrl(
+        appUrl,
+        season === "all" ? "/hotzones" : `/hotzones?season=${season}`,
+      )}
+      shareDescription="When the community is most active, by hour and weekday."
+      robots="noindex, follow"
+      theme="schedule"
     >
-      <a class="btn" href="/discord">
-        Open Discord
-      </a>
-    </SiteHeader>
-    <main class="events-page" id="main" tabindex={-1}>
-      <p class="strap">Activity rhythms</p>
-      <h1>Hot zones</h1>
-      <p>
-        Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
-        {eventCount} scheduled gatherings.
-      </p>
-      <p>
-        Successful joins only (added or already a member); denied, error and degraded attempts never
-        count.
-      </p>
-      {retentionNote ? <p>{retentionNote}</p> : null}
-      <nav aria-label="Signals">
-        <ul>
-          <li>
-            <a href="/hotzones/joins">Joins heatmap</a>
-          </li>
-          <li>
-            <a href="/hotzones/voice">Voice heatmap</a>
-          </li>
-          <li>
-            <a href="/hotzones/games">Games heatmap</a>
-          </li>
-        </ul>
-      </nav>
-      <section aria-labelledby="hotzones-joins-heading">
-        <h2 id="hotzones-joins-heading">
-          <a href="/hotzones/joins">Joins</a>
-        </h2>
-        {!available ? (
-          <JoinsOutageLine />
-        ) : (
-          <>
-            {joinsPeak ? <PeakLine peak={joinsPeak} estimated={false} unit="joins" /> : null}
-            <Grid cells={joins} caption={`Join activity for season ${season}`} />
-          </>
-        )}
-      </section>
-      <section aria-labelledby="hotzones-voice-heading">
-        <h2 id="hotzones-voice-heading">
-          <a href="/hotzones/voice">Voice</a>
-        </h2>
-        <p>Estimated voice activity (estimates until calibration).</p>
-        {voicePeak ? <PeakLine peak={voicePeak} estimated /> : null}
-        <Grid cells={voice} caption={`Estimated voice activity for season ${season}`} />
-      </section>
-      <section aria-labelledby="hotzones-games-heading">
-        <h2 id="hotzones-games-heading">
-          <a href="/hotzones/games">Games</a>
-        </h2>
-        <p>Estimated games activity (estimates until calibration).</p>
-        {gamesPeak ? <PeakLine peak={gamesPeak} estimated /> : null}
-        <Grid cells={games} caption={`Estimated games activity for season ${season}`} />
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+      <SiteHeader
+        active="events"
+        loginReturnTo={season === "all" ? "/hotzones" : `/hotzones?season=${season}`}
+      >
+        <a class="btn" href="/discord">
+          Open Discord
+        </a>
+      </SiteHeader>
+      <main class="events-page" id="main" tabindex={-1}>
+        <p class="strap">Activity rhythms</p>
+        <h1>Hot zones</h1>
+        <p>
+          Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
+          {eventCount} scheduled gatherings.
+        </p>
+        <p>
+          Successful joins only (added or already a member); denied, error and degraded attempts
+          never count.
+        </p>
+        {retentionNote ? <p>{retentionNote}</p> : null}
+        <nav aria-label="Signals">
+          <ul>
+            <li>
+              <a href="/hotzones/joins">Joins heatmap</a>
+            </li>
+            <li>
+              <a href="/hotzones/voice">Voice heatmap</a>
+            </li>
+            <li>
+              <a href="/hotzones/games">Games heatmap</a>
+            </li>
+          </ul>
+        </nav>
+        <section aria-labelledby="hotzones-joins-heading">
+          <h2 id="hotzones-joins-heading">
+            <a href="/hotzones/joins">Joins</a>
+          </h2>
+          {!available ? (
+            <JoinsOutageLine />
+          ) : (
+            <>
+              {joinsPeak ? <PeakLine peak={joinsPeak} estimated={false} unit="joins" /> : null}
+              <Grid cells={joins} caption={`Join activity for season ${season}`} />
+            </>
+          )}
+        </section>
+        <section aria-labelledby="hotzones-voice-heading">
+          <h2 id="hotzones-voice-heading">
+            <a href="/hotzones/voice">Voice</a>
+          </h2>
+          <p>Estimated voice activity (estimates until calibration).</p>
+          {voicePeak ? <PeakLine peak={voicePeak} estimated /> : null}
+          <Grid cells={voice} caption={`Estimated voice activity for season ${season}`} />
+        </section>
+        <section aria-labelledby="hotzones-games-heading">
+          <h2 id="hotzones-games-heading">
+            <a href="/hotzones/games">Games</a>
+          </h2>
+          <p>Estimated games activity (estimates until calibration).</p>
+          {gamesPeak ? <PeakLine peak={gamesPeak} estimated /> : null}
+          <Grid cells={games} caption={`Estimated games activity for season ${season}`} />
+        </section>
+      </main>
+      <SiteFooter />
+    </Layout>
   );
 };
 

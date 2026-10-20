@@ -6,8 +6,18 @@ import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 // gridHtml comes only from the escaped server-side renderHotzoneGrid output.
-const { signal, season, gridHtml, total, eventCount, retentionNote, estimated, appUrl, available, peak } =
-  $derived(data);
+const {
+  signal,
+  season,
+  gridHtml,
+  total,
+  eventCount,
+  retentionNote,
+  estimated,
+  appUrl,
+  available,
+  peak,
+} = $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
