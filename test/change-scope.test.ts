@@ -378,6 +378,17 @@ describe("skip_e2e verdict", () => {
     expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
   });
 
+  it("scans a long run of line comments after a helper path in linear time", () => {
+    writeFileSync(
+      join(repo, "e2e/comments.spec.ts"),
+      `import "../test/helpers/imported";\n${"//".repeat(5000)}x\n`,
+    );
+    git("add", ".");
+    const started = Date.now();
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it("keeps a literal dynamic import precise: only its target is imported", () => {
     writeFileSync(
       join(repo, "e2e/lazy.spec.ts"),

@@ -20,6 +20,31 @@ const visited = new Set();
 const helpers = new Set();
 const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts"];
 
+// Linear scan past whitespace, comments and closing parens; true when a `+`
+// follows. Hand-rolled because an alternation regex over the same trivia
+// backtracks exponentially on repeated `//`.
+function followedByPlus(source, from) {
+  let i = from;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "+") return true;
+    if (ch === ")" || /\s/.test(ch)) {
+      i += 1;
+    } else if (source.startsWith("//", i)) {
+      const nl = source.indexOf("\n", i);
+      if (nl === -1) return false;
+      i = nl + 1;
+    } else if (source.startsWith("/*", i)) {
+      const end = source.indexOf("*/", i + 2);
+      if (end === -1) return false;
+      i = end + 2;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
 while (pending.length) {
   const file = pending.pop();
   if (visited.has(file)) continue;
@@ -55,11 +80,7 @@ while (pending.length) {
     if (!/^(test|e2e)(\/|$)/.test(target)) continue;
     // A relative prefix may feed import(variable) later, so don't infer a
     // complete dependency from a concatenated string, even outside import().
-    if (
-      /^(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\n]*|\))*\+/.test(
-        source.slice(match.index + match[0].length),
-      )
-    ) {
+    if (followedByPlus(source, match.index + match[0].length)) {
       throw new Error("Cannot resolve a concatenated helper path");
     }
     // Include all possible source counterparts, even absent ones: deleted or
