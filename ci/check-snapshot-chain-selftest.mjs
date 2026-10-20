@@ -59,6 +59,19 @@ test("valid chain passes", (t) => {
   assert.deepEqual(checkSnapshotChain(root), { entries: 3, snapshots: 3 });
 });
 
+test("empty journal fails", (t) => {
+  const root = fixture(t, [], {});
+  assert.throws(() => checkSnapshotChain(root), /journal has no entries/);
+});
+
+test("duplicate snapshot id fails", (t) => {
+  const root = fixture(t, ["1004_job-unique-locks", "1005_event-search-logs"], {
+    1004: snapshot("id-1004", ZERO),
+    1005: snapshot("id-1004", "id-1004"),
+  });
+  assert.throws(() => checkSnapshotChain(root), /duplicate snapshot id.*1005_snapshot\.json/);
+});
+
 test("removed snapshot fails", (t) => {
   const root = fixture(
     t,
