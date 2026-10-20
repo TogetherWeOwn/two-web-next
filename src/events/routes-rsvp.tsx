@@ -1,6 +1,7 @@
 // RSVP member writes: PUT/DELETE /events/:key/rsvp, the POST /e/:key/rsvp
 // HTML adapter and the 405 fallback. Split out of src/events/routes.tsx;
 // behavior unchanged.
+import { getSignedCookie } from "hono/cookie";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
@@ -8,6 +9,9 @@ import type { Session } from "../env";
 import { rateLimitExceeded } from "../errors";
 import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
+import { SESSION_COOKIE } from "../session-cookie";
+import { isValidSessionToken } from "../sessions";
+import { expiredWriteBounce } from "../write-recovery";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { resolveNativeRsvpPage, rsvpPageReturnPath } from "./reads";
@@ -32,7 +36,13 @@ const closed = (c: Ctx, why: string) =>
 async function member(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
   const session = await readFragmentSession(c);
-  if (!session) return c.json({ error: "unauthenticated" }, 401);
+  if (!session) {
+    // Recover only a signed, well-formed dead bearer; unknown guests keep
+    // the bare refusal. JSON-only even for header-less callers: no false 200.
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
+    return c.json({ error: "unauthenticated" }, 401);
+  }
   if (!session.member) return c.json({ error: "forbidden" }, 403);
   return session;
 }
@@ -184,7 +194,10 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     // 404 still covers unknown or forged keys. Other failures keep refusal.
     const alreadyWithdrawn = input.status === "withdraw" && response.status === 404;
     if (response.ok || alreadyWithdrawn) return c.redirect(path, 303);
-    if (response.status === 401) return c.redirect(loginUrl(path), 303);
+    if (response.status === 401) {
+      const refusal = (await response.json()) as { recovery?: string };
+      return c.redirect(refusal.recovery ?? loginUrl(path), 303);
+    }
     const retryAfter = response.headers.get("Retry-After");
     // No-JS refusal renders inside the branded event shell (viewport, skip
     // link, main landmark, stylesheets, header/footer), like every other
