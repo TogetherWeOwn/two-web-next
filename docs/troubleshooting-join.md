@@ -50,9 +50,8 @@ authentication, current membership, or the cause of a failure.
 
 `join_failed` belongs to the **sign-in** flow. A failed automatic add still
 issues a non-member session, so the notice does not mean the person joined.
-The one-click `/join` flow has its own recovery page and does **not** issue a
-new signed-in session when automatic entry fails. Do not promise that its
-recovery page signed them in.
+The one-click `/join` flow has its own recovery page and does **not** issue a new signed-in session
+when automatic entry fails. Do not promise that a recovery page signed them in.
 
 ## Sign-in returns and failed auto-join
 
