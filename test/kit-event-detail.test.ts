@@ -901,6 +901,25 @@ describe("Kit detail presentation", () => {
     expect(html).toContain("alert(");
   });
 
+  it.each([
+    [1, KEY, `/e/${KEY}/rsvp`],
+    [2, KEY, `/e/${KEY}/rsvp?attendees=2`],
+    [3, "a/b%c d-é", "/e/a%2Fb%25c%20d-%C3%A9/rsvp?attendees=3"],
+  ])("preserves page %i on the native RSVP action for %s", async (page, key, action) => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore(),
+      memberSession(),
+      null,
+      `?attendees=${page}`,
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.attendeesPaging.page).toBe(page);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail({ ...outcome.model, eventKey: key });
+    expect(html.match(/<form[^>]*action="([^"]*)"[^>]*data-rsvp-form/)?.[1]).toBe(action);
+  });
+
   it("works without JavaScript: the RSVP state posts to the Hono controller", async () => {
     const html = await memberHtml();
     expect(html).toContain(`action="/e/${KEY}/rsvp"`);

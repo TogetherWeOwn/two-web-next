@@ -1,6 +1,7 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { rsvpActionHref } from "../../../src/events/attendee-paths";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
@@ -53,16 +54,10 @@ const detailIslands = [
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
 const closed = $derived(model.rsvpClosed);
-const occupancy = $derived(model.goingOccupancy);
-const full = $derived(model.capacity !== null && occupancy >= model.capacity);
+const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
-const rsvpAction = $derived(
-  model.attendeesPaging.page > 1
-    ? `/e/${encodeURIComponent(model.eventKey)}/rsvp?attendees=${model.attendeesPaging.page}`
-    : `/e/${encodeURIComponent(model.eventKey)}/rsvp`,
-);
 const lineup = $derived(
   renderGoingCount(model.eventKey, {
     going: model.goingCount,
@@ -171,7 +166,7 @@ const lineup = $derived(
       {:else if !model.viewerMember}
         <a href={signIn}>{RSVP_COPY.guestCta}</a>
       {:else}
-        <form method="post" action={rsvpAction} data-rsvp-form>
+        <form method="post" action={rsvpActionHref(model.eventKey, model.attendeesPaging.page)} data-rsvp-form>
           {#if !model.rsvpOpen}
             <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_COPY.paused}</p>
           {/if}
