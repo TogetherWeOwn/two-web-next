@@ -41,7 +41,9 @@ function jobPermissions(text: string) {
   // Read the whole map, including entries after comments or blank lines.
   const blocks = [...text.matchAll(/^ {4}permissions:\n([\s\S]*?)(?=^ {4}[\w-]+:|(?![\s\S]))/gm)];
   expect(blocks, "one job-local permissions map").toHaveLength(1);
-  return blocks[0]?.[1]
+  const body = blocks[0]?.[1];
+  if (body === undefined) throw new Error("missing job-local permissions map");
+  return body
     .split("\n")
     .map((line) => line.replace(/#.*/, "").trim())
     .filter(Boolean);
