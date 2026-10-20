@@ -177,6 +177,28 @@ export async function renderCalendar(
     : (await renderEventsHtml(data, {})).body;
 }
 
+function stripTagMarkup(fragment: string): string {
+  let out = "";
+  let i = 0;
+  while (i < fragment.length) {
+    const open = fragment.indexOf("<", i);
+    if (open === -1) {
+      out += fragment.slice(i);
+      break;
+    }
+    out += fragment.slice(i, open);
+    const close = fragment.indexOf(">", open + 1);
+    // Mirror /<[^>]+>/g: only skip when a non-empty tag closes.
+    if (close === -1 || close === open + 1) {
+      out += "<";
+      i = open + 1;
+      continue;
+    }
+    i = close + 1;
+  }
+  return out.trim();
+}
+
 export function calendarLinks(html: string) {
   return [...html.matchAll(/<td\b[^>]*data-date="([^"]+)"[^>]*>([\s\S]*?)<\/td>/g)].flatMap(
     (cell) =>
@@ -184,7 +206,7 @@ export function calendarLinks(html: string) {
         day: cell[1]!,
         href: (/href="([^"]*)"/.exec(link[1]!)?.[1] ?? "").replaceAll("&amp;", "&"),
         name: /aria-label="([^"]*)"/.exec(link[1]!)?.[1] ?? "",
-        text: link[2]!.replace(/<[^>]+>/g, "").trim(),
+        text: stripTagMarkup(link[2]!),
       })),
   );
 }

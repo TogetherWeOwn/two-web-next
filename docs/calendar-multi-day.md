@@ -1,8 +1,8 @@
 # Reading multi-day events on the month grid
 
 The month grid plots a canonical event on every host-zone calendar day its
-scheduled interval touches — including days before the event's start day is
-visible and days after the displayed month turns. An overnight gathering
+scheduled interval touches within the displayed weeks — even when the event
+started before the leading week or ends after the trailing week. An overnight gathering
 starting February 14 at 23:30 and ending February 15 at 01:00 appears on both
 February 14 and February 15.
 
