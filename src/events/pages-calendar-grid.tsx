@@ -77,7 +77,7 @@ export const MonthGrid: FC<{
       />{" "}
       <input type="hidden" name="view" value="calendar" />
       {state.past ? <input type="hidden" name="past" value="1" /> : null}{" "}
-      <button type="submit" data-testid={CALENDAR_MONTH_JUMP_SUBMIT_TESTID}>
+      <button class="btn" type="submit" data-testid={CALENDAR_MONTH_JUMP_SUBMIT_TESTID}>
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
       </button>
     </form>

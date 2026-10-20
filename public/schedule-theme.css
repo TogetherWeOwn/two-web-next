@@ -23,6 +23,8 @@
 .events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *) { background: var(--surface); border-left: 4px solid var(--brand); padding: 1.5rem; }
 .events-page .schedule-month-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .events-page .schedule-month-nav a { padding: .5rem 1rem; border: 1px solid var(--line); }
+.events-page [data-testid=calendar-month-jump] { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
+.events-page input[type=month] { min-height: 44px; max-width: 100%; padding: .5rem; border: 1px solid var(--line); background: var(--surface); color: var(--ink); color-scheme: dark; font: inherit; }
 .events-page [data-testid=events-calendar-scroll] { overflow-x: auto; }
 .events-page [data-hotzone-scroll] { overflow-x: auto; max-width: 100%; }
 .events-page table { width: 100%; min-width: 42rem; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
