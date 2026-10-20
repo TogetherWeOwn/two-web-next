@@ -11,7 +11,17 @@ The community goal defines:
 - **Joins/week:** joins during a week; bot traffic does not count.
 - **Event attendance:** attendance at community events. The goal sets no numeric attendance threshold. Separately, its event gate is one event held weekly for four consecutive weeks.
 
-Use the goal's weekly reporting period and state its exact start/end timestamps and timezone with every reported value. The goal does not specify a timezone or week-boundary convention; this document does not select one. Until that convention and a source are agreed, mark the value **Not reported — scope unclear** or **Not reported — source unavailable** rather than silently choosing a boundary. Never turn missing, stale, inaccessible, or non-comparable source data into zero. `0 (verified)` is valid only when a complete, current source covers the stated interval and explicitly reports zero for it.
+Use the weekly reporting convention below and state its ISO week label and exact UTC start/end timestamps with every reported value. The convention settles period identity only: an unavailable source or unresolved population, bot classification, or measurement meaning still requires **Not reported — scope unclear** or **Not reported — source unavailable**. Never turn missing, stale, inaccessible, or non-comparable source data into zero. `0 (verified)` is valid only when a complete, current source covers the stated interval and explicitly reports zero for it.
+
+## Weekly reporting convention
+
+Adopted 2026-10-20: use ISO weeks in UTC, from Monday 00:00:00 inclusive to the next Monday 00:00:00 exclusive. State the ISO week-year and week number as `YYYY-Www` together with exact UTC `[start, end)` timestamps; for example, `2026-W10: [2026-03-02T00:00:00Z, 2026-03-09T00:00:00Z)`. This is a reporting convention only, not a change to goal targets or policy; it supplies no measured values and approves no new source.
+
+UTC has no daylight-saving transitions, so every reporting week is 168 hours, including weeks with a 23- or 25-hour local day. Use the ISO week-year (week 1 contains the first Thursday), not the calendar year of an individual day. `2026-W53: [2026-12-28T00:00:00Z, 2027-01-04T00:00:00Z)` contains New Year's Day 2027; `2027-W01` starts at that exclusive end. W53 is a full week where present; W52 → W01 in a 52-week year and W53 → W01 in a 53-week year are adjacent, with no stub weeks.
+
+Assign an event to the reporting week containing its start instant in UTC; keep the event's host-timezone display unchanged. Held-event evidence uses the observed actual start; a planned slot uses its scheduled start and does not establish that the event was held. Carry the note **“counted by UTC instant, displayed in host zone”** on scorecards. A Sunday 20:00 event in `America/Chicago` starts on Monday in UTC and belongs to the next reporting week. This can split local evening activity at a week edge. Activity metrics still use activity instants within their reporting interval, not an event's display date.
+
+The [four-week readiness run](community-monetization-readiness.md#readiness-condition) and [eight-week growth review](community-growth-review.md#evidence-for-the-review) use this same calendar grid. Consecutive weeks have adjoining boundaries, including across ISO year changes; never hide or compress a missing calendar week. Each procedure retains its own evidence and decision rules. This aligns with `/hotzones` UTC half-open windows but adds no weekly window there: its smallest selectable window remains a calendar month, so the Joins/week source limitation below is unchanged.
 
 ## Metric and source map
 
