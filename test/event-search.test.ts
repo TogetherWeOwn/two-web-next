@@ -183,6 +183,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
         title: "Friday night Helldivers",
         description: "Weekly co-op chaos.",
+        purpose: null,
         startsAt: new Date(Date.now() + 72 * hour),
         endsAt: new Date(Date.now() + 74 * hour),
         status: "published",

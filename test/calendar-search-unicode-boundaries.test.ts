@@ -67,6 +67,7 @@ function eventRow(id: number, startsAt: Date): PublicEvent {
     title: "Game night",
     game: null,
     description: null,
+    purpose: null,
     startsAt,
     endsAt: new Date(startsAt.getTime() + 7200_000),
     timezone: "UTC",

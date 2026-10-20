@@ -19,6 +19,7 @@ const limits = [
   { field: "title", max: 100 },
   { field: "game", max: 100 },
   { field: "description", max: 1000 },
+  { field: "purpose", max: 1000 },
   { field: "location", max: 255 },
 ] as const;
 const patterns = [
@@ -33,6 +34,7 @@ const row: EventRow = {
   ...base,
   description: null,
   capacity: null,
+  purpose: null,
   startsAt: new Date("2030-01-01T18:00:00Z"),
   endsAt: new Date("2030-01-01T19:00:00Z"),
   discordEventId: null,
@@ -133,7 +135,7 @@ describe("admin event code-point contract", () => {
     expect(serverMessage(under)).toBe("");
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the four scoped %s controls and retains native POST",
+    "enhances only the five scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
@@ -143,11 +145,21 @@ describe("admin event code-point contract", () => {
         expect(input).toContain(`data-event-text-limit="${max}"`);
         expect(input).not.toContain("maxlength");
         const rejected = form(mode, base, { [field]: "Server feedback" });
-        expect(rejected).toContain(`aria-describedby="f-${field}-error"`);
+        const describedBy =
+          field === "purpose"
+            ? 'aria-describedby="f-purpose-hint f-purpose-error"'
+            : `aria-describedby="f-${field}-error"`;
+        expect(rejected).toContain(describedBy);
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(4);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(5);
+      const purpose = html.match(/<textarea[^>]*name="purpose"[^>]*>/)![0];
+      expect(purpose).toContain('aria-describedby="f-purpose-hint');
+      expect(html).toContain('id="f-purpose-hint"');
+      const purposeError = form(mode, base, { purpose: "Purpose feedback" });
+      expect(purposeError).toContain('aria-describedby="f-purpose-hint f-purpose-error"');
+      expect(purposeError).toContain('id="f-purpose-error"');
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );

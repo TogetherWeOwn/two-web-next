@@ -10,6 +10,7 @@ const event: PublicEvent = {
   game: "Chess",
   description: "Bring a board & <snacks>.",
   location: "Lobby & lounge",
+  purpose: null,
   startsAt: start,
   endsAt: new Date("2026-10-10T22:00:00Z"),
   timezone: "UTC",

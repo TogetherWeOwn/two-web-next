@@ -53,6 +53,7 @@ function eventRow(): PublicEvent {
     title: "Reduced motion game night",
     game: null,
     description: null,
+    purpose: null,
     startsAt: START,
     endsAt: END,
     timezone: "UTC",

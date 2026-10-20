@@ -58,6 +58,7 @@ const row = {
   timezone: "Europe/London",
   capacity: 8,
   // Winter in London: wall time equals UTC, so merged PATCH defaults are exact.
+  purpose: null,
   startsAt: new Date("2030-01-01T18:00:00Z"),
   endsAt: new Date("2030-01-01T19:00:00Z"),
   discordEventId: "123456789012345678",

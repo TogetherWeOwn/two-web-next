@@ -39,6 +39,7 @@ function eventRow(n: number): typeof events.$inferSelect {
     title: `Past game ${n}`,
     game: "Chess",
     description: null,
+    purpose: null,
     startsAt: date,
     endsAt: date,
     timezone: "UTC",

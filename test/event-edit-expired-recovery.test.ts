@@ -68,6 +68,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         title: "Game night",
         game: "Chess",
         description: "Bring a board",
+        purpose: null,
         startsAt: new Date("2026-10-25T01:30:17Z"),
         endsAt: new Date("2026-10-25T01:50:29Z"),
         timezone: "Europe/London",

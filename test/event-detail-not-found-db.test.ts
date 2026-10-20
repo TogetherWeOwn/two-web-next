@@ -53,6 +53,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event-detail miss suggestions (agent
       title: "Game night",
       game: "Chess",
       description: "Bring a friend.",
+      purpose: null,
       startsAt: new Date("2099-01-01T18:00:00Z"),
       endsAt: new Date("2099-01-01T20:00:00Z"),
       timezone: "UTC",

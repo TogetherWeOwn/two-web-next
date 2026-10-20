@@ -101,6 +101,7 @@ export function pageShellFixture(status = "published") {
     title: "Fixture game night",
     game: "Chess",
     description: "Play together.",
+    purpose: null,
     startsAt: now,
     endsAt: new Date("2030-01-01T22:00:00Z"),
     timezone: "UTC",

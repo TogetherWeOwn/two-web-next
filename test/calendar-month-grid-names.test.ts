@@ -29,6 +29,7 @@ function persisted(overrides: Partial<PublicEvent> = {}): PublicEvent {
     title: "Game night",
     game: null,
     description: null,
+    purpose: null,
     startsAt: start,
     endsAt: new Date(start.getTime() + 7200_000),
     timezone: ZONE,

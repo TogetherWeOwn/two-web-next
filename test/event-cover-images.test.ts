@@ -59,6 +59,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     title: "Friday night Helldivers",
     game: "Helldivers",
     description: "Bring a friend.",
+    purpose: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",

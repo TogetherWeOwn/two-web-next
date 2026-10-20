@@ -76,6 +76,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       title: "Counts fixture game night",
       game: null,
       description: null,
+      purpose: null,
       startsAt: new Date(NOW + 3600_000),
       endsAt: new Date(NOW + 7200_000),
       timezone: "UTC",

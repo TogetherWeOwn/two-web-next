@@ -178,6 +178,7 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
       });
       expect(audit!.properties).toMatchObject({
         eventKey: { before: null, after: event.eventKey },
+        purpose: null,
         startsAt: { before: null, after: event.startsAt.toISOString() },
         endsAt: { before: null, after: event.endsAt.toISOString() },
         recurrenceIndex: { before: null, after: event.recurrenceIndex },

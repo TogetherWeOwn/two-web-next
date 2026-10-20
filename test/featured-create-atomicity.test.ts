@@ -139,6 +139,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 url: { before: null, after: values.url },
                 imageUrl: { before: null, after: values.imageUrl },
                 imageAlt: { before: null, after: values.imageAlt },
+                purpose: null,
                 startsAt: { before: null, after: "2026-10-08 18:00:00.000000" },
                 endsAt: { before: null, after: "2026-10-09 18:00:00.000000" },
               }

@@ -21,6 +21,7 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   description: "Bring stims.",
   location: "Voice: General",
   timezone: "UTC",
+  purpose: null,
   startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"),
   createdAt: new Date("2026-07-01T12:00:00Z"),

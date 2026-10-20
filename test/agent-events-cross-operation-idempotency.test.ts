@@ -13,6 +13,7 @@ import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
 import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
 import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
 import syncRevisions from "../drizzle/1020_event-sync-revisions.sql?raw";
+import eventPurpose from "../drizzle/1030_event-purpose.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -106,6 +107,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         icsColumns,
         columnAdds,
         syncColumns,
+        eventPurpose,
       ]) {
         for (const statement of migration
           .replaceAll('"public".', `"${schemaName}".`)

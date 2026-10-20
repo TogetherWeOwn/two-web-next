@@ -49,6 +49,7 @@ const row = {
   location: base.location,
   timezone: base.timezone,
   capacity: null,
+  purpose: null,
   startsAt: new Date("2030-01-01T18:00:00Z"),
   endsAt: new Date("2030-01-01T19:00:00Z"),
   discordEventId: null,

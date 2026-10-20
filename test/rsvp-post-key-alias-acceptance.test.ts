@@ -87,6 +87,7 @@ function fakeEvent(over: Partial<FakeEvent>): FakeEvent {
     title: "Alias night",
     game: null,
     description: null,
+    purpose: null,
     startsAt,
     endsAt: new Date("2030-01-01T22:00:00Z"),
     timezone: "UTC",

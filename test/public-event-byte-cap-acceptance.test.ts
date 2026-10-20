@@ -202,6 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
         location: MAX_LOCATION,
         description: null,
         status: "published",
+        purpose: null,
         startsAt: new Date(Date.UTC(2099, 0, i + 1, 20)),
         endsAt: new Date(Date.UTC(2099, 0, i + 1, 22)),
         ...extra,

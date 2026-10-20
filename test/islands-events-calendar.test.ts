@@ -107,6 +107,7 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
     title: `Game night ${n}`,
     game: null,
     description: null,
+    purpose: null,
     startsAt: start,
     endsAt: end,
     timezone: "Europe/London",

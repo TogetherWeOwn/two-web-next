@@ -33,6 +33,7 @@ const event: PublicEvent = {
   title: "Friday night games",
   description: null,
   game: null,
+  purpose: null,
   startsAt: new Date("2099-11-04T20:00:00Z"),
   endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC",

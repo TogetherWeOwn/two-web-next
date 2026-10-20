@@ -178,6 +178,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
       description: null,
       location: null,
       capacity: null,
+      purpose: null,
       startsAt: new Date("2099-11-04T20:00:00Z"),
       endsAt: new Date("2099-11-04T22:00:00Z"),
     });
@@ -189,6 +190,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
       description: "Bring stims.",
       location: "Voice: General",
       capacity: 4,
+      purpose: "Detail-only purpose must not appear in JSON",
       startsAt: new Date("2099-11-05T20:00:00Z"),
       endsAt: new Date("2099-11-05T22:00:00Z"),
     });
@@ -222,6 +224,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
       location: "Voice: General",
       capacity: 4,
       status: "published",
+      purpose: null,
       startsAt: new Date("2099-07-15T18:00:00Z"),
       endsAt: new Date("2099-07-15T20:00:00Z"),
     });

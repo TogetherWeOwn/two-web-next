@@ -37,6 +37,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     title: "Summer raid night",
     game: null,
     description: "Bring stims.",
+    purpose: null,
     startsAt: start,
     endsAt: new Date("2026-07-15T21:00:00Z"),
     timezone: "Europe/London",

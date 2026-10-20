@@ -158,6 +158,7 @@ function eventFixture(): PublicEvent {
     title: "Chess night",
     game: "Chess",
     description: "Bring a friend.",
+    purpose: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",

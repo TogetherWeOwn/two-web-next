@@ -54,6 +54,7 @@ function eventRow(id: number): typeof events.$inferSelect {
     title: `Game night ${id}`,
     game: null,
     description: null,
+    purpose: null,
     startsAt,
     endsAt: new Date(startsAt.getTime() + 7200_000),
     timezone: "Europe/London",

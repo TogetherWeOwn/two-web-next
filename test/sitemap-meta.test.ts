@@ -55,6 +55,7 @@ function eventRow(over: Partial<EventRow> = {}): EventRow {
     title: `Game night ${n}`,
     game: null,
     description: null,
+    purpose: null,
     startsAt: start,
     endsAt: end,
     timezone: "UTC",
