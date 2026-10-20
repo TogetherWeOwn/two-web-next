@@ -14,7 +14,6 @@ import {
 } from "./error-pages";
 import type { SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
-import { mediaType, splitAcceptRanges } from "./media-type";
 import {
   bufferedMemberHtml,
   bufferedMemberJson,
@@ -140,7 +139,23 @@ function jsonOnlyEventRequest(c: Context): boolean {
   return false;
 }
 
-function outageRepresentation(c: Context): string {
+interface NegotiatedErrorSelection {
+  type: string;
+  htmlQ: number;
+  htmlExact: boolean;
+}
+
+// Shared quality/specificity selector for the supported error representations.
+// The most specific range determines each representation's quality, including
+// q=0 exclusions; only then compare the supported responses. Returns the
+// selected representation plus the text/html candidate's own quality and
+// whether an exact text/html range matched, so explicit-opt-in checks reuse the
+// same parsed qualities instead of treating the all-q=0 default as a preference.
+function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
+  const acceptHeader = c.req.header("Accept");
+  if (!acceptHeader) {
+    return { type: "text/html", htmlQ: 0, htmlExact: false };
+  }
   return accepts(c, {
     header: "Accept",
     supports: ["text/html", "application/json"],
@@ -166,22 +181,31 @@ function outageRepresentation(c: Context): string {
       });
       candidates.sort((a, b) => b.q - a.q || b.specificity - a.specificity || a.order - b.order);
       const preferred = candidates[0]!;
-      return preferred.q > 0 ? preferred.type : config.default;
+      const selected = preferred.q > 0 ? preferred.type : config.default;
+      const html = candidates.find((candidate) => candidate.type === "text/html")!;
+      return {
+        type: selected,
+        htmlQ: html.q,
+        htmlExact: html.specificity === 2,
+      } as unknown as string;
     },
-  });
+  }) as unknown as NegotiatedErrorSelection;
+}
+
+function outageRepresentation(c: Context): string {
+  return negotiatedErrorSelection(c).type;
 }
 
 // Existing machine refusals keep their exact bytes unless a browser explicitly
-// prefers HTML. Fetch's absent/wildcard Accept is not a browser opt-in. Callers
-// merge Vary: Accept even when retaining the legacy representation.
+// prefers HTML with q>0. Fetch's absent/wildcard Accept is not a browser
+// opt-in, and an explicit text/html;q=0 exclusion keeps the legacy bytes.
+// Callers merge Vary: Accept even when retaining the legacy representation.
 export function prefersHtmlError(c: Context): boolean {
-  return (
-    !jsonOnlyEventRequest(c) &&
-    !c.req.path.startsWith("/api/") &&
-    !isFeedErrorPath(c.req.path) &&
-    splitAcceptRanges(c.req.header("accept")).some((range) => mediaType(range) === "text/html") &&
-    outageRepresentation(c) === "text/html"
-  );
+  if (jsonOnlyEventRequest(c) || c.req.path.startsWith("/api/") || isFeedErrorPath(c.req.path)) {
+    return false;
+  }
+  const selection = negotiatedErrorSelection(c);
+  return selection.htmlExact && selection.htmlQ > 0 && selection.type === "text/html";
 }
 
 // Malformed input shares the established 403/413 negotiation, while feed
