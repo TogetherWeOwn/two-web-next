@@ -126,6 +126,7 @@ describe("attendee stale-note placement", () => {
     await b.failRefresh();
     const note = b.query(staleSelector);
     expect(note, "failed refresh surfaces the stale signal").not.toBeNull();
+    expect(note!.parentNode).toBe(b.main);
     expect(ancestors(note!)).toContain(b.main);
     expect(note!.parentNode, "note stays inside main, never after the footer").not.toBe(b.body);
     expect(b.body.children.at(-1), "footer keeps its shell position").toBe(b.footer);
@@ -145,6 +146,7 @@ describe("attendee stale-note placement", () => {
     await b.failRefresh();
     const note = b.query(staleSelector);
     expect(note, "failed refresh surfaces the stale signal").not.toBeNull();
+    expect(note!.parentNode).toBe(b.main);
     expect(ancestors(note!)).toContain(b.main);
     expect(note!.parentNode, "note stays inside main, never after the footer").not.toBe(b.body);
   });
