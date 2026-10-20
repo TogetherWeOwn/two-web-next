@@ -48,23 +48,83 @@ release freeze.
 
 ## Repairing a missed release
 
-If a promote deployed but its `release` job failed, dispatch the workflow for
-the deployed SHA (it is idempotent):
+If a promote deployed but its downstream `release` job failed, dispatch the
+release workflow on `main` for the **exact deployed SHA**, with the producing
+production run and attempt as optional selectors:
 
 ```sh
-gh workflow run release.yml --ref main -f sha=<deployed 40-hex SHA>
+gh workflow run release.yml --ref main -f sha=<deployed-40-hex-SHA> \
+  -f promotion_run_id=<production-run-id> -f promotion_run_attempt=<attempt>
 ```
 
-`-f dry_run=true` prints the version and notes without publishing.
+A main ancestor is not proof of promotion: newer unpromoted main B cannot be
+published using deployed A's evidence. A **new tag** requires all of:
 
-Before creating anything, the job looks up the GitHub Release for the tag. Only a
-404 means it is absent. Any other failure (a GitHub outage, a rate limit, an auth
-error or no network) is inconclusive: the job fails with `existing-release lookup
-... was inconclusive`, creates nothing and tags nothing. Dispatch it again for the
-same SHA once the lookup works.
+- GitHub-authenticated repository and head-repository identities matching this
+  repository, the active canonical `.github/workflows/deploy-production.yml`
+  workflow ID/path, a main-branch producer on local `origin/main`, and a supported
+  production trigger (`workflow_dispatch`, `workflow_run` or `schedule`).
+- The exact producing run **and attempt**, a completed successful
+  `deploy-production` job, and successful ordered gradual-promotion,
+  identity-aware post-promotion smoke, receipt-write and receipt-upload steps.
+  Workflow display names or a globally green conclusion alone do not suffice.
+- Exactly one unexpired `production-promotion-<run_id>-<run_attempt>` artifact
+  belonging to that repository/run/main head. Its only member is the bounded
+  `promotion.json` receipt, never an extracted archive tree. Schema 1 binds
+  `repository`, `workflow: .github/workflows/deploy-production.yml`,
+  `job: deploy-production`, exact selected `sha`, UUID `promoted_version_id`, and
+  string `run_id` / `run_attempt`. The selected SHA comes from preflight and can
+  differ from the producer workflow's checkout SHA.
 
-`ci/release-on-promote.selftest.cjs` (run by `test/release-workflow.test.ts`)
-pins the bump rules, note rendering, the rollback guard, the refusal to tag a
-commit that is not on `main`, and the publish path against a fake `gh`: a 404
-creates the release, an existing release is kept, and an inconclusive lookup
-stops before anything is created.
+The production job records/uploads this receipt **only after** its existing
+identity-aware smoke succeeds. Its ordinary reusable release call passes the
+producing run/attempt; manual selectors become `PROMOTION_RUN_ID` and
+`PROMOTION_RUN_ATTEMPT`. These are untrusted hints, never caller assertions of
+success. Supply both or neither. Without hints, discovery reads the canonical
+workflow's main runs; it never falls back to publishing unchecked. Discovery is
+bounded to one complete page of at most 100 runs and 20 eligible candidates;
+selected-run jobs and artifacts each require a complete page of at most 100.
+An exhausted list, unreadable/malformed evidence, an ambiguous artifact or an
+inconclusive candidate refuses. Select the exact known run/attempt to avoid
+exhausted discovery; it must pass the same checks. API responses are capped at
+1 MiB, archives at 64 KiB, receipts at 4 KiB, each subprocess at 15 seconds and
+the proof operation at two minutes. No second credential is tried.
+
+The producer workflow may be globally **failed** because downstream publication
+failed, or still **in progress** inside its release call. Repair still works:
+only its completed successful deploy job and post-smoke proof authorize the new
+tag, not global workflow success. Failed/skipped/in-progress smoke never does.
+
+Receipts are retained for **30 days** (subject to repository retention limits).
+Runs from before this protocol have no receipt. Expired, deleted or missing proof
+refuses new-tag repair; the workflow never redeploys, rolls back or manufactures
+replacement proof. Retry the same SHA/run/attempt only after an API outage is
+resolved or the correct retained evidence is identified. If no valid evidence
+exists, stop; any future deployment follows the normal independent deployment
+gates, not an automatic release-repair workaround.
+
+Already-tagged missing-release repair reuses that tag without demanding new-tag
+proof. Historical repairs explicitly keep `--latest=false`; an existing release
+is a no-op and rollback promotes create no new tag. Before creating anything,
+release lookup still treats **only HTTP 404** as absence. An outage, rate limit,
+auth failure or no network is inconclusive and fails closed. A partial
+publication that created the tag but not its release retries the same tag/SHA,
+never an extra version bump.
+
+`-f dry_run=true` prints version/notes without publishing or checking promotion
+proof. It is a nonmutating preview, **not authorization** for a later real run;
+the real run must independently verify evidence. Release repair does not change
+production traffic. The ephemeral Actions token gains only job-local
+`actions: read` in the reusable publisher and its caller; workflow-wide
+`permissions: {}` and scoped `contents: write` stay intact. Revert those two read
+declarations through normal review to revoke this capability; missing access
+then refuses new-tag publication, never bypasses proof.
+
+`ci/release-on-promote.selftest.cjs` and
+`ci/release-on-promote-latest.acceptance.cjs` pin versioning, reuse, historical
+Latest and release-lookup failure behavior. The independently paired
+`ci/release-promotion-proof.acceptance.cjs`, wired through
+`test/release-promotion-proof.test.ts`, pins trusted/untrusted evidence, exact
+SHA/attempt binding, workflow receipt production, failed-publication recovery,
+dry-run and zero publication on refusal. All publication tests use fake `gh`
+and throwaway git repositories; no real tags/releases or deployments.
