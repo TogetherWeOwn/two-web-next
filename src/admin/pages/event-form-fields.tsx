@@ -102,7 +102,6 @@ export const EventFormFields: FC<{
               name="organizer_name"
               type="text"
               value={val(values, "organizer_name")}
-              maxLength={500}
               data-event-text-limit={500}
             />
           )}
@@ -114,13 +113,7 @@ export const EventFormFields: FC<{
           hint="HTTPS or HTTP link visible to everyone. Never use attendee-only or private links."
         >
           {(id) => (
-            <input
-              id={id}
-              name="join_url"
-              type="url"
-              value={val(values, "join_url")}
-              maxLength={2048}
-            />
+            <input id={id} name="join_url" type="url" value={val(values, "join_url")} />
           )}
         </Field>
         <Field
@@ -134,7 +127,6 @@ export const EventFormFields: FC<{
               id={id}
               name="join_instructions"
               rows={4}
-              maxLength={5000}
               data-event-text-limit={5000}
             >
               {val(values, "join_instructions")}

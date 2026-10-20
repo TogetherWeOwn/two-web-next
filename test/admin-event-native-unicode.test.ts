@@ -20,6 +20,8 @@ const limits = [
   { field: "game", max: 100 },
   { field: "description", max: 1000 },
   { field: "location", max: 255 },
+  { field: "organizer_name", max: 500 },
+  { field: "join_instructions", max: 5000 },
 ] as const;
 const patterns = [
   { label: "ASCII", characters: ["x"] },
@@ -88,12 +90,18 @@ describe("admin event code-point contract", () => {
         expect(parseEventForm({ ...base, [field]: value })[field]).toBe(value);
         const message = `Keep the ${field} to ${max} characters.`;
         expect(eventTextLimitError(value + "x", field, max)).toBe(message);
+        const serverMessage =
+          field === "organizer_name"
+            ? "Keep the organizer name to 500 characters."
+            : field === "join_instructions"
+              ? "Keep joining instructions to 5000 characters."
+              : message;
         try {
           parseEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
         } catch (error) {
           expect(error).toBeInstanceOf(ValidationError);
-          expect((error as ValidationError).fields).toEqual({ [field]: message });
+          expect((error as ValidationError).fields).toEqual({ [field]: serverMessage });
         }
         expect(eventTextLimitError(` \t${value}  `, field, max)).toBe("");
       },
@@ -133,7 +141,7 @@ describe("admin event code-point contract", () => {
     expect(serverMessage(under)).toBe("");
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the four scoped %s controls and retains native POST",
+    "enhances only the six scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
@@ -143,11 +151,11 @@ describe("admin event code-point contract", () => {
         expect(input).toContain(`data-event-text-limit="${max}"`);
         expect(input).not.toContain("maxlength");
         const rejected = form(mode, base, { [field]: "Server feedback" });
-        expect(rejected).toContain(`aria-describedby="f-${field}-error"`);
+        expect(rejected).toContain(`f-${field.replaceAll("_", "-")}-error"`);
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(4);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(6);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
@@ -339,7 +347,9 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                   (input) => (input as unknown as { validationMessage: string }).validationMessage,
                 ),
               ).toBe(message);
-              expect(await page.locator(`#f-${field}-limit-error`).textContent()).toBe(message);
+              expect(
+                await page.locator(`#f-${field.replaceAll("_", "-")}-limit-error`).textContent(),
+              ).toBe(message);
               expect(await input.getAttribute("aria-invalid")).toBe("true");
               await page.locator('[data-testid="save-event"]').click();
               expect(await page.evaluate("window.submissions.length")).toBe(1);
@@ -351,7 +361,9 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                   (input) => (input as unknown as { validity: { valid: boolean } }).validity.valid,
                 ),
               ).toBe(true);
-              expect(await page.locator(`#f-${field}-limit-error`).isHidden()).toBe(true);
+              expect(
+                await page.locator(`#f-${field.replaceAll("_", "-")}-limit-error`).isHidden(),
+              ).toBe(true);
               await page.locator('[data-testid="save-event"]').click();
               expect(await page.evaluate("window.submissions.length")).toBe(2);
             },
