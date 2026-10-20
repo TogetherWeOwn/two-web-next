@@ -66,6 +66,16 @@ function documentedShell(marker: string): string {
   return blocks[0]!;
 }
 
+function withSelectionProbe(script: string): string {
+  // Emit the fence's selected values from inside the executed subshell, just
+  // before it closes. QUEUES is already asserted via recorded npx commands;
+  // UP_URL and OWNER never reach a command (readback comment only), so without
+  // this probe a cross-environment swap of those two assignments stays green.
+  const probe = `  printf 'RUNBOOK_SELECTION\\t%s\\t%s\\t%s\\n' "\${QUEUES[*]}" "\${UP_URL:-}" "\${OWNER:-}"\n)`;
+  expect(script.endsWith("\n)")).toBe(true);
+  return script.replace(/\n\)$/, `\n${probe}`);
+}
+
 function runDocumentedShell(script: string, environment: string | undefined) {
   const directory = mkdtempSync(
     join(
@@ -100,7 +110,7 @@ function runDocumentedShell(script: string, environment: string | undefined) {
       .split("\n")
       .filter(Boolean)
       .map((line) => line.split("\t"));
-    return { status: result.status, stderr: result.stderr, commands };
+    return { status: result.status, stderr: result.stderr, stdout: result.stdout, commands };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -292,4 +302,24 @@ describe("runbook queue incident targets by environment", () => {
       },
     );
   });
+
+  it.each(environments)(
+    "pins the gated containment UP_URL and OWNER selections for $environment",
+    ({ environment, queues, owner, origin }) => {
+      const result = runDocumentedShell(
+        withSelectionProbe(documentedShell("# GATED CONTAINMENT:")),
+        environment,
+      );
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const selection = result.stdout
+        .split("\n")
+        .find((line) => line.startsWith("RUNBOOK_SELECTION\t"));
+      expect(selection).toBeDefined();
+      const [, queuesSelected, upUrl, ownerSelected] = selection!.split("\t");
+      expect(queuesSelected).toBe(queues.join(" "));
+      expect(upUrl).toBe(`${origin}/up`);
+      expect(ownerSelected).toBe(owner);
+    },
+  );
 });
