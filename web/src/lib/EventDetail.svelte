@@ -1,4 +1,5 @@
 <script lang="ts">
+import { eventStartInDeviceTimezone } from "../../../assets/event-device-timezone";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
@@ -34,6 +35,16 @@ import {
 // Attendees render only when the model carries them — the resolver discloses
 // them to members alone, so anonymous HTML can never hold member names.
 let { model }: { model: KitEventDetailModel } = $props();
+let deviceTimezoneText = $state("");
+function enableDeviceTimezone(button: HTMLButtonElement) {
+  button.hidden = false;
+}
+// A client-side navigation must not carry the previous event's comparison forward.
+$effect(() => {
+  model.eventKey;
+  model.timeDatetime;
+  deviceTimezoneText = "";
+});
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -124,6 +135,16 @@ const lineup = $derived(
       <dt>When</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+      </dd>
+      <dd class="event-device-timezone">
+        <button
+          type="button"
+          hidden
+          use:enableDeviceTimezone
+          aria-controls="event-device-timezone-result"
+          onclick={() => { deviceTimezoneText = eventStartInDeviceTimezone(model.timeDatetime); }}
+        >Show in my device timezone</button>
+        <p id="event-device-timezone-result" role="status" aria-live="polite">{deviceTimezoneText}</p>
       </dd>
     </div>
     {#if model.location}

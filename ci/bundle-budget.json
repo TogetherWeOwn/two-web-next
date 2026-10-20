@@ -21,6 +21,10 @@
       "maxRawBytes": 2048,
       "maxGzipBytes": 1024
     },
+    "public/islands/event-device-timezone.js": {
+      "maxRawBytes": 2048,
+      "maxGzipBytes": 1024
+    },
     "public/islands/events-calendar.js": {
       "maxRawBytes": 6656,
       "maxGzipBytes": 2560
