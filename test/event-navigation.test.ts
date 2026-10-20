@@ -352,8 +352,21 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);
-    expect(await gone.text()).not.toContain('data-testid="event-pagination"');
-    expect(cancelled.queries).toHaveLength(3);
+    const goneHtml = await gone.text();
+    expect(goneHtml).not.toContain('data-testid="event-pagination"');
+    // The gone page adds exactly one bounded related lookup for the
+    // alternatives list (Kit-mirrored siblings + ICS); neighbor navigation
+    // reads still never run here.
+    expect(cancelled.queries).toHaveLength(4);
+    for (const q of cancelled.queries) {
+      expect(q.sql).not.toMatch(/"starts_at" [<>]/);
+    }
+    const relatedQuery = cancelled.queries[3]!;
+    expect(relatedQuery.sql).toContain('"events"."status" =');
+    expect(relatedQuery.sql).toContain('"events"."ends_at" >=');
+    expect(goneHtml).toContain('data-testid="event-cancelled-alternatives"');
+    expect(goneHtml).toContain("Game night 3");
+    expect(goneHtml).toContain('data-testid="event-cancelled-ics"');
   });
 
   it("escapes titles and locations without turning related cards into markup", async () => {
