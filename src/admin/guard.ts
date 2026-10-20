@@ -128,7 +128,6 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     let renewedSession: {
       store: SessionStore;
       tokenHash: string;
-      expiresAt: Date;
       sessionCookie: string;
     } | null = null;
     try {
@@ -140,6 +139,8 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       if (row?.moderator) actor = { id: row.userId, username: row.username };
       else if (!row) expiredGuest = true;
       if (actor && c.req.method === "GET") {
+        // Slide while the row is live, before rendering/audit can cross its expiry.
+        if (!(await resolved.renew(tokenHash, expiresAt))) return bounceToLogin(c);
         attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
         // Sign before the dashboard deadline; the post-handler read gates attachment.
         const sessionCookie = await generateSignedCookie(
@@ -154,7 +155,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
             maxAge: SESSION_TTL_SECONDS,
           },
         );
-        renewedSession = { store: resolved, tokenHash, expiresAt, sessionCookie };
+        renewedSession = { store: resolved, tokenHash, sessionCookie };
       }
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
@@ -190,9 +191,9 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         },
         databaseUnavailable,
       );
-      // Redirects and refusals intentionally omit the session cookie, so do
-      // not renew those responses. Other authorized GET results, including 404s,
-      // renew after rendering and revalidate before the cookie is attached.
+      // The authorized GET already renewed the row. Redirects and refusals
+      // still omit the cookie; other results, including 404s, attach it only
+      // if the bearer survived rendering without rotation or revocation.
       if (
         renewedSession &&
         !(c.res.status >= 300 && c.res.status < 400) &&
@@ -200,19 +201,11 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         c.res.status !== 503
       ) {
         try {
-          const renewed = await renewedSession.store.renew(
-            renewedSession.tokenHash,
-            renewedSession.expiresAt,
-          );
-          if (!renewed && (await renewedSession.store.get(renewedSession.tokenHash))) {
-            c.res = await bounceToLogin(c);
-            return c.res;
-          }
-          if (renewed && (await renewedSession.store.get(renewedSession.tokenHash))) {
+          if (await renewedSession.store.get(renewedSession.tokenHash)) {
             c.header("set-cookie", renewedSession.sessionCookie, { append: true });
           }
         } catch (err) {
-          console.error("admin guard could not renew or revalidate the session; refusing.", {
+          console.error("admin guard could not revalidate the session; refusing.", {
             exception: err instanceof Error ? err.name : "unknown",
           });
           c.res = await databaseUnavailable(c);
