@@ -437,7 +437,7 @@
       event.preventDefault();
       cancelDebounce();
       var submitter = (event && event.submitter) || formEl.querySelector(JUMP_SUBMIT_SELECTOR);
-      var control = submitter && document.activeElement === submitter ? submitter : null;
+      var control = submitter && formEl.contains(document.activeElement) ? submitter : null;
       load(jumpUrl(formEl), true, {
         skeleton: true,
         syncInput: true,

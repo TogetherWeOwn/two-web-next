@@ -12,6 +12,7 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
   calendarMonthEmptyCopy,
@@ -20,6 +21,7 @@ import {
   calendarUrl,
   monthGrid,
   wallDateIso,
+  wallMonth,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -101,15 +103,25 @@ export const EventsCalendarPage: FC<{
     byDay.set(key, list);
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
-  // Month-local emptiness reads the same buckets the grid plots: rows on
-  // spillover days plot outside the selected month, so they never count as
-  // in-month. A failed source suppresses the claim — October may only look
-  // empty — while the error/never/gap states keep their own precedence.
+  // Month-local emptiness counts past rows even with the drawer closed: the
+  // claim names the month, not the visible rows, and spillover days plot
+  // outside the selected month so they never count as in-month. A truncated
+  // past drawer (at the cap) leaves months at or before the wall month
+  // incomplete — older in-month past rows may exist unread — so the claim is
+  // suppressed there; future months cannot hold past rows. A failed source
+  // suppresses the claim — October may only look empty — while the
+  // error/never/gap states keep their own precedence.
+  const monthHasInMonthRows = [...upcoming, ...past].some((e) =>
+    wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`),
+  );
+  const pastMayBeTruncated = past.length >= EVENTS_PAST_DRAWER_LIMIT;
+  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
   const monthEmpty =
     emptyState === null &&
     state.view === "calendar" &&
     !discordFailed &&
-    ![...byDay.keys()].some((day) => day.startsWith(`${state.month}-`));
+    !monthHasInMonthRows &&
+    !(pastMayBeTruncated && monthCouldHoldPast);
   return (
     <ScheduleShell
       title="Events"

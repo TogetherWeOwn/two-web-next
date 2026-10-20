@@ -1,0 +1,234 @@
+// Calendar month-empty past suppression (Builder-owned proof for review findings).
+//
+// The month-empty block must only claim a definitive absence when the read is
+// complete for that month. The month grid reads upcoming rows only, and the
+// past drawer is the 20 most recent ended rows globally — so a past month
+// beyond the drawer cap, or a current month with the drawer closed, may look
+// empty while holding past events. These cases pin the suppression without
+// touching the Test Author acceptance file.
+import { getTableColumns } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import app from "./app";
+import type { Db } from "../src/db/index";
+import { events } from "../src/db/admin-schema";
+import type { Env } from "../src/env";
+import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
+import type { DiscordEventsSource } from "../src/events/discord-transients";
+import { calendarMonthLabel } from "../src/islands/contracts";
+
+const APP_URL = "https://calendar.example.test";
+const INVITE = "https://discord.gg/example";
+const MONTH_EMPTY_TESTID = "calendar-month-empty";
+
+const baseEnv = {
+  APP_URL,
+  DISCORD_CLIENT_ID: "client-id",
+  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_INVITE_URL: INVITE,
+  DISCORD_CLIENT_SECRET: "client-secret",
+  DISCORD_BOT_TOKEN: "bot-token",
+} as unknown as Env;
+
+let eventSeq = 1000;
+function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events.$inferSelect {
+  const n = ++eventSeq;
+  const start = over.startsAt ?? new Date(Date.UTC(2026, 11, 15, 20));
+  const end = over.endsAt ?? new Date(start.getTime() + 7200_000);
+  return {
+    id: n,
+    icsSequence: 1n,
+    eventKey: `ev-${n}`,
+    title: `Game night ${n}`,
+    game: null,
+    description: null,
+    startsAt: start,
+    endsAt: end,
+    timezone: "UTC",
+    location: null,
+    capacity: null,
+    status: "published",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    syncRevision: 1,
+    syncedRevision: 0,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
+    ...over,
+  };
+}
+
+function discordSource(
+  rows: Awaited<ReturnType<DiscordEventsSource["upcoming"]>> = [],
+  failed = false,
+): DiscordEventsSource {
+  return { upcoming: async () => rows, lastReadFailed: () => failed };
+}
+
+function calendarFixture(args: {
+  upcoming?: (typeof events.$inferSelect)[];
+  monthRows?: (typeof events.$inferSelect)[];
+  past?: (typeof events.$inferSelect)[];
+  source?: DiscordEventsSource;
+}) {
+  const upcoming = args.upcoming ?? [];
+  const monthRows = args.monthRows ?? [];
+  const past = args.past ?? [];
+  const source = args.source ?? discordSource();
+  const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+  const encode = (row: typeof events.$inferSelect) =>
+    columns.map((k) => {
+      const v = row[k];
+      return v instanceof Date ? v.toISOString() : v;
+    });
+  const db = drizzle(async (sql, params) => {
+    if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (sql.startsWith('select "discord_event_id" from "events"')) {
+      return {
+        rows: [...upcoming, ...past]
+          .filter((r) => params.includes(r.discordEventId))
+          .map((r) => [r.discordEventId]),
+      };
+    }
+    if (sql.includes('"starts_at" >=')) return { rows: monthRows.map(encode) };
+    let rows = /"ends_at" </.test(sql) ? past : upcoming;
+    if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
+    if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
+    return { rows: rows.map(encode) };
+  });
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({ execute: async () => {} } as unknown as Db),
+  });
+  const env = {
+    ...baseEnv,
+    ADMIN_DB: db as unknown as Db,
+    DISCORD_EVENTS: source,
+  } as unknown as Env;
+  return { env, request: (path: string, init?: RequestInit) => app.request(path, init, env) };
+}
+
+function blockFor(html: string, testid: string): string | null {
+  return (
+    new RegExp(`<div\\b[^>]*data-testid="${testid}"[^>]*>([\\s\\S]*?)</div>`).exec(html)?.[0] ??
+    null
+  );
+}
+
+function decKeep(): typeof events.$inferSelect {
+  return eventRow({
+    eventKey: "dec-keep",
+    title: "December raid",
+    startsAt: new Date("2026-12-15T20:00:00Z"),
+    endsAt: new Date("2026-12-15T22:00:00Z"),
+    timezone: "UTC",
+  });
+}
+
+beforeEach(() => __resetAnonEventCacheForTests());
+afterEach(() => vi.useRealTimers());
+
+describe("month-empty past completeness", () => {
+  it("suppresses the claim when the drawer-closed current month held a past event", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T12:00:00Z"));
+    const octPast = eventRow({
+      eventKey: "oct-past",
+      title: "October past raid",
+      startsAt: new Date("2026-10-15T20:00:00Z"),
+      endsAt: new Date("2026-10-15T22:00:00Z"),
+      timezone: "UTC",
+    });
+    const src = calendarFixture({ upcoming: [decKeep()], monthRows: [], past: [octPast] });
+    const response = await src.request("/events?view=calendar&month=2026-10");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
+  });
+
+  it("suppresses the claim for a past month beyond the 20-row drawer cap", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T12:00:00Z"));
+    const past = Array.from({ length: 20 }, (_, i) =>
+      eventRow({
+        eventKey: `sep-${i + 1}`,
+        title: `September raid ${i + 1}`,
+        startsAt: new Date(Date.UTC(2026, 8, i + 1, 20)),
+        endsAt: new Date(Date.UTC(2026, 8, i + 1, 22)),
+        timezone: "UTC",
+      }),
+    );
+    const src = calendarFixture({ upcoming: [decKeep()], monthRows: [], past });
+    const response = await src.request("/events?view=calendar&month=2026-08&past=1");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
+  });
+
+  it("keeps the claim for a completely read past month that is truly empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T23:30:00Z"));
+    const zoneRow = eventRow({
+      eventKey: "zone-keep",
+      title: "Zone fixture",
+      startsAt: new Date("2026-09-15T20:00:00Z"),
+      endsAt: new Date("2026-09-15T22:00:00Z"),
+      timezone: "Etc/GMT-1",
+    });
+    const src = calendarFixture({ upcoming: [decKeep()], past: [zoneRow] });
+    const response = await src.request("/events?view=calendar&month=2026-10");
+    expect(response.status).toBe(200);
+    const block = blockFor(await response.text(), MONTH_EMPTY_TESTID);
+    expect(block).not.toBeNull();
+    expect(block!).toContain(calendarMonthLabel("2026-10"));
+  });
+
+  it("keeps the claim for a future month even when the past drawer is truncated", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
+    const past = Array.from({ length: 20 }, (_, i) =>
+      eventRow({
+        eventKey: `aug-${i + 1}`,
+        title: `August raid ${i + 1}`,
+        startsAt: new Date(Date.UTC(2026, 7, i + 1, 20)),
+        endsAt: new Date(Date.UTC(2026, 7, i + 1, 22)),
+        timezone: "UTC",
+      }),
+    );
+    const src = calendarFixture({ upcoming: [decKeep()], monthRows: [], past });
+    const response = await src.request("/events?view=calendar&month=2026-10");
+    expect(response.status).toBe(200);
+    const block = blockFor(await response.text(), MONTH_EMPTY_TESTID);
+    expect(block).not.toBeNull();
+    expect(block!).toContain(calendarMonthLabel("2026-10"));
+  });
+
+  it("keeps the claim for a completely read current month that is truly empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-15T12:00:00Z"));
+    const sepPast = eventRow({
+      eventKey: "sep-past",
+      title: "September raid",
+      startsAt: new Date("2026-09-15T20:00:00Z"),
+      endsAt: new Date("2026-09-15T22:00:00Z"),
+      timezone: "UTC",
+    });
+    const src = calendarFixture({ upcoming: [decKeep()], monthRows: [], past: [sepPast] });
+    const response = await src.request("/events?view=calendar&month=2026-10");
+    expect(response.status).toBe(200);
+    const block = blockFor(await response.text(), MONTH_EMPTY_TESTID);
+    expect(block).not.toBeNull();
+    expect(block!).toContain(calendarMonthLabel("2026-10"));
+  });
+});
