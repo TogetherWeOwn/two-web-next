@@ -69,10 +69,11 @@ const INVITE_LINK: ExpectedLink = {
   href: INVITE,
 };
 
-const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
+const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[]; searchForm?: boolean }> = [
   {
     code: 400,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+    searchForm: true,
   },
   {
     code: 404,
@@ -81,11 +82,13 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
       HOME,
       { testid: "error-all-events", name: "Browse all events", href: "/events" },
     ],
+    searchForm: true,
   },
   { code: 403, links: [INVITE_LINK, HOME] },
   {
     code: 410,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+    searchForm: true,
   },
   { code: 429, links: [INVITE_LINK, HOME] },
   { code: 500, links: [INVITE_LINK, HOME] },
@@ -94,6 +97,13 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
     links: [INVITE_LINK, { testid: "error-retry", name: "Try again", href: "/" }],
   },
 ];
+
+// The static EventMissing search form rendered in the 400/404/410 shells, in
+// DOM order: visible text lines are the label then the submit button (the
+// input holds no text and its placeholder is not innerText); tab stops are
+// the input then the submit.
+const SEARCH_FORM_TEXT_LINES = ["Search events", "Search events"];
+const SEARCH_FORM_TAB_ORDER = ["error-events-search", "error-events-search-submit"];
 
 type RenderErrorShell = (code: KitErrorStatus) => { head: string; body: string };
 
@@ -217,7 +227,7 @@ export function renderErrorShell(code) {
       );
     }
 
-    for (const { code, links } of CASES) {
+    for (const { code, links, searchForm } of CASES) {
       it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
         await loadShell(code);
         const copy = kitErrorCopy(code);
@@ -294,7 +304,8 @@ export function renderErrorShell(code) {
         }
 
         // No echoed failure: the section's visible text is exactly the static
-        // code, title, lead and link names — nothing else can be leaking in.
+        // code, title, lead, link names and — on the search-form statuses —
+        // the form's label and submit text. Nothing else can be leaking in.
         // innerText reflects the CSS text-transform, so compare case-folded;
         // exact-case copy is already pinned via textContent above.
         expect(
@@ -303,23 +314,32 @@ export function renderErrorShell(code) {
             .map((line) => line.trim().toLowerCase())
             .filter(Boolean),
         ).toEqual(
-          [copy.code, copy.title, copy.lead, ...links.map((link) => link.name)].map((line) =>
-            line.toLowerCase(),
-          ),
+          [
+            copy.code,
+            copy.title,
+            copy.lead,
+            ...links.map((link) => link.name),
+            ...(searchForm ? SEARCH_FORM_TEXT_LINES : []),
+          ].map((line) => line.toLowerCase()),
         );
 
-        // Focus order: tabbing through the page reaches the recovery links in
-        // the same order they are read.
+        // Focus order: tabbing through the page reaches the recovery links —
+        // then the search form's input and submit on the search-form
+        // statuses — in the same order they are read.
         await page.evaluate("document.activeElement?.blur()");
+        const expectedTabOrder = [
+          ...links.map((link) => link.testid),
+          ...(searchForm ? SEARCH_FORM_TAB_ORDER : []),
+        ];
         const tabbed: string[] = [];
-        for (let i = 0; i < 20 && tabbed.length < links.length; i++) {
+        for (let i = 0; i < 20 && tabbed.length < expectedTabOrder.length; i++) {
           await page.keyboard.press("Tab");
           const testid = await page.evaluate<string | null>(
             "document.activeElement?.getAttribute('data-testid') ?? null",
           );
           if (testid?.startsWith("error-")) tabbed.push(testid);
         }
-        expect(tabbed).toEqual(links.map((link) => link.testid));
+        expect(tabbed).toEqual(expectedTabOrder);
 
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         assertNoViolations(results, `kit error shell ${code}`);
