@@ -41,6 +41,13 @@ const copy = $derived(kitErrorCopy(code));
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
+    {:else if code === 422}
+      <!-- 422: an overlong search renders the Hono notice copy, never outage
+           copy, with the same way back to events the Hono notice offers. -->
+      <p class="recovery-actions">
+        <a class="btn" href="/events" data-testid="error-events">Back to events</a>
+        <a href="/" data-testid="error-home">Back to the homepage</a>
+      </p>
     {:else if code === 403 || code === 429 || code === 500}
       <!-- These statuses share invite recovery, not their headings or lead copy. -->
       <p class="recovery-actions">
