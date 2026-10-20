@@ -20,8 +20,8 @@ import type { PageProps } from "./$types";
 // Markup contract of PastEventsPage (src/events/pages.tsx): the island
 // script, test ids and copy are shared, so the existing E2E and island apply.
 let { data }: PageProps = $props();
-const { rows, page, hasMore, totalPages, appUrl } = $derived(data);
-const destination = $derived(pastEventsUrl(page));
+const { rows, page, hasMore, totalPages, appUrl, q = "" } = $derived(data);
+const destination = $derived(pastEventsUrl(page, q));
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 const island = '<script src="/islands/past-events.js" defer></' + "script>";
 </script>
@@ -36,7 +36,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
   mainClass="events-page"
   loginReturnTo={destination}
 >
-  <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
+  <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-query={q} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
     <div class="schedule-heading">
       <p class="strap">The archive</p>
       <h1 id="past-events-heading" tabindex="-1">Past events</h1>
@@ -47,8 +47,11 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
     </p>
     <div data-archive-state>
+      {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
-        {#if totalPages === 0}
+        {#if totalPages === 0 && q}
+          <p role="status">No past events match your search.</p>
+        {:else if totalPages === 0}
           <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
             <p>{PAST_EVENTS_COPY.empty}</p>
             <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
@@ -59,7 +62,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#each rows as e (e.eventKey)}<EventCard {e} />{/each}</ul>
-    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>Newer</a>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1)}>Older</a>{/if}</nav>
+    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
     <p><a href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>

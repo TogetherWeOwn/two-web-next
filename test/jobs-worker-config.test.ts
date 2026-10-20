@@ -5,17 +5,17 @@ import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { PRUNE_CRON, RECONCILE_CRON } from "../src/jobs/constants";
 import { STAGING_APP_URL, qaEnabled } from "../src/qa";
 
-// TOG-12247: the SvelteKit spike splits the runtime in two Workers that share
-// src/db and the domain modules. A queue has exactly one consumer and a cron
-// exactly one owner, so this pins the split: staging consumes in two-web-jobs
-// (wrangler.jobs.jsonc top level) after the handoff; the web Worker
-// (wrangler.jsonc top level) only produces, and both preview Workers stay off
-// the staging queues, routes and secrets. An accidental deploy must not steal
-// staging's consumers, double-run its crons, or page from an alert probe.
+// The SvelteKit Worker shares src/db and the domain modules with Hono. A queue
+// has exactly one consumer and a cron exactly one owner, so staging consumes in
+// two-web-jobs (wrangler.jobs.jsonc top level); both the Hono rollback config
+// and deployed Kit config only produce. Preview Workers stay off staging queues,
+// routes and secrets. An accidental deploy must not steal consumers, double-run
+// crons, or page from an alert probe.
 
 const read = (path: string) => readFileSync(path, "utf8");
 const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
 const kit = readWranglerConfig(read("web/wrangler.jsonc"));
+const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 const main = readWranglerConfig(read("wrangler.jsonc"));
 const jobsEntry = read("src/jobs-worker.ts");
 
@@ -47,8 +47,11 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
     // Exactly one consumer per staging queue, on the jobs Worker only.
     expect(queueNames(jobs, "consumers")).toEqual(["two-sync-event", "two-internal-action"]);
     expect(queueNames(main, "consumers")).toEqual([]);
-    // Exactly one cron owner: the web Worker runs none.
+    expect(queueNames(stagingKit, "producers")).toEqual(queueNames(main, "producers"));
+    expect(queueNames(stagingKit, "consumers")).toEqual([]);
+    // Exactly one cron owner: both web configs run none after the handoff.
     expect(main.triggers?.crons).toEqual([]);
+    expect(stagingKit.triggers?.crons).toEqual([]);
   });
 
   it("keeps staging placement, tail paging and consumer backstops on the jobs Worker", () => {

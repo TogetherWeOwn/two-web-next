@@ -48,11 +48,11 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
  * `drainPruneTable`. The general session store's `sweepExpired` keeps its
  * existing full-drain contract for non-scheduled callers.
  *
- * Every candidate select takes its rows `FOR UPDATE SKIP LOCKED`: an eligible
- * row locked by an unrelated transaction is skipped instead of stalling the
- * statement, so one held row defers to a later pass while unlocked rows in
- * every table still delete and commit. Batch bounds, cutoffs, guards and
- * exact counts are unchanged.
+ * Column-scoped prune tables use DELETE without explicit row locks. Each
+ * statement's 5-second lock and statement timeouts bound waits on held rows;
+ * a failed table drain rolls back to its savepoint and retries in a later pass.
+ * Other scheduled tables retain `FOR UPDATE SKIP LOCKED`, so held rows defer
+ * while unlocked rows still delete. Bounds, cutoffs, guards and counts stay intact.
  */
 export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
@@ -121,7 +121,6 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
           select id from agent_event_audits where created_at < ${cutoff}
             and created_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
   );
@@ -132,7 +131,6 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
           select id from member_data_access_logs where occurred_at < ${cutoff}
             and occurred_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
   );
@@ -152,7 +150,6 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         await client`delete from agent_event_idempotency_keys where id in (
           select id from agent_event_idempotency_keys where created_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
   );
@@ -162,7 +159,6 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         await client`delete from event_search_logs where id in (
           select id from event_search_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
   );
@@ -172,7 +168,6 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         await client`delete from board_view_logs where id in (
           select id from board_view_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
-          for update skip locked
         ) returning 1`
       ).length,
   );
