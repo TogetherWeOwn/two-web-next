@@ -4,7 +4,7 @@
 // presentations. This file reuses the acceptance fixtures read-only; it does
 // not edit, disable, or rebaseline the independent acceptance suite.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { terminalReviewCopy, type TerminalReviewKind } from "../src/admin/terminal-review";
+import type { TerminalReviewKind } from "../src/admin/terminal-review";
 import {
   OTHER_KEY,
   SAVED_TARGET,
@@ -16,6 +16,26 @@ import {
   type Presentation,
   type Surface,
 } from "./helpers/admin-terminal-review";
+
+// Independent oracle: expected copy pinned as literals per kind, deliberately
+// NOT imported from terminalReviewCopy. Deriving expectations from the copy
+// under test lets emptying or rewording the source keep the suite green.
+const EXPECTED_COPY: Record<
+  TerminalReviewKind,
+  { summary: string; keep: string; guidance: string }
+> = {
+  cancel: {
+    summary: "Review cancellation",
+    keep: "To keep the event, close this review using Review cancellation again. Your unsaved edits stay in the editor.",
+    guidance: "",
+  },
+  delete: {
+    summary: "Review deletion",
+    keep: "To keep the slot, close this review using Review deletion again. Your unsaved edits stay in the editor.",
+    guidance:
+      "To hide the slot without deleting it, clear Published in the editor and Save instead.",
+  },
+};
 
 let kit: Awaited<ReturnType<typeof compileKitReview>>;
 beforeAll(async () => {
@@ -63,10 +83,11 @@ for (const presentation of ["hono", "kit"] as const) {
   describe(`${presentation} terminal review safeguards`, () => {
     for (const surface of SURFACES) {
       const kind = kindFor(surface);
-      const copy = terminalReviewCopy[kind];
+      const copy = EXPECTED_COPY[kind];
 
       it(`${surface}: review keeps the exact non-destructive alternative inside the review`, async () => {
         const review = reviewFor(await render(presentation, surface), actionFor(surface));
+        expect(copy.keep.length).toBeGreaterThan(0);
         expect(review).toContain(copy.keep);
         if (kind === "delete") {
           expect(copy.guidance.length).toBeGreaterThan(0);
@@ -84,7 +105,7 @@ for (const presentation of ["hono", "kit"] as const) {
 
     it("list rows carry distinct accessible names per saved event", async () => {
       const html = await render(presentation, "event-list");
-      const copy = terminalReviewCopy.cancel;
+      const copy = EXPECTED_COPY.cancel;
       expect(summaryLabel(reviewFor(html, actionFor("event-list")))).toBe(
         `${copy.summary}: ${SAVED_TARGET}`,
       );
