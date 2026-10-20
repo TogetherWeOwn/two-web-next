@@ -1,12 +1,12 @@
 /// <reference types="vite/client" />
 // Actual SQL, disposable schema, real session/cookie/journey machinery; only
-// Discord transport is replaced. No migrations, role defaults or live services.
+// Discord transport is replaced. No production/staging access or role changes.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import postgres from "postgres";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import usersMigration from "../drizzle/0000_init-users.sql?raw";
-import { createMemorySessionStore, type Sql } from "../src/sessions";
+import { createPostgresSessionStore, migrate, type Sql } from "../src/sessions";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 import {
   CALLERS,
@@ -66,6 +66,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
   let control: postgres.Sql;
   let holder: postgres.Sql;
   let shared: postgres.Sql;
+  let session: postgres.Sql;
   let closeShared: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
@@ -88,6 +89,10 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       connection: { ...connection, application_name: name },
     });
     closeShared = vi.spyOn(shared, "end");
+    // Mandatory sessions and one-shot journeys use real SQL too, on a distinct
+    // pool so a parked optional write cannot serialize the observer behind it.
+    session = postgres(url!.href, { ...options, connection });
+    await migrate(session as unknown as Sql);
     for (const statement of usersMigration.split("--> statement-breakpoint"))
       if (statement.trim()) await shared.unsafe(statement);
     runtime.schema = schema;
@@ -106,6 +111,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       AND state = 'active'`;
     for (const entry of runtime.clients) await entry.sql.end({ timeout: 0 });
     await shared?.end({ timeout: 0 });
+    await session?.end({ timeout: 0 });
     await holder?.end({ timeout: 0 });
     if (control) {
       try {
@@ -160,7 +166,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       await shared.unsafe("SET statement_timeout = '27s'");
       await shared.unsafe("SET lock_timeout = '23s'");
       const before = await settings();
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const invoke = await prepareSignin(
         caller,
         signinEnv({ SESSION_STORE: store, ROSTER_STORE: asSql() }),
@@ -224,7 +230,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       await shared.unsafe(
         `CREATE TRIGGER slow_roster BEFORE INSERT OR UPDATE ON users FOR EACH ROW EXECUTE FUNCTION "${schema}".slow_roster()`,
       );
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const invoke = await prepareSignin(
         caller,
         signinEnv({ SESSION_STORE: store, ROSTER_STORE: asSql() }),
@@ -272,7 +278,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       await shared.unsafe("SET statement_timeout = '27s'");
       await shared.unsafe("SET lock_timeout = '23s'");
       const before = await settings();
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const invoke = await prepareSignin(
         caller,
         signinEnv({ SESSION_STORE: store, ROSTER_STORE: asSql() }),
@@ -323,7 +329,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       current_setting('lock_timeout')::interval > interval '0 seconds' AND
       current_setting('lock_timeout')::interval <= interval '5 seconds')`);
       const before = await settings();
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const invoke = await prepareSignin(
         caller,
         signinEnv({ SESSION_STORE: store, ROSTER_STORE: asSql() }),
@@ -354,7 +360,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
       await shared.unsafe("SET statement_timeout = '27s'");
       await shared.unsafe("SET lock_timeout = '23s'");
       const before = await settings();
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const env = signinEnv({ SESSION_STORE: store, ROSTER_STORE: asSql() });
       const invoke = await prepareSignin(caller, env);
       await expectIssued(await invoke(), caller, store);
@@ -392,7 +398,7 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
         await shared.unsafe(
           "ALTER TABLE users ADD CONSTRAINT refuse_roster CHECK (false) NOT VALID",
         );
-      const store = createMemorySessionStore();
+      const store = createPostgresSessionStore(session as unknown as Sql);
       const env = signinEnv({ SESSION_STORE: store, DATABASE_URL: url!.href });
       const invoke = await prepareSignin(caller, env);
       vi.spyOn(console, "warn").mockImplementation(() => {});
