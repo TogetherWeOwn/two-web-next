@@ -43,6 +43,7 @@
 .events-page .member-board-table :is(caption, td, th[scope=row]) { overflow-wrap: anywhere; }
 .events-page .member-board-table :is(th, td):first-child { width: 5.5rem; }
 .events-page .member-board-table :is(th, td):last-child { width: 5rem; }
+.events-page [data-archive-state] { overflow-wrap: anywhere; }
 .events-page [data-archive-pager] { display: flex; flex-wrap: wrap; gap: 1.5rem; }
 @media (max-width: 48rem) {
   .events-page .schedule-row { grid-template-columns: 3.5rem minmax(0, 1fr); padding: 1rem; gap: 1rem; }
