@@ -70,7 +70,7 @@ import {
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
-import { isDatabaseUnavailable } from "../db/errors";
+import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
@@ -250,12 +250,25 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // than stacking their deadlines; they still share one pooled connection, so
     // the budget covers both transactions. Failed/blocked widgets are omitted;
     // authorization and the guard's critical access-log write stay fail-closed.
-    const [funnel, zeroSearches] = db
-      ? await Promise.all([
-          dashboardJoinFunnel(db, identity),
-          topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
-        ])
-      : [undefined, undefined];
+    let funnel: Awaited<ReturnType<typeof dashboardJoinFunnel>>;
+    let zeroSearches: Awaited<ReturnType<typeof topZeroResultSearches>>;
+    if (db) {
+      const [funnelResult, zeroSearchesResult] = await Promise.allSettled([
+        dashboardJoinFunnel(db, identity),
+        topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
+      ]);
+      for (const result of [funnelResult, zeroSearchesResult]) {
+        if (result.status === "rejected" && !isDatabaseQueryCancellation(result.reason)) {
+          throw result.reason;
+        }
+      }
+      funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
+      zeroSearches =
+        zeroSearchesResult.status === "fulfilled" ? zeroSearchesResult.value : undefined;
+    } else {
+      funnel = undefined;
+      zeroSearches = undefined;
+    }
     return bufferedMemberHtml(
       c,
       <AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />,

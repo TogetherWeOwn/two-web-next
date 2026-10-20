@@ -262,6 +262,28 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     },
   );
 
+  it("omits a zero-search cancellation and still answers with the funnel", async () => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db, session } = aggregateDb(7);
+    let calls = 0;
+    session.transaction = async (work) => {
+      if (++calls === 1) return work(db);
+      throw Object.assign(new Error("statement timeout"), {
+        code: "57014",
+        name: "PostgresError",
+      });
+    };
+    const res = await adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
+      ...env,
+      ADMIN_DB: db,
+    } as Env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).not.toContain('data-testid="top-zero-searches"');
+  });
+
   it("omits the funnel widget and still answers 200", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store);
