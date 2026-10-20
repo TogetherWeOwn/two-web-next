@@ -331,6 +331,62 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(r).toMatchObject({ resynced: 1, deferred: 0 });
     });
 
+    it("a cutoff without a page limit returns only due keys, not sleeping recovery or dirty keys", async () => {
+      const recoveryId = await seedPublished("aaa-recovery-future");
+      await markClean("aaa-recovery-future");
+      await seedAttempt(recoveryId, { attempts: 2, nextAttemptAt: FUTURE });
+      const dirtyId = await seedPublished("aaa-dirty-future");
+      await markClean("aaa-dirty-future");
+      await sql`update events set sync_revision = sync_revision + 1 where id = ${dirtyId}`;
+      await seedAttempt(dirtyId, { attempts: 0, nextAttemptAt: FUTURE });
+      await seedPublished("zzz-ready");
+
+      const store = pgEventStore(sql);
+      expect(await store.staleEventKeys(undefined, NOW)).toEqual(["zzz-ready"]);
+      expect(await store.staleEventKeys()).toEqual([
+        "aaa-dirty-future",
+        "aaa-recovery-future",
+        "zzz-ready",
+      ]);
+    });
+
+    it("an attempts-0 dirty request is due at the exact deadline, but its future twin is not", async () => {
+      const original = "99999999-9999-4999-8999-999999999999";
+      const dueId = await seedPublished("aaa-dirty-due");
+      await markClean("aaa-dirty-due");
+      await sql`update events set sync_revision = sync_revision + 1 where id = ${dueId}`;
+      await seedAttempt(dueId, { attempts: 0, nextAttemptAt: NOW, idempotencyKey: original });
+      const earlyId = await seedPublished("aaa-dirty-early");
+      await markClean("aaa-dirty-early");
+      await sql`update events set sync_revision = sync_revision + 1 where id = ${earlyId}`;
+      const future = new Date(NOW.getTime() + 1000);
+      await seedAttempt(earlyId, { attempts: 0, nextAttemptAt: future });
+
+      const store = pgEventStore(sql);
+      // Neither row can enter through recovery, which requires attempts > 0.
+      expect(await pageWith(store, 10, new Date(NOW.getTime() - 1000))).toEqual({
+        keys: [],
+        deferred: 0,
+      });
+      expect(await pageWith(store, 10, NOW)).toEqual({ keys: ["aaa-dirty-due"], deferred: 0 });
+
+      const queue = fakeQueue();
+      const r = await reconcileEvents({ events: store, queue, lock: memLock(), now: () => NOW });
+      expect(queue.sent).toEqual([
+        expect.objectContaining({ eventKey: "aaa-dirty-due", idempotencyKey: original }),
+      ]);
+      expect(r).toMatchObject({ resynced: 1, deferred: 0 });
+      expect(await store.pendingSync("aaa-dirty-due")).toMatchObject({
+        idempotencyKey: original,
+        requestAttempts: 0,
+        nextAttemptAt: NOW,
+      });
+      expect(await store.pendingSync("aaa-dirty-early")).toMatchObject({
+        requestAttempts: 0,
+        nextAttemptAt: future,
+      });
+    });
+
     it("the exact deadline is due under the original key; one second earlier is not", async () => {
       const original = "88888888-8888-4888-8888-888888888888";
       const dueId = await seedPublished("mmm-due");
