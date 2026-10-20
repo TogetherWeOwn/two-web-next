@@ -34,6 +34,13 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
+- **Focused mutation (WARN):** `.github/workflows/mutation-roles-wall-time.yml`
+  runs the DB-free baseline plus only `R4`–`R7` and `W1`–`W3` on the existing
+  standard GitHub-hosted runner. It is not required and is separate from `ci`
+  (including `ci-ok` and its deployment consumer). The job and signal steps
+  use `continue-on-error`: survivors and infrastructure failures cannot fail
+  the overall check. JSON, Markdown and per-run Vitest evidence are retained
+  for 14 days, including on failure. The full nightly signal stays unchanged.
 - **Test inventory (HARD):** `ci/test-inventory.mjs` fails the job when a
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
   runs `npm run test:inventory -- --strict` with no `continue-on-error`;
@@ -100,16 +107,34 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
 
-## Merge-blocking mutation proposal
+## Focused mutation rollout (WARN-first)
 
-Nightly triage (2026-10-11, head `de850cf`): 20/20 mutants killed, zero
-survivors, so nothing is on fire. The blocking candidates are the seven new
-targeted mutants — `R4`–`R7` (`src/roles.ts`: blank-allowlist admit,
-fetch-failure admit, lookup-failure admit, any-role admits) and `W1`–`W3`
+The fixed seven-mutant subset is `R4`–`R7` (`src/roles.ts`: blank-allowlist
+admit, fetch-failure admit, lookup-failure admit, any-role admits) and `W1`–`W3`
 (`src/admin/validation-wall-time.ts`: fold flip, gap admitted, unknown zone
-admitted) — because each is killed by a 2-file, 46-test subset
-(`moderator-malformed-success` + `event-time-validation`) that runs in ~3s
-DB-free. A blocking job (baseline + 7 mutants ≈ under 1 min on the existing
-runners) flips these from nightly-signal to merge-blocking without moving the
-slow session/join/admin mutants, which stay nightly. Not implemented yet:
-needs its own PR wiring the subset job in WARN first.
+admitted). It runs only `test/moderator-malformed-success.test.ts` and
+`test/event-time-validation.test.ts` (46 tests), with no database URLs inherited
+by Vitest. The slow session/join/admin mutants remain in the existing nightly
+job; that inventory, its safeguards and all coverage floors are unchanged.
+
+Run `env -u DATABASE_URL npm run mutation:roles-wall-time` locally. The runner
+refuses dirty targets, requires a green unmutated baseline, checks unique
+anchors, and reuses the nightly targeted restore with SHA-256 verification
+before proceeding to another mutant. Each Vitest child has a 20-second cap;
+the job has a five-minute cap. No whole-tree checkout or dirty-target bypass
+is offered. A restore mismatch stops further mutation and preserves unexpected
+bytes for inspection. Abrupt runner loss or an uncatchable process kill cannot
+promise cleanup; partial reports are saved before mutation and after each result.
+
+`artifacts/mutation-roles-wall-time/report.{json,md}` distinguishes surviving
+mutants (coverage gaps, exit 0) from infrastructure failures (exit 1): baseline
+failure, missing inputs, stale/ambiguous anchors, timeouts, signals, spawn/load
+errors and restore mismatches. Exit 1 from Vitest is not enough to count a kill:
+both suite files must produce complete, non-skipped assertion results with an
+actual failed test. Reports include per-mutant before/after hashes. The
+always-run workflow summary writes an infrastructure fallback if no runner
+report exists, and the always-run upload preserves available reports and logs.
+
+Run `npm run mutation:roles-wall-time:selftest` for hermetic harness and workflow
+wiring checks. Promotion to HARD remains a separate reviewed slice: this job
+is intentionally WARN-only and neither branch protection nor `ci-ok` reads it.
