@@ -1,4 +1,4 @@
-// Month-jump enhanced-navigation acceptance (TOG-34011 Test Author handoff).
+// Month-jump enhanced-navigation acceptance (Test Author handoff).
 //
 // Executes the SHIPPED binder (public/islands/events-calendar.js) in a fixture
 // DOM with intercepted fetch: no browser, DB, network or new dependency.
