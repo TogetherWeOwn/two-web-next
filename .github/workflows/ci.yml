@@ -259,6 +259,12 @@ jobs:
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+      - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
+        run: |
+          npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json
+          for surface in hono-calendar hono-archive kit-calendar kit-archive; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
+          done
       - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
         env:
           ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
