@@ -270,8 +270,13 @@ describe("supplemental route-level refusal pins", () => {
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(await response.text()).toContain("We will be right back");
     } else {
-      expect(response.headers.get("content-type")).toContain("text/plain");
-      expect(await response.text()).toBe("Sign-out temporarily unavailable");
+      // Intentional pin update: refusal correlation serves the shared
+      // JSON envelope (with request_id) instead of legacy plaintext.
+      expect(response.headers.get("content-type")).toContain("application/json");
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ error: "db_unavailable" });
+      expect(typeof body.request_id).toBe("string");
+      expect(JSON.stringify(body)).not.toContain(PRIVATE);
     }
   });
 
