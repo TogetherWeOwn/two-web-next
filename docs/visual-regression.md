@@ -59,8 +59,21 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
    `*-actual.png` over its baseline and each new baseline into place. A
    reviewed actual supersedes the stale committed copy of the same baseline
-   inside the artifact; the script refuses (writing nothing) when two
-   genuinely different sources map to one baseline.
+   inside the artifact. A baseline-directory copy alone can add a genuinely
+   absent baseline or match an existing one (a byte-identical no-op); it cannot
+   replace differing checkout bytes. A stale-copy conflict names that baseline
+   and refuses the entire plan. Use a current artifact or review a matching
+   actual; do not delete the newer checkout baseline to force acceptance.
+   Conflicting actuals, differing copies without an actual, and unreadable
+   sources or existing targets also refuse before any baseline is written.
+   All source bytes and local targets are preflighted first; apply-time disk
+   failures are not rolled back.
+
+   Suite ownership uses exact directory segments relative to the unzipped
+   artifact root, not substrings or the extraction folder's name. Kit output
+   directories (`test-results-kit-visual/`, `test-results-kit-parity/`, and
+   `__screenshots-kit__/`) are excluded; use the
+   [Kit acceptance guide](kit-parity-gates.md#visual-gates) for those images.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 
