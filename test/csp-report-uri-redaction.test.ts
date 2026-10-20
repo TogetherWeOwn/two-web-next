@@ -229,12 +229,17 @@ describe("CSP report URI log confidentiality", () => {
     random.mockReturnValue(0.5);
     await post(payload, "0.5");
     await post(payload, "typo");
-    expect(warn).toHaveBeenCalledTimes(2);
-    for (const call of warn.mock.calls)
+    // Two violation lines plus the once-per-isolate warn for the "typo"
+    // sample rate (which keeps the sink logging at 1.0).
+    expect(warn).toHaveBeenCalledTimes(3);
+    const violations = warn.mock.calls.filter((call) => call[0] === "csp.report.violation");
+    expect(violations).toHaveLength(2);
+    for (const call of violations)
       expect(call[1]).toMatchObject({
         blocked_uri: "inline",
         document_uri: "https://next.example.test/document",
       });
+    expect(JSON.stringify(warn.mock.calls)).toContain("CSP_REPORT_SAMPLE_RATE");
     for (const marker of markers) expect(JSON.stringify(warn.mock.calls)).not.toContain(marker);
   });
 });

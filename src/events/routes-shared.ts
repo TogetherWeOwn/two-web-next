@@ -3,6 +3,7 @@
 // this file holds what at least two groups use. Re-exported from the barrel.
 import type { Context, Hono } from "hono";
 import type { Env, Session } from "../env";
+import { warnInvalidConfigOnce } from "../config-warn";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
 import { throttleGuard } from "../throttle";
@@ -27,11 +28,14 @@ export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
  * disposable Postgres) set `E2E_PUBLIC_READ_BUDGET` and the suites stop
  * tripping each other's windows. Positive integers only; anything else keeps
  * the production 60 (same shape as the agent-events `routePerMinute`
- * override).
+ * override). A configured-but-invalid value warns once per isolate.
  */
 export function publicReadBudget(env: Env): number {
-  const override = Number(env.E2E_PUBLIC_READ_BUDGET);
-  return Number.isInteger(override) && override > 0 ? override : PUBLIC_EVENT_READS_PER_MINUTE;
+  const raw = env.E2E_PUBLIC_READ_BUDGET;
+  const override = Number(raw);
+  if (Number.isInteger(override) && override > 0) return override;
+  if (raw !== undefined && raw.trim() !== "") warnInvalidConfigOnce("E2E_PUBLIC_READ_BUDGET", raw);
+  return PUBLIC_EVENT_READS_PER_MINUTE;
 }
 
 /** One client budget across public pages and feeds, before event or session reads. */
