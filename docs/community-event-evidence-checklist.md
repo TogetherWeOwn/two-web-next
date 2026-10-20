@@ -19,7 +19,7 @@ Complete one row per week. Record exact inclusive/exclusive boundaries and timez
 | --- | --- |
 | Week | Exact calendar date range, start/end timestamps, and timezone. |
 | Event | Title and scheduled start/end time of the event counted for this week. |
-| Occurrence evidence | Link to the organizer occurrence record proving the event was actually held at its scheduled time — for example the Discord scheduled event reaching active/completed, or the organizer log. Name the source and access date. |
+| Occurrence evidence | Link to the organizer occurrence record proving the event was actually held at its scheduled time — for example a contemporaneous organizer, recorder, or host closeout note confirming the session began and ended, with observed start/end and timezone. Name the source and access date. |
 | Occurrence verdict | `Held` or `Not held` under the occurrence rule below. |
 | Attendance | Distinct humans with any evidenced presence during the event window, counted under the attendance rule below; or `Not reported` with the reason. |
 | Attendance source | Link to the already-authorized presence source used, with its bot-exclusion rule; or `None — Not reported`. |
@@ -27,7 +27,8 @@ Complete one row per week. Record exact inclusive/exclusive boundaries and timez
 
 ## Occurrence rule
 
-- An event counts for its week only if it was actually held at its scheduled time, evidenced by the organizer occurrence record (for example the Discord scheduled event reaching active/completed, or the organizer log).
+- An event counts for its week only if it was actually held at its scheduled time, evidenced by the organizer occurrence record confirming the session began and ended, with observed start/end and timezone. Use the [run-of-show closeout evidence](weekly-event-run-of-show.md#closeout-evidence), such as a contemporaneous organizer, recorder, or host closeout note.
+- Platform event status alone is not occurrence proof. In particular, Discord external scheduled events can automatically become active/completed at their scheduled times even when no session took place. Keep platform state separate from occurrence evidence.
 - Cancelled, skipped, moved-out-of-week, and unevidenced events do not count.
 - A week with no evidenced held event fails the run.
 - A rescheduled event is not held in its original week; if it actually takes place later, it counts only in the week it occurs, and never in both weeks. See [event planning cadence](event-planning-cadence.md#no-event-cancellation-and-reschedule).
@@ -45,7 +46,7 @@ Complete one row per week. Record exact inclusive/exclusive boundaries and timez
 
 ## Consecutive-week rule
 
-The gate needs four consecutive `Pass` weeks. Any `Fail` week — missed event, missing or unknown evidence, cancellation, skip — breaks the run; start the four-week run again after the break. Do not treat missing evidence as zero or as a pass. Attendance recorded as `Not reported` does not fail an otherwise held week, but the gap must be recorded, not filled.
+The gate needs four consecutive `Pass` weeks. Any `Fail` week — missed event, missing or unknown occurrence evidence, cancellation, skip — breaks the run; start the four-week run again after the break. Do not treat missing evidence as zero or as a pass. Attendance recorded as `Not reported` does not fail an otherwise held week, but the gap must be recorded, not filled.
 
 ## Examples (synthetic; not community measurements)
 
@@ -89,6 +90,10 @@ Week 3's event was cancelled and never took place. The cancellation breaks the r
 | 2026-04-27 → 2026-05-04 | Game night D | Synthetic organizer log entry: held 2026-05-01 19:00–21:00 UTC | Held | 9 distinct humans; synthetic presence record; bots excluded | Pass |
 
 Result: not demonstrated. The longest consecutive run is weeks 1–2 (two weeks). A cancellation is never a held event in its original week; if a replacement takes place later, it counts only in the week it occurs.
+
+### Status-only negative control
+
+Suppose four synthetic Discord external scheduled events automatically reach active/completed at their scheduled times, but no session takes place and no closeout confirms actual start/end. All four weeks are `Not held` / `Fail`, even if the listings or RSVP totals look complete. Platform status cannot demonstrate the occurrence condition.
 
 ## Authorization boundary
 
