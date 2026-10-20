@@ -69,9 +69,10 @@ available option is considered.
 
 If automatic Discord entry fails, the callback has a non-member session and
 lands at `/?n=join_failed` instead of sending the person to a protected page
-that would return 403 and hide the failure explanation and invite. When a safe
-return destination was recorded, it is kept as the intended destination for a
-plain retry. If this followed an expired write, its recovery notice also stays
+that would return 403 and hide the failed-auto-join explanation. That generic
+403 still offers an invite link, but not the reason automatic entry failed.
+When a safe return destination was recorded, it is kept as the intended
+destination for a plain retry. If this followed an expired write, its recovery notice also stays
 pending. A successful retry can return to the original safe page and show the
 one-shot resubmit notice; the failed auto-join or its notice does not prove
 membership. A bounced write goes to write recovery, never back into a resubmit.
