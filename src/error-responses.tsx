@@ -3,6 +3,7 @@ import { accepts } from "hono/accepts";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import {
+  BadRequestPage,
   ForbiddenPage,
   GonePage,
   InternalErrorPage,
@@ -13,6 +14,7 @@ import {
 } from "./error-pages";
 import type { SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
+import { mediaType, splitAcceptRanges } from "./media-type";
 import {
   bufferedMemberHtml,
   bufferedMemberJson,
@@ -74,7 +76,7 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
 
 // Merge Accept into Vary (preserving any existing dimensions such as Origin
 // or Cookie) rather than overwriting the header.
-function varyAccept(c: Context) {
+export function varyAccept(c: Context) {
   const current = c.res.headers.get("Vary");
   if (current) {
     const dims = current.split(",").map((d) => d.trim().toLowerCase());
@@ -125,7 +127,8 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
 // Match the JSON-only event contracts before a handler can run (e.g. session
 // lookup failure). GET /events and admin/profile browser forms still negotiate.
 function jsonOnlyEventRequest(c: Context): boolean {
-  const { method, path } = c.req;
+  const path = c.req.path;
+  const method = c.req.method.toUpperCase();
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
@@ -166,6 +169,42 @@ function outageRepresentation(c: Context): string {
       return preferred.q > 0 ? preferred.type : config.default;
     },
   });
+}
+
+// Existing machine refusals keep their exact bytes unless a browser explicitly
+// prefers HTML. Fetch's absent/wildcard Accept is not a browser opt-in. Callers
+// merge Vary: Accept even when retaining the legacy representation.
+export function prefersHtmlError(c: Context): boolean {
+  return (
+    !jsonOnlyEventRequest(c) &&
+    !c.req.path.startsWith("/api/") &&
+    !isFeedErrorPath(c.req.path) &&
+    splitAcceptRanges(c.req.header("accept")).some((range) => mediaType(range) === "text/html") &&
+    outageRepresentation(c) === "text/html"
+  );
+}
+
+// Malformed input shares the established 403/413 negotiation, while feed
+// readers retain the original plaintext upload refusal.
+export function badRequest(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(400);
+  if (isFeedErrorPath(c.req.path)) {
+    return memberReadActive()
+      ? bufferedMemberText(c, "Bad request", 400)
+      : c.text("Bad request", 400);
+  }
+  if (
+    jsonOnlyEventRequest(c) ||
+    c.req.path.startsWith("/api/") ||
+    outageRepresentation(c) === "application/json"
+  ) {
+    const body = { error: "bad_request", message: "Check your request and try again." };
+    return memberReadActive() ? bufferedMemberJson(c, body, 400) : c.json(body);
+  }
+  const page = <BadRequestPage />;
+  return memberReadActive() ? bufferedMemberHtml(c, page, 400) : c.html(page);
 }
 
 // Shared outage envelope: no session/data reads, no driver details. Explicit
