@@ -16,12 +16,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
+import { expectedLhrs, loadCollectedLhrs, loadLhrs } from "./lighthouse-quality-run.mjs";
+
+const require = createRequire(import.meta.url);
+const { sampleMatrix, evidenceLines } = require("./lighthouse-samples.cjs");
 
 const budget = JSON.parse(readFileSync(new URL("./quality-budget.json", import.meta.url), "utf8"));
 
 export function routeOf(url) {
   try {
-    return new URL(url).pathname;
+    const parsed = new URL(url);
+    return parsed.pathname + parsed.search + parsed.hash;
   } catch {
     return url;
   }
@@ -30,7 +36,7 @@ export function routeOf(url) {
 export function summarize(lhrs, minScores) {
   const byRoute = new Map();
   for (const lhr of lhrs) {
-    const route = routeOf(lhr.finalDisplayedUrl || lhr.requestedUrl || "");
+    const route = routeOf(lhr.requestedUrl || lhr.finalDisplayedUrl || lhr.finalUrl || "");
     byRoute.set(route, [...(byRoute.get(route) ?? []), lhr]);
   }
   const lines = [
@@ -85,14 +91,6 @@ export function summarize(lhrs, minScores) {
   return lines.join("\n") + "\n";
 }
 
-function loadLhrs(dir) {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".json") && f !== "manifest.json")
-    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")))
-    .filter((r) => r.categories);
-}
-
 // Fail-closed guard for missing evidence: a blank summary with no artifact is
 // indistinguishable from all-budgets-passed, so zero loaded LHRs fails unless
 // the run was explicitly marked as skipped (LIGHTHOUSE_SUMMARY_ALLOW_EMPTY=1,
@@ -120,9 +118,17 @@ export function emptyResult({ allowEmpty }) {
 // The main-block wiring extracted so the selftest pins it: the empty branch,
 // the ALLOW_EMPTY_ENV read, and the exit code. Callers redirect stdout to
 // $GITHUB_STEP_SUMMARY, so the ::error:: annotation must go to stderr.
-export function buildSummary({ lhrs, env = process.env, standardsText = null }) {
+export function buildSummary({
+  lhrs,
+  collectedLhrs = lhrs,
+  hasReportFiles = lhrs.length + collectedLhrs.length > 0,
+  env = process.env,
+  standardsText = null,
+}) {
   const parts = [];
-  const allowEmpty = env[ALLOW_EMPTY_ENV] === "1";
+  const allowEmpty = env[ALLOW_EMPTY_ENV] === "1" && !hasReportFiles;
+  const { collect } = expectedLhrs({ env });
+  const matrix = sampleMatrix(collectedLhrs, collect);
   let exitCode = 0;
   let error = null;
   if (lhrs.length === 0) {
@@ -132,6 +138,17 @@ export function buildSummary({ lhrs, env = process.env, standardsText = null }) 
     error = result.error;
   } else {
     parts.push(summarize(lhrs, budget.categories));
+  }
+  if (!(lhrs.length === 0 && allowEmpty)) {
+    parts.push("### Planned URL collection evidence\n", ...evidenceLines(matrix));
+    if (!matrix.complete) {
+      exitCode = 1;
+      error ??=
+        "::error::Incomplete Lighthouse collection: planned per-URL sample quotas were not met.";
+      parts.push(
+        "\nCOLLECT FAILURE: incomplete per-URL evidence; category scores are not a completeness verdict.\n",
+      );
+    }
   }
   if (standardsText) parts.push(standardsText);
   return { text: parts.join("\n"), exitCode, error };
@@ -183,7 +200,16 @@ function selftest() {
   assert.equal(wiredSkipped.exitCode, 0);
   assert.equal(wiredSkipped.error, null);
   assert.match(wiredSkipped.text, /No quality reports/);
-  const wiredFull = buildSummary({ lhrs: [lhr("http://h/", 1)], env: {}, standardsText: null });
+  const { collect } = expectedLhrs({ env: {} });
+  const full = collect.url.flatMap((url) =>
+    Array.from({ length: collect.numberOfRuns }, () => ({
+      ...lhr(url, 1),
+      categories: Object.fromEntries(
+        Object.keys(budget.categories).map((id) => [id, { score: 1 }]),
+      ),
+    })),
+  );
+  const wiredFull = buildSummary({ lhrs: full, env: {}, standardsText: null });
   assert.equal(wiredFull.exitCode, 0);
   assert.equal(wiredFull.error, null);
   assert.match(wiredFull.text, /Lighthouse quality/);
@@ -216,7 +242,18 @@ else {
   const standardsText = existsSync(".lighthouseci/standards-summary.md")
     ? readFileSync(".lighthouseci/standards-summary.md", "utf8")
     : null;
-  const result = buildSummary({ lhrs, env: process.env, standardsText });
+  const result = buildSummary({
+    lhrs,
+    collectedLhrs: loadCollectedLhrs(),
+    hasReportFiles: [
+      [".lighthouseci", /^lhr-\d+\.json$/],
+      [".lighthouseci/quality", /^(?!manifest\.json$).*\.json$/],
+    ].some(
+      ([dir, pattern]) => existsSync(dir) && readdirSync(dir).some((name) => pattern.test(name)),
+    ),
+    env: process.env,
+    standardsText,
+  });
   mkdirSync(".lighthouseci", { recursive: true });
   writeFileSync(".lighthouseci/quality-summary.md", result.text);
   console.log(result.text);

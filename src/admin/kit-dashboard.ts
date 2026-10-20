@@ -8,7 +8,7 @@
 // cookies, the session, or the audit. The member-read boundary around
 // resolve() still owns classification and the audit; this only tells the
 // load which HTTP posture the Hono dashboard keeps.
-import { isDatabaseUnavailable } from "../db/errors";
+import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
 
 export type DashboardWidgetOutage = { outage: true };
 export type DashboardWidgetValues<F, Z> = {
@@ -31,7 +31,11 @@ export function resolveDashboardWidgets<F, Z>(
   zeroSearches: PromiseSettledResult<Z | undefined>,
 ): DashboardWidgetOutage | DashboardWidgetValues<F, Z> {
   for (const settled of [funnel, zeroSearches]) {
-    if (settled.status === "rejected" && isDatabaseUnavailable(settled.reason)) {
+    if (
+      settled.status === "rejected" &&
+      isDatabaseUnavailable(settled.reason) &&
+      !isDatabaseQueryCancellation(settled.reason)
+    ) {
       return { outage: true };
     }
   }

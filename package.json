@@ -30,6 +30,8 @@
     "test:catalog-preflight": "node --test ci/staging-catalog-preflight.test.mjs",
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
+    "mutation:roles-wall-time": "node ci/mutation-roles-wall-time.mjs",
+    "mutation:roles-wall-time:selftest": "node ci/mutation-sessions-join.mjs --selftest && node --test ci/mutation-roles-wall-time.test.mjs",
     "scan:fetch-await": "npx -y --package @ast-grep/cli@0.50.0 ast-grep scan",
     "scan:rules-test": "npx -y --package @ast-grep/cli@0.50.0 ast-grep test",
     "floor-guard": "node ci/floor-guard.mjs",
@@ -40,6 +42,7 @@
     "test:inventory:selftest": "node ci/test-inventory.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
+    "test:auth-signin-browser": "node ci/auth-browser.mjs",
     "budget": "node ci/check-bundle-budget.mjs",
     "budget:selftest": "node ci/check-bundle-budget.mjs --selftest",
     "worker-budget": "node ci/check-worker-bundle.mjs",
@@ -72,7 +75,7 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
@@ -100,7 +103,7 @@
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.151.0",
-    "yaml": "^2.9.1"
+    "yaml": "2.9.1"
   },
   "overrides": {
     "@lhci/cli": {

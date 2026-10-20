@@ -4,15 +4,15 @@ Use this template to report the four measures in the authoritative TWO Community
 
 ## Reporting period
 
-- **Week:** `[week label]`
-- **Start:** `[YYYY-MM-DD HH:MM, timezone]`
-- **End:** `[YYYY-MM-DD HH:MM, timezone]`
+- **Week:** `[YYYY-Www; ISO week-year and week number]`
+- **Start (inclusive):** `[YYYY-MM-DDT00:00:00Z; Monday, UTC]`
+- **End (exclusive):** `[YYYY-MM-DDT00:00:00Z; next Monday, UTC]`
 - **Prepared:** `[date]`
 - **Sources checked:** `[source links or report/query references, with access date]`
 - **Completeness:** `Complete | Partial | No source data`
 - **Notes:** `[known gaps, scope, or corrections; do not include member-level exports]`
 
-Enter exact inclusive/exclusive boundaries and timezone for each report. Use a consistent seven-day period when comparing weeks. The goal record does not specify a timezone or boundary convention; do not imply one has been approved.
+Use the [weekly reporting convention](community-participation-metrics.md#weekly-reporting-convention) adopted 2026-10-20: ISO week, Monday 00:00 UTC inclusive to the next Monday 00:00 UTC exclusive. This is a reporting convention, not a change to goal targets or policy. Each week is 168 hours regardless of local DST; ISO week-years handle W53 and year boundaries without partial weeks. Include exact UTC `[start, end)` timestamps as well as the week label. Event note: **“counted by UTC instant, displayed in host zone”**; assign events by start instant, not host-zone date. Missing-source and scope labels below remain required wherever evidence is incomplete.
 
 ## Metrics
 
@@ -49,7 +49,7 @@ These examples demonstrate status handling only. Values and source names below a
 | Joins | 3 | Synthetic complete join report; bot joins excluded; illustrative only. |
 | Event attendance | 7 | Synthetic attendance evidence record (not RSVP data); illustrative only. |
 
-Period: `2026-01-05 00:00 UTC` through `2026-01-12 00:00 UTC` (half-open interval). Completeness: `Complete`. This fictional example demonstrates a fully populated period; it is not evidence that the specified measurement sources are approved or available.
+Period: `2026-W02: [2026-01-05T00:00:00Z, 2026-01-12T00:00:00Z)`. Event note: “counted by UTC instant, displayed in host zone”. Completeness: `Complete`. This fictional example demonstrates a fully populated period; it is not evidence that the specified measurement sources are approved or available.
 
 ### Missing-source example
 
@@ -60,7 +60,7 @@ Period: `2026-01-05 00:00 UTC` through `2026-01-12 00:00 UTC` (half-open interva
 | Joins | 3 | Synthetic full-period join source; illustrative only. |
 | Event attendance | Not reported | No documented attendance evidence source; an RSVP roster is not a substitute. |
 
-Completeness: `Partial`. Do not convert either missing value to zero.
+Period: `2026-W03: [2026-01-12T00:00:00Z, 2026-01-19T00:00:00Z)`. Event note: “counted by UTC instant, displayed in host zone”. Completeness: `Partial`. Do not convert either missing value to zero.
 
 ### Empty-week example
 
@@ -71,7 +71,7 @@ Completeness: `Partial`. Do not convert either missing value to zero.
 | Joins | 0 (verified) | Synthetic full-period join source; bot joins excluded. |
 | Event attendance | 0 (verified) | Synthetic complete attendance evidence confirms no attendance; RSVP counts are not used. |
 
-Completeness: `Complete`. If any source is absent, incomplete, or ambiguous instead, mark the affected metric `Not reported` rather than zero.
+Period: `2026-W04: [2026-01-19T00:00:00Z, 2026-01-26T00:00:00Z)`. Event note: “counted by UTC instant, displayed in host zone”. Completeness: `Complete`. If any source is absent, incomplete, or ambiguous instead, mark the affected metric `Not reported` rather than zero.
 
 ## Source references and limits
 

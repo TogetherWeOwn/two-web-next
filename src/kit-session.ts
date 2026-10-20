@@ -11,8 +11,10 @@
 // probe below, attached by the hook only to successful moderator admin
 // documents. Rotation stays route-specific inside Hono's readSession
 // (no blanket rotating layout load; fragments and JSON keep nonrotating
-// reads), logout stays the authoritative Hono POST /logout, and flashes stay
-// Hono-consumed until a Kit route needs to consume them.
+// reads), and logout stays the authoritative Hono POST /logout. This module
+// only peeks flashes. Profile destinations expire the join flash in the hook
+// core after a released successful HTML GET; that deletion does not run
+// here and does not issue or rotate a session.
 //
 // Decision contract: "authenticated" (live row, bits from the row),
 // "guest" (missing/tampered cookie, non-two_ token, unknown/expired/revoked
@@ -154,9 +156,12 @@ function expiredWriteOf(value: string | false | undefined): string | null {
 /**
  * Kit-visible return state, read-only: the safe destination the OAuth
  * callback would honor, the one-shot join flash, and the pending
- * expired-write notice. Consumption (cookie deletion) stays Hono-side, so a
- * Kit read can never double-spend a flash. HEAD/POST reads leave the join
- * flash pending, matching Hono's GET-only readJoinResult.
+ * expired-write notice. This peek never deletes. A profile destination
+ * expires a valid flash only after the member-read boundary releases a
+ * successful HTML GET; every other Kit read still leaves consumption to the
+ * route that renders the banner. HEAD/POST reads leave the join flash
+ * pending, matching Hono's GET-only readJoinResult, so a peek cannot
+ * double-spend it.
  */
 export async function readReturnJourney(
   request: Request,
