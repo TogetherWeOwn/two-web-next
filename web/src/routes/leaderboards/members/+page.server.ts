@@ -82,6 +82,7 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
           }
         }
       }
+      setHeaders({ "cache-control": "no-store, private", vary: "Cookie" });
       redirect(302, "/auth/discord");
     }
     if (status === 403) error(403, "Forbidden");
