@@ -105,13 +105,34 @@ export async function eraseMember(
     const users = await tx`delete from users where id = ${discordId} returning 1`;
     const profiles = await tx`delete from profiles where user_id = ${discordId} returning 1`;
     const rsvps = await tx`delete from rsvps where user_id = ${discordId} returning 1`;
-    const sessions = await tx`delete from web_sessions where user_id = ${discordId} returning 1`;
+    // An in-flight rotation can replace a locked source row after this
+    // DELETE's statement snapshot. Recount with a fresh snapshot and delete
+    // its successor, like revokeMemberSessions does for revocation stamps.
+    // The loop has no pass cap on purpose: a bounded cap throws away (by
+    // rolling back) every row deleted so far, so sustained rotation always
+    // outlasts it while the victim stays signed in. Each pass deletes every
+    // row in a fresh snapshot, so a rotation racing a deleted row parks on
+    // its lock and then fails on the missing source without minting; only
+    // rotations already holding a source lock can still commit a successor,
+    // bounding each pass's miss to the instantaneously in-flight frontier.
+    // Passes therefore chase a shrinking frontier until one pass observes
+    // quiescence. Database errors still propagate and roll the whole
+    // erasure back.
+    let sessions = 0;
+    for (;;) {
+      const deleted = await tx`delete from web_sessions where user_id = ${discordId} returning 1`;
+      sessions += deleted.length;
+      const [remaining] = await tx<
+        { n: number }[]
+      >`select count(*)::int as n from web_sessions where user_id = ${discordId}`;
+      if ((remaining?.n ?? 0) === 0) break;
+    }
     const attempts =
       await tx`delete from join_attempts where discord_id = ${discordId} returning 1`;
     counts.users = users.length;
     counts.profiles = profiles.length;
     counts.rsvps = rsvps.length;
-    counts.web_sessions = sessions.length;
+    counts.web_sessions = sessions;
     counts.join_attempts = attempts.length;
     return counts;
   });
