@@ -34,7 +34,27 @@ any other host.
 - The repo is public, so the job summary lists alert names and counts only. The
   full report, with URLs and evidence, is never uploaded. Reproduce locally with
   the same image and command when you need detail.
-- An `ignore` entry may carry an optional `uriPrefix`: only alert instances
-  whose URI contains that substring are ignored, so Worker-served hits for the
-  same plugin still count. Prefer a scoped ignore when the evidence is
-  edge-owned (for example `/cdn-cgi/` for Cloudflare-injected assets).
+- An `ignore` entry may carry an optional `uriPrefix`, interpreted as a parsed
+  pathname prefix, not a substring of the full URI. A scoped exemption requires
+  an absolute HTTP(S) string URI with the same parsed origin (scheme, host and
+  effective port) as its containing site's absolute HTTP(S) `@name`. Missing or
+  invalid site/URI evidence, credentials, relative URLs, parser-repaired whitespace
+  or backslashes, and invalid percent escapes cannot establish an exemption.
+  Query/fragment matches, foreign origins and lookalike paths remain counted.
+- Before subtracting any scoped instances, the explicit `count` must be a
+  non-negative safe integer (number or canonical integer string) equal to the
+  supplied instance-list length. Missing, malformed or inconsistent counts fail
+  closed with a diagnostic that contains only structural indexes, not raw input.
+  Without instances the alert stays; with complete evidence, only proven edge
+  hits are subtracted and every unproved or Worker-served hit remains counted.
+  The committed exception remains plugin 10096 on `/cdn-cgi/`; Medium and Low
+  budgets remain zero. High is still non-exemptible. This proof requirement does
+  not change structurally valid empty-scan behavior, including `site: []`.
+
+Run the synthetic offline regression coverage with:
+
+```sh
+npm test -- test/zap-gate.test.ts test/zap-scope-evidence-acceptance.test.ts test/zap-uri-admission.test.ts test/zap-retry-decision.test.ts
+```
+
+No live scanner or network access is needed to verify the exemption boundary.

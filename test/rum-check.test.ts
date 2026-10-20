@@ -193,11 +193,8 @@ describe("ci/rum-check.mjs injected fetch", () => {
     CF_RUM_ACCOUNT_ID: "account-marker-abc123",
     CF_RUM_SITE_TAG: "site-marker-abc123",
   };
-  const jsonResponse = (body: unknown, status = 200) => ({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => body,
-  });
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status });
   const run = (
     responseOrFetch: unknown,
     runEnv: Record<string, string> = env,
@@ -214,13 +211,7 @@ describe("ci/rum-check.mjs injected fetch", () => {
   };
 
   it("fails invalid JSON instead of reporting insufficient data", async () => {
-    const r = await run({
-      ok: true,
-      status: 200,
-      json: async () => {
-        throw new SyntaxError("bad");
-      },
-    });
+    const r = await run(new Response("not json"));
     expect(r.code).toBe(1);
     expect(r.kind).toBe("invalid-response");
     expect(r.summary).toMatch(/Response invalid/);
@@ -397,6 +388,93 @@ describe("ci/rum-check.mjs injected fetch", () => {
     expect(r.summary).toContain("1 GraphQL error(s)");
     expect(r.summary).not.toContain("partial-failure-marker");
   });
+
+  it("keeps synchronous and rejected network failures classified and payload-free", async () => {
+    for (const fetchImpl of [
+      () => {
+        throw new Error("token-marker-abc123");
+      },
+      () => Promise.reject(new Error("account-marker-abc123")),
+    ]) {
+      const r = await run(fetchImpl);
+      expect(r.kind).toBe("query-failed");
+      expect(r.code).toBe(1);
+      expect(r.summary).toContain("Budgets not evaluated.");
+      expect(r.summary).not.toMatch(/marker-abc123/);
+    }
+  });
+
+  it("disposes a response arriving after timeout without starting its reader", async () => {
+    vi.useFakeTimers();
+    let resolveFetch!: (value: unknown) => void;
+    const cancel = vi.fn(() => Promise.reject(new Error("late disposal")));
+    const getReader = vi.fn();
+    const onSummary = vi.fn();
+    try {
+      const pending = runRumCheck({
+        env,
+        budget,
+        timeoutMs: 100,
+        fetchImpl: () => new Promise((resolve) => (resolveFetch = resolve)),
+        onSummary,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await pending).toMatchObject({ code: 1, kind: "timeout" });
+      resolveFetch({ body: { cancel, getReader } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(getReader).not.toHaveBeenCalled();
+      expect(onSummary).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["resolve", "reject"])(
+    "ignores a late read %s even when read and cancellation both ignore abort",
+    async (outcome) => {
+      vi.useFakeTimers();
+      let resolveRead!: (value: unknown) => void;
+      let rejectRead!: (err: Error) => void;
+      const reader = {
+        read: vi.fn(
+          () =>
+            new Promise((resolve, reject) => {
+              resolveRead = resolve;
+              rejectRead = reject;
+            }),
+        ),
+        cancel: vi.fn(() => new Promise(() => {})),
+        releaseLock: vi.fn(),
+      };
+      const onSummary = vi.fn();
+      try {
+        const pending = runRumCheck({
+          env,
+          budget,
+          timeoutMs: 100,
+          fetchImpl: async () => ({ ok: true, status: 200, body: { getReader: () => reader } }),
+          onSummary,
+        });
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await pending).toMatchObject({ code: 1, kind: "timeout" });
+        expect(reader.cancel).toHaveBeenCalledTimes(1);
+        expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+        if (outcome === "resolve") {
+          resolveRead({ done: false, value: new TextEncoder().encode("late payload") });
+        } else {
+          rejectRead(new Error("late read failed"));
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reader.read).toHaveBeenCalledTimes(1);
+        expect(onSummary).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("bounds failure summaries and omits payloads, credentials and identity", async () => {
     const hostile = {

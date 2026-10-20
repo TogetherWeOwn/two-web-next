@@ -103,4 +103,16 @@ describe("Kit member board render", () => {
     // The viewer's own row is marked from the server-side isViewer flag.
     expect(html).toContain('aria-current="true"');
   });
+
+  it("links the board in the Primary nav as the current page, as Hono does, not Events", () => {
+    const nav = renderPage(baseData()).match(
+      /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/,
+    );
+    expect(nav).not.toBeNull();
+    expect(nav![1]).toContain(
+      '<a href="/leaderboards/members" aria-current="page">Leaderboard</a>',
+    );
+    // Events is a sibling section here, never the current page.
+    expect(nav![1]).toContain('<a href="/events">Events</a>');
+  });
 });

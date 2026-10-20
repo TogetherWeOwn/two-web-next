@@ -92,7 +92,9 @@ function varyAccept(c: Context) {
 // Wired by the RSVP writes (src/events/routes.tsx, W9). Uses the same
 // quality/specificity/q=0 selector as outageRepresentation so that explicit
 // JSON q=0, mixed-case, wildcard, and machine-only contracts behave
-// consistently; always emits private no-store + Vary: Accept.
+// consistently; always emits private no-store + Vary: Accept. Feed paths
+// keep their non-HTML contract (same branch as 403/410): a throttled feed
+// reader's parser gets plain text, never the branded page or the envelope.
 export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promise<Response> {
   const parsed = Math.floor(retryAfter);
   const n = Number.isFinite(parsed) ? Math.max(1, parsed) : 60;
@@ -100,6 +102,9 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(429);
+  if (isFeedErrorPath(c.req.path)) {
+    return c.text("Too many requests", 429);
+  }
   if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
     const requestId = supportReference(c);
     return c.json({
