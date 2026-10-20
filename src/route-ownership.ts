@@ -458,8 +458,12 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
-  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
-  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
+  // The member-document proof is supplied only after audit release and full-HTML
+  // classification below; callers without it retain the moderator admin scope.
+  authStatusCookieFor?: (
+    event: HookEventLike,
+    releasedMemberDocument?: boolean,
+  ) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -604,6 +608,7 @@ function renderMemberRead(
   event: HookEventLike,
   reads: MemberRead | undefined,
   deps: HookDispatchDeps,
+  onRelease?: (response: Response) => void,
 ): Promise<Response> {
   return memberReadResponse(
     { method: event.request.method, route: event.route?.id ?? "unmatched" },
@@ -615,7 +620,10 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
-    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
+    (response) => {
+      onRelease?.(response);
+      return deps.afterMemberRead?.(event, response) ?? Promise.resolve();
+    },
   );
 }
 
@@ -697,6 +705,7 @@ export async function dispatchHookRequest(
   // clients the budget allows through.
   const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
+  let releasedMemberResponse: Response | undefined;
   if (route.reads !== "public") {
     // Narrowed once for the deferred render: the closure below would lose the
     // branch narrowing on route.reads.
@@ -708,7 +717,9 @@ export async function dispatchHookRequest(
       });
     } else {
       await bridgeSession();
-      response = await renderMemberRead(event, reads, deps);
+      response = await renderMemberRead(event, reads, deps, (released) => {
+        releasedMemberResponse = released;
+      });
     }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
@@ -734,14 +745,43 @@ export async function dispatchHookRequest(
   if (
     deps.authStatusCookieFor &&
     event.request.method === "GET" &&
-    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
     response.status === 200 &&
     response.headers.get("content-type")?.includes("text/html") &&
-    locals?.status === "authenticated" &&
-    locals.session?.moderator
+    locals?.status === "authenticated"
   ) {
+    // Match the owned manifest entry, not an arbitrary member-looking URL.
+    // Only the exact buffered response released by the audit boundary qualifies.
+    let memberDocument = false;
+    if (
+      response === releasedMemberResponse &&
+      locals.session?.member === true &&
+      ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path)
+    ) {
+      const html = await response.clone().text();
+      memberDocument =
+        /<!doctype html>/i.test(html) && /<html[\s>]/i.test(html) && html.includes("</body>");
+      if (memberDocument) {
+        const headers = new Headers(response.headers);
+        headers.delete("content-length");
+        response = new Response(
+          html.includes('src="/islands/auth-status.js"')
+            ? html
+            : html.replace(
+                "</body>",
+                '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script></body>',
+              ),
+          { status: response.status, headers },
+        );
+      }
+    }
+    // Preserve admin fragment cookies separately; the new member scope requires
+    // a full document and does not alter the existing admin controller.
+    const adminDocument = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals.session?.moderator;
     try {
-      const cookie = await deps.authStatusCookieFor(event);
+      const cookie =
+        memberDocument || adminDocument
+          ? await deps.authStatusCookieFor(event, memberDocument)
+          : null;
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
