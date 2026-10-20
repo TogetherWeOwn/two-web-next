@@ -146,12 +146,31 @@ export function publicGuidePath(href: string): string | null {
 
 // Allow a decision tree made of headings or table rows. Keep each instruction
 // local to its outcome: a warning in an unrelated branch cannot satisfy it.
+// Branch locality: the outcome must match the block heading (or first line)
+// only, Source-references is never a branch, and exactly one block must match.
 export function guidanceFor(body: string, outcome: RegExp): string {
-  const blocks = body.split(/(?=^#{1,6} )/m).flatMap((section) => {
+  const sections = body.split(/(?=^#{1,6} )/m).filter((section) => {
+    const heading = section.split("\n")[0] ?? "";
+    return !/source.references/i.test(heading);
+  });
+  const blocks = sections.flatMap((section) => {
     const rows = section.split("\n").filter((line) => /^\|/.test(line));
     return rows.length ? [section.split(/^\|/m)[0]!, ...rows] : [section];
   });
-  const matches = blocks.filter((block) => outcome.test(block));
-  expect(matches.length, `recovery branch for ${outcome}`).toBeGreaterThan(0);
-  return matches.join("\n").replace(/[*_`]/g, "").replace(/\s+/g, " ");
+  const matchTarget = (block: string): string => {
+    const lines = block.split("\n");
+    const first = lines[0] ?? "";
+    if (/^\|/.test(first.trim())) return first;
+    if (/^#{1,6} /.test(first)) {
+      const content = lines.slice(1).find((line) => line.trim().length > 0) ?? "";
+      return `${first}\n${content}`;
+    }
+    return first;
+  };
+  const matches = blocks.filter((block) => {
+    outcome.lastIndex = 0;
+    return outcome.test(matchTarget(block));
+  });
+  expect(matches.length, `recovery branch for ${outcome}`).toBe(1);
+  return matches[0]!.replace(/[*_`]/g, "").replace(/\s+/g, " ");
 }

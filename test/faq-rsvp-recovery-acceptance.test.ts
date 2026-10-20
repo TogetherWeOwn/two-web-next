@@ -259,7 +259,7 @@ describe("focused RSVP recovery guide and support boundaries", () => {
     ],
     [
       "ended event",
-      /ended|been and gone|past event/i,
+      /\bended\b|been and gone|past event/i,
       /events|replacement|another event/i,
       /stop|do not|don't|cannot|can't/i,
     ],
@@ -276,8 +276,10 @@ describe("focused RSVP recovery guide and support boundaries", () => {
       /before[^.]{0,100}(?:again|another|writ|resubmi)|stop/i,
     ],
     [
+      // Persistent delay is a sub-branch inside Saved: pin the Saved heading,
+      // then assert its persistent-specific escalation and do-not-resubmit stop.
       "persistent mirror delay",
-      /persistent|persists|still[^.]{0,50}(?:sync|pending)|mirror delay/i,
+      /Saved\. Syncing to Discord\./,
       /moderator|support|escalat/i,
       /(?:do not|don't|never)[^.]{0,100}(?:sav|resubmi|repeat|mirror|retry)/i,
     ],
