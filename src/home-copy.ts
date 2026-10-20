@@ -27,11 +27,9 @@ export const HOME_NOTICES = {
 
 export type HomeNotice = keyof typeof HOME_NOTICES;
 
-const HOME_NOTICE_KEYS = new Set<string>(Object.keys(HOME_NOTICES));
-
 /** The `?n=` value Hono accepts: exactly one of the six keys, else no notice. */
 export function parseHomeNotice(value: string | null): HomeNotice | null {
-  if (!value || !HOME_NOTICE_KEYS.has(value)) return null;
+  if (!value || !Object.hasOwn(HOME_NOTICES, value)) return null;
   return value as HomeNotice;
 }
 
