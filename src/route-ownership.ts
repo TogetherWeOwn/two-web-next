@@ -764,7 +764,7 @@ export async function dispatchHookRequest(
         const headers = new Headers(response.headers);
         headers.delete("content-length");
         response = new Response(
-          html.includes('src="/islands/auth-status.js"')
+          /<script\b[^>]*src="\/islands\/auth-status\.js"[^>]*>/.test(html)
             ? html
             : html.replace(
                 "</body>",
