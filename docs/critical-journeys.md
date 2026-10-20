@@ -205,7 +205,11 @@ the number of flaky rows. The Markdown summary calls out that retries and
 report-config provenance must be checked. `unexpected` becomes `failed` with
 the first-line failure message. Failure and skip diagnostics are bounded and
 scrubbed for known credential forms, email/member identifiers, long numeric
-IDs, URLs and the configured QA token before they enter the ledger. `skipped`
+IDs, URLs and the configured QA token before they enter the ledger. Redaction
+handles quoted credential/member keys and token-suffixed names, passwords, API
+keys and the session cookie. The configured token is removed before first-line
+normalization, and all redaction runs before the 200-character cap so truncation
+cannot retain a token prefix. `skipped`
 becomes `skipped` with the skip annotation or result error, or `no reason
 recorded` when neither names one.
 Any other status — missing, non-string, or an unrecognized string — becomes

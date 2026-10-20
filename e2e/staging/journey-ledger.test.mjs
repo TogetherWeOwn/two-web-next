@@ -241,6 +241,63 @@ test("flaky reason removes the configured QA token before log or summary output"
   assert.equal(summary.journeys[0].reason, "Timeout 30000ms exceeded: [redacted token]");
 });
 
+for (const [label, message, expected] of [
+  ["quoted cookie", '{"cookie": "fixture-cookie-value"}', "{[redacted credential data]"],
+  [
+    "quoted authorization",
+    '{"authorization":"Basic fixture-basic-value"}',
+    "{[redacted credential data]",
+  ],
+  [
+    "suffixed token",
+    "GET /cb?access_token=fixture-access-value",
+    "GET /cb?[redacted credential data]",
+  ],
+  ["hyphenated token", "refresh-token=fixture-refresh-value", "[redacted credential data]"],
+  ["password", "password=fixture-password-value", "[redacted credential data]"],
+  ["underscore API key", "api_key=fixture-api-value", "[redacted credential data]"],
+  ["hyphenated API key", "api-key=fixture-api-value", "[redacted credential data]"],
+  ["compact API key", "apikey=fixture-api-value", "[redacted credential data]"],
+  ["secret", "secret=fixture-secret-value", "[redacted credential data]"],
+  ["session cookie", "__Host-two_session=fixture-session-value", "[redacted credential data]"],
+  ["quoted member", '{"username": "fixture-member-name"}', "{[redacted member data]"],
+  ["single-quoted member", "{'username': 'fixture-member-name'}", "{[redacted member data]"],
+  ["21-digit ID", "member ID 123456789012345678901", "member ID [redacted id]"],
+  ["Bearer", "request failed: Bearer fixture-bearer-value", "request failed: Bearer [redacted]"],
+  [
+    "URL query credential",
+    "request failed: https://example.com/cb?credential=fixture-query-value",
+    "request failed: [redacted url]",
+  ],
+]) {
+  test(`flaky diagnostic redacts ${label} serialization`, () => {
+    const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
+    assert.equal(summary.journeys[0].reason, expected);
+    assert.ok(formatLedgerMarkdown(summary).includes(expected));
+  });
+}
+
+test("configured token is scrubbed before the 200-character reason limit", () => {
+  const token = "qa-token-canary-value";
+  const prefix = `${"x".repeat(190)} `;
+  const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", `${prefix}${token}`)]), {
+    qaAuthToken: token,
+  });
+  assert.equal(summary.journeys[0].reason, `${prefix}[redacted token]`.slice(0, 200));
+  assert.doesNotMatch(summary.journeys[0].reason, /qa-token/);
+});
+
+test("flaky timedOut first attempt retains its exact scrubbed reason", () => {
+  const spec = flakySpec(
+    "timed out journey",
+    "First timeout: Bearer fixture-bearer-value\nCall log",
+  );
+  spec.tests[0].results[0].status = "timedOut";
+  const summary = summarizeJourneys(reportWith([spec]));
+  assert.equal(summary.verdict, "fail");
+  assert.equal(summary.journeys[0].reason, "First timeout: Bearer [redacted]");
+});
+
 test("flaky summary explains retries and config provenance must be checked", () => {
   const summary = summarizeJourneys(reportWith([flakySpec()]));
   const markdown = formatLedgerMarkdown(summary);
@@ -447,6 +504,74 @@ test("gate exit 1 on unexpected flaky with ledger and step-summary output (negat
   assert.match(ledger.journeys[1].reason ?? "", /Timeout 30000ms exceeded/);
   assert.match(streams.err, /Staging journeys failed/);
   assert.match(readFileSync(paths.stepSummaryPath, "utf8"), /retries/i);
+});
+
+test("gate scrubs its environment token from every diagnostic output before any sweep", () => {
+  const token = "qa-token-canary-value";
+  const paths = gateScratch("journey-gate-token-");
+  const failed = flakySpec("failed journey", `first failure ${token}`);
+  failed.tests[0].status = "unexpected";
+  writeReport(
+    paths.reportPath,
+    reportWith([
+      flakySpec("flaky journey", `first attempt ${token}`),
+      failed,
+      skippedSpec("skipped journey", `skip precondition ${token}`),
+      statusSpec("unknown journey", `unknown ${token}`),
+    ]),
+  );
+  const streams = gateStreams();
+  const previousToken = process.env.QA_AUTH_TOKEN;
+  try {
+    process.env.QA_AUTH_TOKEN = token;
+    assert.equal(runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr }), 1);
+  } finally {
+    if (previousToken === undefined) delete process.env.QA_AUTH_TOKEN;
+    else process.env.QA_AUTH_TOKEN = previousToken;
+  }
+  const json = readFileSync(paths.ledgerJsonPath, "utf8");
+  assert.deepEqual(
+    JSON.parse(json).journeys.map((journey) => journey.reason),
+    [
+      "first attempt [redacted token]",
+      "first failure [redacted token]",
+      "skip precondition [redacted token]",
+      "unknown test status: unknown [redacted token]",
+    ],
+  );
+  for (const output of [
+    json,
+    readFileSync(paths.ledgerMdPath, "utf8"),
+    readFileSync(paths.stepSummaryPath, "utf8"),
+    streams.out,
+  ]) {
+    assert.ok(!output.includes(token), "configured token must never reach a diagnostic output");
+    assert.ok(output.includes("[redacted token]"), "each output must contain the scrubbed reason");
+  }
+  assert.ok(!streams.err.includes(token));
+});
+
+test("both artifact uploads have exactly the two derived ledger paths", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const uploads = workflow
+    .split(/\n {6}- name: /)
+    .filter((step) => step.includes("uses: actions/upload-artifact@"));
+  assert.equal(uploads.length, 2);
+  for (const step of uploads) {
+    const pathBlock = step.match(/\n {10}path: \|\n([\s\S]*?)(?=\n {0,10}\S|$)/)?.[1];
+    assert.ok(pathBlock, "upload must use an explicit path list");
+    assert.deepEqual(
+      pathBlock
+        .split("\n")
+        .map((path) => path.trim())
+        .filter(Boolean),
+      ["test-results/staging-journey-ledger.json", "test-results/staging-journey-ledger.md"],
+      "no raw directories, extra files or globs may be uploaded",
+    );
+  }
 });
 
 test("flaky evidence uploads only via the scrubbed failure path, never raw before scrub", () => {

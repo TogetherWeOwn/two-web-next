@@ -650,5 +650,15 @@ test("the sweep runs on failure, before the upload, with the token in its own en
     assert.match(uploadStep, /staging-journey-ledger\.json/);
     assert.match(uploadStep, /staging-journey-ledger\.md/);
     assert.doesNotMatch(uploadStep, /staging-journeys\.json|playwright-report\/|trace\.zip|\.html/);
+    const pathBlock = uploadStep.match(/\n {10}path: \|\n([\s\S]*?)(?=\n {0,10}\S|$)/)?.[1];
+    assert.ok(pathBlock, "upload must use an explicit path list");
+    assert.deepEqual(
+      pathBlock
+        .split("\n")
+        .map((path) => path.trim())
+        .filter(Boolean),
+      ["test-results/staging-journey-ledger.json", "test-results/staging-journey-ledger.md"],
+      "both uploads must exclude every raw directory, extra file and glob",
+    );
   }
 });

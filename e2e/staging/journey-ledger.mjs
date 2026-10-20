@@ -13,12 +13,10 @@ const MAX_REASON_LENGTH = 200;
 
 function cleanReason(value) {
   if (typeof value !== "string") return "";
-  const line = value
+  return value
     .split(/\r?\n/, 1)[0]
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .trim()
-    .slice(0, MAX_REASON_LENGTH);
-  return line;
+    .trim();
 }
 
 function skipReason(test, qaAuthToken) {
@@ -38,24 +36,24 @@ function skipReason(test, qaAuthToken) {
 }
 
 function scrubDiagnosticReason(value, qaAuthToken) {
-  const reason = cleanReason(value);
-  if (!reason) return "";
+  if (typeof value !== "string") return "";
+  // Scrub before normalization or truncation can split a configured token.
   const tokenScrubbed =
     typeof qaAuthToken === "string" && qaAuthToken
-      ? reason.split(qaAuthToken).join("[redacted token]")
-      : reason;
-  return tokenScrubbed
+      ? value.split(qaAuthToken).join("[redacted token]")
+      : value;
+  return cleanReason(tokenScrubbed)
     .replace(
-      /\b(?:authorization|cookie|set-cookie|x-two-qa-auth|token)\s*[:=].*$/i,
+      /["']?\b(?:authorization|cookie|set-cookie|x-two-qa-auth|[\w-]*token|password|api[-_]?key|secret|__Host-two_session)["']?\s*[:=].*$/i,
       "[redacted credential data]",
     )
     .replace(/\bbearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted email]")
     .replace(
-      /\b(?:member|user|username|display\s*name|email|discord\s*id)\s*[:=]\s*[^,;]+/gi,
+      /["']?\b(?:member|user|username|display\s*name|email|discord\s*id)["']?\s*[:=]\s*[^,;]+/gi,
       "[redacted member data]",
     )
-    .replace(/\b\d{17,20}\b/g, "[redacted id]")
+    .replace(/\b\d{17,}\b/g, "[redacted id]")
     .replace(/https?:\/\/\S+/gi, "[redacted url]")
     .slice(0, MAX_REASON_LENGTH);
 }
