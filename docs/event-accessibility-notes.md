@@ -52,8 +52,13 @@ the rendered textarea value back after create and edit.
   1280px (200, 410 and 404 states).
 - Targeted axe-core scan (wcag2a + wcag2aa) of the with-notes event page at
   1280x800: 0 violations.
-- `npm run lighthouse` (mobile) and `npm run lighthouse:quality` (desktop):
-  results recorded below once the local runs complete.
+- `npm run lighthouse` (mobile): 24 reports across the eight fixture routes,
+  all configured assertions passed via `npx lhci assert`. The autorun wrapper
+  exits 1 during cleanup (`spawn ps ENOENT`: the container has no `ps`), after
+  collection completes; thresholds unchanged.
+- `npm run lighthouse:quality` (desktop): 24 reports across the eight fixture
+  routes, all quality-floor assertions passed via `npx lhci assert`, with the
+  same environmental cleanup failure and unchanged floors.
 - Visual baselines: the seeded visual-spec event carries no notes, so the
   committed `event` baselines are unaffected. Comparisons run in CI on the
   pinned runner; no baseline changes are expected from this slice.
