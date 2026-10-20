@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone probe tooling has no declaration file.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
-import { PREVIEW_PATH, QA_HEADER, REDISPATCH_PATH, SOURCE_EVIDENCE_PATH, STAGING_URL, runProbe, sessionCookieValue } from "../bin/queue-authwall-probe.mjs";
+import * as probe from "../bin/queue-authwall-probe.mjs";
+
+const {
+  PREVIEW_PATH,
+  QA_HEADER,
+  REDISPATCH_PATH,
+  SOURCE_EVIDENCE_PATH,
+  STAGING_URL,
+  runProbe,
+  sessionCookieValue,
+} = probe;
 
 function headers(init: Record<string, string>, cookies: string[] = []): Headers {
   const h = new Headers(init);
