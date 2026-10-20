@@ -163,6 +163,7 @@ export async function renderRoute(route, member, locals) {
   const data = await page.load({
     locals,
     params: { user: member.id },
+    url: new URL(route === "profile" ? "/profile" : "/members/" + member.id, ${JSON.stringify(APP_URL)}),
     setHeaders(value) { Object.assign(headers, value); },
   });
   const { head, body } = render(Wrapper, { props: { route, data } });
