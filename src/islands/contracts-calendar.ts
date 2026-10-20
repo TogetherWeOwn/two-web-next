@@ -173,6 +173,18 @@ export const EVENTS_EMPTY_COPY = {
   signIn: "Sign in with Discord",
 } as const;
 
+/* Partial source: healthy local rows stay visible while the Discord source
+ * reports failure, with an accessible notice that the schedule may be
+ * incomplete. Renders inside the swapped content zone beside the list/grid,
+ * never with an empty state (a failed read with nothing visible keeps the
+ * full error instead). Retry re-issues the same URL; the join link is the
+ * human fallback. No source URLs, tokens or error details in the copy. */
+export const EVENTS_PARTIAL_TESTID = "events-partial-source";
+export const EVENTS_PARTIAL_COPY = {
+  notice:
+    "Some Discord events may be missing from this schedule right now — local events are shown below.",
+} as const;
+
 /* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;
  * "today" is evaluated in the hosts' zone, not the server's or the viewer's. */
 export const EVENTS_CALENDAR_SCROLL_TESTID = "events-calendar-scroll";

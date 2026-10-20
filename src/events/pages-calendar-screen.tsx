@@ -25,7 +25,13 @@ import type { JoinResult } from "../return-journey";
 import type { PublicEvent } from "./reads";
 import { ScheduleShell } from "./pages-shared";
 import { CalendarHead, CalendarLiveRegions, CalendarSearchForm } from "./pages-calendar-controls";
-import { EmptyError, EmptyGap, EmptyNever, SearchMiss } from "./pages-calendar-empty";
+import {
+  EmptyError,
+  EmptyGap,
+  EmptyNever,
+  PartialSourceNotice,
+  SearchMiss,
+} from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
 import { CalendarList } from "./pages-calendar-list";
 import { type CalRow, rowZone } from "./pages-calendar-row";
@@ -166,6 +172,14 @@ export const EventsCalendarPage: FC<{
         </div>
 
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
+          {/* Partial source: healthy rows stay useful beside the notice. An
+              empty state (including the failed-empty error) takes precedence,
+              and an out-of-range page keeps its turns back into the schedule.
+              Inside the swapped zone so fragment turns add/remove the notice. */}
+          {discordFailed && emptyState === null && (hasVisibleResults || outOfRange) ? (
+            <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
+          ) : null}
+
           {emptyState === "error" ? (
             <EmptyError url={url} inviteUrl={inviteUrl} />
           ) : emptyState === "never" ? (
