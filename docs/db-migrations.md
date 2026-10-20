@@ -221,6 +221,12 @@ with `target: production`, behind the `production` Environment:
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
   Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+- Branch/target correspondence: `branch` must be empty (defaults to `target`),
+  equal to `target`, or `test-*`; staging↔production swaps and other overrides
+  refuse before provisioning or I/O. Local operators must declare
+  `BACKUP_TARGET=staging|production` matching `DATABASE_URL` for the same check
+  on all four script commands. Without that declaration, legacy local branch
+  behavior remains unchanged; the guard does not inspect or attest the URL.
 - Layout: `neon/<branch>-<branch>-<UTC>.dump` dailies — the `neon` R2 key
   prefix is retained deliberately so pre-rename manifests and archives stay
   addressable only until rotation prunes them (retention, below in this
@@ -243,17 +249,49 @@ with `target: production`, behind the `production` Environment:
 - Selftest: `ci/db-backup-selftest.sh` runs stubbed (no secrets, no
   network) in CI.
 
-## Interim option: VPS Postgres via Tunnel
-
-Before Neon is provisioned, early staging may read the existing VPS
-Postgres through the Cloudflare Tunnel (zero-change, plan P2 option 1).
-Constraints: staging only, read paths first, move to the Neon `staging`
-branch before the parallel run. If the tunnel leg is needed, it is an
-operator step (tunnel route + secret), not a repo change.
-
 ## Rollback
 
-Same Postgres on both sides of the cutover, so there is no data to
-un-migrate: rollback is DNS flip-back + Workers rollback, with a
-Coolify redeploy of the recorded prior SHA as backstop (rehearsed on
-staging in W16).
+Next and legacy do not share a database. Per the [Topology](#topology-target)
+table, Next staging and production use PlanetScale Postgres; legacy
+`two-web` / `two-bot` data lives in the separate VPS Postgres named in the
+introduction. The cutover import copied legacy data into Next one way (the
+`bin/import/` importers read legacy only in read-only transactions), and
+nothing in this repository copies Next writes back. Legacy VPS data is
+therefore not interchangeable with Next data: it is neither a backup of Next
+nor a data rollback target. Use the reviewed procedures:
+
+- **Worker code:** [Worker rollback](runbook.md#worker-rollback) to a
+  recorded known-good version ID; production uses the `rollback-production`
+  workflow. It does not undo migrations, data writes, Discord side effects,
+  queue messages or external-resource changes.
+- **Schema and data:** the **Rollback** rules under
+  [web schema migrations](runbook.md#neon-web-schema-migrations-separate-operator-action).
+  Prefer a reviewed forward repair. An authorized PITR or backup restore
+  follows the provider's documented procedure with writers paused; reconcile
+  bot, queues and external effects separately. Archive checks and live-data
+  recovery prerequisites are in
+  [Backups and restore drill](runbook.md#backups-and-restore-drill).
+- **DNS back to legacy:** a traffic change, not a data rollback; legacy
+  serves its own database. It requires the
+  [recovery map](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits),
+  a validated incident procedure and the
+  [standing legacy-origin precondition](runbook.md#before-the-production-flip).
+
+This repository deploys the web app only as Cloudflare Workers, so a Coolify
+redeploy is not a rollback path for it. The kept staging
+[rehearsal record](cutover-rollback.md#rehearsal-record) covers Worker
+rollback and DNS flip-back only; it proves neither a production recovery nor
+a data restore. This section states the documented topology and procedures,
+not a live check of either provider.
+
+## Retired interim option: VPS Postgres via Tunnel
+
+Historical and non-actionable. The
+[first version of this document](https://github.com/TogetherWeOwn/two-web-next/pull/10)
+offered early staging a read path to the legacy VPS Postgres through a
+Cloudflare Tunnel until a Neon `staging` branch existed. Staging later ran on
+Neon and now uses the pinned PlanetScale staging branch
+([Topology](#topology-target)); `ci/db-migrate.mjs` refuses retired Neon
+endpoints. No tracked configuration or workflow uses a tunnel to the VPS
+database. Do not add one, and never point staging or production Next at the
+legacy VPS database.

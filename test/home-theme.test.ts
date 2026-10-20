@@ -107,6 +107,19 @@ describe("homepage theme", () => {
     if (member) expect(html).toContain('href="https://discord.gg/invite">Open Discord');
   });
 
+  it.each([
+    ["guest", null],
+    ["signed-in non-member", session],
+    ["member", { ...session, member: true }],
+  ] as const)("offers the member board link to members only (%s)", (_viewer, viewer) => {
+    const nav = render({ session: viewer }).match(
+      /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/,
+    );
+    expect(nav).not.toBeNull();
+    // Guests and non-members cannot open the board, so they are not offered it.
+    expect(nav![1]!.includes('href="/leaderboards/members"')).toBe(viewer?.member === true);
+  });
+
   it.each(["joined", "already_member", "join_failed", "signin_failed"])(
     "retains the %s status and invite recovery",
     (notice) => {

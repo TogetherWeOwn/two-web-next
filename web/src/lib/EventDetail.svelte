@@ -42,9 +42,10 @@ const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>
 const goingCountIsland = '<script src="/islands/going-count.js" defer></' + "script>";
 const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' + "script>";
 
-const closed = $derived(
-  model.isDraft ? "draft" : model.isPast || Date.parse(model.endsAt) <= Date.now() ? "past" : null,
-);
+// Server-decided RSVP closure: the resolver settles the verdict from the
+// server render instant, so a fast or slow viewer clock never reopens or
+// closes this render.
+const closed = $derived(model.rsvpClosed);
 const occupancy = $derived(model.goingOccupancy);
 const full = $derived(model.capacity !== null && occupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");

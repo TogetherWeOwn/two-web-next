@@ -155,18 +155,42 @@ invocation can carry same-script traces minutes apart (a delayed flush, a
 retry batch), and trace arrival order within that invocation is arbitrary:
 each trace is filed into its 30-second event-time bucket from its own
 `eventTimestamp`, and the buckets of one invocation are observed oldest
-first. Four crashes from six minutes ago arriving in the same invocation
-alongside one new crash never form a five-crash window — only traces
-sharing a rolling five-minute event-time window count together, and within
-one invocation the same traces in any arrival order keep the same buckets
-and the same verdict. This is best-effort counting over recent buckets,
-not live delivery: a delayed trace still counts in its event-time bucket
-while that bucket is inside the window, and an expired bucket simply drops
-out. Across invocations the verdict can still depend on arrival order: a
-delayed bucket observed in a later invocation is counted alongside newer
-buckets already retained, so a delayed flush landing after a newer
-observation can page even though the same traces in the opposite order
-would not.
+first. Each script retains a monotonic window endpoint: the newest accepted
+event time seen for that script, including observations with zero counts.
+An older arrival never moves that endpoint backward. A bucket contributes
+only while its end is strictly greater than `endpoint - five minutes`;
+the bucket ending exactly at the cutoff is expired. This preserves the
+existing bucket-overlap convention (up to 30 seconds of boundary rounding).
+
+Across separate invocations, four recent crashes and one six-minute-older
+crash therefore never combine into a false five-crash spike, in either
+arrival order. Expired arrivals are ignored before insertion, attribution
+or paging: they cannot displace live counts at the bucket cap, contaminate
+build attribution or retrospectively page a window already expired by a
+newer observation. A late crash still inside the retained window can
+complete the five-crash threshold. Equal timestamps add counts; they are
+not deduplicated. The endpoint is script-local and independent of the
+uptime-health observation watermark. Alert timestamps, pending-attempt
+fencing and delivered-only cooldown timing keep their existing semantics.
+
+The endpoint is persisted with counts and restored on cold start. A
+rejected observation write rolls back the endpoint, counts and pending
+attempt together. Legacy snapshots derive an initial endpoint from the
+newest valid retained bucket start, irrespective of stored array order;
+expired buckets are pruned, compatible pending/cooldown state survives and
+legacy counts retain unknown attribution. An empty legacy snapshot starts
+its endpoint on the first accepted observation. This migration has only
+bucket-level precision; it cannot recover an old writer's exact event time
+or counts already evicted by that writer.
+
+This remains best-effort counting, not a delivery-time window or replay
+engine. The endpoint advances with source observations, not wall-clock
+passage; wholly delayed traffic with no newer observation can still form
+its own event-time spike. Earlier pages are not retracted, and arrivals
+outside the retained window are not replayed to find historical spikes.
+Independent local fallback/isolate state can still differ from durable
+state. Fixture tests prove the counting boundary, not live rollout or
+webhook delivery.
 
 Like the per-fingerprint mute, the cooldown arms only when the page is
 actually delivered; a failed Discord POST leaves the alarm ready to retry on

@@ -3,9 +3,9 @@
 //
 // Oversized code/state on GET /join/callback is refused before the shared
 // join throttle spend (zero budget consumed) with the existing expired-link
-// recovery and its bounded OversizedOAuthParams log line. The branch clears
-// the journey cookies like every other non-throttled callback outcome, and
-// `error` callbacks keep today's denied path (throttle spent). Hermetic:
+// recovery and its bounded OversizedOAuthParams log line. Unadmitted refusals
+// leave the current journey cookies untouched; only admitted terminal callbacks
+// clear them. Admitted `error` callbacks keep the denied path (throttle spent). Hermetic:
 // memory session store, in-memory join Sql double, stubbed fetch — no live
 // Discord, database, or secrets.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -158,12 +158,21 @@ const recordsFor = (logs: ReturnType<typeof captureDiagnosticStream>, message: s
     .filter((r) => r.args[0] === message)
     .map((r) => ({ channel: r.channel, args: withheld(r.args, []) as unknown[] }));
 
-function expectJourneyCleared(res: Response) {
-  const setCookies = res.headers.getSetCookie().join("\n");
-  for (const name of ["__Host-two_join_state", "__Host-two_join_source", "__Host-two_join_next"]) {
-    expect(setCookies, `${name} cleared`).toContain(`${name}=;`);
+const journeyCookies = ["__Host-two_join_state", "__Host-two_join_source", "__Host-two_join_next"];
+
+function expectJourneyPreserved(res: Response) {
+  for (const name of journeyCookies) {
+    const header = res.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+    expect(header, `${name} neither cleared nor replaced`).toBeUndefined();
   }
-  expect(setCookies).toContain("Max-Age=0");
+}
+
+function expectJourneyCleared(res: Response) {
+  for (const name of journeyCookies) {
+    const header = res.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+    expect(header, `${name} cleared`).toContain(`${name}=;`);
+    expect(header, `${name} expires`).toContain("Max-Age=0");
+  }
 }
 
 afterEach(() => {
@@ -187,7 +196,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     const html = await res.text();
     expect(html).toContain("Join link expired");
     expect(html).toContain('data-testid="recovery-retry"');
-    // Retry intent survives the clearing, like every other recovery path.
+    // Recovery offers the safe retry intent without clearing the pending journey.
     expect(html).toContain("next=%2Fevents");
     expect(html).toContain("source=web-homepage");
     expect(sessionCookie(res)).toBeUndefined();
@@ -199,7 +208,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     // still checks availability; it cannot consume the shared join budget.
     expect(f.join.availabilityChecks).toHaveBeenCalledTimes(1);
     expect(f.join.hits.filter((h) => h.bucket.startsWith("join:"))).toHaveLength(1);
-    expectJourneyCleared(res);
+    expectJourneyPreserved(res);
     // Bounded log line unchanged: own class, sanitized source, never values.
     const line = recordsFor(logs, JOIN_LOG);
     expect(line).toHaveLength(1);
@@ -217,6 +226,19 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
       request: JOIN_ROUTE,
       messages: [JOIN_LOG],
     });
+    // The original signed cookies and stored state still admit the genuine return.
+    const completed = await app.request(
+      `/join/callback?code=abc&state=${begun.state}`,
+      { headers: { cookie: begun.cookie } },
+      f.env,
+    );
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("location")).toBe("/events");
+    expect(sessionCookie(completed)).toBeDefined();
+    expect(f.join.attempts).toEqual([
+      { outcome: "added", source: "web-homepage", requestId: null, discordId: "42" },
+    ]);
+    expectJourneyCleared(completed);
   });
 
   it("oversized state spends zero join budget", async () => {
@@ -238,7 +260,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     expect(f.replace).not.toHaveBeenCalled();
     expect(f.join.attempts).toHaveLength(0);
     expect(f.join.hits.filter((h) => h.bucket.startsWith("join:"))).toHaveLength(1);
-    expectJourneyCleared(res);
+    expectJourneyPreserved(res);
     const line = recordsFor(logs, JOIN_LOG);
     expect(line).toHaveLength(1);
     expect(line[0]!.channel).toBe("warn");
@@ -272,7 +294,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     expect(f.join.attempts).toHaveLength(0);
     expect(f.create).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
-    expectJourneyCleared(res);
+    expectJourneyPreserved(res);
     expectDiagnosticStreamClean(logs, ["fixture query failure"], {
       request: JOIN_ROUTE,
       messages: [JOIN_LOG],
@@ -291,7 +313,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     expect(await res.text()).toContain("Join link expired");
     expect(fetch).not.toHaveBeenCalled();
     expect(sessionCookie(res)).toBeUndefined();
-    expectJourneyCleared(res);
+    expectJourneyPreserved(res);
     expectDiagnosticStreamClean(logs, [], { request: JOIN_ROUTE, messages: [JOIN_LOG] });
   });
 
@@ -321,6 +343,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
         discordId: null,
       },
     ]);
+    expectJourneyCleared(res);
     // Denied path never warns, oversized or not.
     expect(recordsFor(logs, JOIN_LOG)).toHaveLength(0);
     expectDiagnosticStreamClean(logs, [oversized.slice(0, 16)], { request: JOIN_ROUTE });
@@ -441,6 +464,7 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     expect(await res.text()).toContain("Discord is unreachable");
     expect(f.join.hits.filter((h) => h.bucket.startsWith("join:"))).toHaveLength(2);
     expect(f.join.attempts[0]).toMatchObject({ outcome: "error" });
+    expectJourneyCleared(res);
     const line = recordsFor(logs, JOIN_LOG);
     expect(line).toHaveLength(1);
     expect(line[0]!.args[1]).toMatchObject({ outcome: "error" });

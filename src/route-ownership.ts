@@ -12,11 +12,14 @@
 // of those are ignored, and the original Request passes through untouched
 // (query preserved, body unread) to whichever renderer owns it.
 
+import { Context } from "hono";
+import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
 import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
+import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
 import { isTrustedHost } from "./trust-hosts";
 
@@ -619,6 +622,26 @@ function renderMemberRead(
   );
 }
 
+// Profile destinations are the Kit twin of Hono's post-boundary takeJoinResult
+// (src/profiles/routes-gate.ts): expire the one-shot join flash only after the
+// member-read boundary has released a successful HTML GET. The peek in
+// readReturnJourney stays read-only, so a refused, failed, HEAD, or non-HTML
+// response leaves the pending cookie untouched. Hono's deleteCookie supplies
+// the zero max-age expiry with return-journey deleteOpts (path /, Secure,
+// HttpOnly, SameSite Lax). No secret, new lifetime, or new cookie.
+function releasedProfileConsumesJoinFlash(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/profile" && route.path !== "/members/:user") return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  const flash = (event.locals as Partial<KitLocals> | undefined)?.joinResult;
+  return flash === "added" || flash === "already_member";
+}
+
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
 // renderer runs, decided before resolve and before any auth/body read. A
 // resolve() failure propagates and is never replayed through Hono. The
@@ -756,6 +779,14 @@ export async function dispatchHookRequest(
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
+  }
+  // After the released response exists, and only for the two profile paths.
+  // Not in the loader: that would expire the flash before the audit can refuse.
+  if (releasedProfileConsumesJoinFlash(route, event, response)) {
+    const c = new Context(event.request);
+    c.res = response;
+    deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
+    response = c.res;
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;

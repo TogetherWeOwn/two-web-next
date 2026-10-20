@@ -4,8 +4,9 @@
 // flag every Set-Cookie missing those attributes — including deletions. An
 // unauthenticated spider trips deletions on the OAuth round trip
 // (/auth/discord with no ?next=, every terminal /auth/discord/callback),
-// on /join/callback, and on POST /logout, so the clearing responses must be
-// flagged the same as the sets. Local fixtures only: no database, no Discord.
+// on every admitted /join/callback, and on POST /logout, so the clearing
+// responses must be flagged the same as the sets. Local fixtures only: no
+// database, no Discord.
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
@@ -70,11 +71,62 @@ describe("clearing cookies carry HttpOnly + SameSite=Lax (ZAP 10010/10054)", () 
     assertAllFlagged(denied, "GET /auth/discord/callback denial");
   });
 
-  it("GET /join/callback clears the join journey cookies flagged", async () => {
-    const res = await app.request("/join/callback?error=access_denied", {}, env);
-    expect([200, 302, 303]).toContain(res.status);
-    expect(flaggedDeletions(res)).toEqual([]);
-    assertAllFlagged(res, "GET /join/callback");
+  it("an admitted /join/callback denial clears the join journey cookies flagged", async () => {
+    // Only an admitted callback owns journey cleanup, so flag hygiene is
+    // exercised through a genuine denial that presents the matching signed
+    // state (mirroring the auth denial above), not a bare hit whose empty
+    // Set-Cookie list would make the flag checks vacuous.
+    const storeEnv = { ...env, SESSION_STORE: createMemorySessionStore() } as unknown as Env;
+    const start = await app.request(
+      "/join/discord?next=%2Fevents&source=web-homepage",
+      {},
+      storeEnv,
+    );
+    expect(start.status).toBe(302);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    expect(state).toBeTruthy();
+    const cookie = start.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+
+    // An unadmitted hit carrying the live jar must not emit any journey
+    // Set-Cookie at all: the pending journey survives byte-for-byte, which
+    // the admitted denial below then proves by still being admissible.
+    const joinCookies = ["__Host-two_join_state", "__Host-two_join_source", "__Host-two_join_next"];
+    const stray = await app.request(
+      "/join/callback?error=access_denied",
+      { headers: { cookie } },
+      storeEnv,
+    );
+    expect(stray.status).toBe(200);
+    expect(
+      stray.headers
+        .getSetCookie()
+        .filter((c) => joinCookies.some((name) => c.startsWith(`${name}=`))),
+    ).toEqual([]);
+
+    const denied = await app.request(
+      `/join/callback?error=access_denied&state=${state}`,
+      { headers: { cookie } },
+      storeEnv,
+    );
+    expect(denied.status).toBe(200);
+    expect(await denied.text()).toContain("Join cancelled");
+    expect(flaggedDeletions(denied)).toEqual([]);
+    assertAllFlagged(denied, "GET /join/callback denial");
+    // Non-vacuous: an actual deletion header per journey cookie, each
+    // mirroring the set attributes the scanner requires.
+    for (const name of joinCookies) {
+      const header = denied.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+      expect(header, `${name} deletion header`).toBeDefined();
+      expect(header, name).toContain(`${name}=;`);
+      expect(header, name).toMatch(/max-age=0/i);
+      expect(header, name).toMatch(/httponly/i);
+      expect(header, name).toMatch(/secure/i);
+      expect(header, name).toMatch(/samesite=lax/i);
+      expect(header, name).toMatch(/path=\/(?:;|$)/i);
+    }
   });
 
   it("POST /logout clears session, probe and recovery cookies flagged", async () => {

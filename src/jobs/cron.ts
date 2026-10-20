@@ -68,7 +68,10 @@ export async function reconcileEvents(deps: {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
-    stale: await events.staleEventKeys(RECONCILE_REDISPATCH_PAGE_SIZE),
+    stale: await events.staleEventKeys(
+      RECONCILE_REDISPATCH_PAGE_SIZE,
+      (deps.now ?? (() => new Date()))(),
+    ),
   });
   // Commit materialization and release parent row locks before external I/O.
   // The enclosing flight still excludes another scheduler throughout dispatch.
@@ -172,8 +175,8 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * totals for a half-visited table. Idempotent: a re-run matches nothing and
  * reports zeros.
  *
- * The worker runs the lock sweep on its autocommit dispatch pool rather than
- * the flight transaction (the sweep deletes the exact rows acquire targets;
+ * The worker runs the lock sweep on its separate dispatch pool, committing
+ * each statement, rather than the flight (it deletes rows acquire targets;
  * inside the flight its row locks would be held until the whole pass commits
  * and block concurrent acquires). Either client satisfies the stores shape.
  */
@@ -257,7 +260,7 @@ export async function pruneModelTables(
   // error never aborts its siblings. Concurrent drains on a single flight
   // transaction interleave savepoints and one rollback destroys its peers,
   // so tables drain one at a time inside the flight while the lock sweep
-  // keeps its autocommit dispatch-pool boundary (see worker.ts). A failed
+  // keeps its per-statement dispatch-pool boundary (see worker.ts). A failed
   // table contributes 0: partial batches from a failed drain are rolled back
   // (or discarded) and must never surface as successful-looking counts.
   const failures: PruneTableFailure[] = [];

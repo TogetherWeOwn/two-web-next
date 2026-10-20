@@ -70,6 +70,10 @@ const INVITE_LINK: ExpectedLink = {
 
 const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
   {
+    code: 400,
+    links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+  },
+  {
     code: 404,
     links: [
       { testid: "error-join", name: "Join with Discord", href: "/auth/discord" },

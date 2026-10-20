@@ -91,6 +91,18 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "Three synthetic ULID event keys in the Kit event-detail session-renewal fixture, used only by in-memory event lookup and request paths, not credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-event-detail-session-renewal\.test\.ts$''']
+regexes = [
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FBV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FCV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FZV$''',
+]
+
+[[allowlists]]
 description = "Synthetic malformed event key with a non-Crockford U in the admin route admission fixture, not a credential"
 targetRules = ["generic-api-key"]
 condition = "AND"

@@ -7,6 +7,7 @@
 // the same routes at one allowlisted origin. It never copies or relaxes an
 // assertion. Everything here is read-only: the only network calls are GETs.
 const base = require("./lighthouserc.cjs");
+const { sampleMatrix, assertionsByUrl } = require("./lighthouse-samples.cjs");
 
 // Exact allowlist, like e2e/staging-guard.mjs: https, no port, no credentials,
 // no path, query or hash. Anything else fails closed.
@@ -58,7 +59,10 @@ function requireEventPath(path) {
 
 /** The route paths of ci/lighthouserc.cjs, in order, with the event slot named. */
 function configuredPaths() {
-  const paths = base.ci.collect.url.map((entry) => new URL(entry).pathname);
+  const paths = base.ci.collect.url.map((entry) => {
+    const url = new URL(entry);
+    return url.pathname + url.search + url.hash;
+  });
   if (paths.filter((path) => EVENT_PATH.test(path)).length !== 1) {
     throw new Error("ci/lighthouserc.cjs must list exactly one /e/<key> route.");
   }
@@ -256,14 +260,6 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-const pathnameOf = (value) => {
-  try {
-    return new URL(value).pathname;
-  } catch {
-    return null;
-  }
-};
-
 /**
  * Per-route verdicts from the lhci output. `lhrs` are parsed lhr-*.json files,
  * `assertions` the parsed assertion-results.json (failed assertions only).
@@ -272,32 +268,19 @@ const pathnameOf = (value) => {
  */
 function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
   const root = requireAllowedOrigin(origin);
-  const paths = plannedPaths(eventPath);
-  const finalToPath = new Map();
-  const runsByPath = new Map();
-  for (const lhr of lhrs) {
-    const path = pathnameOf(lhr.requestedUrl);
-    if (path == null) continue;
-    runsByPath.set(path, [...(runsByPath.get(path) ?? []), lhr]);
-    const finalPath = pathnameOf(lhr.finalUrl);
-    if (finalPath != null) finalToPath.set(finalPath, path);
-  }
-  const failuresByPath = new Map();
-  for (const failure of assertions) {
-    const path = pathnameOf(failure.url);
-    const key = runsByPath.has(path) ? path : (finalToPath.get(path) ?? path);
-    failuresByPath.set(key, [...(failuresByPath.get(key) ?? []), failure]);
-  }
-  const rows = paths.map((path) => {
-    const runs = runsByPath.get(path) ?? [];
-    const failures = failuresByPath.get(path) ?? [];
+  const collect = buildConfig({ origin, eventPath }).ci.collect;
+  const matrix = sampleMatrix(lhrs, collect);
+  const failuresByUrl = assertionsByUrl(matrix, assertions);
+  const rows = matrix.rows.map(({ url, quota, runs }) => {
+    const path = url.slice(root.length);
+    const failures = failuresByUrl.get(url);
     const errors = failures.filter((failure) => failure.level === "error");
     const medians = Object.fromEntries(
       METRICS.map(([id]) => [id, median(runs.map((lhr) => lhr.audits?.[id]?.numericValue))]),
     );
-    const redirected = runs.find((lhr) => lhr.finalUrl && pathnameOf(lhr.finalUrl) !== path);
+    const redirected = runs.find((lhr) => lhr.finalUrl && lhr.finalUrl !== url);
     const verdict =
-      runs.length === 0 ? "fail" : errors.length ? "fail" : failures.length ? "warn" : "pass";
+      runs.length < quota ? "fail" : errors.length ? "fail" : failures.length ? "warn" : "pass";
     return {
       path,
       url: `${root}${path}`,
@@ -310,12 +293,13 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
         actual: failure.actual,
         expected: failure.expected,
       })),
-      note:
-        runs.length === 0
-          ? "no Lighthouse run completed"
-          : redirected
-            ? `redirected to ${redirected.finalUrl}`
-            : "",
+      note: [
+        runs.length < quota ? `${runs.length}/${quota} runs (incomplete collection)` : "",
+        runs.length === 0 ? "no Lighthouse run completed" : "",
+        redirected ? `redirected to ${redirected.finalUrl}` : "",
+      ]
+        .filter(Boolean)
+        .join("; "),
     };
   });
   if (eventPath == null) {

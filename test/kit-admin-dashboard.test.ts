@@ -219,6 +219,19 @@ describe("Kit admin dashboard outage mapping: 503 like Hono, never a 500", () =>
     ).toEqual({ outage: false, funnel: undefined, zeroSearches: zeroValue });
   });
 
+  it("a query cancellation degrades to an omitted section, not an outage", () => {
+    const cancellation = Object.assign(new Error("statement timeout"), {
+      name: "PostgresError",
+      code: "57014",
+    });
+    expect(
+      resolveDashboardWidgets(
+        { status: "fulfilled", value: funnelValue },
+        { status: "rejected", reason: cancellation },
+      ),
+    ).toEqual({ outage: false, funnel: funnelValue, zeroSearches: undefined });
+  });
+
   it("healthy widgets pass their values through", () => {
     expect(
       resolveDashboardWidgets(
