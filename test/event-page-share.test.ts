@@ -229,6 +229,8 @@ describe("Event detail share matrix (fixture-only)", () => {
   });
 
   it.each([
+    ["expanded endsAt only", "2030-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
+    ["negative startsAt only", "-000001-01-10T20:00:00Z", "2030-01-10T22:00:00Z"],
     ["expanded", "+010000-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
     ["negative", "-000001-01-10T20:00:00Z", "-000001-01-10T22:00:00Z"],
   ])(

@@ -36,7 +36,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 /** PHP `DATE_RSS` (`D, d M Y H:i:s O`) in UTC, i.e. `+0000`. */
 export function rssDate(d: Date): string {
-  return `${DAYS[d.getUTCDay()]}, ${pad(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000`;
+  if (!isWireInstant(d)) throw new RangeError("RSS timestamp is outside the four-digit year range");
+  return `${DAYS[d.getUTCDay()]}, ${pad(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).padStart(4, "0")} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000`;
 }
 
 /** RFC 5545 §3.3.11 escaping: backslash, semicolon, comma, newlines. */
@@ -202,9 +203,22 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
   return calendar(inner);
 };
 
+export function latestWireUpdatedAt(rows: EventRow[]): Date {
+  return rows.reduce(
+    (latest, row) =>
+      isWireInstant(row.updatedAt) && row.updatedAt > latest ? row.updatedAt : latest,
+    new Date(0),
+  );
+}
+
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);
-  const items = rows
+  const renderable = rows.filter((e) => isWireInstant(e.startsAt) && isWireInstant(e.endsAt));
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("eventsRss skipped rows with non-wire timestamps.", { skipped });
+  }
+  const items = renderable
     .map((e) => {
       const url = xml(pageUrl(e, appUrl));
       return (

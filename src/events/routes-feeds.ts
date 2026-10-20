@@ -9,6 +9,8 @@ import {
   eventIcs,
   eventsIcsCollection,
   eventsRss,
+  isWireInstant,
+  latestWireUpdatedAt,
 } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
@@ -62,7 +64,13 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
     const rows = await listFeed(db, ["published"]);
-    const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
+    const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
+    if (skippedUpdatedAt > 0) {
+      console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
+        skipped: skippedUpdatedAt,
+      });
+    }
+    const built = latestWireUpdatedAt(rows);
     return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
