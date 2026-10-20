@@ -10,6 +10,16 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      kit_route_family:
+        description: Kit staging route family; the default keeps all routes on Hono
+        type: choice
+        required: true
+        default: hono
+        options:
+          - hono
+          - archive
+          - archive-static
 
 permissions:
   contents: read
@@ -33,8 +43,8 @@ jobs:
     # back on the self-hosted fleet with no workflow change.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
-    # Production-style gate: GitHub Environment protection rules (required
-    # reviewers, etc.) apply to staging deploys the same way they would to prod.
+    # Environment secrets and the deployed staging URL. Exact-SHA CI, the
+    # staging hold and post-deploy verification are the automated release gates.
     environment:
       name: staging
       url: https://next.togetherweown.com
@@ -77,6 +87,11 @@ jobs:
       # The Worker bundle imports web/src modules, so wrangler needs the Kit
       # workspace dependencies (same install as ci.yml).
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Select Kit route families
+        id: kit-route-flags
+        env:
+          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
+        run: node ci/kit-route-flags.mjs
       # No test re-run here: the exact-SHA gate above (re-checked before each
       # mutation below) requires full CI, which already ran every `npm run
       # check` part on this commit. A second copy outgrew this job's timeout.
@@ -85,6 +100,8 @@ jobs:
       # CI's drift check passed, so the deployed bytes are the reviewed bytes.
       - name: Build minified public assets (esbuild, drift fails closed)
         run: npm run build:assets:check
+      - name: Build Kit staging Worker
+        run: npm run build --prefix web
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
@@ -184,13 +201,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
         # The Version is tagged with the CI-verified commit; /up reads the tag
-        # back as revision.commit (a full lowercase SHA only). The web Worker
+        # back as revision.commit (a full lowercase SHA only). The Kit Worker
         # only produces after the handoff. Deploying the consumer-free config
         # does NOT detach the existing consumers: Wrangler only adds or updates
         # the consumers listed in the deployed config, never deletes a dropped
         # one. The detach step below removes them explicitly before the jobs
-        # Worker attaches, so two consumers never exist.
-        run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"
+        # Worker attaches, so two consumers never exist. Route flags come only
+        # from the validated workflow input and default to Hono ownership.
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

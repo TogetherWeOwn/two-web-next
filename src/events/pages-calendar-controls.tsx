@@ -22,6 +22,7 @@ import {
   eventsSearchHitCopy,
   eventsSearchMissCopy,
   eventsViewStatusCopy,
+  pastEventsUrl,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -84,8 +85,8 @@ export const CalendarHead: FC<{ state: CalendarState; appUrl: string }> = ({ sta
         </a>
       </div>
       <p>
-        <a href="/events/past" data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
-          {EVENTS_EMPTY_COPY.pastArchive}
+        <a href={pastEventsUrl(1, state.q)} data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
+          {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
         </a>{" "}
         <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
           {EVENTS_EMPTY_COPY.subscribe}

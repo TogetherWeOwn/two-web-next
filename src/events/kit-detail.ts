@@ -34,7 +34,7 @@ import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { isValidZone } from "./date-format";
-import { googleCalendarUrl } from "./feeds";
+import { googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
@@ -130,11 +130,14 @@ export interface KitEventDetailModel {
   /** Rooted .md alternate path; drafts have no Markdown view. */
   markdownAlternate?: string;
   icsUrl: string;
-  googleCalendarUrl: string;
+  /** Google Calendar deep link; null when the window is not ICS-wire-formattable. */
+  googleCalendarUrl: string | null;
   /** Copy-link target: identical to the canonical URL by construction. */
   copyLink: string;
   /** Server-formatted wall time in the event zone, ISO fallback. */
   whenText: string;
+  /** Server-formatted scheduled end in the event zone, ISO fallback. */
+  endsWhenText: string;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
@@ -466,9 +469,15 @@ export async function resolveKitEventDetail(
           // every viewer, so only link it where it answers 200.
           ...(event.status === "draft" ? {} : { markdownAlternate: `/e/${event.eventKey}.md` }),
           icsUrl: `/events/${event.eventKey}.ics`,
-          googleCalendarUrl: googleCalendarUrl(event),
+          // Finite but non-wire years stay a readable page: only the Google
+          // Calendar deep link (an ICS instant pair) is omitted, mirroring Hono.
+          googleCalendarUrl:
+            isWireInstant(event.startsAt) && isWireInstant(event.endsAt)
+              ? googleCalendarUrl(event)
+              : null,
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
+          endsWhenText: formatEventWhen(event.endsAt, event.timezone),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,

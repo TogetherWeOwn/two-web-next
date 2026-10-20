@@ -740,19 +740,13 @@ export function parseAttendeePageParam(raw: string | null | undefined): number {
   return normalizeAttendeePage(Number(raw));
 }
 
-/** Native attendee page URL: page 1 stays bare so first-page links reset the
- * section, like the roster's page-one convention. */
-export function attendeePageHref(eventKey: string, page: number): string {
-  return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
-}
-
-/** Encoded variant for POST destinations built from the routed :key param:
- * the key is encoded (route input) while the page stays a validated integer,
- * so malformed/unsafe page values can never escape the local destination. */
-export function rsvpPageReturnPath(eventKey: string, page: number): string {
-  const base = `/e/${encodeURIComponent(eventKey)}`;
-  return page > 1 ? `${base}?attendees=${page}` : base;
-}
+/** Native attendee page URLs (canonical builders in ./attendee-paths, shared
+ * with the renderers and the framework-free refusal core): page 1 stays bare
+ * so first-page links reset the section, like the roster's page-one
+ * convention. The return-path variant encodes the routed key while the page
+ * stays a validated integer, so malformed/unsafe page values can never escape
+ * the local destination. */
+export { attendeePageHref, rsvpPageReturnPath } from "./attendee-paths";
 
 /** Strict native-RSVP page resolution across the submitted carriers (action
  * query values plus the body attendees value). Missing carriers are absent;

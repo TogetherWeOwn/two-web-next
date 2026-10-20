@@ -240,7 +240,7 @@ test("jobs secrets preflight runs before the first Cloudflare mutation and the j
     "utf8",
   );
   const queues = workflow.indexOf("- name: Ensure queues exist");
-  const web = workflow.indexOf("run: npx wrangler deploy --config wrangler.jsonc");
+  const web = workflow.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc");
   const secrets = workflow.indexOf("run: node ci/check-jobs-secrets.mjs");
   const gate = workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy");
   const deploy = workflow.indexOf("run: npx wrangler deploy --config wrangler.jobs.jsonc");
@@ -259,7 +259,7 @@ test("web-consumer detach runs between the web deploy and the jobs gate", () => 
     new URL("../.github/workflows/deploy.yml", import.meta.url),
     "utf8",
   );
-  const web = workflow.indexOf("run: npx wrangler deploy --config wrangler.jsonc");
+  const web = workflow.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc");
   const detach = workflow.indexOf("wrangler queues consumer remove");
   const gate = workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy");
   assert.ok(web > 0 && detach > 0 && gate > 0, "expected web deploy, detach and jobs gate");

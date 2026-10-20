@@ -63,11 +63,24 @@
       window.location.assign(window.location.href);
   }
 
+  function archiveSearch(page, query) {
+    var params = new URL("/events/past", window.location.href).searchParams;
+    if (Number(page) > 1) params.set("page", String(page));
+    if (query) params.set("q", query);
+    var search = params.toString();
+    return search ? "?" + search : "";
+  }
+
   function archiveUrl(href, fromHistory) {
     var url = new URL(href, window.location.href);
+    var params = url.searchParams;
+    var valid = Array.from(params.keys()).every(function (key) {
+      return (key === "page" || key === "q") && params.getAll(key).length === 1;
+    });
+    var page = params.get("page");
     return url.origin === window.location.origin &&
       url.pathname === "/events/past" &&
-      (fromHistory || (/^(\?page=[1-9]\d*)?$/.test(url.search) && !url.hash))
+      (fromHistory || (valid && (!page || /^[1-9]\d*$/.test(page)) && !url.hash))
       ? url
       : null;
   }
@@ -171,12 +184,13 @@
       }
       var pageNumber = next.dataset.page;
       var totalPages = next.dataset.totalPages;
+      var query = next.dataset.query || "";
       if (
         !/^[1-9]\d*$/.test(pageNumber) ||
         !/^(0|[1-9]\d*)$/.test(totalPages) ||
         !Number.isSafeInteger(Number(pageNumber)) ||
         !Number.isSafeInteger(Number(totalPages)) ||
-        new URL(incoming.href).search !== (pageNumber === "1" ? "" : "?page=" + pageNumber)
+        new URL(incoming.href).search !== archiveSearch(pageNumber, query)
       ) {
         throw new Error("Invalid archive page");
       }
@@ -208,6 +222,7 @@
       });
       root.dataset.page = pageNumber;
       root.dataset.totalPages = totalPages;
+      root.dataset.query = query;
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
