@@ -49,6 +49,8 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,
+      available: data.available,
+      peak: data.peak,
     };
   } catch (err) {
     const status = (err as { status?: number })?.status;
