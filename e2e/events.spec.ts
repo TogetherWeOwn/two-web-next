@@ -1,6 +1,7 @@
 import { test, expect, qaLogin } from "./fixtures";
 
 const eventKey = "01J00000000000000000000001";
+const eventPurpose = "A relaxed introduction for new Go players.";
 
 test("member opens an event from the list, RSVPs going, then withdraws", async ({
   page,
@@ -8,11 +9,15 @@ test("member opens an event from the list, RSVPs going, then withdraws", async (
 }) => {
   await qaLogin(context, "qa-member");
   await page.goto("/events");
+  await expect(page.getByText(eventPurpose, { exact: true })).toHaveCount(0);
   await page.getByRole("link", { name: "E2E Community Night", exact: true }).first().click();
   await expect(page).toHaveURL(`/e/${eventKey}`);
   await expect(
     page.getByRole("heading", { name: "E2E Community Night", exact: true }),
   ).toBeVisible();
+  await expect(page.getByText("Purpose", { exact: true })).toBeVisible();
+  await expect(page.getByText(eventPurpose, { exact: true })).toBeVisible();
+  await expect(page.getByText("Disposable browser fixture", { exact: true })).toBeVisible();
   // Strict browser acceptance: API calls are not a substitute for this control.
   // These testids are frozen in src/islands/contracts.ts (W10 slice 2).
   await expect(page.getByTestId("rsvp-going")).toBeVisible();
