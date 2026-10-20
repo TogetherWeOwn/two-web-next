@@ -43,6 +43,21 @@ function featuredAuditValues({ startsAtText, endsAtText, ...row }: FeaturedEditR
   return { ...row, startsAt: startsAtText, endsAt: endsAtText };
 }
 
+// Every editable field nulled out: diffed against the locked-row snapshot,
+// the delete audit reconstructs the slot. dirty() omits null-to-null fields,
+// so the receipt keeps the same sparse shape as create/update audits.
+const NULL_FEATURED_SNAPSHOT = {
+  title: null,
+  body: null,
+  url: null,
+  imageUrl: null,
+  imageAlt: null,
+  isPublished: null,
+  position: null,
+  startsAt: null,
+  endsAt: null,
+};
+
 export async function createFeatured(
   db: Db,
   actor: Actor,
@@ -129,12 +144,16 @@ export async function updateFeatured(
   return row;
 }
 
-/** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
+/**
+ * Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited.
+ * The delete audit snapshots the full locked row (update-audit value shape, after null per field),
+ * so a mistaken delete stays reconstructable from the activity log alone. Receipt only: no restore.
+ */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
     const [locked] = await tx
-      .select()
+      .select(featuredEditSelection)
       .from(featuredContents)
       .where(eq(featuredContents.id, id))
       .for("update");
@@ -146,7 +165,10 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
       subjectType: "FeaturedContent",
       subjectId: String(locked.id),
       causerId: actor.id,
-      properties: { title: { before: locked.title, after: null } },
+      properties: dirty(
+        featuredAuditValues(locked) as Record<string, unknown>,
+        NULL_FEATURED_SNAPSHOT,
+      ),
     });
   });
   // Committed: the homepage drops the slot on the next fetch.
