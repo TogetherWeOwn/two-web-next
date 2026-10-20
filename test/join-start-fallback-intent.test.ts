@@ -225,6 +225,32 @@ describe("join start fallback preserves sanitized intent", () => {
     expect([...retry.searchParams.keys()].sort()).toEqual(["next", "source"]);
   });
 
+  it.each(["sweep-rejects", "issue-rejects", "issue-refuses"] as FailureMode[])(
+    "%s source-only fallback keeps attribution on the one-click retry link",
+    async (mode) => {
+      const { store, env: e } = isolated();
+      breakJourneys(store, mode);
+      const res = await app.request(startQuery({ source: SAFE_SOURCE }), {}, e);
+      const location = await expectFallback(res, { next: null, source: SAFE_SOURCE });
+      const page = await app.request(location, {}, e);
+      expect(page.status).toBe(200);
+      const retry = oneClickHref(await page.text());
+      expect(retry.origin).toBe(env.APP_URL);
+      expect(retry.pathname).toBe("/join/discord");
+      expect([...retry.searchParams.entries()]).toEqual([["source", SAFE_SOURCE]]);
+    },
+  );
+
+  it("the source-only landing keeps exactly the attribution on the one-click link", async () => {
+    const { env: e } = isolated();
+    const page = await app.request("/join?source=Partner%3Afall-drive_01", {}, e);
+    expect(page.status).toBe(200);
+    const retry = oneClickHref(await page.text());
+    expect(retry.origin).toBe(env.APP_URL);
+    expect(retry.pathname).toBe("/join/discord");
+    expect([...retry.searchParams.entries()]).toEqual([["source", SAFE_SOURCE]]);
+  });
+
   it("the landing page puts a safe source on the one-click link and drops a hostile one", async () => {
     const { env: e } = isolated();
     const kept = await app.request(
