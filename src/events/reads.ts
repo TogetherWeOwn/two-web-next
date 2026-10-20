@@ -274,7 +274,10 @@ const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${
 // A row explicitly marked past is never upcoming, even with a future end:
 // without this the overlap read would grow a past archive. Cancelled rows
 // stay listed (legacy visibility); the month grid excludes them separately.
-const notPastEventStatus = ne(events.status, "past");
+// Inlined like the draft literal in `calendarVisible`, never a bound param:
+// pg-proxy fixtures route reads by bound params, and a bound "past" would
+// misroute every upcoming read into the past bucket.
+const notPastEventStatus = sql`${events.status} != 'past'`;
 
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.

@@ -124,12 +124,11 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" <> $1 and "events"."ends_at" >= $2)` &&
-          params.length === 2 &&
-          params[0] === "past" &&
-          isInstant(params[1])
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1)` &&
+          params.length === 1 &&
+          isInstant(params[0])
         ) {
-          return { rows: [[fixture.endsAt >= new Date(params[1]) ? "1" : "0"]] };
+          return { rows: [[fixture.endsAt >= new Date(params[0]) ? "1" : "0"]] };
         }
         // The upcoming list is paged: the audited set only turns page one
         // (Drizzle omits a zero offset), so the pinned limit below proves the
@@ -137,32 +136,30 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // closed list deliberately does not know.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" <> $1 and "events"."ends_at" >= $2) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
-          params.length === 3 &&
-          params[0] === "past" &&
-          isInstant(params[1]) &&
-          params[2] === EVENTS_UPCOMING_PAGE_SIZE + 1
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
+          params.length === 2 &&
+          isInstant(params[0]) &&
+          params[1] === EVENTS_UPCOMING_PAGE_SIZE + 1
         ) {
-          return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
+          return { rows: fixture.endsAt >= new Date(params[0]) ? [encoded] : [] };
         }
         // No calendar-view traffic in the audited set; emulate the month read
         // faithfully against the single fixture row so one never 500s silently.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" <> $1 and "events"."status" <> $2 and "events"."ends_at" >= $3 and "events"."starts_at" < $4 and "events"."ends_at" > $5) order by "events"."starts_at" asc, "events"."id" asc limit $6` &&
-          params.length === 6 &&
-          params[0] === "past" &&
-          params[1] === "cancelled" &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."status" <> $1 and "events"."ends_at" >= $2 and "events"."starts_at" < $3 and "events"."ends_at" > $4) order by "events"."starts_at" asc, "events"."id" asc limit $5` &&
+          params.length === 5 &&
+          params[0] === "cancelled" &&
+          isInstant(params[1]) &&
           isInstant(params[2]) &&
           isInstant(params[3]) &&
-          isInstant(params[4]) &&
-          params[5] === EVENTS_MONTH_GRID_LIMIT
+          params[4] === EVENTS_MONTH_GRID_LIMIT
         ) {
           const overlaps =
-            fixture.startsAt.getTime() < new Date(params[3]).getTime() &&
-            fixture.endsAt.getTime() > new Date(params[4]).getTime();
+            fixture.startsAt.getTime() < new Date(params[2]).getTime() &&
+            fixture.endsAt.getTime() > new Date(params[3]).getTime();
           return {
-            rows: fixture.endsAt >= new Date(params[2]) && overlaps ? [encoded] : [],
+            rows: fixture.endsAt >= new Date(params[1]) && overlaps ? [encoded] : [],
           };
         }
         // Grid day-jumps resolve the card's list page: the anchor row, then the
@@ -170,13 +167,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // counts exactly when the anchor is the fixture itself.
         if (
           sql ===
-            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" <> $2 and "events"."ends_at" >= $3)` &&
-          params.length === 3 &&
+            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $2)` &&
+          params.length === 2 &&
           params[0] === fixtureKey &&
-          params[1] === "past" &&
-          isInstant(params[2])
+          isInstant(params[1])
         ) {
-          return { rows: fixture.endsAt >= new Date(params[2]) ? [encoded] : [] };
+          return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
         // The rank anchor compares at the stored timestamp precision: the
         // count carries the anchor id twice (once per subquery) instead of a
@@ -185,13 +181,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // before it.
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" <> $1 and "events"."ends_at" >= $2 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $3) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $4) and "events"."id" < $5)))` &&
-          params.length === 5 &&
-          params[0] === "past" &&
-          isInstant(params[1]) &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $2) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $3) and "events"."id" < $4)))` &&
+          params.length === 4 &&
+          isInstant(params[0]) &&
+          params[1] === fixture.id &&
           params[2] === fixture.id &&
-          params[3] === fixture.id &&
-          params[4] === fixture.id
+          params[3] === fixture.id
         ) {
           return { rows: [["0"]] };
         }
