@@ -40,9 +40,13 @@ export function savedEventReview(row: SavedEventReviewRow, now: Date) {
         ? "This saved event is cancelled. Cancellation is terminal; it cannot be republished."
         : row.status === "published"
           ? "This saved event is already published. Saving edits updates the published record."
-          : corrections.length === 0
-            ? "The saved draft is ready for the current publication checks."
-            : "The saved draft needs corrections before publishing.",
+          : row.status === "past"
+            ? "This saved event is past. Past events have ended and cannot be published as-is."
+            : row.status !== "draft"
+              ? "This saved event is not a draft and cannot be published as-is."
+              : corrections.length === 0
+                ? "The saved draft is ready for the current publication checks."
+                : "The saved draft needs corrections before publishing.",
     corrections,
   };
 }
