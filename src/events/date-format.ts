@@ -81,3 +81,72 @@ export function currentCalendarMonth(now: Date): string {
 export function wallDayStart(iso: string): number {
   return new Date(`${iso}T00:00:00Z`).getTime();
 }
+
+/** Numeric day key for an ISO wall day ("YYYY-MM-DD", plus the expanded grid
+ * years past 9999), so clipping compares calendar days without Date parsing.
+ * Null when the shape is unusable. */
+function dayKey(iso: string): number | null {
+  const m = /^([+-]?)(\d{4,6})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  const key = Number(m[2]) * 10000 + Number(m[3]) * 100 + Number(m[4]);
+  return m[1] === "-" ? -key : key;
+}
+
+/**
+ * Host-zone wall days of the canonical interval [startsAt, endsAt) clipped to
+ * the displayed grid. The end is exclusive: an exact-midnight ending does not
+ * add the next day. Invalid zones read as UTC, like every wall reader here.
+ *
+ * Clip-then-iterate: the endpoints narrow to the grid before any day is
+ * stepped, so a millennia-long interval costs grid days, not millennia. Day
+ * membership comes from Intl wall dates at the endpoints (monotonic in time,
+ * so every day between is touched); the stepping walks UTC midnights only to
+ * enumerate ISO labels, never to decide membership — DST never shifts a day.
+ * A degenerate window keeps start-day plotting instead of vanishing.
+ */
+export function canonicalIntervalDays(
+  startsAt: Date,
+  endsAt: Date,
+  zone: string,
+  gridFirst: string,
+  gridLast: string,
+): string[] {
+  const first = wallDateIso(startsAt, zone);
+  const gridLo = dayKey(gridFirst);
+  const gridHi = dayKey(gridLast);
+  if (gridLo === null || gridHi === null) return [];
+  if (!(endsAt.getTime() > startsAt.getTime())) {
+    const key = dayKey(first);
+    return key !== null && key >= gridLo && key <= gridHi ? [first] : [];
+  }
+  const last = wallDateIso(new Date(endsAt.getTime() - 1), zone);
+  const firstKey = dayKey(first) ?? gridLo;
+  const lastKey = dayKey(last) ?? gridHi;
+  const lo = firstKey >= gridLo ? first : gridFirst;
+  const hi = lastKey <= gridHi ? last : gridLast;
+  if (dayKey(lo)! > dayKey(hi)!) return [];
+  const start = wallDayStart(lo);
+  const end = wallDayStart(hi);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  // Grid geometry caps the walk: whole weeks, at most 6 rows of 7.
+  const days: string[] = [];
+  for (let t = start; t <= end && days.length < 42; t += 86_400_000) {
+    days.push(wallDateIso(new Date(t), "UTC"));
+  }
+  return days;
+}
+
+/** "Monday, 15 February 2027" — the long day line for continuation names. The
+ * ISO wall day formats as its own UTC date, so the weekday belongs to the
+ * displayed day in every zone. Falls back to the raw day, never throws. */
+export function calendarDayLongLabel(dayIso: string): string {
+  const t = wallDayStart(dayIso);
+  if (!Number.isFinite(t)) return dayIso;
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(t));
+}

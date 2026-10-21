@@ -423,6 +423,10 @@ npx wrangler tail two-web-next-alerts --format json > /path/to/private/alert-rec
 
 # Terminal 2; QA_AUTH_TOKEN must already be supplied by an approved secret binding.
 node bin/alert-probe.mjs --receipt-file /path/to/private/alert-receipts.json
+# Offline preflight (validates receipt file plus token presence, sends nothing):
+node bin/alert-probe.mjs --receipt-file /path/to/private/alert-receipts.json --dry-run
+# Discovery (usage to stdout, zero effects):
+node bin/alert-probe.mjs --help
 ```
 
 The script refuses every non-staging target, posts with the QA token in a
@@ -442,8 +446,9 @@ at the boundary and completed later; it fails closed on prefix replacement or
 truncation. Freshness does not compare the operator clock to Cloudflare's clock.
 A source critical line, old receipt, foreign-probe receipt, delivery-failed
 receipt, or only one receipt cannot pass. It never calls or reads the webhook
-secret. Failure/timeout exits
-nonzero and claims no delivery. Stop the live tail and remove the private raw
+secret. Failure/timeout exits nonzero and claims no delivery, with a stable
+`code=` reason distinguishing mis-invocation and missing inputs (exit 2) from
+delivery failure (exit 1). Stop the live tail and remove the private raw
 stream after the drill; retain only the script's redacted JSON result plus the
 tested SHA as evidence. A missing operator secret leaves this live drill
 unverified; local fixture tests still cover the chain.
