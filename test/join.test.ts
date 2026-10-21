@@ -483,26 +483,26 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("degrades to /join (never 500) when sweeping expired journeys rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when sweeping expired journeys rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.sweepExpired = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });
 
-  it("degrades to /join (never 500) when issuing the journey rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when issuing the journey rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.issue = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });
