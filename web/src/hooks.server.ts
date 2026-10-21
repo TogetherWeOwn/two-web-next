@@ -44,14 +44,18 @@ export const handle: Handle = async ({ event, resolve }) =>
     // core alone decides when the option is set.
     resolve: (hookEvent, opts) =>
       resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
-    pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render),
-    eventsPage: (request, render) =>
+    pastArchive: (request, render, requestId) =>
+      dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId),
+    eventsPage: (request, render, requestId) =>
       dispatchEventsRequest(request, env, render, {
         sessionFor: kitEventsSessionFor(env),
         journeyFor: kitEventsJourneyFor(env),
+        requestId,
       }),
-    eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render),
-    hotzones: (request, render) => dispatchHotzonesRequest(request, env, render),
+    eventDetail: (request, render, requestId) =>
+      dispatchEventDetailRequest(request, env, render, undefined, requestId),
+    hotzones: (request, render, requestId) =>
+      dispatchHotzonesRequest(request, env, render, undefined, requestId),
     sessionFor: kitSessionBridge(env),
     authStatusCookieFor: kitAuthStatusCookieFor(env),
     eventDetailRotationFor: kitEventDetailRotationFor(env),

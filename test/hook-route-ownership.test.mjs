@@ -537,19 +537,19 @@ describe("hooks.server route ownership wiring", () => {
     // pins above stay green without it (the import carries
     // dispatchPastArchiveRequest and the comment carries pastArchive).
     expect(source).toContain(
-      "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
+      "pastArchive: (request, render, requestId) =>\n      dispatchPastArchiveRequest(request, env, render, undefined, undefined, requestId)",
     );
     // Whole binding: deleting the eventDetail line silently drops the detail
     // read throttle (the dispatch treats it as optional), so the exact line
     // must fail. The import and comments alone carry the name.
     expect(source).toContain(
-      "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
+      "eventDetail: (request, render, requestId) =>\n      dispatchEventDetailRequest(request, env, render, undefined, requestId)",
     );
     // Whole binding: deleting the hotzones line silently drops the hot-zone
     // read throttle (the dispatch treats it as optional), so the exact line
     // must fail. The import and comments alone carry the name.
     expect(source).toContain(
-      "hotzones: (request, render) => dispatchHotzonesRequest(request, env, render)",
+      "hotzones: (request, render, requestId) =>\n      dispatchHotzonesRequest(request, env, render, undefined, requestId)",
     );
     // Whole binding: the member board's post-release view log lives on this
     // closure. Making it a no-op or passing a fixed status instead of
@@ -574,9 +574,10 @@ describe("hooks.server route ownership wiring", () => {
     // flash peeks: deleting any of these lines must fail, and the hook still
     // carries no session logic of its own (readers live in kit-session.ts).
     expect(source).toContain("dispatchEventsRequest");
-    expect(source).toContain("eventsPage: (request, render) =>");
+    expect(source).toContain("eventsPage: (request, render, requestId) =>");
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
+    expect(source).toContain("journeyFor: kitEventsJourneyFor(env),\n        requestId,");
     expect(source).toContain("honoFetch,");
     // The content-leaf zero-stylesheet strip travels as a resolve option:
     // the hook must forward it untouched. Dropping the second argument

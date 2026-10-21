@@ -213,16 +213,21 @@ export function eventDetailConsumesFlash(outcome: KitEventDetailOutcome, method:
  * GET /e/:key handler (src/events/routes-detail.tsx): the shared public-read
  * budget runs before any read, and a limited client gets the Hono 429 with its
  * no-store, private headers instead of the page. The hook binds env into this
- * (request, render) => dispatchEventDetailRequest(request, env, render); the
- * core decides WHEN it runs, so the route-id branch is pinned in
+ * (request, render, requestId) => dispatchEventDetailRequest(...); the core
+ * decides WHEN it runs, so the route-id branch is pinned in
  * src/route-ownership.ts instead of in web/src/hooks.server.ts. */
 export async function dispatchEventDetailRequest(
   request: Request,
   env: Env,
   render: () => Promise<Response>,
-  guard: (request: Request, env: Env) => Promise<Response | null> = kitPublicReadGuard,
+  guard: (
+    request: Request,
+    env: Env,
+    requestId?: unknown,
+  ) => Promise<Response | null> = kitPublicReadGuard,
+  requestId?: unknown,
 ): Promise<Response> {
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
   return render();
 }

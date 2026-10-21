@@ -202,12 +202,13 @@ export async function dispatchHotzonesRequest(
   env: Env,
   render: () => Promise<Response>,
   guard: KitPublicReadGuard = kitPublicReadGuard,
+  requestId?: unknown,
 ): Promise<Response> {
   // Season grammar first, mirroring the Hono handlers: a bad season reaches
   // the load's 400 without spending. Unknown signals never reach this
   // wrapper: the manifest lists concrete signal paths only, so anything else
   // falls through to the Hono 404.
   if (!parseSeasonParam(new URL(request.url).searchParams.get("season"))) return render();
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   return limited ?? render();
 }
