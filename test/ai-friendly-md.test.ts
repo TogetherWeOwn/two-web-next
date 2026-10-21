@@ -310,7 +310,7 @@ describe("md builders (pure, DB-free)", () => {
     expect(mdText("===")).toBe("\\===");
     expect(mdText("---")).toBe("\\---");
     expect(mdText("<!-- hi -->")).toBe("\\<!-- hi -->");
-    expect(mdText("<div>hi</div>")).toBe("\\<div>hi</div>");
+    expect(mdText("<div>hi</div>")).toBe("\\<div>hi\\</div>");
     // Existing contract still holds.
     expect(mdText("# hi")).toBe("\\# hi");
     expect(mdText("> quote")).toBe("\\> quote");

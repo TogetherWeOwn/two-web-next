@@ -13,6 +13,7 @@ import type { Env } from "../env";
 import { getPublicApiEvent, listPublicApiEvents } from "../events/reads";
 import {
   API_PUBLIC_BOUNDS,
+  PUBLIC_DATA_INTERNAL_MESSAGE,
   parsePublicEventId,
   type PublicApiEventCollectionDto,
   type PublicDataErrorCode,
@@ -64,10 +65,9 @@ function toolJson(value: object) {
 }
 
 const UNAVAILABLE = "Event data is temporarily unavailable.";
-// Static programming-error message: never err.message (drizzle echoes the
-// failed SQL, column names and bound params). Mirrors the REST 500 without
-// exposing internals; the real error goes to error.alert only.
-const INTERNAL = "Event data could not be read.";
+// Programming faults reuse the REST 500 message (same static bytes, same
+// privacy boundary); the real error goes to error.alert only.
+const INTERNAL = PUBLIC_DATA_INTERNAL_MESSAGE;
 
 export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
   const { env, db } = deps;

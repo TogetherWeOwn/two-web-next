@@ -94,8 +94,10 @@ export async function loadCalendarPageModel(args: {
   includeDrafts: boolean;
   discord: DiscordEventsSource;
   now?: Date;
+  /** Correlation id for the `event_search` line and the demand-record warn; omitted when absent or invalid. */
+  requestId?: string | null;
 }): Promise<CalendarPageModel> {
-  const { db, input, includeDrafts, discord } = args;
+  const { db, input, includeDrafts, discord, requestId } = args;
   const now = args.now ?? new Date();
   const { q, searching, view, past, page, jumpKey, jumpRequested } = input;
   const match = matchQuery(q);
@@ -184,13 +186,17 @@ export async function loadCalendarPageModel(args: {
     readFailed: discordFailed,
   });
 
-  if (searching && listPage === 1) {
+  // An incomplete read must never manufacture demand evidence: while the
+  // Discord source reports failure, the count is partial and a zero is not a
+  // definitive no-match, so neither the search-demand record nor the
+  // event_search result log is written. Recovery records normally.
+  if (searching && listPage === 1 && !discordFailed) {
     const totalMatches = totalUpcoming + transients.length + localPast.length;
-    await recordSearch(db, q, totalMatches);
-    const entry = eventSearchLogEntry(match ?? "", totalMatches);
+    await recordSearch(db, q, totalMatches, undefined, requestId);
+    const entry = eventSearchLogEntry(match ?? "", totalMatches, requestId);
     if (entry) {
       try {
-        console.info("event_search", JSON.stringify(entry));
+        console.info("event_search", entry);
       } catch {
         /* a down logger is an unrecorded search, never a broken page */
       }

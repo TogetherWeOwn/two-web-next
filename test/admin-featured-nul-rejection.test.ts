@@ -9,9 +9,11 @@
 // - Only the field-error key is pinned; the exact message wording is the
 //   implementer's choice (asserted non-empty, never matched literally).
 // - A single NUL field must be the ONLY error: no collateral broadening.
-// - Only NUL is rejected in this slice. Normal Unicode, emoji ZWJ sequences,
-//   multiline/tabbed body text, other control characters, the 255-code-point
-//   limits and optional-empty behaviour all keep working exactly as today.
+// - NUL keeps its field-specific copy. Other control, bidi and invisible
+//   characters are now rejected too, with the event form's shared copy (see
+//   test/featured-control-invisible-acceptance.test.ts). Normal Unicode, emoji
+//   ZWJ sequences, multiline/tabbed body text, the 255-code-point limits and
+//   optional-empty behaviour all keep working exactly as today.
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -117,9 +119,10 @@ describe("featured form keeps accepting everything that is not NUL (validator co
     expect(parseFeaturedForm({ ...base, body }).body).toBe(body);
   });
 
-  it("accepts a non-NUL control character (BEL) in the body: only NUL is rejected", () => {
-    const body = "before\u0007after";
-    expect(parseFeaturedForm({ ...base, body }).body).toBe(body);
+  it("rejects a non-NUL control character (BEL) in the body with the shared control copy", () => {
+    expect(errors({ ...base, body: "before\u0007after" })).toEqual({
+      body: "Remove control or invisible characters.",
+    });
   });
 
   it("still accepts exactly 255 code points of astral title text", () => {

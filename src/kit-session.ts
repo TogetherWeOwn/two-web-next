@@ -9,10 +9,11 @@
 // several readers are wired). The bridge never rotates, revokes, or issues
 // a session; the one cookie this module writes is the signed auth-status
 // probe below, attached by the hook only to successful moderator admin
-// responses or audited full member documents. Rotation stays route-specific:
+// responses or audited full member documents. Renewal stays route-specific:
 // Hono's readSession rotates its page views (no blanket rotating layout load;
-// fragments and JSON keep nonrotating reads), and the Kit event detail renews
-// through kitEventDetailRotationFor, which the hook core calls only after the
+// fragments and JSON keep nonrotating reads), the Kit event detail renews
+// through kitEventDetailRotationFor, and Kit admin reads slide through
+// kitAdminRenewalFor, which the hook core calls only after the
 // member-read boundary releases a successful GET. Logout stays the
 // authoritative Hono POST /logout. This module only peeks flashes. Profile
 // destinations expire the join flash in the hook core after a released
@@ -27,6 +28,7 @@
 // accepted here: it proves liveness only and is not a login token.
 import { generateSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
+import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
@@ -110,10 +112,12 @@ export async function resolveRequestSession(
   let row;
   try {
     row = await deps.store.get(await hashToken(raw));
-  } catch {
+  } catch (err) {
     // Fail closed to "unknown", never to a false logout: callers render the
     // session state as indeterminate (like Hono's sessionUnavailable guest
     // fallback) instead of telling a member they are logged out.
+    // One class-only warn (no Hono context here); callers must not re-warn it.
+    console.warn("kit session store unavailable", { exception: exceptionClass(err) });
     return UNKNOWN;
   }
   if (!row) return GUEST;
@@ -222,7 +226,11 @@ export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
       return decision.status === "authenticated" && decision.session
         ? { member: decision.session.member, moderator: decision.session.moderator }
         : null;
-    } catch {
+    } catch (err) {
+      // The store never materialized, so no read ran: one class-only warn.
+      // A store.get failure warns inside resolveRequestSession and resolves
+      // to UNKNOWN (null here), so this catch never double-warns it.
+      console.warn("kit events session store unavailable", { exception: exceptionClass(err) });
       return null;
     }
   };
@@ -248,7 +256,14 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
             sessionSecret: env.SESSION_SECRET,
             store: await storeForEnv(env),
           });
-        } catch {
+        } catch (err) {
+          // The store never materialized, so no read ran: one class-only
+          // warn, UNKNOWN with the journey kept. A store.get failure warns
+          // inside resolveRequestSession and resolves to UNKNOWN, so this
+          // catch never double-warns it.
+          console.warn("kit session bridge store unavailable", {
+            exception: exceptionClass(err),
+          });
           return UNKNOWN;
         }
       })(),
@@ -304,6 +319,53 @@ export function kitEventDetailRotationFor(
     // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
     // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
     return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      maxAge: SESSION_TTL_SECONDS,
+    });
+  };
+}
+
+/**
+ * Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
+ * admin-guard slide (src/admin/guard.ts: a current bearer renews the
+ * 120-minute window, grace reads never refresh cookies). The hook core calls
+ * this only after the member-read boundary releases a successful GET document,
+ * so a refused, failed, bounced or redirected read never touches the presented
+ * bearer.
+ *
+ * Slide, not rotate. Hono admin reads deliberately never rotate — rotation is
+ * the site's concern, and an admin read must not invalidate the cookie the
+ * moderator's other tab holds. The renewal cookie re-signs the PRESENTED
+ * bearer with a fresh Max-Age, and the store call is renew(), never rotate().
+ * Only a current bearer (statusHash present) renews; grace/predecessor reads
+ * return null without a store write. A lost race (renew resolves false)
+ * returns null like any other expected non-renewal; only a store failure
+ * propagates, and the hook core renders the released page without renewal
+ * then. Non-moderators and anonymous callers get null with zero store writes.
+ */
+export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<string | null> {
+  return async (event) => {
+    const locals = event.locals as Partial<KitLocals> | undefined;
+    const bits = locals?.status === "authenticated" ? locals.session : null;
+    if (!bits?.moderator || !env.SESSION_SECRET) return null;
+    // verifiedCookies never throws (a malformed header resolves to no
+    // cookies); an unverifiable bearer simply does not renew.
+    const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
+    const raw = cookies?.[SESSION_COOKIE];
+    if (!isValidSessionToken(raw)) return null;
+    const store = await storeForEnv(env);
+    const tokenHash = await hashToken(raw);
+    // Only a current bearer renews: grace reads never refresh cookies (Hono
+    // gates on statusHash first). A null key returns before any renew call.
+    if (!(await store.statusHash(tokenHash))) return null;
+    const renewed = await store.renew(tokenHash, new Date(Date.now() + SESSION_TTL_SECONDS * 1000));
+    if (!renewed) return null;
+    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
+    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
+    return generateSignedCookie(SESSION_COOKIE, raw, env.SESSION_SECRET, {
       path: "/",
       secure: true,
       httpOnly: true,
