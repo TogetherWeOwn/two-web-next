@@ -109,3 +109,10 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/admin-event-route-key-admission\.test\.ts$''']
 regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FAU$''']
+
+[[allowlists]]
+description = "Synthetic Discord snowflake leak-marker in the queue/agent structured-fields acceptance test; patterned digits, not a real client or credential"
+targetRules = ["discord-client-id"]
+condition = "AND"
+paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
+regexes = ['''777666555444333222''']
