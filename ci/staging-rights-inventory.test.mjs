@@ -91,31 +91,159 @@ const UNQUALIFIED_KEYWORDS = [
   "WHERE",
 ];
 
-function assertBuiltinCalls(read, builtins) {
-  for (const [, builtin] of read.sql.matchAll(/pg_catalog\.(\w+)\s*\(/g)) {
-    assert.ok(builtins.includes(builtin), `${read.id}: builtin outside fixed list: ${builtin}`);
+// Bare keywords: every other unqualified token candidate reads may use. Kept
+// separate from UNQUALIFIED_KEYWORDS (call-shaped skips) so each list documents
+// its own gate. CURRENT_USER/SESSION_USER are the keyword call forms, never
+// parenthesized; PG_CATALOG is the schema qualifier of every fixed call and
+// catalog target.
+const SQL_KEYWORDS = [
+  ...UNQUALIFIED_KEYWORDS,
+  "ALL",
+  "BY",
+  "CROSS",
+  "CURRENT_USER",
+  "ELSE",
+  "END",
+  "FROM",
+  "IS",
+  "JOIN",
+  "LATERAL",
+  "LEFT",
+  "NULL",
+  "ORDER",
+  "PG_CATALOG",
+  "RECURSIVE",
+  "SELECT",
+  "SESSION_USER",
+  "THEN",
+  "TRUE",
+  "UNION",
+  "WHEN",
+  "WITH",
+];
+
+function blankLiterals(sql) {
+  return sql.replace(/'(?:[^']|'')*'/g, "''");
+}
+
+// CTE names and definition columns from the WITH clause. The column list is
+// optional (edges/acl_entries carry none); the WITH/comma anchor keeps a
+// planted `name AS (` outside a CTE definition from registering a name.
+function cteDefinitions(sql) {
+  const names = new Set();
+  const columns = new Set();
+  const defs = /(?:WITH\s+RECURSIVE|WITH|,)\s*(\w+)\s*(?:\(([^)]*)\)\s*)?AS\s*\(/gi;
+  for (const [, name, list] of sql.matchAll(defs)) {
+    names.add(name.toUpperCase());
+    if (list !== undefined)
+      for (const column of list.split(","))
+        if (/^[A-Za-z_]\w*$/.test(column.trim())) columns.add(column.trim().toUpperCase());
   }
-  const ctes = new Set(
-    [...read.sql.matchAll(/(\w+)\s*\([^)]*\)\s*AS\s*\(/gi)].map((m) => m[1].toUpperCase()),
-  );
-  for (const [, name] of read.sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
+  return { names, columns };
+}
+
+// Alias (upper) -> catalog table (lower) for every pg_catalog FROM/JOIN/comma
+// target. A call-shaped `pg_catalog.name(` is never a table target; a target
+// with no usable alias (keyword or end of clause) registers under its own
+// table name, so table-qualified references still resolve against the
+// allowlist instead of being skipped.
+function catalogAliases(sql) {
+  const aliases = new Map();
+  const target = /(?:FROM|JOIN|,)\s*pg_catalog\.(\w+)\b(?!\s*\()(?:\s+AS\s+(\w+)|\s+(\w+))?/gi;
+  for (const [, table, asAlias, alias] of sql.matchAll(target)) {
+    const name = asAlias ?? alias;
+    if (name && !SQL_KEYWORDS.includes(name.toUpperCase()))
+      aliases.set(name.toUpperCase(), table.toLowerCase());
+    else aliases.set(table.toUpperCase(), table.toLowerCase());
+  }
+  return aliases;
+}
+
+// Non-catalog aliases usable as bare tokens: CTE FROM/JOIN/comma targets and
+// LATERAL function-output aliases (`) alias ON`). CTE-qualified and
+// function-output columns are not catalog columns, so they stay out of the
+// per-catalog check while their aliases still resolve as bare tokens.
+function extraAliases(sql, cteNames) {
+  const aliases = new Set();
+  if (cteNames.size > 0) {
+    const cte = [...cteNames].join("|");
+    const target = new RegExp(`(?:FROM|JOIN|,)\\s*(?:${cte})\\s*(?:AS\\s+(\\w+)|(\\w+))?`, "gi");
+    for (const [, asAlias, alias] of sql.matchAll(target)) {
+      const name = asAlias ?? alias;
+      if (name && !SQL_KEYWORDS.includes(name.toUpperCase())) aliases.add(name.toUpperCase());
+    }
+  }
+  for (const [, alias] of sql.matchAll(/\)\s*(?:AS\s+)?(\w+)\s+ON\b/gi))
+    if (!SQL_KEYWORDS.includes(alias.toUpperCase())) aliases.add(alias.toUpperCase());
+  return aliases;
+}
+
+function assertBuiltinCalls(read, builtins) {
+  const sql = blankLiterals(read.sql);
+  const { names: ctes } = cteDefinitions(sql);
+  const fixed = builtins.map((name) => name.toLowerCase());
+  for (const [, schema, builtin] of sql.matchAll(/([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(/g)) {
+    assert.equal(
+      schema.toLowerCase(),
+      "pg_catalog",
+      `${read.id}: qualified call outside pg_catalog: ${schema}.${builtin}`,
+    );
+    assert.ok(
+      fixed.includes(builtin.toLowerCase()),
+      `${read.id}: builtin outside fixed list: ${builtin.toLowerCase()}`,
+    );
+  }
+  for (const [, name] of sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
     const upper = name.toUpperCase();
     if (UNQUALIFIED_KEYWORDS.includes(upper) || ctes.has(upper)) continue;
     assert.fail(`${read.id}: unqualified call outside fixed list: ${name}`);
   }
 }
 
+function assertNoQuotedIdentifiers(read) {
+  // The sole double-quoted form in candidate SQL is the ::"char" cast in the
+  // relation_acls defaults; any other quote is a quoted identifier, which
+  // PostgreSQL resolves case-sensitively outside the allowlist spellings.
+  assert.doesNotMatch(
+    read.sql.replace(/::"char"/g, ""),
+    /"/,
+    `${read.id}: quoted identifier outside the fixed ::"char" cast`,
+  );
+}
+
+function assertBareTokens(read) {
+  // Every unqualified token must be a fixed keyword, a declared output field,
+  // a table/CTE alias, a CTE name or a CTE definition column. Qualified
+  // references (after .), cast targets (after :) and string contents never
+  // reach this check, so an unqualified column reference cannot evade the
+  // alias-qualified per-catalog check above.
+  const sql = blankLiterals(read.sql).replace(/::"char"/g, "");
+  const { names: ctes, columns: cteColumns } = cteDefinitions(sql);
+  const allowed = new Set([...SQL_KEYWORDS, ...ctes, ...cteColumns]);
+  for (const field of read.fields ?? []) allowed.add(field.toUpperCase());
+  for (const alias of catalogAliases(sql).keys()) allowed.add(alias);
+  for (const alias of extraAliases(sql, ctes)) allowed.add(alias);
+  for (const [, token] of sql.matchAll(/(?<![\w.:\"'])([A-Za-z_]\w*)/g))
+    assert.ok(
+      allowed.has(token.toUpperCase()),
+      `${read.id}: bare token outside fixed surface: ${token}`,
+    );
+}
+
 function assertCatalogColumns(read, catalogColumns) {
-  const aliases = new Map(
-    [...read.sql.matchAll(/(?:FROM|JOIN)\s+pg_catalog\.(\w+)(?:\s+AS)?\s+(\w+)/gi)].map((m) => [
-      m[2],
-      m[1],
+  const sql = blankLiterals(read.sql);
+  const aliases = catalogAliases(sql);
+  const allowed = Object.fromEntries(
+    Object.entries(catalogColumns).map(([table, columns]) => [
+      table.toLowerCase(),
+      columns.map((column) => column.toLowerCase()),
     ]),
   );
-  for (const [, alias, column] of read.sql.matchAll(/\b(\w+)\.(\w+)\b/g)) {
-    if (aliases.has(alias))
+  for (const [, alias, column] of sql.matchAll(/\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b/g)) {
+    const table = aliases.get(alias.toUpperCase());
+    if (table !== undefined)
       assert.ok(
-        catalogColumns[aliases.get(alias)].includes(column),
+        (allowed[table] ?? []).includes(column.toLowerCase()),
         `${read.id}: ${alias}.${column}`,
       );
   }
@@ -203,7 +331,10 @@ test("fixed PG18 reads expose only declared columns, catalogs and builtins", asy
       read.sql,
       /;|--|\/\*|\b(?:INSERT|UPDATE|DELETE|GRANT|REVOKE|CALL|DO|COPY)\b/i,
     );
-    for (const [, catalog] of read.sql.matchAll(/\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)/gi)) {
+    const targets =
+      /\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)\b(?!\s*\()|,\s*pg_catalog\.(\w+)\b(?!\s*\()/gi;
+    for (const [, fromJoin, comma] of read.sql.matchAll(targets)) {
+      const catalog = (fromJoin ?? comma).toLowerCase();
       assert.ok(Object.hasOwn(CATALOG_COLUMNS, catalog), `catalog outside fixed list: ${catalog}`);
     }
     assertBuiltinCalls(read, BUILTINS);
@@ -460,12 +591,16 @@ test("membership SQL keeps forward and reverse traversals separate", async () =>
   assert.doesNotMatch(sql, /m\.roleid = c\.oid OR m\.member = c\.oid/);
 });
 
-test("catalog column references stay inside the exact per-catalog allowlist", async () => {
+test("candidate SQL stays inside the exact fixed surface", async () => {
   const { READS, CATALOG_COLUMNS } = await modules();
-  for (const read of READS) assertCatalogColumns(read, CATALOG_COLUMNS);
+  for (const read of READS) {
+    assertCatalogColumns(read, CATALOG_COLUMNS);
+    assertNoQuotedIdentifiers(read);
+    assertBareTokens(read);
+  }
 });
 
-test("allowlist checks reject AS aliases and unqualified builtins", async () => {
+test("allowlist checks reject non-fixed SQL spellings", async () => {
   const { CATALOG_COLUMNS, BUILTINS } = await modules();
   const mutant = (sql) => ({ id: "mutant", sql });
   // AS-aliased catalog references must still resolve against the allowlist.
@@ -478,6 +613,27 @@ test("allowlist checks reject AS aliases and unqualified builtins", async () => 
       ),
     /mutant: p\.provolatile/,
   );
+  // Comma-joined catalog targets resolve too: the second target's alias is
+  // enumerated, so its forbidden columns fail instead of being skipped.
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT p.provolatile FROM pg_catalog.pg_class c, pg_catalog.pg_proc p"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: p\.provolatile/,
+  );
+  // Alias-less targets resolve under their own table name, even when a clause
+  // keyword directly follows the target.
+  assertCatalogColumns(mutant("SELECT pg_proc.prokind FROM pg_catalog.pg_proc"), CATALOG_COLUMNS);
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT pg_proc.provolatile FROM pg_catalog.pg_proc WHERE pg_proc.prokind = 1"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: pg_proc\.provolatile/,
+  );
   // Unqualified builtins resolve via the pg_catalog search path, so they fail.
   assert.throws(
     () =>
@@ -487,6 +643,17 @@ test("allowlist checks reject AS aliases and unqualified builtins", async () => 
       ),
     /mutant: unqualified call outside fixed list: has_table_privilege/,
   );
+  // Uppercase spellings fold to the same identifiers, so they fail identically.
+  assert.throws(
+    () =>
+      assertBuiltinCalls(mutant("SELECT PG_CATALOG.HAS_TABLE_PRIVILEGE(1, 'SELECT')"), BUILTINS),
+    /mutant: builtin outside fixed list: has_table_privilege/,
+  );
+  // Other-schema qualified calls are outside the fixed surface.
+  assert.throws(
+    () => assertBuiltinCalls(mutant("SELECT public.synthetic_guard()"), BUILTINS),
+    /mutant: qualified call outside pg_catalog: public\.synthetic_guard/,
+  );
   // Qualified allowlisted calls and keyword forms still pass.
   assertBuiltinCalls(
     mutant(
@@ -494,6 +661,28 @@ test("allowlist checks reject AS aliases and unqualified builtins", async () => 
     ),
     BUILTINS,
   );
+  // Quoted identifiers resolve outside the allowlist spellings, so they fail.
+  assert.throws(
+    () => assertNoQuotedIdentifiers(mutant('SELECT "p"."provolatile" FROM pg_catalog.pg_proc p')),
+    /mutant: quoted identifier outside the fixed ::"char" cast/,
+  );
+  assert.throws(
+    () => assertNoQuotedIdentifiers(mutant('SELECT pg_catalog."has_table_privilege"(1)')),
+    /mutant: quoted identifier outside the fixed ::"char" cast/,
+  );
+  // The fixed ::"char" cast is the sole quoted exception.
+  assertNoQuotedIdentifiers(mutant("SELECT 's'::\"char\""));
+  // Unqualified columns evade the alias-qualified check, so bare tokens fail.
+  assert.throws(
+    () => assertBareTokens(mutant("SELECT provolatile FROM pg_catalog.pg_proc p")),
+    /mutant: bare token outside fixed surface: provolatile/,
+  );
+  // Fixed spellings resolve: keywords, fields, aliases and CTE references pass.
+  assertBareTokens({
+    id: "mutant",
+    fields: ["function_kind"],
+    sql: "SELECT p.prokind::text AS function_kind FROM pg_catalog.pg_proc p",
+  });
 });
 
 test("cycles terminate and incomplete ACL or MEMBER rows cannot pass", async () => {
@@ -501,6 +690,13 @@ test("cycles terminate and incomplete ACL or MEMBER rows cannot pass", async () 
   const mutations = [
     (f) => {
       f.relation_acls.rows = [];
+    },
+    // A single missing in-scope ACL row must stop at the per-relation
+    // comparison: dropping only relation 100 keeps the 101/102 rows, so the
+    // non-empty check above cannot stop this and only the completeness guard
+    // can. Without this pin the guard is deletable with the suite green.
+    (f) => {
+      f.relation_acls.rows = f.relation_acls.rows.filter((r) => r.relation_oid !== 100);
     },
     (f) => {
       f.column_acls.rows.pop();
