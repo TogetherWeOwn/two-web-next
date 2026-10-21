@@ -5,8 +5,9 @@
 import type { Hono } from "hono";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
+import { inviteDestination } from "../invite";
 import { safeNext, sanitizeSource } from "./service";
-import { background, type JoinRender } from "./route-shared";
+import { background, JOIN_START_FAILED_NOTICE, type JoinRender } from "./route-shared";
 
 export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: JoinRender) {
   app.get("/join", (c) => {
@@ -28,13 +29,23 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // is the only way back into /join/discord.
     const next = safeNext(c.req.query("next"));
     const source = sanitizeSource(c.req.query("source"));
+    // The store-down start bounce lands here with ?notice=start-failed so
+    // the member sees why the start failed instead of a silent bounce (E1).
+    // Exact-match allowlist: anything else renders the plain page, so a
+    // hostile or mistyped value leaves no trace in the HTML.
+    const notice =
+      c.req.query("notice") === JOIN_START_FAILED_NOTICE ? JOIN_START_FAILED_NOTICE : null;
+    // Sanitized like /discord and the join callback: a bad
+    // DISCORD_INVITE_URL renders the hardcoded fallback, never a dead,
+    // relative or hostile href.
     return render.joinPage(c, {
-      inviteUrl: c.env.DISCORD_INVITE_URL,
+      inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,
       widgetSnapshot,
       next,
       source,
       appUrl: c.env.APP_URL,
+      notice,
     });
   });
 }
