@@ -294,6 +294,12 @@ catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
 
+Queue-only blindness pages nowhere here: an unreadable ledger reports
+top-level `degraded` with `queue.status: unknown` on HTTP 200, so this prober
+stays green by design. That 200 does not double with the direct
+`scheduled.failing` page above, which remains the paging signal for failed
+reconcile/prune runs.
+
 ### Synthetic main-flow checks: `synthetic.down`
 
 Scheduled runs landing on a five-minute boundary also probe the main flow

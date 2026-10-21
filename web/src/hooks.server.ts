@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import {
+  kitAdminRenewalFor,
   kitAuthStatusCookieFor,
   kitEventDetailRotationFor,
   kitEventsJourneyFor,
@@ -25,10 +26,10 @@ import { honoFetch } from "#lib/server/hono.ts";
 // or session logic to mutate — only env, honoFetch, resolve and the tested
 // bridges. The events-list binding adds the list's read-only session peek and
 // join-flash peek (no rotation, no consumption at the hook layer) for the
-// dispatch's shared-cache eligibility. Rotation stays route-specific: the
+// dispatch's shared-cache eligibility. Renewal stays route-specific: the
 // bridge never issues, rotates, revokes, or sets cookies, and the event
-// detail renews only through the post-release rotation binding below, after
-// the member-read boundary releases a successful GET. Logout and OAuth stay
+// detail and admin reads renew only through the post-release bindings below,
+// after the member-read boundary releases a successful GET. Logout and OAuth stay
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
 export const handle: Handle = async ({ event, resolve }) =>
@@ -55,6 +56,7 @@ export const handle: Handle = async ({ event, resolve }) =>
     sessionFor: kitSessionBridge(env),
     authStatusCookieFor: kitAuthStatusCookieFor(env),
     eventDetailRotationFor: kitEventDetailRotationFor(env),
+    adminRenewalFor: kitAdminRenewalFor(env),
     accessSink: kitAccessSink(env),
     // Loopback Kit parity fixture flags only: the core turns these booleans
     // plus a loopback appUrl into the fixture route choice, so the member
