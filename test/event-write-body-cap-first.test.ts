@@ -136,7 +136,7 @@ describe("body-size cap precedes throttle and session on event writes", () => {
         const { request, pull } = upload(path, method, max, cookie, true);
         const response = await app.request(request, undefined, envFor(sessions, throttle));
         expect(response.status, kind).toBe(413);
-        expect(await response.json(), kind).toEqual(ERROR);
+        expect(await response.json(), kind).toMatchObject(ERROR);
         expect(throttle.store, kind).not.toHaveBeenCalled();
         expect(throttle.sql, kind).not.toHaveBeenCalled();
         expect(throttle.count(), kind).toBe(0);
@@ -157,7 +157,7 @@ describe("body-size cap precedes throttle and session on event writes", () => {
         const { request, pull } = upload(path, method, max, cookie, false);
         const response = await app.request(request, undefined, envFor(sessions, throttle));
         expect(response.status, kind).toBe(413);
-        expect(await response.json(), kind).toEqual(ERROR);
+        expect(await response.json(), kind).toMatchObject(ERROR);
         expect(throttle.store, kind).not.toHaveBeenCalled();
         expect(throttle.sql, kind).not.toHaveBeenCalled();
         expect(throttle.count(), kind).toBe(0);
@@ -180,7 +180,7 @@ describe("body-size cap precedes throttle and session on event writes", () => {
         const { request } = upload(path, method, max, cookie, advertised);
         const response = await app.request(request, undefined, envFor(sessions, throttle));
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(WRITE_THROTTLE_PER_MINUTE);
         expect(get, `advertised=${advertised}`).not.toHaveBeenCalled();

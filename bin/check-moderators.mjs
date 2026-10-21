@@ -20,6 +20,18 @@ import { readFileSync } from "node:fs";
 import { readWranglerConfig } from "../ci/check-config-docs.mjs";
 import { checkModerators, renderModeratorReport } from "../src/probes/check-moderators.ts";
 
+const USAGE = `Usage: node --import ./bin/ts-hook.mjs bin/check-moderators.mjs [--require-configured] [--json] [--config=<path> [--env=<name>]] [--help]
+
+Deploy-time moderator role-config probe. Reads DISCORD_MODERATOR_ROLE_IDS plus
+DISCORD_GUILD_ID, or --config top-level vars (with --env, env.<name>.vars only).
+--json emits the findings verdict; --help prints this usage to stdout and reads
+nothing. Network-free: it checks resolved config, never Discord.`;
+
+if (process.argv.slice(2).includes("--help")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 const args = new Set(process.argv.slice(2));
 const configs = [...args].filter((a) => a.startsWith("--config="));
 const envs = [...args].filter((a) => a.startsWith("--env="));

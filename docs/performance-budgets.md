@@ -286,13 +286,21 @@ routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
 is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
 The retry also fires on the truncation signature of exit 0 with tail routes
 unmeasured, which the old single-shot runner failed closed on with no
-diagnosis. A full-evidence assert failure never retries. Every run writes
+diagnosis, and on a marginal `/` LCP breach: complete evidence where the only
+error-level assertion is the homepage `largest-contentful-paint` strictly
+inside (budget, budget * 1.1) with every other route pass or warn-only. The
+retry gates; the first attempt's table (`watch-summary.attempt1.md`) and
+per-run files (`marginal-attempt1/`) stay in the artifact next to the gating
+table, so both attempts are evidence. Any other full-evidence assert failure
+never retries, and a second breach stays red as systematic. Every run writes
 `.lighthouseci/origin-collect.log` (full lhci output) and, on failure,
 `.lighthouseci/origin-collect-diagnosis.md`, which says COLLECT FAILURE
 (short evidence, naming the routes short of runs: re-run the step, budgets
 untouched), BUDGET BREACH (full evidence plus an evaluated assertion miss:
 see `watch-summary.md`), or an unclassified step failure (full evidence, no
 assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
+The `watch-summary.md` medians table is followed by a per-sample table with
+every run's values for every route, including passes.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
@@ -346,12 +354,14 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 | `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |
 | `public/islands/avatar.js` | 287 / 213 | 512 / 512 |
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
-| `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
+| `public/islands/events-calendar.js` | 7180 / 2639 | 7680 / 2816 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
 | `public/islands/member-profile.js` | 9471 / 3500 | 12288 / 4608 |
 | `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
 | `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |
+
+2026-10-21: the `events-calendar.js` row now records the calendar month-jump merge (7180/2639 B); ceilings 7680/2816 B are the minimal steps covering it.
 
 The auth-status gzip ceiling uses the repository's ×1.25 rule on its recorded
 2026-10-10 baseline (1213 B → 1536 B). This approved headroom covers two

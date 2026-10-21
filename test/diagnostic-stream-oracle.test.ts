@@ -542,11 +542,11 @@ describe("expectDiagnosticStreamClean", () => {
     expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).not.toThrow();
   });
 
-  it("fails without the request line, even with no marker present", () => {
+  it("fails without a route-shaped request record, even with no marker present", () => {
     const records = captureDiagnosticStream();
     console.log("request");
     expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).toThrow(
-      "request line written",
+      "request record present",
     );
   });
 

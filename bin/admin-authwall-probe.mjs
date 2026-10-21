@@ -17,6 +17,26 @@ export const STAGING_URL = "https://next.togetherweown.com";
 export const QA_HEADER = "X-TWO-QA-Auth";
 const SESSION_COOKIE = "__Host-two_session=";
 
+const USAGE = `Usage: node bin/admin-authwall-probe.mjs [--help]
+
+Staging-only operator probe: admin POST auth-wall parity across the three
+legs — guest bounces to session recovery, member 403s on the moderator bit,
+moderator reads the dashboard.
+
+Environment:
+  QA_AUTH_TOKEN  staging QA login token (required; never pass it as a CLI argument)
+
+The probe target is pinned to ${STAGING_URL}; there are no other options.
+POST bodies are empty: every expectation is decided by the same-origin
+middleware or the admin guard, before any handler touches the database, so
+the probe writes nothing. Output is a redacted JSON result on stdout;
+failures print one generic line to stderr and claim nothing.
+
+Exit codes:
+  exit 0  every auth-wall check passed
+  exit 1  any check failed, a QA login was refused, an argument was passed,
+          or the probe errored`;
+
 // All nine admin mutation routes behind the admin guard (src/admin/routes.tsx).
 export const ADMIN_POST_PATHS = [
   "/admin/events",
@@ -168,6 +188,13 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
 }
 
 async function main() {
+  if (process.argv.slice(2).includes("--help")) {
+    // Discovery only: usage to stdout, exit 0, zero side effects — no token
+    // read, no login, no probe. Checked before the argv refusal so --help is
+    // never parsed as a positional.
+    console.log(USAGE);
+    return;
+  }
   if (process.argv.length !== 2) throw new Error("Usage: node bin/admin-authwall-probe.mjs");
   const result = await runProbe({ token: process.env.QA_AUTH_TOKEN });
   console.log(JSON.stringify(result, null, 2));

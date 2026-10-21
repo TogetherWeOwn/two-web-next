@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare, Response } from "miniflare";
+import { AUTH_BROWSER_CHECK_IDS, AUTH_EVIDENCE_SCHEMA_VERSION } from "./auth-evidence-schema.mjs";
 
 const require = createRequire(
   process.env.AUTH_BROWSER_TOOLS_DIR
@@ -15,6 +16,11 @@ const require = createRequire(
 const { chromium } = require("playwright");
 const output = process.env.AUTH_BROWSER_OUTPUT_DIR;
 assert.ok(output, "Set AUTH_BROWSER_OUTPUT_DIR to a run-owned evidence directory");
+assert.equal(
+  AUTH_BROWSER_CHECK_IDS.length,
+  6,
+  "auth-evidence schema changed arity: record each new check ID after its assertion",
+);
 await mkdir(output, { recursive: true });
 let mf;
 let browser;
@@ -177,10 +183,11 @@ try {
   });
   assert.ok((await page.textContent("body")).includes("Browser Member"));
   assert.deepEqual(calls, ["exchange", "identity", "join"]);
-  checks.push(
-    "Real browser sign-in CTA completes mocked OAuth and renders an authenticated landing",
-  );
+  checks.push(AUTH_BROWSER_CHECK_IDS[0]);
 
+  // AUTH_BROWSER_CHECK_IDS index map: 0 sign-in CTA, 1/2 auth re-entry/replay,
+  // 3/4 join re-entry/replay, 5 consent denial. Each ID is pushed only after
+  // its assertions above pass; never copy the whole array.
   for (const [flow, start] of [
     ["auth", "/auth/discord"],
     ["join", "/join/discord"],
@@ -207,7 +214,7 @@ try {
     await stalePage.goto(origin);
     assert.ok(!(await stalePage.textContent("body")).includes("Browser Member"));
     await stale.close();
-    checks.push(`${flow}: fresh signed-in re-entry revokes the supplied prior browser session`);
+    checks.push(AUTH_BROWSER_CHECK_IDS[flow === "auth" ? 1 : 3]);
 
     await context.clearCookies();
     await context.addCookies(original.cookies);
@@ -217,9 +224,7 @@ try {
     assert.ok(!(await page.textContent("body")).includes("Browser Member"));
     if (flow === "join") assert.ok((await page.textContent("body")).includes("Join link expired"));
     else assert.equal(new URL(page.url()).searchParams.get("n"), "signin_failed");
-    checks.push(
-      `${flow}: ORIGINAL signed-cookie replay makes no exchange/join and cannot authenticate`,
-    );
+    checks.push(AUTH_BROWSER_CHECK_IDS[flow === "auth" ? 2 : 4]);
     await page.screenshot({ path: resolve(output, `${flow}-replay.png`), fullPage: true });
   }
   deny = true;
@@ -227,9 +232,10 @@ try {
   await page.goto(`${origin}/join/discord`);
   assert.ok((await page.textContent("body")).includes("Join cancelled"));
   assert.equal(calls.length, count);
-  checks.push("Join consent denial renders recovery without an upstream exchange");
+  checks.push(AUTH_BROWSER_CHECK_IDS[5]);
   assert.deepEqual(unexpected, []);
   const result = {
+    schemaVersion: AUTH_EVIDENCE_SCHEMA_VERSION,
     checks,
     authorizations,
     mockedCalls: calls,

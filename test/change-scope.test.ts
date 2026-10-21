@@ -987,6 +987,7 @@ describe("backup selftest wiring", () => {
     "bash ci/db-backup-argv-selftest.sh",
     "python3 ci/backup-manifest-admission-selftest",
     "python3 ci/backup-restore-proof/selftest.py",
+    "bash ci/db-backup-retention-plan-selftest.sh",
   ];
   const gate =
     "if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";

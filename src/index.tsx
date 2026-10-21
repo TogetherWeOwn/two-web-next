@@ -543,7 +543,13 @@ app.get("/", async (c) => {
     executionCtx,
     c.get("requestId"),
   );
-  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
+  const featuredPromise = cachedFeatured(
+    c.env,
+    () => dbFor(c),
+    new Date(),
+    executionCtx,
+    c.get("requestId"),
+  );
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
     await Promise.all([
       sessionPromise,
