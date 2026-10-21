@@ -57,8 +57,13 @@ function feedJsonRequested(c: Ctx): boolean {
     .some((range) => {
       const [type, ...parameters] = range.split(";").map((part) => part.trim());
       if (type !== "application/json") return false;
-      const quality = parameters.find((part) => part.startsWith("q="))?.slice("q=".length) ?? "1";
-      return /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) && Number(quality) > 0;
+      const weights = parameters.filter((part) => /^q\s*=/.test(part));
+      const quality = weights[0]?.replace(/^q\s*=\s*/, "") ?? "1";
+      return (
+        weights.length <= 1 &&
+        /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) &&
+        Number(quality) > 0
+      );
     });
 }
 
