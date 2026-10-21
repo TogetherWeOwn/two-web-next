@@ -20,14 +20,22 @@ import { test } from "node:test";
 const e2eDir = new URL(".", import.meta.url);
 
 // playwright.config.ts runs testDir ./e2e with testMatch **/*.spec.ts and
-// testIgnore **/{staging,watch,explore,kit-parity}/**: the census must walk
-// the same tree, or specs the runner executes stay invisible to the budget.
+// testIgnore **/{staging,watch,explore,kit-parity}/**, while
+// playwright.kit-parity.config.ts runs testDir ./e2e/kit-parity with
+// testIgnore: []. Each census must walk the same tree as its own runner, or
+// specs the runner executes stay invisible to the budget.
 const PLAYWRIGHT_IGNORED_DIRS = new Set(["staging", "watch", "explore", "kit-parity"]);
+const KIT_PARITY_IGNORED_DIRS = new Set();
 
-function collectSpecFiles(dirUrl, prefix, out = []) {
+function collectSpecFiles(dirUrl, prefix, ignoredDirs, out = []) {
   for (const entry of readdirSync(dirUrl, { withFileTypes: true })) {
-    if (entry.isDirectory() && !PLAYWRIGHT_IGNORED_DIRS.has(entry.name)) {
-      collectSpecFiles(new URL(`./${entry.name}/`, dirUrl), `${prefix}${entry.name}/`, out);
+    if (entry.isDirectory() && !ignoredDirs.has(entry.name)) {
+      collectSpecFiles(
+        new URL(`./${entry.name}/`, dirUrl),
+        `${prefix}${entry.name}/`,
+        ignoredDirs,
+        out,
+      );
     } else if (entry.isFile() && entry.name.endsWith(".spec.ts")) {
       out.push(`${prefix}${entry.name}`);
     }
@@ -43,7 +51,7 @@ function readBudget() {
 }
 
 function countSpecLogins() {
-  const files = collectSpecFiles(e2eDir, "").sort();
+  const files = collectSpecFiles(e2eDir, "", PLAYWRIGHT_IGNORED_DIRS).sort();
   assert.ok(files.length > 0, "no e2e spec files found");
   return files.map((file) => {
     const source = readFileSync(new URL(`./${file}`, e2eDir), "utf8");
@@ -59,7 +67,7 @@ function countTeardownLogins() {
 
 function countParityLogins() {
   const dir = new URL("./kit-parity/", e2eDir);
-  const files = collectSpecFiles(dir, "").sort();
+  const files = collectSpecFiles(dir, "", KIT_PARITY_IGNORED_DIRS).sort();
   assert.ok(files.length > 0, "no kit-parity spec files found");
   return files.map((file) => {
     const source = readFileSync(new URL(`./${file}`, dir), "utf8");
