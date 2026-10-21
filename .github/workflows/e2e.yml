@@ -143,6 +143,14 @@ jobs:
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
+      # The journeys spend the full 10/min qa-login budget (10 spec logins
+      # plus the teardown login) against the shared web_throttle_hits table,
+      # so the parity run's own QA login 429s whenever the rolling 60 s
+      # window still holds them. Clear the volitional counters on the
+      # disposable DB so each suite starts with a clean window.
+      - name: Reset throttle counters for parity
+        if: ${{ !cancelled() }}
+        run: node e2e/reset-throttle.mjs
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
       # run against Hono and the built Kit Worker on the same seeded disposable
       # Postgres after the browser suite. The Kit workspace is rebuilt here
