@@ -155,8 +155,8 @@ jobs:
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
       # run against Hono and the built Kit Worker on the same seeded disposable
       # Postgres after the browser suite. The Kit workspace is rebuilt here
-      # for the parity run. Read-only apart from the parity step's two QA
-      # logins (one shared member, one isolated renewal — pinned by
+      # for the parity run. Read-only apart from the parity step's one QA
+      # login (the shared member — renewal is DB-minted, pinned by
       # e2e/qa-login-budget.test.mjs) and its one going RSVP (withdrawn in
       # afterAll) and the archive journey's 24 seeded rows (swept in afterAll),
       # so they neither contaminate either visual suite nor skew the teardown
@@ -177,7 +177,7 @@ jobs:
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
-      # Throttle pacing: the parity step just spent 2 QA logins. Sleep past
+      # Throttle pacing: the parity step just spent 1 QA login. Sleep past
       # the 60 s window so the perf gate below starts with an empty bucket.
       - name: Let the QA-login throttle window expire before auth-perf
         if: ${{ !cancelled() }}

@@ -9,7 +9,7 @@
 // (.github/workflows/e2e.yml) so each 60 s rolling window holds only its own
 // step's logins; this static test counts every login site in every step and
 // fails loudly when a new site would push any step over, pointing at the fix
-// direction (fewer logins, not retries). The parity pair is pinned exactly,
+// direction (fewer logins, not retries). The parity login is pinned exactly,
 // not just bounded, and direct, non-inline, and helper-form logins are pinned
 // to zero wherever they would spend the throttle invisibly to the census.
 
@@ -102,8 +102,8 @@ function countNonInlineQaLoginPosts(relativePath) {
 
 // The qaLogin helper is counted per journey spec above, which excludes
 // kit-parity — so a helper call in a parity file would spend the shared
-// throttle invisibly to the census. Parity logs in through its two counted
-// POST call sites instead.
+// throttle invisibly to the budget census. Parity logs in through its one counted
+// POST call site instead (the renewal session is DB-minted).
 function countQaLoginCalls(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
   return (source.match(/qaLogin\s*\(/g) ?? []).length;
@@ -199,11 +199,13 @@ test("every browser-smoke step holds its own QA logins under the throttle budget
   );
   assert.equal(
     parityTotal,
-    2,
-    `kit-parity specs must keep exactly two QA-login POST call sites (found ${parityTotal}: ${parityBreakdown || "none"}): ` +
-      `one shared member login plus one isolated renewal login. A third parity login ` +
-      `reddened fast runs before — cut a login elsewhere first, and reshape renewal ` +
-      `coverage with the Test Author rather than editing their spec to satisfy this pin.`,
+    1,
+    `kit-parity specs must keep exactly one QA-login POST call site (found ${parityTotal}: ${parityBreakdown || "none"}): ` +
+      `the shared member login only — the isolated renewal session is minted directly ` +
+      `in Postgres (the login was never under test) and spends no throttle budget. ` +
+      `A second parity login reddened fast runs before — cut a login elsewhere first, ` +
+      `and reshape renewal coverage with the Test Author rather than editing their ` +
+      `spec to satisfy this pin.`,
   );
   assert.deepEqual(
     directSites,
@@ -222,7 +224,7 @@ test("every browser-smoke step holds its own QA logins under the throttle budget
   assert.deepEqual(
     parityHelperLogins,
     [],
-    `kit-parity specs must log in through the two counted POST call sites above, not the qaLogin helper: ` +
+    `kit-parity specs must log in through the one counted POST call site above, not the qaLogin helper: ` +
       `${parityHelperLogins.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
       `A helper login here spends the shared throttle invisibly to the budget census.`,
   );
