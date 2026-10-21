@@ -22,8 +22,9 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   paused or cancelled row would show up in `/events`, in the seeded event's "more
   events" cards and in the journeys' lists, so the spec inserts both rows after the
   public routes have been compared and deletes them when its block ends (the same
-  disposable Postgres guard as `e2e/seed.mjs`). Only a signed-in member sees the
-  paused notice (a guest gets the sign-in link), so that test signs in once through
+  disposable Postgres guard as `e2e/seed.mjs`). Guests see the paused notice plus
+  the sign-in link; the paused baseline captures the member view instead, so that
+  test signs in once through
   the stubbed Discord OAuth round trip that `e2e/join.spec.ts` uses, for both
   widths. It does not use the QA login: the journeys that run next already spend
   the whole `qa-login` throttle (10 per minute, `e2e/fixtures.ts`), and one more
