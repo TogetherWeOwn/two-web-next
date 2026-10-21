@@ -10,7 +10,7 @@
 // - Access log: every admin GET/HEAD runs inside the keyed read boundary. Stable
 //   route metadata does not authorize SQL or supply subjects. One row per
 //   request (CISO condition TOG-355); failed attribution or audit always
-//   refuses the buffered contents, even with the legacy enforcement flag off.
+//   refuses the buffered contents.
 // - POSTs carry the same origin check as /logout (SameSite=Lax already
 //   blocks cross-site cookie sends; this refuses a forged same-shape POST
 //   anyway).

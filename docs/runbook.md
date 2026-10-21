@@ -1505,9 +1505,9 @@ These are local doubles, not deployed outage acceptance.
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
 and never retries the other source after a connection failure. Optional
-search-log/widget reads fail open but do not protect primary DB reads. Do not
-touch `MEMBER_ACCESS_LOG_ENFORCE` for a recovery: the flag has no production
-effect and required logging always fails closed. Diagnose from redacted
+search-log/widget reads fail open but do not protect primary DB reads. Required
+member-access logging always fails closed, with no setting to relax it, so
+recovery never involves loosening it. Diagnose from redacted
 platform errors/config metadata; a code rollback may help a code regression,
 but cannot repair a Neon outage. Escalate
 binding/DB recovery to the Director and authorized custodian; never credential-hop.

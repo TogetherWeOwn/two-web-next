@@ -42,7 +42,6 @@ import { build } from "esbuild";
 import { Hono } from "hono";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import type { Db } from "../src/db/index";
 import { emptyGrid, priorGrid } from "../src/hotzones/aggregates";
 import { renderHotzoneGrid } from "../src/hotzones/pages";
 import { registerHotzoneRoutes } from "../src/hotzones/routes";
@@ -106,9 +105,8 @@ beforeAll(async () => {
   )) as { renderKit: RenderKit });
 });
 
-// Available-reads Hono fixture: joins grids render genuine-empty through a
-// hermetic fake Db (no live DB, no network), priors render seeded, board-view
-// writes no-op inside the fake transaction, throttle double admits one read.
+// Null-DB Hono fixture: joins grids render empty, priors render seeded, no
+// board-view writes (routes guard on db), throttle double admits one read.
 function fixture() {
   let now = Date.now();
   const hits: { bucket: string; at: number }[] = [];
@@ -137,34 +135,13 @@ function fixture() {
       unsafe: async () => [],
     },
   );
-  // Hermetic genuine-empty joins double: no bucket rows, zero events, so the
-  // joins section renders its table with the selected-season label
-  // (available=true) instead of the null-DB outage line. Mirrors the minimal
-  // fake transaction in test/hotzones-joins-grid-retention.test.ts, plus the
-  // insert seam recordBoardView uses.
-  const whereResult = Object.assign(Promise.resolve([{ n: 0 }]), {
-    groupBy: async () => [],
-  });
-  const fakeTx = {
-    execute: async () => [],
-    select: () => ({
-      from: () => ({
-        where: () => whereResult,
-        leftJoin: () => ({ where: () => whereResult }),
-      }),
-    }),
-    insert: () => ({ values: async () => [] }),
-  };
-  const fakeDb = {
-    transaction: async (run: (tx: typeof fakeTx) => Promise<unknown>) => run(fakeTx),
-  } as unknown as Db;
   const app = new Hono<{ Bindings: Env }>();
   registerHotzoneRoutes(app);
   const env = {
     APP_URL,
     THROTTLE_STORE: async () => sql as unknown as Sql,
     get ADMIN_DB() {
-      return fakeDb;
+      return null;
     },
   } as unknown as EnvWithThrottle;
   const request = (path: string) => app.request(path, { headers: { "cf-connecting-ip": IP } }, env);
