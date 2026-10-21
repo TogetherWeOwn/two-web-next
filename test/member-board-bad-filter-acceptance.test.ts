@@ -176,7 +176,7 @@ describe("branded 400 acceptance: bad member-board filters (Hono)", () => {
     ["season", "/leaderboards/members?season=2026-13", /season/i],
     ["scope", "/leaderboards/members?scope=bogus", /scope/i],
     ["scope", "/leaderboards/members?scope=friends", /friend|defer/i],
-    ["activity", "/leaderboards/members?activity=chess!", /activity|game/i],
+    ["activity", "/leaderboards/members?activity=" + "a".repeat(101), /activity|game/i],
   ] as const)(
     "bad %s (%s) gets the branded member 400 with zero database work",
     async (_filter, path, problem) => {
@@ -237,7 +237,7 @@ describe("branded 400 acceptance: bad member-board filters (Kit answer class)", 
     { seasonParam: "bogus" },
     { scopeParam: "bogus" },
     { scopeParam: "friends" },
-    { activityParam: "chess!" },
+    { activityParam: "chess\u0000" },
   ])(
     "the Kit load refuses %o with a 400 before any read, carrying no outage copy",
     async (overrides) => {
