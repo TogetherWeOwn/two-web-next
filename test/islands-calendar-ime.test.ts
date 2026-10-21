@@ -69,7 +69,9 @@ function browser() {
       const id = /data-testid="([^"]+)"/.exec(s)?.[1];
       return (id && live[id]) || null;
     },
-    querySelectorAll: () => zones,
+    // Zones only answer their own selector; any other selector (for example
+    // the card sign-in links the island validates) matches nothing, as in a DOM.
+    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? zones : []),
     contains: () => true,
   });
   const history: string[] = [];

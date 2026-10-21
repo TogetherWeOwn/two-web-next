@@ -117,17 +117,17 @@ describe("upBody queue compatibility", () => {
       expect(body.queue.status).toBe(body.status);
     }
   });
-  it("a throwing measure reports unknown without making a ready DB fail", async () => {
+  it("a throwing measure reports degraded unknown without failing DB readiness", async () => {
     const body = await upBody(async () => {
       throw new Error("private SQL/credential");
     }, healthSql());
-    expect(body.status).toBe("healthy");
+    expect(body.status).toBe("degraded");
     expect(body.queue).toEqual(unknownQueue);
     expect(body).toMatchObject({ db: "ok", pending_migrations: 0 });
   });
   it("an unconfigured queue backend retains its detail", async () => {
     const body = await upBody(null, healthSql());
-    expect(body.status).toBe("healthy");
+    expect(body.status).toBe("degraded");
     expect(body.queue).toEqual({ ...unknownQueue, detail: "queue ledger is not configured." });
   });
 });
@@ -211,7 +211,7 @@ describe("/up additive ready-wait signal", () => {
     });
   });
 
-  it("a hung queue alone reports unknown on a ready HTTP 200", async () => {
+  it("a hung queue alone reports degraded unknown on a ready HTTP 200", async () => {
     vi.useFakeTimers();
     try {
       const pending = Promise.resolve(
@@ -221,7 +221,7 @@ describe("/up additive ready-wait signal", () => {
       const res = await pending;
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        status: "healthy",
+        status: "degraded",
         db: "ok",
         pending_migrations: 0,
         queue: unknownQueue,
@@ -262,7 +262,7 @@ describe("GET /up", () => {
       queue: { status: "degraded", warn_at: QUEUE_WARN_AT, critical_at: QUEUE_CRITICAL_AT },
     });
   });
-  it("stays 200 when only the queue ledger fails", async () => {
+  it("stays 200 with degraded top-level when only the queue ledger fails", async () => {
     const res = await app.request(
       "/up",
       {},
@@ -271,7 +271,7 @@ describe("GET /up", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({
-      status: "healthy",
+      status: "degraded",
       db: "ok",
       pending_migrations: 0,
       queue: unknownQueue,
@@ -968,20 +968,20 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
     expect((await pgQueueDepth(sql)).failed).toBe(1);
   });
 
-  it("an unreadable ledger reports unknown with failed null on a 200, never a 500", async () => {
+  it("an unreadable ledger reports degraded unknown with failed null on a 200, never a 500", async () => {
     await fail("sync-event", "sync-event:x", "transport error");
     expect((await pgQueueDepth(sql)).failed).toBe(1);
     await sql`drop table queue_failed_jobs`;
     try {
       const body = await upBody(() => pgQueueDepth(sql), healthSql());
-      expect(body.status).toBe("healthy");
+      expect(body.status).toBe("degraded");
       expect(body.queue).toMatchObject({ status: "unknown", failed: null });
 
       // Real SQL end to end: the DB gate stays ok, so the route stays 200.
       const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        status: "healthy",
+        status: "degraded",
         db: "ok",
         pending_migrations: 0,
         queue: { status: "unknown", failed: null },

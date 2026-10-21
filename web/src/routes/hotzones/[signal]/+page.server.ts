@@ -43,7 +43,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       gridHtml: await renderHotzoneGrid(
         data.cells,
         data.estimated
-          ? `Estimated ${data.signal} activity for season ${data.season}`
+          ? `Season-independent seeded estimate of ${data.signal} activity`
           : `Join activity for season ${data.season}`,
       ),
       total: data.total,

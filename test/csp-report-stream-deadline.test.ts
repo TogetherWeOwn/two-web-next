@@ -176,7 +176,7 @@ describe("CSP report stream liveness", () => {
     }
   });
 
-  it("discards an aborted read without waiting for cancellation", async () => {
+  it("accounts an aborted read as sink_failed without waiting for cancellation", async () => {
     const cancellation = deferred<void>();
     const req = request(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
     const read = vi
@@ -202,7 +202,12 @@ describe("CSP report stream liveness", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseLock).toHaveBeenCalledOnce();
     expect(parse).not.toHaveBeenCalledWith(report);
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.sink_failed", {
+      exception: "Error",
+    });
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
+      "synthetic read failure",
+    );
     cancellation.resolve();
     await completed;
   });
@@ -289,23 +294,39 @@ describe("CSP stream controls", () => {
     expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("private-marker");
   });
 
-  it.each([null, "", "not-json{{{", '{"hello":"world"}'])(
-    "silently returns 204 for empty/malformed input %j",
-    async (body) => {
-      const stream =
-        body === null
-          ? null
-          : new ReadableStream<Uint8Array>(
-              {
-                start(c) {
-                  c.enqueue(encode(body));
-                  c.close();
-                },
+  it.each([null, ""])("silently returns 204 for empty input %j", async (body) => {
+    const stream =
+      body === null
+        ? null
+        : new ReadableStream<Uint8Array>(
+            {
+              start(c) {
+                c.enqueue(encode(body));
+                c.close();
               },
-              { highWaterMark: 0 },
-            );
+            },
+            { highWaterMark: 0 },
+          );
+    await assert204(await post(request(stream)));
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["not-json{{{", '{"hello":"world"}'])(
+    "returns 204 with byte-count accounting for malformed input %j",
+    async (body) => {
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          start(c) {
+            c.enqueue(encode(body));
+            c.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
       await assert204(await post(request(stream)));
-      expect(console.warn).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.malformed", {
+        bytes: encode(body).byteLength,
+      });
     },
   );
 

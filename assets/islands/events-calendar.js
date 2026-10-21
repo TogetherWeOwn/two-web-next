@@ -62,6 +62,10 @@
     return url.pathname + url.search;
   }
 
+  function invalidPage() {
+    throw new Error("Invalid calendar page");
+  }
+
   function cancelDebounce() {
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = null;
@@ -204,8 +208,36 @@
           return s.getAttribute("data-cal-zone") === null;
         })
       ) {
-        throw new Error("Invalid calendar page");
+        invalidPage();
       }
+      // Admit authentication destinations with the zones, never from a draft.
+      // Require rooted, endpoint-specific links whose sole next is this request;
+      // keep the complete href so attribution parameters survive unchanged.
+      if (!calendarHref(canonical.href)) invalidPage();
+      function authHref(source, endpoint) {
+        var href = source.getAttribute("href");
+        var returns = new URL(href, window.location.href).searchParams.getAll("next");
+        if (
+          !href ||
+          !href.startsWith(endpoint + "?") ||
+          returns.length !== 1 ||
+          returns[0] !== pageAddress(url)
+        )
+          invalidPage();
+        return href;
+      }
+      var authSwaps = [
+        ['header a[data-testid="signin"]', "/auth/discord"],
+        [".schedule-heading a", "/join"],
+      ].map(function (entry) {
+        var target = document.querySelector(entry[0]);
+        var source = page.querySelector(entry[0]);
+        if (!!target !== !!source) invalidPage();
+        return { target: target, href: source && authHref(source, entry[1]) };
+      });
+      Array.from(next.querySelectorAll('a[data-testid="signin"]')).forEach(function (source) {
+        authHref(source, "/join/discord");
+      });
       // Check ownership before replacement detaches the focused control. Newer
       // typing (even back to the same value) or moved focus cancels restoration.
       // Hiding content can itself blur its control to body after a paint.
@@ -222,13 +254,13 @@
       var byName = new Map();
       sources.forEach(function (source) {
         var name = source.getAttribute("data-cal-zone");
-        if (byName.has(name)) throw new Error("Invalid calendar page");
+        if (byName.has(name)) invalidPage();
         byName.set(name, source);
       });
       var swaps = zones.map(function (target) {
         var name = target.getAttribute("data-cal-zone");
         var source = byName.get(name);
-        if (!source) throw new Error("Invalid calendar page");
+        if (!source) invalidPage();
         byName.delete(name);
         return { target: target, source: source };
       });
@@ -241,6 +273,9 @@
       swaps.forEach(function (swap) {
         swap.target.replaceChildren.apply(swap.target, swap.children);
         swap.target.hidden = swap.source.hidden;
+      });
+      authSwaps.forEach(function (swap) {
+        if (swap.target) swap.target.setAttribute("href", swap.href);
       });
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
