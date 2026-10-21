@@ -8,13 +8,16 @@
 //     propagate (reject) to the dashboard's shared 503 boundary, silently.
 //   - Member-stats (src/profiles/stats.ts memberStatsWithBudget and
 //     readMemberStats) warns MEMBER_STATS once with the exception class
-//     plus an aborted flag; the profile hides the stats block (null).
+//     plus an aborted flag; the profile renders the explicit unavailable
+//     state (membershipUnavailable). A milestones-only failure warns
+//     MEMBER_MILESTONES once and keeps the membership facts.
 //   - Counts (src/counts.ts readCounts) warns COUNTS_READ once per failed
 //     view with the view key plus the exception class; fallbacks unchanged.
 //
-// Boundaries: success stays silent on every leg; budget/deadline expiry
-// keeps its current outcome (hide/omit) silently; no database configured
-// keeps the silent UNAVAILABLE fallback. Every new field is class-only —
+// Boundaries: success stays silent on every leg; the content-gap deadline
+// omits silently and an unconfigured database keeps the silent UNAVAILABLE
+// fallback. A stats budget trip settles the unavailable outcome and warns
+// once with aborted:true; Every new field is class-only —
 // never a message, token, cookie, URL, query text or member identity.
 //
 // Hermetic only: fake Db/tx fixtures, stubbed postgres module, fake timers
@@ -38,12 +41,16 @@ import {
 } from "./helpers/diagnostic-stream";
 
 const CONTENT_GAP_READ = "Event search unavailable for content-gap read; omitting the widget.";
-const MEMBER_STATS = "Member stats unavailable; hiding the stats block.";
+const MEMBER_STATS = "Member stats unavailable; showing the unavailable state.";
+const MEMBER_MILESTONES = "Member milestones unavailable; keeping membership facts.";
 const COUNTS_READ = "Counts read unavailable";
 
 const TOK = "***synthetic-access-2w7q***";
 const SECRET = "***synthetic-secret-9d4f***";
 const MEMBER = "100000000000000037";
+const VALID_RAY = "0123456789abcdef-LHR";
+const VALID_ULID = "01K9N8Q2R5T7V3W4X6Y8Z0A2B4";
+const MALFORMED_ID = "not-a-request-id!!";
 const GAP_DSN = "postgres://gap-user:gap-s3cret@gap-host.test/gapdb";
 const COUNTS_URL = "postgres://counts-user:counts-s3cret@127.0.0.1:9/countsdb";
 
@@ -195,12 +202,12 @@ describe("content-gap read warns once on ordinary failure", () => {
     await expect(topZeroResultSearches(db, 10, 25)).resolves.toBeUndefined();
     release([]);
     await gate;
-    expect(logs.length).toBeGreaterThanOrEqual(0);
+    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
   });
 });
 
 describe("member-stats warn carries class plus aborted flag", () => {
-  it("wrapper: throwing source warns once with class + aborted:false; stats hide (null)", async () => {
+  it("wrapper: throwing source warns once with class + aborted:false; stats read unavailable", async () => {
     const logs = captureDiagnosticStream();
     await expect(
       memberStatsWithBudget(async () => {
@@ -208,7 +215,13 @@ describe("member-stats warn carries class plus aborted flag", () => {
           `stats select failed ${TOK}; cookie __Host-two_session=${SECRET}`,
         );
       }, MEMBER),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
     const line = recordsFor(logs, MEMBER_STATS);
     expect(line).toHaveLength(1);
     expect(line[0]!.channel).toBe("warn");
@@ -228,33 +241,46 @@ describe("member-stats warn carries class plus aborted flag", () => {
     expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
   });
 
-  it("budget expiry hides the block and stays silent", async () => {
+  it("budget expiry settles the unavailable outcome and warns once with aborted:true", async () => {
     vi.useFakeTimers();
     try {
-      let release!: (value: MemberStats | null) => void;
-      const gate = new Promise<MemberStats | null>((resolve) => {
-        release = resolve;
-      });
+      const execute = vi.fn().mockReturnValue(new Promise(() => {}));
       const logs = captureDiagnosticStream();
-      const pending = memberStatsWithBudget(() => gate, MEMBER);
+      const pending = readMemberStats({ execute } as unknown as Db, MEMBER);
       await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS + 50);
-      await expect(pending).resolves.toBeNull();
-      expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
-      release(null);
-      await gate;
+      await expect(pending).resolves.toMatchObject({
+        membershipUnavailable: true,
+        joinedAt: null,
+        tenureDays: null,
+        rankKey: null,
+        milestones: [],
+      });
+      const line = recordsFor(logs, MEMBER_STATS);
+      expect(line).toHaveLength(1);
+      expect(line[0]!.channel).toBe("warn");
+      expect(line[0]!.args).toEqual([MEMBER_STATS, { exception: "DOMException", aborted: true }]);
+      expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+      streamClean(logs, [TOK, SECRET, MEMBER]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("direct read with an aborted signal warns with aborted:true; stats hide", async () => {
+  it("direct read with an aborted signal warns with aborted:true; stats read unavailable", async () => {
     const execute = vi.fn();
     const controller = new AbortController();
     controller.abort();
     const logs = captureDiagnosticStream();
     await expect(
       readMemberStats({ execute } as unknown as Db, MEMBER, controller.signal),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
     expect(execute).not.toHaveBeenCalled();
     const line = recordsFor(logs, MEMBER_STATS);
     expect(line).toHaveLength(1);
@@ -264,7 +290,7 @@ describe("member-stats warn carries class plus aborted flag", () => {
     streamClean(logs, [TOK, SECRET, MEMBER]);
   });
 
-  it("direct read with a throwing execute warns with aborted:false; stats hide", async () => {
+  it("direct read with a throwing execute warns with aborted:false; stats read unavailable", async () => {
     const execute = vi
       .fn()
       .mockRejectedValue(new MemberStatsReadFailed(`members select failed ${TOK} ${SECRET}`));
@@ -272,7 +298,13 @@ describe("member-stats warn carries class plus aborted flag", () => {
     const logs = captureDiagnosticStream();
     await expect(
       readMemberStats({ execute } as unknown as Db, MEMBER, controller.signal),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
     expect(execute).toHaveBeenCalledOnce();
     const line = recordsFor(logs, MEMBER_STATS);
     expect(line).toHaveLength(1);
@@ -280,6 +312,133 @@ describe("member-stats warn carries class plus aborted flag", () => {
     expect(line[0]!.args).toEqual([
       MEMBER_STATS,
       { exception: "MemberStatsReadFailed", aborted: false },
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    streamClean(logs, [TOK, SECRET, MEMBER]);
+  });
+
+  it("milestones-only failure warns once and keeps the membership facts", async () => {
+    const fullMember = {
+      member_id: MEMBER,
+      joined_at: "2025-01-01T00:00:00Z",
+      tenure_days: 637,
+      rank_key: "community_regular",
+      is_current_member: true,
+    };
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([fullMember])
+      .mockRejectedValueOnce(
+        new MemberStatsReadFailed(`milestones select failed ${TOK} ${SECRET}`),
+      );
+    const controller = new AbortController();
+    const logs = captureDiagnosticStream();
+    await expect(
+      readMemberStats({ execute } as unknown as Db, MEMBER, controller.signal),
+    ).resolves.toEqual({
+      joinedAt: new Date("2025-01-01T00:00:00Z"),
+      tenureDays: 637,
+      rankKey: "community_regular",
+      isCurrentMember: true,
+      milestones: [],
+      milestonesTruncated: false,
+      milestonesUnavailable: true,
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    const line = recordsFor(logs, MEMBER_MILESTONES);
+    expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
+    expect(line[0]!.args).toEqual([
+      MEMBER_MILESTONES,
+      { exception: "MemberStatsReadFailed", aborted: false },
+    ]);
+    expect(recordsFor(logs, MEMBER_STATS)).toHaveLength(0);
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    streamClean(logs, [TOK, SECRET, MEMBER]);
+  });
+
+  it("wrapper: a valid request id travels on the warn", async () => {
+    const logs = captureDiagnosticStream();
+    await expect(
+      memberStatsWithBudget(
+        async () => {
+          throw new MemberStatsReadFailed(
+            `stats select failed ${TOK}; cookie __Host-two_session=${SECRET}`,
+          );
+        },
+        MEMBER,
+        VALID_RAY,
+      ),
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
+    const line = recordsFor(logs, MEMBER_STATS);
+    expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
+    expect(line[0]!.args).toEqual([
+      MEMBER_STATS,
+      { exception: "MemberStatsReadFailed", aborted: false, request_id: VALID_RAY },
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    streamClean(logs, [TOK, SECRET, MEMBER, "__Host-two_session"]);
+  });
+
+  it("wrapper: a malformed request id is omitted from the warn", async () => {
+    const logs = captureDiagnosticStream();
+    await expect(
+      memberStatsWithBudget(
+        async () => {
+          throw new MemberStatsReadFailed(
+            `stats select failed ${TOK}; cookie __Host-two_session=${SECRET}`,
+          );
+        },
+        MEMBER,
+        MALFORMED_ID,
+      ),
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
+    const line = recordsFor(logs, MEMBER_STATS);
+    expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
+    expect(line[0]!.args).toEqual([
+      MEMBER_STATS,
+      { exception: "MemberStatsReadFailed", aborted: false },
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    streamClean(logs, [TOK, SECRET, MEMBER, "__Host-two_session"]);
+  });
+
+  it("direct read: a valid ULID travels on the warn", async () => {
+    const execute = vi
+      .fn()
+      .mockRejectedValue(new MemberStatsReadFailed(`members select failed ${TOK} ${SECRET}`));
+    const controller = new AbortController();
+    const logs = captureDiagnosticStream();
+    await expect(
+      readMemberStats({ execute } as unknown as Db, MEMBER, controller.signal, VALID_ULID),
+    ).resolves.toMatchObject({
+      membershipUnavailable: true,
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    const line = recordsFor(logs, MEMBER_STATS);
+    expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
+    expect(line[0]!.args).toEqual([
+      MEMBER_STATS,
+      { exception: "MemberStatsReadFailed", aborted: false, request_id: VALID_ULID },
     ]);
     expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     streamClean(logs, [TOK, SECRET, MEMBER]);
