@@ -5,6 +5,7 @@
 import type { Hono } from "hono";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
+import { inviteDestination } from "../invite";
 import { safeNext, sanitizeSource } from "./service";
 import { background, type JoinRender } from "./route-shared";
 
@@ -29,7 +30,7 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     const next = safeNext(c.req.query("next"));
     const source = sanitizeSource(c.req.query("source"));
     return render.joinPage(c, {
-      inviteUrl: c.env.DISCORD_INVITE_URL,
+      inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,
       widgetSnapshot,
       next,

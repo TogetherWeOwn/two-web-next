@@ -1,5 +1,6 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { discordWidgetHealth } from "../../../../src/discord-widget";
+import { inviteDestination } from "../../../../src/invite";
 import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
 import { safeNext, sanitizeSource } from "../../../../src/join/service";
 import type { PageServerLoad } from "./$types";
@@ -51,7 +52,7 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
     setHeaders,
   });
   return {
-    inviteUrl: env.DISCORD_INVITE_URL,
+    inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
     widgetUrl,
     widgetSnapshot,
     oneClickHref:
