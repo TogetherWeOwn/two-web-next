@@ -205,7 +205,10 @@ export function isDriverConnectionRaceCrash(error) {
 export function captureDriverRaceCrashes() {
   const crashes = [];
   const saved = process.rawListeners("uncaughtException");
+  let released = false;
   const restore = () => {
+    if (released) return;
+    released = true;
     process.removeListener("uncaughtException", onCrash);
     for (const listener of saved) process.on("uncaughtException", listener);
   };
@@ -322,13 +325,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   // crash after the runner already rejected: swallow only that signature and
   // fail closed instead of dumping a raw driver stack. The natural
   // fail-closed rejection still carries the disposition; a crash landing
-  // after it settled must not print twice or override success.
+  // after it settled must not print twice or override success. A crash
+  // landing first settles too, so a second stray crash cannot print again.
   let settled = false;
   process.on("uncaughtException", (error) => {
     if (!isDriverConnectionRaceCrash(error)) throw error;
     if (settled) return;
     console.error(safeMigrationError(error));
     process.exitCode = 1;
+    settled = true;
   });
   try {
     await runMigration(process.argv[2]);
