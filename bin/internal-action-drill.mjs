@@ -99,7 +99,7 @@ if (!apply) {
     );
     process.exit(0);
   }
-  console.log("internal action drill (TOG-11706): plan (preview only, no effects)");
+  console.log("internal action drill: plan (preview only, no effects)");
   console.log(`  bot     ${new URL(targets.botUrl).origin}`);
   console.log(`  web     ${new URL(targets.webOrigin).origin}`);
   console.log(

@@ -104,7 +104,7 @@ if (!apply) {
     );
     process.exit(0);
   }
-  console.log("internal actions smoke (TOG-10112): plan (preview only, no effects)");
+  console.log("internal actions smoke: plan (preview only, no effects)");
   console.log(`  target  ${new URL(url).origin}`);
   console.log(
     announcementOnly
