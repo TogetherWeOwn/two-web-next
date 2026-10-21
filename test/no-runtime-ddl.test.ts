@@ -70,6 +70,22 @@ function codeOnly(text: string): string {
     .join("\n");
 }
 
+// Single DDL finder shared by the src/ scan and the positive controls:
+// per-line matches plus the whitespace-folded whole-text check that
+// catches statements split across lines. Sharing it keeps the controls
+// pinned to the scan: deleting or narrowing the folded branch here turns
+// the suite red instead of letting two copies drift apart.
+function findDdl(code: string): string[] {
+  const hits: string[] = [];
+  code.split("\n").forEach((line, index) => {
+    if (DDL_PATTERN.test(line)) hits.push(`:${index + 1} (${line.trim().slice(0, 100)})`);
+  });
+  if (hits.length === 0 && DDL_PATTERN.test(code.replace(/\s+/g, " "))) {
+    hits.push(" (DDL statement split across lines)");
+  }
+  return hits;
+}
+
 // Positive controls: one sample per pattern branch, so narrowing or
 // deleting any branch turns the suite red. Kept as plain strings in this
 // test file, which lives outside the scanned src/ tree.
@@ -165,19 +181,7 @@ describe("no runtime DDL in the Worker bundle", () => {
     for (const file of walk(`${SRC}/`)) {
       if (DDL_SITES.has(file)) continue;
       const code = codeOnly(readFileSync(new URL(file, root), "utf8"));
-      code.split("\n").forEach((line, index) => {
-        if (DDL_PATTERN.test(line)) {
-          violations.push(`${file}:${index + 1} (${line.trim().slice(0, 100)})`);
-        }
-      });
-      // A statement split across lines evades the per-line check; folding
-      // whitespace catches `create\ntable …` at file granularity.
-      if (
-        violations.every((v) => !v.startsWith(`${file}:`)) &&
-        DDL_PATTERN.test(code.replace(/\s+/g, " "))
-      ) {
-        violations.push(`${file} (DDL statement split across lines)`);
-      }
+      for (const hit of findDdl(code)) violations.push(`${file}${hit}`);
     }
     expect(violations, "DDL statements live in drizzle/ migrations, not in src/").toEqual([]);
   });
@@ -212,21 +216,22 @@ describe("no runtime DDL in the Worker bundle", () => {
     const files = walk(`${SRC}/`);
     expect(files.length).toBeGreaterThan(100);
     expect(files.some((file) => file.endsWith(".tsx"))).toBe(true);
+    // Every sample goes through the same finder the src/ scan uses, so a
+    // narrowed or deleted finder branch fails here, not just in the scan.
     for (const sample of DDL_SAMPLES) {
-      expect(DDL_PATTERN.test(sample), `DDL sample not flagged: ${sample}`).toBe(true);
+      expect(findDdl(sample).length, `DDL sample not flagged: ${sample}`).toBeGreaterThan(0);
     }
     for (const sample of HELPER_SAMPLES) {
       expect(HELPER_PATTERN.test(sample), `helper sample not flagged: ${sample}`).toBe(true);
     }
-    // A statement split across lines evades the per-line check; folding
-    // whitespace must still catch it.
+    // A statement split across lines evades the per-line check; the shared
+    // finder must still catch it through its folded branch.
     const split = "create\ntable probe_ddl (id integer)";
     expect(split.split("\n").some((line) => DDL_PATTERN.test(line))).toBe(false);
-    expect(DDL_PATTERN.test(split.replace(/\s+/g, " "))).toBe(true);
+    expect(findDdl(split)).toEqual([" (DDL statement split across lines)"]);
     // Comment-only text must not trip either pattern.
     const stripped = codeOnly(COMMENT_ONLY_SAMPLE);
-    expect(DDL_PATTERN.test(stripped)).toBe(false);
-    expect(DDL_PATTERN.test(stripped.replace(/\s+/g, " "))).toBe(false);
+    expect(findDdl(stripped)).toEqual([]);
     expect(HELPER_PATTERN.test(stripped)).toBe(false);
   });
 });
