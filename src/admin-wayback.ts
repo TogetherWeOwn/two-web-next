@@ -11,8 +11,6 @@ export interface AdminWayBack {
   label: string;
 }
 
-const LIFECYCLE_ACTIONS = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const;
-
 /** Map a refused request path to its admin way back, or null outside /admin. */
 export function adminWayBack(path: string): AdminWayBack | null {
   const clean = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
@@ -20,27 +18,20 @@ export function adminWayBack(path: string): AdminWayBack | null {
   if (clean === "/admin/events") {
     return { href: "/admin/events/new", label: "Back to the new event form" };
   }
-  const lifecycle = new RegExp(`^/admin/events/([^/]+)/(${LIFECYCLE_ACTIONS.join("|")})$`).exec(
+  // An update and a lifecycle action refuse onto the same editor.
+  const event = /^\/admin\/events\/([^/]+)(\/publish|\/cancel|\/rsvp-pause|\/rsvp-reopen)?$/.exec(
     clean,
   );
-  if (lifecycle) {
-    return { href: `/admin/events/${lifecycle[1]}`, label: "Back to the event editor" };
-  }
-  const eventUpdate = /^\/admin\/events\/([^/]+)$/.exec(clean);
-  if (eventUpdate) {
-    return { href: `/admin/events/${eventUpdate[1]}`, label: "Back to the event editor" };
+  if (event) {
+    return { href: `/admin/events/${event[1]}`, label: "Back to the event editor" };
   }
   if (clean === "/admin/featured") {
     return { href: "/admin/featured/new", label: "Back to the new featured form" };
   }
-  const featuredDelete = /^\/admin\/featured\/([^/]+)\/delete$/.exec(clean);
-  if (featuredDelete) {
-    // The refused delete changed nothing, so the editor is still the way back.
-    return { href: `/admin/featured/${featuredDelete[1]}`, label: "Back to the featured editor" };
-  }
-  const featuredUpdate = /^\/admin\/featured\/([^/]+)$/.exec(clean);
-  if (featuredUpdate) {
-    return { href: `/admin/featured/${featuredUpdate[1]}`, label: "Back to the featured editor" };
+  // A refused delete changed nothing, so the editor is still the way back.
+  const featured = /^\/admin\/featured\/([^/]+)(\/delete)?$/.exec(clean);
+  if (featured) {
+    return { href: `/admin/featured/${featured[1]}`, label: "Back to the featured editor" };
   }
   const redispatch = /^\/admin\/queue\/failed\/([^/]+)\/redispatch$/.exec(clean);
   if (redispatch) {
