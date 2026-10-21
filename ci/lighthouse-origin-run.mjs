@@ -109,10 +109,12 @@ export function buildOriginDiagnosis({
     `- origin: ${origin}`,
     `- event route: ${eventPath ? `${eventPath} (from ${eventSource})` : "skipped, see watch-summary.md"}`,
     `- expected LHRs: ${expected}`,
-    ...attempts.map(
-      (a) =>
-        `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs${a.marginal?.marginal ? ` (marginal / LCP breach at ${a.marginal.actual} ms, retried)` : ""}`,
-    ),
+    ...attempts.map((a, i) => {
+      // ", retried" only when a retry actually followed: the terminal attempt
+      // of a marginal-twice run breached marginally but ran last.
+      const followed = i < attempts.length - 1 ? ", retried" : "";
+      return `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs${a.marginal?.marginal ? ` (marginal / LCP breach at ${a.marginal.actual} ms${followed})` : ""}`;
+    }),
   ];
   if (marginalRetry) {
     lines.push(
@@ -741,6 +743,10 @@ function selftest() {
       assert.match(diagnosis, /BUDGET BREACH/);
       assert.match(diagnosis, /systematic, not variance/);
       assert.match(diagnosis, /marginal \/ LCP breach at 2100 ms, retried/);
+      assert.doesNotMatch(
+        diagnosis,
+        /attempt 2: exit 1, 24 LHRs \(marginal \/ LCP breach at 2100 ms, retried\)/,
+      );
       assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
     }
     // Far over budget: `/` LCP at 2500 is outside the band, NO retry.
