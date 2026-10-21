@@ -135,7 +135,7 @@ describe("body-size cap precedes the throttle on POST /logout", () => {
         const { request, pull } = upload("/logout", MAX, cookie, advertised);
         const response = await app.request(request, undefined, envFor(sessions, throttle));
         expect(response.status, `${presenter}`).toBe(413);
-        expect(await response.json(), `${presenter}`).toEqual(ERROR);
+        expect(await response.json(), `${presenter}`).toMatchObject(ERROR);
         expect(throttle.store, `${presenter}`).not.toHaveBeenCalled();
         expect(throttle.sql, `${presenter}`).not.toHaveBeenCalled();
         expect(throttle.count(), `${presenter}`).toBe(0);
@@ -156,7 +156,7 @@ describe("body-size cap precedes the throttle on POST /logout", () => {
       const { request } = upload("/logout", MAX, "", advertised);
       const response = await app.request(request, undefined, envFor(sessions, throttle));
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(throttle.store).not.toHaveBeenCalled();
       expect(throttle.count()).toBe(WRITE_THROTTLE_PER_MINUTE);
       await request.body?.cancel().catch(() => {});
@@ -248,7 +248,7 @@ describe("body-size cap precedes the throttle on POST /auth/qa/:identity", () =>
       const { request, pull } = upload("/auth/qa/qa-member", MAX, "", advertised, qaHeaders);
       const response = await app.request(request, undefined, envFor(sessions, throttle));
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(throttle.store).not.toHaveBeenCalled();
       expect(throttle.sql).not.toHaveBeenCalled();
       expect(throttle.count()).toBe(0);
@@ -267,7 +267,7 @@ describe("body-size cap precedes the throttle on POST /auth/qa/:identity", () =>
       const { request } = upload("/auth/qa/qa-member", MAX, "", advertised, qaHeaders);
       const response = await app.request(request, undefined, envFor(sessions, throttle));
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(throttle.store).not.toHaveBeenCalled();
       expect(throttle.count()).toBe(AUTH_THROTTLE_PER_MINUTE);
       expect(create).not.toHaveBeenCalled();

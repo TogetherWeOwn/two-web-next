@@ -13,8 +13,11 @@ one cron owner.
 - Moves: `consumers` for `two-sync-event` / `two-internal-action` and both
   crons (`*/10 * * * *` reconcile, `0 0 * * *` prune) to the jobs top level.
 - Stays: web producers (`SYNC_EVENT_QUEUE`, `INTERNAL_ACTION_QUEUE`) in the Kit
-  staging config, routes, the root config's `env.production` cutover template,
-  preview envs and their disjoint queues.
+  staging config, routes, the produce-only web `env.production`, the jobs
+  `env.production`, preview envs and their disjoint queues. The production
+  move is its own one-time transfer in
+  [production-jobs-handoff.md](./production-jobs-handoff.md), never part of
+  this staging procedure.
 - Jobs top level adds only `placement` (aws:us-east-1, beside PlanetScale staging),
   `tail_consumers` (staging pager), `keep_vars` and `APP_URL`; never preview
   production guild settings and never secrets in source.

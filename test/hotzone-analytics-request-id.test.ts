@@ -6,6 +6,7 @@ import { safeRequestId } from "../src/request-log";
 import app from "./app";
 
 const BOARD_WARNING = "Board view unavailable for logging; serving results without recording.";
+const THROTTLE_NULL_STORE_WARN = "Throttle store unavailable; allowing the request.";
 const RAY = "abcdef0123456789-IAD";
 const PATHS = ["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"];
 
@@ -69,7 +70,15 @@ describe.each(PATHS)("%s board warning joins to http.request", (path) => {
     if (ray === RAY) expect(requestId).toBe(RAY);
     else if (ray !== undefined) expect(requestId).not.toBe(ray);
 
-    expect(console.warn).toHaveBeenCalledTimes(1);
+    const calls = vi.mocked(console.warn).mock.calls;
+    // The null throttle store intentionally warns once per guarded request
+    // (fail-open allow); this test only owns the board-warning line, so it
+    // filters that contracted line before asserting nothing else warned.
+    const unexpected = calls.filter(
+      ([msg]) => msg !== BOARD_WARNING && msg !== THROTTLE_NULL_STORE_WARN,
+    );
+    expect(unexpected).toEqual([]);
+    expect(calls.filter(([msg]) => msg === BOARD_WARNING)).toHaveLength(1);
     expect(console.warn).toHaveBeenCalledWith(BOARD_WARNING, {
       exception: "DrizzleQueryError",
       request_id: requestId,

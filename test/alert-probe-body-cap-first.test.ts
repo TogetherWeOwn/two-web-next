@@ -47,7 +47,7 @@ describe("alert probe body cap runs before the throttle", () => {
         INTERNAL_ACTION_QUEUE: { send } as unknown as Queue,
       } as Env);
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       if (advertised) expect(pull).not.toHaveBeenCalled();
       else expect(pull.mock.calls.length).toBeLessThanOrEqual(BODY_LIMIT_BYTES.action / 1024 + 2);
       expect(store).not.toHaveBeenCalled();

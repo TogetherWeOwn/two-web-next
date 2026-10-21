@@ -27,12 +27,15 @@ PRs, logs or command arguments.
   `archive-static`. The GitHub Environment `staging` supplies deployment-scoped
   values; it is not a human approval gate or Wrangler named environment. Worker
   name is `two-web-next`; Hyperdrive's resource name is not a Worker selector
-  or isolation guarantee. `wrangler.jsonc` remains the Hono config and
-  production cutover template.
-- **prod (cutover template, not live):** [`wrangler.jsonc`](../wrangler.jsonc)
+  or isolation guarantee. `wrangler.jsonc` remains the Hono config and the
+  production config (never the staging target).
+- **prod (live):** [`wrangler.jsonc`](../wrangler.jsonc)
   declares a named **`env.production`** block (isolated Worker name, apex
-  route, queues, Hyperdrive binding and explicit vars; bindings and vars are
-  not inherited), and
+  route, producer-only queues, Hyperdrive binding and explicit vars; bindings
+  and vars are not inherited), and [`wrangler.jobs.jsonc`](../wrangler.jobs.jsonc)
+  declares the jobs **`env.production`** block (both production consumers and
+  both production crons; see
+  [production-jobs-handoff.md](./production-jobs-handoff.md)).
   [`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml)
   promotes automatically on `e2e-staging` completion plus a daily schedule
   backstop (keeping manual dispatch), gated by
@@ -42,9 +45,9 @@ PRs, logs or command arguments.
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
   deploy and `e2e-staging` runs on the same SHA, with an executed, passing
-  `staging-quality` job. Neither the checked-in template nor the workflow
-  is permission to deploy: production deployment, DNS and database/queue
-  provisioning stay separately gated until cutover authorization. There is no
+  `staging-quality` job. Neither the checked-in config nor the workflow
+  bypasses those gates: production deployment, DNS and database/queue
+  provisioning each stay separately gated. There is no
   `env.staging` block. Do not infer isolation from a var's name or these labels.
 
 `dev/staging/prod` in the table means the setting is applicable in each, with
@@ -159,6 +162,7 @@ explicitly because Wrangler never inherits top-level vars (or
 | `two-web-next` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app staging web (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next` | Traces from an undocumented script name are ignored by `tail()`; paging for that Worker is silently disabled. Never match by prefix. |
 | `two-web-next-production` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app production (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next-production` | Production traces arrive under the production app name; without this exact entry production pages are silently ignored. |
 | `two-web-jobs` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app staging jobs (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-jobs`; jobs top-level `tail_consumers` service `two-web-next-alerts` | Jobs traces arrive under the jobs app name; without this exact entry staging queue/cron failures page nothing. Never match by prefix. |
+| `two-web-jobs-production` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app production jobs (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-jobs-production`; jobs `env.production` `tail_consumers` service `two-web-next-alerts-production` | Production jobs traces arrive under the production jobs app name; without this exact entry production queue/cron failures page nothing. Never match by prefix. |
 <!-- tail-config-docs:end -->
 
 ### CSP report log budget

@@ -9,6 +9,7 @@ import {
   type FailedJobReplayCandidate,
 } from "../jobs/preview";
 import { pgQueueLedger, pgUniqueLock } from "../jobs/postgres";
+import { queueExceptionClass } from "../jobs/queue-error";
 import { replayFailedSyncEvent } from "../jobs/replay";
 import { bufferedMemberJson } from "../member-reads";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../qa";
@@ -164,10 +165,10 @@ async function recordAttemptOrRefuse(
     await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview, outcome);
     return null;
   } catch (err) {
-    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
-    console.error("queue redispatch audit failed; refusing redispatch.", {
-      exception: err instanceof Error ? err.name : typeof err,
-      failureId: preview.failure.id,
+    // No raw exception message, SQL bindings or diagnostic payload in logs.
+    console.warn("Queue redispatch audit failed; refusing the dispatch.", {
+      exception: queueExceptionClass(err),
+      failure_id: preview.failure.id,
     });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
@@ -207,10 +208,9 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   try {
     candidate = await (deps.loadCandidate ?? loadRedispatchCandidate)(c.env, id);
   } catch (err) {
-    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
-    console.error("queue redispatch source read failed; refusing redispatch.", {
-      exception: err instanceof Error ? err.name : typeof err,
-      failureId: id,
+    console.warn("Queue redispatch candidate load failed.", {
+      exception: queueExceptionClass(err),
+      failure_id: id,
     });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
@@ -263,10 +263,9 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
         ? await deps.dispatch(candidate.eventKey, key)
         : await dispatchRedispatch(c.env, candidate.eventKey, key);
   } catch (err) {
-    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
-    console.error("queue redispatch dispatch failed; refusing redispatch.", {
-      exception: err instanceof Error ? err.name : typeof err,
-      failureId: id,
+    console.warn("Queue redispatch dispatch failed.", {
+      exception: queueExceptionClass(err),
+      failure_id: candidate.preview.failure.id,
     });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
