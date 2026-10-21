@@ -341,6 +341,7 @@ export function llmsTxt(appUrl: string): string {
     "",
     "- There is no public listing of members: profiles are members-only and never appear here.",
     "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser, there are no remote tools.",
+    "- Poll these documents cheaply: send If-None-Match with the ETag you last saw and an unchanged document answers 304 with no body.",
     "- Event times below render in each event's own timezone next to the UTC instant on the page.",
     "",
   );

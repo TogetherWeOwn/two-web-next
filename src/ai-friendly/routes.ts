@@ -11,9 +11,9 @@ import { dbFor } from "../admin/db";
 import { alertRequestError } from "../alerts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
-import { publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { isDatabaseUnavailable } from "../db/errors";
-import { robotsTagFor } from "../headers";
+import { stagingRobots } from "../headers";
 import { requestRoute } from "../request-log";
 import { rulesLastUpdated } from "../rules-last-updated";
 import {
@@ -38,21 +38,19 @@ type Ctx = Context<{ Bindings: Env }>;
 
 const NOINDEX = "noindex, nofollow";
 
-/** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
-function stagingRobots(c: Ctx): string | null {
-  let serving: string | undefined;
-  try {
-    serving = new URL(c.req.url).hostname;
-  } catch {
-    serving = undefined;
-  }
-  return robotsTagFor(c.env.APP_URL, serving);
-}
-
-function mdOk(c: Ctx, body: string, cache: string, robots?: string): Response {
+/**
+ * The one success path for every Markdown document: a strong ETag over the
+ * response bytes lets agents that poll these docs revalidate with
+ * If-None-Match. A match answers 304 with the same validator, cache-control
+ * and robots headers and no body; errors never come through here.
+ */
+async function mdOk(c: Ctx, body: string, cache: string, robots?: string): Promise<Response> {
   const tag = robots ?? stagingRobots(c);
   if (tag) c.header("x-robots-tag", tag);
   c.header("cache-control", cache);
+  const etag = await etagFor(body);
+  c.header("etag", etag);
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
   return c.body(body, 200, { "content-type": MARKDOWN_MIME });
 }
 
