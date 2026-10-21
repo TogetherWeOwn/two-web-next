@@ -318,9 +318,15 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3),
+ * then the day. Long titles keep the truncated visible form first so axe
+ * label-content-name-mismatch passes, then the full title; short titles are
+ * not duplicated. */
 export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
-  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+  const truncated = gridTitle(title);
+  const time = wallTimeHm(startsAt, zone);
+  const day = cardDayLabel(startsAt, zone);
+  return truncated === title ? `${time} ${title}, ${day}` : `${time} ${truncated} ${title}, ${day}`;
 }
 
 /** Continuation link name starts with the visible "Continues title" (WCAG
