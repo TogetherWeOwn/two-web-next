@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -124,4 +125,49 @@ test("live chain minus the 1005 snapshot fails", (t) => {
   cpSync(join(repoRoot, "drizzle"), join(root, "drizzle"), { recursive: true });
   rmSync(join(root, "drizzle/meta/1005_snapshot.json"), { force: true });
   assert.throws(() => checkSnapshotChain(root), /missing snapshot.*1005_event-search-logs/);
+});
+
+test("CLI usage errors exit 2 with a usage line", () => {
+  for (const args of [["--bogus"], ["unexpected", "args"]]) {
+    const result = spawnSync(process.execPath, ["ci/check-snapshot-chain.mjs", ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 2, `argv ${JSON.stringify(args)} must exit 2 (usage error)`);
+    assert.match(result.stderr, /usage/i);
+    assert.match(result.stderr, /check-snapshot-chain/);
+    assert.equal(result.stdout, "");
+  }
+});
+
+test("CLI success exits 0 on the live chain", () => {
+  const result = spawnSync(process.execPath, ["ci/check-snapshot-chain.mjs"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /snapshot-chain: ok/);
+});
+
+test("CLI genuine failure exits 1", (t) => {
+  // The CLI resolves its root from its own path, so a relocated copy checks
+  // the fixture instead of the live tree.
+  const root = mkdtempSync(join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "snapshot-chain-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "ci"), { recursive: true });
+  cpSync(join(repoRoot, "ci/check-snapshot-chain.mjs"), join(root, "ci/check-snapshot-chain.mjs"));
+  put(
+    root,
+    "drizzle/meta/_journal.json",
+    journal(["1004_job-unique-locks", "1005_event-search-logs"]),
+  );
+  put(root, "drizzle/meta/1004_snapshot.json", snapshot("id-1004", ZERO));
+  // No 1005 snapshot: the gate ran and found a broken chain.
+  const result = spawnSync(process.execPath, ["ci/check-snapshot-chain.mjs"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing snapshot.*1005_event-search-logs/);
+  assert.equal(result.stdout, "");
 });
