@@ -27,7 +27,8 @@ const dbStub = "export async function dbFor() { return null; };";
 const alertsStub = `export function alertRequestError(err, fields) {
   globalThis.__bindingAlertCalls.push({ err, fields });
 }`;
-const gridStub = "export async function renderHotzoneGrid() { return 'grid'; };";
+const gridStub =
+  "export async function renderHotzoneGrid() { return 'grid'; }; export function renderPeriodPicker() { return 'picker'; };";
 const journeyStub = "export const JOURNEY_TTL_SECONDS = 600;";
 
 async function bundleRoute(entryRelPath, stubs) {
