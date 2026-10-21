@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createImportFixtureClients } from "./helpers/import-events-rsvps-db";
 // Standalone operator scripts intentionally run directly under Node, not the TS app.
@@ -100,6 +101,25 @@ describe("legacy events import controls", () => {
 
   it("rejects port zero rather than falling back to inherited connection settings", () => {
     expect(() => connectDatabase("postgres://agent_test@agent-testdb:0/two_web_next")).toThrow();
+  });
+
+  it("tells usage exit 2 apart from unresolved-report exit 2 by output", async () => {
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Usage exit 2: nothing ran, so no JSON report on stdout, usage line on stderr.
+      expect(await main(["--aply"], {})).toBe(2);
+      expect(out).not.toHaveBeenCalled();
+      expect(err).toHaveBeenCalledWith(expect.stringMatching(/^Usage: /));
+      // Report exit 2 is the other meaning and is still returned for unresolved rows.
+      expect(reportExitCode({ unresolved: { rsvpUsers: 1 } })).toBe(2);
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+    }
+    const doc = readFileSync("docs/import-events-rsvps.md", "utf8");
+    expect(doc).toMatch(/Report exit 2/);
+    expect(doc).toMatch(/Usage exit 2/);
   });
 
   it("does not disclose argv/env secrets on failure", async () => {

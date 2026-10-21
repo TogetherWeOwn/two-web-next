@@ -134,8 +134,13 @@ into ordinary events.
 The JSON report contains counts only, not connection strings, event content,
 member identifiers, or raw database errors. Orphan RSVPs are counted by reason
 and skipped, never silently dropped. Missing creators are reported and mapped
-to null, matching the nullable creator FK. Exit 2 means the report contains
-orphans/missing creators (valid rows are still committed with `--apply`); exit 1
+to null, matching the nullable creator FK. Exit 2 has two meanings; tell them
+apart by the output. **Report exit 2**: the run completed, stdout carries the JSON
+report, and the report contains orphans/missing creators (valid rows are still
+committed with `--apply`). **Usage exit 2**: the tool was invoked wrong (a typo
+such as `--aply`, an unknown flag, or a URL on argv), nothing ran, stdout is empty
+and stderr carries the one usage line. A wrapper must check for the JSON report on
+stdout before concluding that an apply committed. Exit 1
 means validation/connection/database failure. Transactional failures roll back;
 a lost commit acknowledgement has an unconfirmed outcome, so inspect the
 destination before retrying. Exit 0

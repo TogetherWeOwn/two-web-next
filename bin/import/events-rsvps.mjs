@@ -51,9 +51,11 @@ const timestampColumns = new Set([
 export const EVENTS_RSVPS_USAGE =
   "Usage: node bin/import/events-rsvps.mjs [--dry-run | --apply] [--help]. Connection URLs come only from LEGACY_DATABASE_URL and DATABASE_URL.";
 
-// Usage errors ("invoked wrong", exit 2) are a distinct class from import
+// Usage errors ("invoked wrong", nothing ran) are a distinct class from import
 // failures ("ran and failed", exit 1): a flag typo must print the usage line,
-// never the import-failure prose.
+// never the import-failure prose. Exit 2 is shared with reportExitCode ("ran,
+// unresolved references"); the two differ by output: a usage error prints only
+// the usage line to stderr and no JSON report to stdout (docs/import-events-rsvps.md).
 export class EventsRsvpsUsageError extends Error {
   constructor() {
     super(EVENTS_RSVPS_USAGE);
