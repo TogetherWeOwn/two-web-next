@@ -85,6 +85,7 @@ import { loadHotzoneSignalData, loadHotzonesIndexData } from "../src/kit-hotzone
 import type { Env } from "../src/env";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { createMemorySessionStore } from "../src/sessions";
+import { text } from "./helpers/hotzone-period-picker";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -154,6 +155,11 @@ const peakParasOf = (html: string): string[] => {
 };
 
 const tablesIn = (html: string): number => html.match(/<table>/g)?.length ?? 0;
+
+// Svelte SSR inserts comment markers between text nodes; compare paragraph
+// text, not markup, so a silent-zero summary cannot hide behind those markers.
+const paragraphTextsOf = (html: string): string[] =>
+  [...mainOf(html).matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)].map((match) => text(match[1]!));
 
 // Index section slice by its heading id (joins/voice/games).
 const sectionOf = (html: string, headingId: string): string => {
@@ -338,6 +344,10 @@ describe("Hono joins unavailable vs genuine-empty", () => {
       eventCount: 0,
       available: false,
     });
+    expect(paragraphTextsOf(html)).toContain(
+      "Aggregate activity by hour and weekday for season all.",
+    );
+    expect(text(mainOf(html))).not.toContain("0 joins");
     expect(html).toContain(OUTAGE_LINE);
     expect(html).toContain('role="status"');
 
@@ -364,6 +374,8 @@ describe("Hono joins unavailable vs genuine-empty", () => {
       eventCount: 0,
       available: false,
     });
+    expect(paragraphTextsOf(html)).toContain("Join activity for season all.");
+    expect(text(mainOf(html))).not.toContain("0 joins");
     expect(html).toContain(OUTAGE_LINE);
     expect(html).toContain('role="status"');
     expect(tablesIn(html)).toBe(0);
@@ -400,6 +412,10 @@ describe("Hono hot-zone routes without a database", () => {
     const res = await app.request("/hotzones", {}, envNoDb);
     expect(res.status).toBe(200);
     const html = await res.text();
+    expect(paragraphTextsOf(html)).toContain(
+      "Aggregate activity by hour and weekday for season all.",
+    );
+    expect(text(mainOf(html))).not.toContain("0 joins");
     expect(html).toContain(OUTAGE_LINE);
     const joinsSection = sectionOf(html, "hotzones-joins-heading");
     expect(tablesIn(joinsSection)).toBe(0);
@@ -416,6 +432,8 @@ describe("Hono hot-zone routes without a database", () => {
     const joins = await app.request("/hotzones/joins", {}, envNoDb);
     expect(joins.status).toBe(200);
     const joinsHtml = await joins.text();
+    expect(paragraphTextsOf(joinsHtml)).toContain("Join activity for season all.");
+    expect(text(mainOf(joinsHtml))).not.toContain("0 joins");
     expect(joinsHtml).toContain(OUTAGE_LINE);
     expect(tablesIn(joinsHtml)).toBe(0);
 
@@ -532,6 +550,19 @@ const { compile } = webRequire("svelte/compiler") as {
   compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
 };
 let renderKit: (signal: string | null, data: Record<string, unknown>) => string;
+type KitIndexData = Awaited<ReturnType<typeof loadHotzonesIndexData>>;
+type KitSignalData = Awaited<ReturnType<typeof loadHotzoneSignalData>>;
+type KitEvent = {
+  url: URL;
+  params: { signal: string };
+  setHeaders: (headers: Record<string, string>) => void;
+};
+let bindings: {
+  loadIndex: (event: KitEvent) => Promise<Record<string, unknown>>;
+  loadSignal: (event: KitEvent) => Promise<Record<string, unknown>>;
+  setIndexData: (data: KitIndexData) => void;
+  setSignalData: (data: KitSignalData) => void;
+};
 
 beforeAll(async () => {
   const { outputFiles } = await build({
@@ -540,6 +571,9 @@ beforeAll(async () => {
         import { render } from "svelte/server";
         import Index from "./web/src/routes/hotzones/+page.svelte";
         import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
+        export { load as loadIndex } from "./web/src/routes/hotzones/+page.server.ts";
+        export { load as loadSignal } from "./web/src/routes/hotzones/[signal]/+page.server.ts";
+        export { setIndexData, setSignalData } from "./src/kit-hotzones";
         export function renderKit(signal, data) {
           return render(signal ? Signal : Index, { props: { data } }).body;
         }
@@ -552,13 +586,45 @@ beforeAll(async () => {
     platform: "node",
     format: "esm",
     write: false,
-    tsconfigRaw: { compilerOptions: {} },
+    tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
+    banner: {
+      js: `import { createRequire as fixtureRequire } from "node:module"; const require = fixtureRequire(${JSON.stringify(join(root, "package.json"))});`,
+    },
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib") },
     plugins: [
       {
         name: "kit-hotzones-peak-ssr",
         setup(plugin) {
+          // Keep both load functions and grid rendering real. Replace only the
+          // platform/database and helper boundary to isolate binding mappings.
+          plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "workers",
+            namespace: "peak-binding",
+          }));
+          plugin.onResolve({ filter: /\/src\/admin\/db$/ }, () => ({
+            path: "db",
+            namespace: "peak-binding",
+          }));
+          plugin.onResolve({ filter: /\/src\/kit-hotzones$/ }, () => ({
+            path: "helper",
+            namespace: "peak-binding",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "peak-binding" }, ({ path }) => ({
+            contents:
+              path === "workers"
+                ? `export const env = { APP_URL: ${JSON.stringify(APP_URL)} };`
+                : path === "db"
+                  ? `export function dbFor() { throw new Error("unexpected direct database read"); }`
+                  : `
+                    let indexData, signalData;
+                    export const setIndexData = (data) => { indexData = data; };
+                    export const setSignalData = (data) => { signalData = data; };
+                    export const loadHotzonesIndexData = async () => indexData;
+                    export const loadHotzoneSignalData = async () => signalData;
+                  `,
+            loader: "js",
+          }));
           plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
             const { js } = compile(readFileSync(path, "utf8"), {
               generate: "server",
@@ -571,9 +637,11 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ renderKit } = (await import(
+  const compiled = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`
-  )) as { renderKit: typeof renderKit });
+  );
+  ({ renderKit } = compiled);
+  bindings = compiled;
 });
 
 const kitIndexFixture = (overrides: Record<string, unknown> = {}): Record<string, unknown> => {
@@ -697,6 +765,10 @@ describe("Kit Svelte joins unavailable vs genuine-empty", () => {
         joinsPeak: null,
       }),
     );
+    expect(paragraphTextsOf(html)).toContain(
+      "Aggregate activity by hour and weekday for season all.",
+    );
+    expect(text(mainOf(html))).not.toContain("0 joins");
     expect(html).toContain(OUTAGE_LINE);
     const joinsSection = sectionOf(html, "hotzones-joins-heading");
     expect(joinsSection).toContain(OUTAGE_LINE);
@@ -721,6 +793,8 @@ describe("Kit Svelte joins unavailable vs genuine-empty", () => {
         peak: null,
       }),
     );
+    expect(paragraphTextsOf(html)).toContain("Join activity for season all.");
+    expect(text(mainOf(html))).not.toContain("0 joins");
     expect(html).toContain(OUTAGE_LINE);
     expect(tablesIn(html)).toBe(0);
     expect(peakParasOf(html)).toHaveLength(0);
@@ -742,7 +816,93 @@ describe("Kit Svelte joins unavailable vs genuine-empty", () => {
     expect(html).not.toContain(OUTAGE_LINE);
     expect(html).toContain("0 joins across 0 scheduled gatherings");
     expect(tablesIn(html)).toBe(3);
+
+    const signal = renderKit(
+      "joins",
+      kitSignalFixture("joins", {
+        cells: emptyGrid(),
+        total: 0,
+        eventCount: 0,
+        available: true,
+        peak: null,
+      }),
+    );
+    expect(paragraphTextsOf(signal)).toContain(
+      "Join activity for season all: 0 joins across 0 scheduled gatherings.",
+    );
+    expect(signal).not.toContain(OUTAGE_LINE);
+    expect(tablesIn(signal)).toBe(1);
+    expect(peakParasOf(signal)).toHaveLength(0);
   });
+});
+
+const bindingEvent = (signal = "joins"): KitEvent => ({
+  url: new URL(`${APP_URL}/hotzones/${signal}?season=all`),
+  params: { signal },
+  setHeaders: () => {},
+});
+
+describe("Kit executed peak bindings", () => {
+  const joinsPeak = { weekday: 1, hour: 20, count: 8 };
+  const voicePeak = { weekday: 2, hour: 19, count: 15 };
+  const gamesPeak = { weekday: 5, hour: 21, count: 12 };
+
+  it.each([
+    ["distinct peaks", true, joinsPeak, voicePeak, gamesPeak],
+    ["unavailable joins with priors", false, null, voicePeak, gamesPeak],
+    ["genuine-empty null peaks", true, null, null, null],
+    ["null voice only", true, joinsPeak, null, gamesPeak],
+    ["null games only", true, joinsPeak, voicePeak, null],
+  ] as const)(
+    "index forwards availability and each signal's own peak: %s",
+    async (_label, available, joins, voice, games) => {
+      bindings.setIndexData({
+        season: "all",
+        joins: { cells: JOINS_GRID(), total: 11, eventCount: 1 },
+        voice: { cells: VOICE_GRID(), total: 19 },
+        games: { cells: GAMES_GRID(), total: 18 },
+        retentionNote: null,
+        appUrl: APP_URL,
+        available,
+        peaks: { joins, voice, games },
+      });
+      const data = await bindings.loadIndex(bindingEvent());
+      expect({
+        available: data.available,
+        joinsPeak: data.joinsPeak,
+        voicePeak: data.voicePeak,
+        gamesPeak: data.gamesPeak,
+      }).toEqual({ available, joinsPeak: joins, voicePeak: voice, gamesPeak: games });
+    },
+  );
+
+  it.each([
+    ["joins", "non-null peak", true, joinsPeak],
+    ["voice", "non-null peak", true, voicePeak],
+    ["games", "non-null peak", true, gamesPeak],
+    ["joins", "genuine-empty null peak", true, null],
+    ["voice", "null peak", true, null],
+    ["games", "null peak", true, null],
+    ["joins", "unavailable null peak", false, null],
+  ] as const)(
+    "%s signal forwards availability and peak: %s",
+    async (signal, _label, available, peak) => {
+      bindings.setSignalData({
+        signal,
+        season: "all",
+        cells: signal === "joins" ? JOINS_GRID() : signal === "voice" ? VOICE_GRID() : GAMES_GRID(),
+        total: signal === "joins" ? 11 : signal === "voice" ? 19 : 18,
+        eventCount: signal === "joins" ? 1 : 0,
+        retentionNote: null,
+        estimated: signal !== "joins",
+        appUrl: APP_URL,
+        available,
+        peak,
+      });
+      const data = await bindings.loadSignal(bindingEvent(signal));
+      expect({ available: data.available, peak: data.peak }).toEqual({ available, peak });
+    },
+  );
 });
 
 describe("peak + available wiring pins", () => {
