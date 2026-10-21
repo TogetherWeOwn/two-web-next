@@ -550,6 +550,9 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      - name: Inert rights inventory negative and leak selftests (no sockets or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/staging-rights-inventory.test.mjs
       - name: Catalog-preflight selftest (disposable service Postgres only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:catalog-preflight
