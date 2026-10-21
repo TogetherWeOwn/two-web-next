@@ -145,18 +145,17 @@ have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
 moderator in fresh and cancels every `Staging E2E` event still published or draft
 (`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local
 pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`, `e2e/admin-filters.spec.ts`) have their own backstop,
-`e2e/local-global-teardown.ts`, which only uses `https://localhost:8787` and
-the disposable CI Postgres, only
-matches their `E2E Waitlist `, `E2E Promotion `, `E2E Pause `, `E2E Moderator ` and `E2E Filter ` fixture titles, and is guarded
-to run in GitHub Actions on Linux. It checks that Postgres for live sweep-target
-fixtures first and skips its QA login when none exist, keeping the shared
-qa-login throttle window clear for the parity step that follows. Neither sweep crosses into the other's
+`e2e/local-global-teardown.ts`, which only uses the disposable CI Postgres,
+only matches their `E2E Waitlist `, `E2E Promotion `, `E2E Pause `, `E2E Moderator ` and `E2E Filter ` fixture titles, and is guarded
+to run in GitHub Actions on Linux. It cancels orphaned fixtures with one SQL
+UPDATE instead of signing in, so it spends none of the shared qa-login
+throttle on any run. Neither sweep crosses into the other's
 origin. Each list and final verification traverse matching pages even when a
 page contains substring lookalikes. Pagination keeps the fixed origin and
 filters, advances one page at a time, and fails closed past 20 pages per status.
-The local sweep allows four cancellation passes and up to two QA-login
-throttle waits within a shared five-minute deadline; it honors `Retry-After`
-without retrying refused credentials. The staging sweep allows four passes and
+The local sweep is one SQL UPDATE with no login, no passes, and no waits; a
+database error fails the teardown loudly instead of claiming cleanup
+succeeded. The staging sweep allows four passes and
 at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
 On failure the job sweeps `test-results/` and `playwright-report/`, but uploads

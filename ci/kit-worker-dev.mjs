@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -25,10 +26,7 @@ try {
     "kit-worker-dev: KIT_WORKER_TEST_DATABASE_URL/DATABASE_URL must be a valid Postgres URL",
   );
 }
-if (
-  !["postgres:", "postgresql:"].includes(db.protocol) ||
-  !["localhost", "127.0.0.1", "::1"].includes(db.hostname)
-) {
+if (!["postgres:", "postgresql:"].includes(db.protocol) || !isLoopbackHostname(db.hostname)) {
   throw new Error("kit-worker-dev: Kit Worker fixture accepts only a disposable loopback Postgres");
 }
 try {

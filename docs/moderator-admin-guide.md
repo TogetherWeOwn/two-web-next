@@ -122,7 +122,9 @@ QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-
 ```
 
 It spends two QA-login hits and stays inside the admin-write throttle budget.
-Live runs belong to the authorized cutover procedure, not CI.
+Live runs belong to the authorized cutover procedure, not CI. The queue
+operator legs (preview, redispatch, source-evidence) have their own drill in
+[the redrive runbook](queue-redrive-runbook.md#auth-wall-drill-staging-only).
 
 ## Busy writes and retrying
 
@@ -294,6 +296,9 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
+   | Organizer name | Optional, at most 500 characters. Shown on the event page as Hosted by; name only a host who has agreed to be listed. |
+   | Public joining link | Optional, at most 2048 characters. Must be a public http(s) URL without sign-in credentials; shown on published pages as the joining link. |
+   | Joining instructions | Optional, at most 5000 characters. Verified public steps shown under How to join. |
    | Capacity | Empty = unlimited; otherwise a whole number from 1 to 2147483647. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
    | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
 
@@ -302,8 +307,9 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description, accessibility notes and location reject control/invisible
-   characters; ordinary emoji sequences are allowed.
+   description, accessibility notes, location, organizer name, joining link
+   and joining instructions reject control/invisible characters; ordinary
+   emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement
@@ -658,18 +664,19 @@ Only perform content actions you are authorized to take. Do not:
 - Promise a Discord announcement, membership change or fix time without evidence.
 
 For a member incident, collect the **page path**, exact visible sentence,
-approximate time with timezone, whether `/discord` worked, and whether others
-are affected. Strip callback queries and personal information before handing
-that summary to site maintainers/engineering. Share any necessary member-specific
-context only through the approved private support process.
+Support reference shown on the error page, approximate time with timezone,
+whether `/discord` worked, and whether others are affected. Strip callback
+queries and personal information before handing that summary to site
+maintainers/engineering. Share any necessary member-specific context only
+through the approved private support process.
 
 | Report | Moderator response |
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
-| **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Do not repeatedly click or bypass the limit. |
+| **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Copy the Support reference from the page into the incident report. Do not repeatedly click or bypass the limit. |
 | **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Order is guard, then cap, then throttle: sign-in and moderator role still come first (a guest redirect or 403 takes precedence), but the cap runs before the write throttle, so an oversized body answers 413 even when the budget is spent, and 429 applies only to bodies at or under the cap. |
-| **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording and time. Do not guess the cause. |
-| **We will be right back** (503) | Use the invite offered by the page or `/discord`; escalate if it persists. Do not restart anything. |
+| **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording, Support reference and time. Do not guess the cause. |
+| **We will be right back** (503) | Use the invite offered by the page or `/discord`; copy the Support reference into the incident report and escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
 | 403 on a moderator/admin surface | Expect it for a signed-in non-moderator, a stale role cache, or a form-action path opened directly by a signed-in non-moderator. Verify the role in-server, then re-check after a fresh sign-in and role sync ([sign-in check](#get-into-the-panel)); non-moderators get 403 and failed lookups fail closed ([probe expectations](#auth-wall-probe-staging-only)). If a current moderator hits it, escalate the path and time. |
 | Dashboard card or section missing on `/admin` (Join funnel, Top searches with no results) | Do not read absence as zero: a failing or slow optional read omits its section inside the 1.5 s budget while the dashboard stays available. Stop and escalate the path and time with timezone. A signed-session 503 or missing database configuration is different: the panel itself is unavailable, so report it the same way. |

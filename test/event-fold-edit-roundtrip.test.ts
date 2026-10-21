@@ -124,7 +124,8 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     ["second (GMT)", SECOND_OCCURRENCE],
   ] as const) {
     it(`unchanged edit-route save preserves the ${side} occurrence`, async () => {
-      const key = `fold-keep-${stored === FIRST_OCCURRENCE ? "bst" : "gmt"}`;
+      const key =
+        stored === FIRST_OCCURRENCE ? "01K00000000000000000000024" : "01K00000000000000000000025";
       await seed(key, stored, "2026-10-25T03:00:00.000Z");
       const page = await app.request(
         APP_URL + `/admin/events/${key}`,
@@ -147,11 +148,19 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
   }
 
   it("unchanged edit-route save preserves sub-minute precision on both occurrences", async () => {
-    await seed("fold-ms-bst", "2026-10-25T00:30:27.125Z", "2026-10-25T03:00:44.875Z");
-    await seed("fold-ms-gmt", "2026-10-25T01:30:27.125Z", "2026-10-25T03:00:44.875Z");
+    await seed(
+      "01K00000000000000000000026",
+      "2026-10-25T00:30:27.125Z",
+      "2026-10-25T03:00:44.875Z",
+    );
+    await seed(
+      "01K00000000000000000000027",
+      "2026-10-25T01:30:27.125Z",
+      "2026-10-25T03:00:44.875Z",
+    );
     for (const [key, starts] of [
-      ["fold-ms-bst", "2026-10-25T00:30:27.125Z"],
-      ["fold-ms-gmt", "2026-10-25T01:30:27.125Z"],
+      ["01K00000000000000000000026", "2026-10-25T00:30:27.125Z"],
+      ["01K00000000000000000000027", "2026-10-25T01:30:27.125Z"],
     ] as const) {
       const page = await app.request(
         APP_URL + `/admin/events/${key}`,
@@ -176,18 +185,26 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     // Stored on the BST side; the moderator moves 01:30 -> 01:45 inside the
     // fold. The wall text no longer matches the rendered carrier minute, so
     // the save takes the fresh-parse second (GMT) occurrence, not the stored side.
-    await seed("fold-drop", FIRST_OCCURRENCE, "2026-10-25T03:00:00.000Z");
-    const res = await post("fold-drop", { ...FORM, starts_at: "2026-10-25 01:45" });
+    await seed("01K00000000000000000000028", FIRST_OCCURRENCE, "2026-10-25T03:00:00.000Z");
+    const res = await post("01K00000000000000000000028", {
+      ...FORM,
+      starts_at: "2026-10-25 01:45",
+    });
     expect(res.status).toBe(303);
-    const row = await saved("fold-drop");
+    const row = await saved("01K00000000000000000000028");
     expect(row.startsAt.toISOString()).toBe("2026-10-25T01:45:00.000Z");
     expect(row.endsAt.toISOString()).toBe("2026-10-25T03:00:00.000Z");
   });
 
   it("a deliberate move out of the fold drops the carrier to the unambiguous instant", async () => {
-    await seed("fold-leave", SECOND_OCCURRENCE, "2026-10-25T03:00:00.000Z");
-    const res = await post("fold-leave", { ...FORM, starts_at: "2026-10-25 02:30" });
+    await seed("01K00000000000000000000029", SECOND_OCCURRENCE, "2026-10-25T03:00:00.000Z");
+    const res = await post("01K00000000000000000000029", {
+      ...FORM,
+      starts_at: "2026-10-25 02:30",
+    });
     expect(res.status).toBe(303);
-    expect((await saved("fold-leave")).startsAt.toISOString()).toBe("2026-10-25T02:30:00.000Z");
+    expect((await saved("01K00000000000000000000029")).startsAt.toISOString()).toBe(
+      "2026-10-25T02:30:00.000Z",
+    );
   });
 });

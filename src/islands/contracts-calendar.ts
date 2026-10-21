@@ -6,7 +6,9 @@
 
 export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 export {
+  calendarDayLongLabel,
   calendarZone,
+  canonicalIntervalDays,
   cardDayLabel,
   cardTimeLabel,
   isValidZone,
@@ -16,7 +18,8 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
+import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
  * One rowset rendered twice — list + month grid — in a single SSR pass.
@@ -78,15 +81,29 @@ export function escapeLikeTerm(raw: string): string {
 
 /** One structured line per rendered search: normalized query + visible count.
  * No user id, no session, no IP, no raw input. Fail-open — logging never
- * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape. */
+ * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape.
+ * The optional `request_id` joins the line to `http.request`: it travels only
+ * when it validates, and is omitted — never raw — otherwise. */
 export interface EventSearchLogEntry {
   event: "event_search";
   query: string;
   results: number;
+  request_id?: string;
 }
-export function eventSearchLogEntry(raw: string, results: number): EventSearchLogEntry | null {
+export function eventSearchLogEntry(
+  raw: string,
+  results: number,
+  requestId?: string | null,
+): EventSearchLogEntry | null {
   const query = normalizeEventSearch(raw);
-  return query === null ? null : { event: "event_search", query, results: Math.max(0, results) };
+  if (query === null) return null;
+  const validated = safeRequestId(requestId);
+  return {
+    event: "event_search",
+    query,
+    results: Math.max(0, results),
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  };
 }
 
 /* Past drawer (legacy showPast): opens one way, stays open; searching reveals
@@ -304,6 +321,12 @@ export function gridTitle(title: string): string {
 /** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
 export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
   return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+}
+
+/** Continuation link name starts with the visible "Continues title" (WCAG
+ * 2.5.3), then the displayed day — never the original start. */
+export function gridContinuationAccessibleName(title: string, dayIso: string): string {
+  return `Continues ${title}, ${calendarDayLongLabel(dayIso)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

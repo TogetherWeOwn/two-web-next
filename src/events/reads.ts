@@ -31,7 +31,7 @@ import {
   PAST_EVENTS_PAGE_SIZE,
   type DiscordTransient,
 } from "../islands/contracts";
-import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
+import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
@@ -135,7 +135,7 @@ export function normalizeUpcomingPage(page: number): number {
     : 1;
 }
 
-/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
+/** Upcoming = visible, never explicitly past, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
 export async function listUpcoming(
   db: Db,
   now = new Date(),
@@ -143,7 +143,12 @@ export async function listUpcoming(
   page = 1,
 ): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number; total: number }> {
   page = normalizeUpcomingPage(page);
-  const visible = and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now));
+  const visible = and(
+    calendarVisible(opts),
+    finiteEventWindow,
+    notPastEventStatus,
+    gte(events.endsAt, now),
+  );
   const [total] = await db.select({ n: count() }).from(events).where(visible);
   const n = Number(total?.n ?? 0);
   const totalPages = Math.ceil(n / EVENTS_UPCOMING_PAGE_SIZE);
@@ -187,6 +192,7 @@ export async function rankUpcoming(
         eq(events.eventKey, key),
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
         gte(events.endsAt, now),
       ),
     );
@@ -203,6 +209,7 @@ export async function rankUpcoming(
       and(
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
         gte(events.endsAt, now),
         or(
           lt(events.startsAt, anchorStartsAt),
@@ -216,7 +223,8 @@ export async function rankUpcoming(
 /** Month-grid scope: the visible upcoming rows plotted on the grid for `month`
  * ("YYYY-MM", caller-validated). The grid renders whole Monday-first weeks,
  * so the covered range reaches into the adjacent months and the read keeps
- * exactly the rows landing on a covered wall day in their own zone. SQL reads
+ * exactly the rows whose finite scheduled interval overlaps a covered wall
+ * day in their own zone — including starts before the leading week. SQL reads
  * the covered UTC days widened for the widest zone offset; the grid cap is a
  * pathological guard only: a real month never holds that many events. */
 export async function listUpcomingForMonth(
@@ -231,8 +239,6 @@ export async function listUpcomingForMonth(
   if (!range) return [];
   const from = new Date(wallDayStart(range.first) - 86400000);
   const to = new Date(wallDayStart(range.last) + 2 * 86400000);
-  const firstDay = wallDayStart(range.first);
-  const lastDay = wallDayStart(range.last);
   const rows = await db
     .select()
     .from(events)
@@ -240,9 +246,11 @@ export async function listUpcomingForMonth(
       and(
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
+        ne(events.status, "cancelled"),
         gte(events.endsAt, now),
-        gte(events.startsAt, from),
         lt(events.startsAt, to),
+        gt(events.endsAt, from),
       ),
     )
     .orderBy(asc(events.startsAt), asc(events.id))
@@ -251,8 +259,9 @@ export async function listUpcomingForMonth(
     db,
     rows.filter((r) => {
       if (!isRenderableEventWindow(r)) return false;
-      const day = wallDayStart(wallDateIso(r.startsAt, r.timezone));
-      return day >= firstDay && day <= lastDay;
+      return (
+        canonicalIntervalDays(r.startsAt, r.endsAt, r.timezone, range.first, range.last).length > 0
+      );
     }),
   );
 }
@@ -263,6 +272,14 @@ const finiteEventStart = sql`isfinite(${events.startsAt})`;
 // Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
 // `toISOString()`/formatting throws, so upcoming reads refuse either one.
 const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
+
+// A row explicitly marked past is never upcoming, even with a future end:
+// without this the overlap read would grow a past archive. Cancelled rows
+// stay listed (legacy visibility); the month grid excludes them separately.
+// Inlined like the draft literal in `calendarVisible`, never a bound param:
+// pg-proxy fixtures route reads by bound params, and a bound "past" would
+// misroute every upcoming read into the past bucket.
+const notPastEventStatus = sql`${events.status} != 'past'`;
 
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
@@ -615,7 +632,14 @@ export async function getEventNeighbors(
     .select({ startsAt: events.startsAt })
     .from(events)
     .where(eq(events.id, event.id));
-  const [previous, next] = await Promise.all([
+  // Both sub-reads must settle before this call settles: Promise.all
+  // rejects on the first failure while the sibling still holds the capture
+  // pending, and the member-read boundary refuses while pending !== 0 — a
+  // fast previous-rejection with a slow next query 503s the whole page even
+  // though the caller fails decorative reads open. allSettled drains both
+  // permits first; a failure still rejects so the caller's empty-shape belt
+  // (routes-detail, kit-detail) applies after the capture is quiet.
+  const [previousSettled, nextSettled] = await Promise.allSettled([
     nonSensitiveRead("events", () =>
       db
         .select(eventLinkColumns)
@@ -655,6 +679,10 @@ export async function getEventNeighbors(
         .limit(1),
     ),
   ]);
+  if (previousSettled.status === "rejected") throw previousSettled.reason;
+  if (nextSettled.status === "rejected") throw nextSettled.reason;
+  const previous = previousSettled.value;
+  const next = nextSettled.value;
   return { previous: previous[0] ?? null, next: next[0] ?? null };
 }
 
