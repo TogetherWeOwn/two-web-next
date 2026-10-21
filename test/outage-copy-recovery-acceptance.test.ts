@@ -126,11 +126,30 @@ async function hono503() {
   );
 }
 
+// Skip Svelte hydration comment tokens by walking: a comment ends at the first
+// `-->`, so skipping its token ignores the markers without regex stripping.
+// An unterminated comment swallows the rest of the input.
+function stripComments(input: string) {
+  let out = "";
+  let index = 0;
+  while (index < input.length) {
+    if (input.startsWith("<!--", index)) {
+      const end = input.indexOf("-->", index + 4);
+      index = end === -1 ? input.length : end + 3;
+      continue;
+    }
+    const next = input.indexOf("<!--", index);
+    const stop = next === -1 ? input.length : next;
+    out += input.slice(index, stop);
+    index = stop;
+  }
+  return out;
+}
+
 function lead(html: string) {
   const match = /<p\b[^>]*class="lead"[^>]*>([\s\S]*?)<\/p>/.exec(html);
   expect(match, "real rendered lead exists").not.toBeNull();
-  return (match?.[1] ?? "")
-    .replace(/<!--[^]*?-->/g, "")
+  return stripComments(match?.[1] ?? "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -142,8 +161,7 @@ function link(html: string, testid: string) {
   expect(match, `real ${testid} recovery anchor exists`).not.toBeNull();
   return {
     href: /\bhref="([^"]*)"/.exec(match?.[1] ?? "")?.[1],
-    label: (match?.[2] ?? "")
-      .replace(/<!--[^]*?-->/g, "")
+    label: stripComments(match?.[2] ?? "")
       .replace(/\s+/g, " ")
       .trim(),
   };
