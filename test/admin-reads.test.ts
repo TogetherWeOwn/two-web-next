@@ -123,15 +123,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
   });
   afterEach(clean);
 
+  let nextEventKey = 0;
   async function seedEvent(status = "draft") {
     const [ev] = await db
       .insert(events)
       .values({
-        eventKey:
-          `01TESTEVENT${Math.random().toString(36).slice(2, 10).toUpperCase().padEnd(8, "0")}`.slice(
-            0,
-            26,
-          ),
+        eventKey: `01K000000000000000${String(++nextEventKey).padStart(8, "0")}`,
         title: "Roster night",
         startsAt: new Date("2026-11-04T20:00:00Z"),
         endsAt: new Date("2026-11-04T22:00:00Z"),
@@ -334,6 +331,6 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     expect(await status(p.eventKey)).toBe("cancelled");
 
     // Unknown key → 404, no write.
-    expect((await post("/events/NOPE/publish")).status).toBe(404);
+    expect((await post("/events/01K00000000000000000000019/publish")).status).toBe(404);
   });
 });
