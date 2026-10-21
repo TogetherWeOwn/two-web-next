@@ -615,7 +615,14 @@ export async function getEventNeighbors(
     .select({ startsAt: events.startsAt })
     .from(events)
     .where(eq(events.id, event.id));
-  const [previous, next] = await Promise.all([
+  // Both sub-reads must settle before this call settles: Promise.all
+  // rejects on the first failure while the sibling still holds the capture
+  // pending, and the member-read boundary refuses while pending !== 0 — a
+  // fast previous-rejection with a slow next query 503s the whole page even
+  // though the caller fails decorative reads open. allSettled drains both
+  // permits first; a failure still rejects so the caller's empty-shape belt
+  // (routes-detail, kit-detail) applies after the capture is quiet.
+  const [previousSettled, nextSettled] = await Promise.allSettled([
     nonSensitiveRead("events", () =>
       db
         .select(eventLinkColumns)
@@ -655,6 +662,10 @@ export async function getEventNeighbors(
         .limit(1),
     ),
   ]);
+  if (previousSettled.status === "rejected") throw previousSettled.reason;
+  if (nextSettled.status === "rejected") throw nextSettled.reason;
+  const previous = previousSettled.value;
+  const next = nextSettled.value;
   return { previous: previous[0] ?? null, next: next[0] ?? null };
 }
 

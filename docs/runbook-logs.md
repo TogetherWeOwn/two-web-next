@@ -147,6 +147,7 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `source evidence snapshot failed; refusing evidence.` | The guarded source-evidence snapshot threw (`src/admin/source-evidence.ts`): a source read, freshness check or statement-shape validation failed. Ends the single attempt. | Fails closed with the `evidence_unavailable` 503. | Search logs for the line and its `incidentId`; then `SELECT id FROM queue_failed_jobs WHERE id = <incidentId>` to confirm the failed-row read, and check database health with the [alert runbook](runbook-alerts.md). | `exception` (class name), `incidentId` (numeric incident id). Never the exception message, SQL text, bindings, request URI, or any payload |
 | `source evidence database missing; refusing evidence.` | No database is configured (`src/admin/source-evidence.ts`): neither `DATABASE_URL` nor the `DB` Hyperdrive binding resolved, so the snapshot never started. | Fails closed with the `evidence_unavailable` 503. | Search logs for the line and its `incidentId`; then confirm the deployment carries a database binding (miniflare/Hyperdrive config for staging) before suspecting the database itself. | `exception` (fixed `MissingConfiguration`: nothing threw), `incidentId` (numeric incident id). Never the env, a URI, or any payload |
 | `queue redispatch prerequisites missing; refusing redispatch.` | No producer prerequisites on the real dispatch path (`src/admin/queue-redispatch.ts`): `SYNC_EVENT_QUEUE` unbound or no database URL resolved, so dispatch never started and nothing was written. | Fails closed with the `redispatch_unavailable` 503. | Search logs for the line and its `failureId`; then confirm the deployment carries a queue binding and a database binding (miniflare/Hyperdrive config for staging) before suspecting the database itself. | `exception` (fixed `MissingConfiguration`: nothing threw), `failureId` (numeric queue failure id). Never the env, a URI, or any payload |
+| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw (`src/auth/routes.ts`). | Fails closed with the 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. See [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation) for the sibling login-start warns. | `exception` (class name), validated `request_id` |
 
 ### Queue ledger, lock and malformed-carrier warnings
 
@@ -401,8 +402,27 @@ secret or the live access token.
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
+| `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. A `signin_failed` redirect on `GET /auth/discord` with no exchange line points at the login-start store: see [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation). On `GET /auth/discord/callback`, a store-acquisition or journey-consume failure stays silent (indistinguishable from a stray hit), so check database health directly via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
 | `guild auto-join failed` | Adding the fresh member to the guild (`addGuildMemberDetailed` in `src/discord.ts`) returned a non-member outcome. Read `kind`: `rate_limited` is Discord throttling (a usable backoff rides to the recovery response as a `Retry-After` header); `provider_outage` is a Discord 5xx; `transport_failure` is a fetch throw; `forbidden` (403) is a bot permission problem, not an outage; `failed` is the config-shaped outcome (blank bot token, malformed guild or user id, or any other non-429/403/5xx status), so a sustained `failed` run points at [`DISCORD_GUILD_ID` / `DISCORD_BOT_TOKEN`](config.md) and the bot's guild membership, not at Discord health. | None on sign-in: the session is still issued as a non-member session and the member lands on the `/?n=join_failed` recovery page with the invite fallback; the remembered destination is re-recorded for the retry. | Filter logs for the line and split by `kind`. A sustained `failed` run points at the guild/bot config above; `forbidden` points at the bot's guild role and permissions; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health. Never replay a member sign-in to investigate. | `request_id`, `guild_id` (the configured guild actually used, not a member identity), `kind` |
+
+### Login-start store failures and logout revocation
+
+Three auth-scoped lines cover the session-store failures around the Discord
+round trip (`src/auth/routes.ts`). None pages: each line accompanies the
+member-visible redirect or 503 the member already sees. Correlate by the
+validated `request_id`, which joins to the `http.request` line. Where a line
+carries an exception, it is the class name only, never the raw error text,
+which can quote connection strings or tokens. An `issue()` returning `false`
+(not a throw), stray callback hits and consent denials stay silent by design,
+and the callback-consume and exchange-failure lines are untouched (see
+[Auth sign-in warnings](#auth-sign-in-warnings) and
+[Discord sign-in and guild auto-join warnings](#discord-sign-in-and-guild-auto-join-warnings)).
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `auth login-start store unavailable` | The session store could not be acquired on `GET /auth/discord` (`console.warn`). | The generic sign-in failure redirect (`/?n=signin_failed`); no OAuth state is minted and no Discord call is made. | Filter logs for the message and compare against `http.request` volume on `/auth/discord`. A burst with no matching Discord-side change points at the session store: `SELECT count(*) FROM web_sessions` to confirm the table is readable, then database health via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only), validated `request_id` |
+| `auth login-start journey failed` | The one-use journey sweep or issue threw on `GET /auth/discord` (`console.warn`). An `issue()` returning `false` is not a throw and stays silent. | The same generic `/?n=signin_failed` redirect as the row above. | Same store check as the row above, plus the journey table: `SELECT count(*) FROM web_oauth_journeys` to confirm the table is readable, then database health via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only), validated `request_id` |
+| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw on `POST /logout` (`console.error`; the authoritative row lives in [Failure log lines](#failure-log-lines)). | The 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class only), validated `request_id` |
 
 ### Analytics write-degradation warnings
 
@@ -422,8 +442,8 @@ continues, depending on whether the write wins the deadline race. A
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
-| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN), `request_id` (only when the caller's ID validates) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text), `request_id` (only when the caller's ID validates) |
 
 The `exception` field tells a rejection apart from a deadline expiry: a
 rejected write carries the error's class name (with a `typeof` fallback for a
@@ -462,11 +482,15 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-Neither line carries a `request_id`, so correlate by time window and route,
-not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
-member identity, cookies, tokens, connection strings, and invented request IDs
-out of diagnostic output: the aggregates above are sufficient, and the
-warning's `exception` is a class name, never the message.
+Both lines carry the serving request's validated `request_id`, so join a
+warning to its `http.request` by ID, not by time window. The ID travels only
+when it validates: Hono-served searches and board views always carry one,
+while Kit-served lines omit it — no request ID is plumbed through the Kit
+bindings, so correlate those by time window and route. Keep raw
+`normalized_query` and `normalized_board_key` values, member identity,
+cookies, tokens, connection strings, and invented request IDs out of
+diagnostic output: the aggregates above are sufficient, and the warning's
+`exception` is a class name, never the message.
 
 ### Missing sync-queue binding warning
 
@@ -700,7 +724,11 @@ line carries no fields, and the session-fallback line carries only the fixed
 no member identity either: the prune line carries the exception class (never the message), the attempt line
 carries the exception class, `outcome` and validated `request_id`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source`, `outcome` and validated `request_id` (see
-[Join journey warnings](#join-journey-warnings)). `csp.report.violation`
+[Join journey warnings](#join-journey-warnings)). The login-start store warns and the logout
+revocation error (`src/auth/routes.ts`) carry the exception class and the validated `request_id`
+only — never a token, cookie, message, or member identity (see
+[Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation)).
+`csp.report.violation`
 (`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
 17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
 as `:id` (`src/csp-report-uri.ts`). `test/console-user-key-guard.test.ts` fails
