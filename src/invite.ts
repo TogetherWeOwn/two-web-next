@@ -14,7 +14,7 @@ export { FALLBACK_INVITE };
 // alert. The message never carries the configured value.
 export class InviteConfigError extends Error {
   constructor() {
-    super("services.discord.invite_url is unusable");
+    super("DISCORD_INVITE_URL is unusable");
     this.name = "InviteConfigError";
   }
 }

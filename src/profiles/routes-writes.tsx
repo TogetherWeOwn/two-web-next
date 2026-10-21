@@ -101,7 +101,19 @@ export function registerWriteRoutes(
       });
       return badRequest(c);
     }
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return badRequest(c);
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      // Well-formed non-object JSON refuses the same 400 as a parse failure:
+      // warn with the synthetic TypeError like the event leg, so a non-object
+      // spray shows up in warn-vs-400-volume triage instead of reading as
+      // not-malformed. The 400 shape is unchanged.
+      const requestId = safeRequestId(c.get("requestId"));
+      malformedLog.warn("profile.write.malformed_body", {
+        exception: "TypeError",
+        content_type: mediaType(c.req.header("content-type")),
+        ...(requestId ? { request_id: requestId } : {}),
+      });
+      return badRequest(c);
+    }
     // `games` must be present (legacy `present|array`). Only a plain form
     // submission treats absence as a blank list; JSON must say so with `games: []`,
     // otherwise an omitted key would silently wipe the stored list.
