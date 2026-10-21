@@ -104,7 +104,7 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
   { code: 500, links: [INVITE_LINK, HOME] },
   {
     code: 503,
-    links: [INVITE_LINK, { testid: "error-retry", name: "Try again", href: "/" }],
+    links: [INVITE_LINK, { testid: "error-retry", name: "Back to the homepage", href: "/" }],
   },
 ];
 
