@@ -91,7 +91,7 @@ export const CalendarHead: FC<{ state: CalendarState; appUrl: string }> = ({ sta
         <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
           {EVENTS_EMPTY_COPY.subscribe}
         </a>{" "}
-        <a href={feedUrl(appUrl)}>Download calendar (.ics)</a> <a href="/events.rss">RSS feed</a>
+        <a href="/events.rss">RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
     </div>
     {subscriptionHelp(appUrl)}

@@ -51,16 +51,16 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     <!-- Static mirror of subscriptionHelp() (src/events/subscription-help.tsx):
          {@html} inside this section leaves hydration anchors with no Hono
          counterpart and breaks the cross-target section contract. -->
-    <details class="subscription-help">
+    <details class="subscription-help" data-testid="subscription-help">
       <summary>How to subscribe to the calendar</summary>
       <p>{SUBSCRIPTION_GUIDANCE[0]}</p>
       <p>{SUBSCRIPTION_GUIDANCE[1]}</p>
       <label for="calendar-feed-url">Calendar feed URL</label>
       <div class="subscription-copy">
-        <input id="calendar-feed-url" type="text" value={feedUrl(appUrl)} readonly /><button class="btn" type="button" data-copy-link={feedUrl(appUrl)} data-copy-feed="true" hidden>Copy feed URL</button>
+        <input id="calendar-feed-url" data-testid="subscription-feed-url" type="text" value={feedUrl(appUrl)} readonly /><button class="btn" type="button" data-testid="subscription-copy-button" data-copy-link={feedUrl(appUrl)} data-copy-feed="true" hidden>Copy feed URL</button>
       </div>
-      <p>Select the feed URL to copy it manually if Subscribe does not open your calendar app.</p>
-      <p role="status" aria-atomic="true" data-copy-toast></p>
+      <p data-testid="subscription-manual-copy">Select the feed URL and copy it manually in your calendar app.</p>
+      <p role="status" aria-atomic="true" data-copy-toast data-testid="subscription-copy-status"></p>
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
     <div data-archive-state>
