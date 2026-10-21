@@ -184,30 +184,31 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("env.production.queues.producers");
     expect(section).toContain("two-web-next-production-sync-event");
     expect(section).toContain("two-sync-event");
-    // Production reconcile runs on the web Worker: a missing binding there is stuck.
-    // Pin the ownership claim itself, not just the Worker name (which is a
-    // substring of the production queue name asserted above), and tie it to
-    // the wrangler configs so a handoff that moves the cron fails here.
-    expect(section).toContain(
-      "In the production cutover template this self-healing does not apply:",
-    );
-    expect(section).toContain("Worker `two-web-next-production` owns both");
+    // Production reconcile runs on the jobs Worker after the transfer: a web-only
+    // missing binding is late, not lost. Pin the ownership claim itself, not
+    // just the Worker name (which is a substring of the production queue name
+    // asserted above), and tie it to the wrangler configs so a handoff that
+    // moves the cron fails here.
+    expect(section).toContain("In production the same split applies after the jobs transfer:");
+    expect(section).toContain("Worker `two-web-jobs-production` owns the");
     expect(section).toContain("`*/10 * * * *` reconcile");
-    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
-    expect(section).toContain("stuck, not late");
-    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
-    expect(section).toContain("which has no production env");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jobs.jsonc`)");
+    expect(section).toContain("stuck, not self-healing");
+    expect(section).toContain("its own `SYNC_EVENT_QUEUE` binding");
+    expect(section).toContain("top level for staging, `env.production` for production");
     const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
     expect(production?.name).toBe("two-web-next-production");
-    expect(section).toContain(`Worker \`${production.name}\` owns both`);
-    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(production?.triggers?.crons ?? []).toEqual([]);
     expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
     expect(production?.queues?.producers).toContainEqual({
       queue: "two-web-next-production-sync-event",
       binding: "SYNC_EVENT_QUEUE",
     });
     const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
-    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
+    const jobsProduction = jobsConfig.env?.production;
+    expect(jobsProduction?.name).toBe("two-web-jobs-production");
+    expect(section).toContain(`Worker \`${jobsProduction?.name}\` owns the`);
+    expect(jobsProduction?.triggers?.crons).toContain(RECONCILE_CRON);
   });
 
   it("source still emits the warning with the documented fields", () => {
