@@ -3,6 +3,18 @@ import { assertDiscordId } from "./member-erasure";
 
 export type SessionRevocationCounts = { web_sessions: number };
 
+/**
+ * Revocation result: the stamped count plus chase forensics. `passes` is the
+ * number of chase passes executed and `stampsPerPass` the sessions each pass
+ * stamped, in order. On apply results `passes === stampsPerPass.length` and
+ * `web_sessions === sum(stampsPerPass)` hold; dry-run returns `passes: 0`
+ * with an empty array next to the counted `web_sessions`. Numbers only, never ids.
+ */
+export type SessionRevocationResult = SessionRevocationCounts & {
+  passes: number;
+  stampsPerPass: number[];
+};
+
 export type SessionRevocationTx = <T = Record<string, unknown>[]>(
   strings: TemplateStringsArray,
   ...values: unknown[]
@@ -28,11 +40,15 @@ export async function revokeMemberSessions(
   sql: SessionRevocationSql,
   discordId: string,
   opts: { dryRun: boolean },
-): Promise<SessionRevocationCounts> {
+): Promise<SessionRevocationResult> {
   assertDiscordId(discordId);
-  if (opts.dryRun) return countActiveMemberSessions(sql, discordId);
+  if (opts.dryRun) {
+    const counts = await countActiveMemberSessions(sql, discordId);
+    return { ...counts, passes: 0, stampsPerPass: [] };
+  }
   return sql.begin(async (tx) => {
     let revoked = 0;
+    const stampsPerPass: number[] = [];
     // An in-flight rotation can replace a locked row after this UPDATE's
     // statement snapshot. Recount with a fresh snapshot and catch its successor.
     // The loop has no pass cap on purpose: a bounded cap throws away (by
@@ -51,8 +67,10 @@ export async function revokeMemberSessions(
         where user_id = ${discordId} and revoked_at is null and expires_at > clock_timestamp()
         returning 1`;
       revoked += rows.length;
+      stampsPerPass.push(rows.length);
       const remaining = await countActiveMemberSessions(tx, discordId);
-      if (remaining.web_sessions === 0) return { web_sessions: revoked };
+      if (remaining.web_sessions === 0)
+        return { web_sessions: revoked, passes: stampsPerPass.length, stampsPerPass };
     }
   });
 }

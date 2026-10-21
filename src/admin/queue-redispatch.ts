@@ -235,8 +235,15 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   }
   // The real producer path prerequisites fail closed before any write, the
   // same rule dispatchRedispatch enforces; the injected seam owns its path.
-  if (deps.dispatch === undefined && (!c.env.SYNC_EVENT_QUEUE || !databaseUrl(c.env)))
+  if (deps.dispatch === undefined && (!c.env.SYNC_EVENT_QUEUE || !databaseUrl(c.env))) {
+    // No producer prerequisites: the exception class is fixed (nothing threw),
+    // plus the failure id. Never the env, a URI, or any payload.
+    console.error("queue redispatch prerequisites missing; refusing redispatch.", {
+      exception: "MissingConfiguration",
+      failureId: id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
+  }
   // The receipt is written before the message is queued: a write that fails
   // refuses the dispatch, so no dispatch ever answers without a trail. When
   // the queue send itself fails afterwards, the 503 keeps the attempt

@@ -3,6 +3,9 @@
   const link = document.querySelector("[data-copy-link]");
   const toast = document.querySelector("[data-copy-toast]");
   if (!link || !toast) return;
+  const feed = link.getAttribute("data-copy-feed") != null;
+  if (feed) link.hidden = false;
+  const manual = "Select the feed URL and copy it manually in your calendar app.";
   // Unsettled clipboard promises get truthful feedback at 5 s; the feedback contract caps this at 10 s.
   const feedbackDeadlineMs = 5000;
   const resetMs = 4000;
@@ -50,8 +53,9 @@
     timer = setTimeout(() => {
       if (!owns()) return;
       pending = false;
-      toast.textContent =
-        "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
+      toast.textContent = feed
+        ? manual
+        : "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
       timer = setTimeout(() => {
         if (mine === latest) toast.textContent = "";
       }, resetMs);
@@ -67,10 +71,10 @@
         } catch {
           // A newer click or an expired deadline owns feedback; never fall back for it.
           if (!owns()) return;
-          copied = fallback(text);
+          copied = !feed && fallback(text);
         }
       } else {
-        copied = fallback(text);
+        copied = !feed && fallback(text);
       }
     } catch {
       copied = false;
@@ -79,16 +83,19 @@
     pending = false;
     clearTimeout(timer);
     toast.textContent = copied
-      ? "Event link copied."
-      : "That link didn't copy — copy it from the address bar.";
+      ? feed
+        ? "Calendar feed URL copied."
+        : "Event link copied."
+      : feed
+        ? manual
+        : "That link didn't copy — copy it from the address bar.";
     timer = setTimeout(() => {
       if (mine === latest) toast.textContent = "";
     }, resetMs);
   }
 
-  // The control stays a link: plain activation copies, modified clicks and
-  // modified keys keep native link navigation, and both Enter and Space copy
-  // exactly once. Ctrl/Cmd/Shift+Enter opens the link in a new tab or window.
+  // Event controls stay links: plain activation copies, modified clicks and
+  // keys keep native navigation. Feed controls use native button activation.
   link.addEventListener("click", (event) => {
     if (
       event.defaultPrevented ||
@@ -102,18 +109,20 @@
     event.preventDefault();
     void copy();
   });
-  link.addEventListener("keydown", (event) => {
-    if (
-      event.defaultPrevented ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey ||
-      (event.key !== " " && event.key !== "Enter")
-    )
-      return;
-    event.preventDefault();
-    if (event.repeat) return;
-    void copy();
-  });
+  // Native buttons already synthesize one click for Enter/Space.
+  if (!feed)
+    link.addEventListener("keydown", (event) => {
+      if (
+        event.defaultPrevented ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.altKey ||
+        (event.key !== " " && event.key !== "Enter")
+      )
+        return;
+      event.preventDefault();
+      if (event.repeat) return;
+      void copy();
+    });
 })();
