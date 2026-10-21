@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
 import { renderHtmlOutcome } from "./html-outcome";
@@ -22,8 +23,11 @@ export const recoveryUrl = (next: string) =>
   `/auth/recover?next=${encodeURIComponent(safeNext(next) ?? "/profile")}`;
 
 function writeReturn(c: Ctx): string {
+  const key = c.req.path.match(/^\/(?:events|e)\/([^/]+)(?:\/|$)/)?.[1];
+  const eventReturn =
+    key && eventKeyAllowed(key, c.env.APP_URL) ? `/e/${canonicalEventKey(key) ?? key}` : "/events";
   const fallback =
-    adminWriteReturn(c.req.path) ?? (c.req.path.startsWith("/members/") ? "/profile" : "/events");
+    adminWriteReturn(c.req.path) ?? (c.req.path.startsWith("/members/") ? "/profile" : eventReturn);
   try {
     const ref = new URL(c.req.header("referer") ?? "");
     if (ref.origin === new URL(c.env.APP_URL).origin)
@@ -61,6 +65,8 @@ function adminWriteReturn(path: string): string | null {
 
 export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Response> {
   const next = writeReturn(c);
+  c.header("cache-control", "no-store, private");
+  c.header("vary", "Cookie");
   // JSON callers keep 401, with an explicit recovery link, never an OAuth redirect.
   // JSON-only routes pass jsonOnly: a header-less fetch must not follow a 303 to a 200 page.
   // Accept uses exact media-range matching (shared with profile saves); Content-Type
@@ -95,6 +101,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
         inviteUrl: "/discord",
       },
       honoRecoveryRenderer,
+      { headers: { "cache-control": "no-store, private", vary: "Cookie" } },
     ),
   );
 }

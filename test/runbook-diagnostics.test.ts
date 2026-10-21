@@ -87,7 +87,7 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(health).not.toMatch(/always returns \*\*200\*\*/);
     expect(health).toMatch(/`GET \/robots\.txt` is DB-free[^.]*startup/);
     expect(health).toContain("HTTP 200 + `db:ok` + `pending_migrations:0`");
-    expect(health).toContain("healthy + unknown");
+    expect(health).toContain("degraded + unknown");
     expect(health).toContain("lack of evidence");
     expect(health).toContain("oldest_ready_wait_age_seconds");
     expect(health).toContain("ready_wait_severity");

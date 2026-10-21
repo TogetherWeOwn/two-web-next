@@ -118,19 +118,19 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     expect(html).toContain('href="#profile-bio"');
     expect(html).toContain('href="#profile-games-text"');
     expect(html).toContain('href="#profile-timezone"');
-    // Field errors beside the controls, wired for assistive tech.
+    // Field errors beside the controls, wired for assistive tech. Timezone
+    // keeps its help text associated alongside the error; Bio and Games keep
+    // their composition hint and count nodes associated alongside the error.
     for (const field of ["profile-bio", "profile-games-text", "profile-timezone"]) {
       expect(html).toContain(`id="${field}-error"`);
       expect(html).toContain('aria-invalid="true"');
+      expect(html).toContain(
+        field === "profile-timezone"
+          ? `aria-describedby="profile-timezone-help ${field}-error"`
+          : `aria-describedby="${field}-hint ${field}-count ${field}-error"`,
+      );
     }
-    // Composition hints stay associated alongside the field errors.
-    expect(html).toContain(
-      'aria-describedby="profile-bio-hint profile-bio-count profile-bio-error"',
-    );
-    expect(html).toContain(
-      'aria-describedby="profile-games-text-hint profile-games-text-count profile-games-text-error"',
-    );
-    expect(html).toContain('aria-describedby="profile-timezone-error"');
+    // Composition hint copy stays visible alongside the field errors.
     expect(html).toContain("Keep your bio to 1000 characters or fewer.");
     expect(html).toContain("Add no more than 20 games.");
   });

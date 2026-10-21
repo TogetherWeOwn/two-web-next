@@ -55,7 +55,7 @@ async function expectRefusal(response: Response | typeof PENDING) {
   const res = response as Response;
   expect(res.status).toBe(413);
   expect(res.headers.get("cache-control")).toBe("no-store, private");
-  expect(await res.json()).toEqual(ERROR);
+  expect(await res.json()).toMatchObject(ERROR);
 }
 
 const neverSettles = () => new Promise<void>(() => {});

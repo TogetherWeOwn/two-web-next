@@ -627,6 +627,30 @@
     }, 0);
   });
 
+  // Detection only offers a shortcut; it never changes a saved or live draft.
+  // Keep the browser's alias verbatim and leave final validation to the server.
+  (function deviceTimezoneHelper() {
+    var helper = root.querySelector("[data-device-timezone]");
+    var button = root.querySelector("[data-device-timezone-use]");
+    var field = form.elements.timezone;
+    if (!helper || !button || !field) return;
+    var zone;
+    try {
+      zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (typeof zone !== "string" || !/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(zone))
+        return;
+      new Intl.DateTimeFormat("en", { timeZone: zone });
+    } catch {
+      return;
+    }
+    button.addEventListener("click", function () {
+      field.value = zone;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    helper.hidden = false;
+  })();
+
   // Member work in the editor during an owned save: keep their focus, caret and draft.
   ["keydown", "pointerdown", "focusin", "input"].forEach(function (type) {
     form.addEventListener(type, function () {

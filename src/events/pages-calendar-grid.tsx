@@ -14,7 +14,9 @@ import {
   calendarMonthLabel,
   calendarUrl,
   gridAccessibleName,
+  gridContinuationAccessibleName,
   gridTitle,
+  wallDateIso,
   wallTimeHm,
   type CalendarDay,
   type CalendarState,
@@ -70,17 +72,31 @@ export const MonthGrid: FC<{
                 >
                   <span>{day.day}</span>
                   <ul>
-                    {day.events.map((e) => (
-                      <li>
-                        <a
-                          href={calendarJumpUrl(state.past, rowKey(e))}
-                          data-cal-jump
-                          aria-label={gridAccessibleName(rowTitle(e), e.startsAt, rowZone(e, zone))}
-                        >
-                          {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
-                        </a>
-                      </li>
-                    ))}
+                    {day.events.map((e) => {
+                      const entryZone = rowZone(e, zone);
+                      // A row lands on a non-start cell only through canonical
+                      // interval expansion — transients and past rows bucket on
+                      // their start day — so a day mismatch is exactly the
+                      // continuation case.
+                      const continued = day.iso !== wallDateIso(e.startsAt, entryZone);
+                      return (
+                        <li>
+                          <a
+                            href={calendarJumpUrl(state.past, rowKey(e))}
+                            data-cal-jump
+                            aria-label={
+                              continued
+                                ? gridContinuationAccessibleName(rowTitle(e), day.iso)
+                                : gridAccessibleName(rowTitle(e), e.startsAt, entryZone)
+                            }
+                          >
+                            {continued
+                              ? `Continues ${gridTitle(rowTitle(e))}`
+                              : `${wallTimeHm(e.startsAt, entryZone)} ${gridTitle(rowTitle(e))}`}
+                          </a>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </td>
               ))}

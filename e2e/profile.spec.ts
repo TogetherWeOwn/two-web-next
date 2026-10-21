@@ -3,7 +3,8 @@ import { test, expect, qaLogin } from "./fixtures";
 // One member login covers the edit and sign-out journeys: POST
 // /auth/qa/:identity shares the `qa-login` throttle (10/min per runner IP,
 // src/throttle.ts) across the whole sequential smoke, so each spec file spends
-// as few logins as it can. The moderator journey below keeps its own login.
+// as few logins as it can. The moderator admin-link journey rides the
+// activity-log spec's moderator session instead of a second login here.
 test("QA member edits and persists their profile, then signs out", async ({ page, context }) => {
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
@@ -21,6 +22,10 @@ test("QA member edits and persists their profile, then signs out", async ({ page
   await expect(page.getByLabel("Timezone", { exact: true })).toBeFocused();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("Europe/London");
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Use this device's timezone", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeFocused();
   const saved = page.waitForResponse(
@@ -52,13 +57,4 @@ test("QA member edits and persists their profile, then signs out", async ({ page
   expect(
     (await context.cookies()).find((item) => item.name === "__Host-two_session"),
   ).toBeUndefined();
-});
-
-test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
-  await qaLogin(context, "qa-moderator");
-  await page.goto("/profile");
-  await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
-  await page.getByTestId("profile-admin-link").click();
-  await expect(page).toHaveURL(/\/admin$/);
-  await expect(page.getByRole("heading", { name: "Moderation", exact: true })).toBeVisible();
 });

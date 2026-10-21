@@ -1,0 +1,56 @@
+{
+  "environment": "real app through a11y fixture worker; owned disposable schema; external requests blocked",
+  "oauth": "restored banner uses a signed callback-cookie fixture, not a live Discord exchange",
+  "rows": [
+    {
+      "mode": "before",
+      "width": 1280,
+      "href": "/join/discord?next=%2Fe%2F01J00000000000000000000015",
+      "writes": 1,
+      "criticalOrSerious": 0
+    },
+    {
+      "mode": "after",
+      "width": 1280,
+      "href": "/auth/recover?next=%2Fe%2F01J00000000000000000000015",
+      "writes": 1,
+      "criticalOrSerious": 0
+    },
+    {
+      "mode": "restored-cookie-fixture",
+      "width": 1280,
+      "writes": 1
+    },
+    {
+      "mode": "native",
+      "width": 1280,
+      "posts": 1,
+      "next": "/e/01J00000000000000000000015"
+    },
+    {
+      "mode": "before",
+      "width": 390,
+      "href": "/join/discord?next=%2Fe%2F01J00000000000000000000015",
+      "writes": 1,
+      "criticalOrSerious": 0
+    },
+    {
+      "mode": "after",
+      "width": 390,
+      "href": "/auth/recover?next=%2Fe%2F01J00000000000000000000015",
+      "writes": 1,
+      "criticalOrSerious": 0
+    },
+    {
+      "mode": "restored-cookie-fixture",
+      "width": 390,
+      "writes": 1
+    },
+    {
+      "mode": "native",
+      "width": 390,
+      "posts": 1,
+      "next": "/e/01J00000000000000000000015"
+    }
+  ]
+}

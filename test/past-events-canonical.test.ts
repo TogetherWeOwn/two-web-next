@@ -117,12 +117,17 @@ function expectArchiveSeo(html: string, canonical: string) {
   expect(html).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(html).not.toContain("/rsvp");
   // Header/footer chrome is tolerated outside the archive section; the
-  // section itself must carry zero RSVP surface and zero controls.
+  // section allows only the native, non-submitting feed-copy action.
   const section = archiveSection(html);
   expect(section).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(section).not.toContain("/rsvp");
-  expect(section).not.toMatch(/<button|<form/);
-  expect(scripts(html)).toEqual(["/islands/past-events.js"]);
+  expect(section).not.toMatch(/<form\b/);
+  expect(section.match(/<button\b[^>]*>/g)).toEqual([
+    expect.stringMatching(
+      /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
+    ),
+  ]);
+  expect(scripts(html)).toEqual(["/islands/copy-link.js", "/islands/past-events.js"]);
 }
 
 describe("past-events canonical + no-RSVP-controls (TOG-11766)", () => {

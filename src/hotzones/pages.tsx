@@ -9,6 +9,7 @@ import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
+import { utcPeriodShortcuts } from "./season";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -50,6 +51,45 @@ const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
 export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
   (<Grid cells={cells} caption={caption} />).toString();
 
+// Native period picker shared by Hono and Kit: a GET form whose action stays
+// on the current index/signal route, plus server-derived UTC shortcuts. No
+// JavaScript dependency; the committed season renders back into the input so
+// applies and resets stay bookmarkable. The all/absent reset anchor carries
+// no query state, keeping the canonical URL bare.
+const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }) => {
+  const { month, quarter } = utcPeriodShortcuts();
+  return (
+    <section aria-labelledby="hotzone-period-heading">
+      <h2 id="hotzone-period-heading">Choose a period</h2>
+      <form method="get" action={action}>
+        <label for="hotzone-season">Period</label>{" "}
+        <input
+          type="text"
+          id="hotzone-season"
+          name="season"
+          value={season}
+          aria-describedby="hotzone-season-help"
+        />{" "}
+        <button type="submit">Apply</button>
+        <p id="hotzone-season-help">
+          Enter all for all available data, a year such as 2026, a month such as 2026-02, or a
+          quarter such as 2026-Q2. Shortcuts use UTC.
+        </p>
+      </form>
+      <p>
+        <a href={`${action}?season=${month}`}>This month</a> ·{" "}
+        <a href={`${action}?season=${quarter}`}>This quarter</a> ·{" "}
+        <a href={action}>All available data</a>
+      </p>
+    </section>
+  );
+};
+
+// Kit's server-only loaders reuse this escaped JSX string for the identical
+// picker, rather than shipping a second renderer in the client bundle.
+export const renderPeriodPicker = (action: string, season: string) =>
+  (<PeriodPicker action={action} season={season} />).toString();
+
 export const HotzonesIndexPage: FC<{
   appUrl: string;
   season: string;
@@ -59,71 +99,78 @@ export const HotzonesIndexPage: FC<{
   voice: HeatGrid;
   games: HeatGrid;
   retentionNote?: string | null;
-}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games, retentionNote }) => (
-  <Layout
-    title="Hot zones — Together We Own"
-    canonical={canonicalUrl(appUrl, season === "all" ? "/hotzones" : `/hotzones?season=${season}`)}
-    shareDescription="When the community is most active, by hour and weekday."
-    robots="noindex, follow"
-    theme="schedule"
-  >
-    <SiteHeader
-      active="events"
-      loginReturnTo={season === "all" ? "/hotzones" : `/hotzones?season=${season}`}
+}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games, retentionNote }) => {
+  // Every signal link keeps the selected season; absent/all stays canonical
+  // with no query, matching the canonical URL and login return-to.
+  const qs = season === "all" ? "" : `?season=${season}`;
+  return (
+    <Layout
+      title="Hot zones — Together We Own"
+      canonical={canonicalUrl(appUrl, `/hotzones${qs}`)}
+      shareDescription="When the community is most active, by hour and weekday."
+      robots="noindex, follow"
+      theme="schedule"
     >
-      <a class="btn" href="/discord">
-        Open Discord
-      </a>
-    </SiteHeader>
-    <main class="events-page" id="main" tabindex={-1}>
-      <p class="strap">Activity rhythms</p>
-      <h1>Hot zones</h1>
-      <p>
-        Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
-        {eventCount} scheduled gatherings.
-      </p>
-      <p>
-        Successful joins only (added or already a member); denied, error and degraded attempts never
-        count.
-      </p>
-      {retentionNote ? <p>{retentionNote}</p> : null}
-      <nav aria-label="Signals">
-        <ul>
-          <li>
-            <a href="/hotzones/joins">Joins heatmap</a>
-          </li>
-          <li>
-            <a href="/hotzones/voice">Voice heatmap</a>
-          </li>
-          <li>
-            <a href="/hotzones/games">Games heatmap</a>
-          </li>
-        </ul>
-      </nav>
-      <section aria-labelledby="hotzones-joins-heading">
-        <h2 id="hotzones-joins-heading">
-          <a href="/hotzones/joins">Joins</a>
-        </h2>
-        <Grid cells={joins} caption={`Join activity for season ${season}`} />
-      </section>
-      <section aria-labelledby="hotzones-voice-heading">
-        <h2 id="hotzones-voice-heading">
-          <a href="/hotzones/voice">Voice</a>
-        </h2>
-        <p>Estimated voice activity (estimates until calibration).</p>
-        <Grid cells={voice} caption={`Estimated voice activity for season ${season}`} />
-      </section>
-      <section aria-labelledby="hotzones-games-heading">
-        <h2 id="hotzones-games-heading">
-          <a href="/hotzones/games">Games</a>
-        </h2>
-        <p>Estimated games activity (estimates until calibration).</p>
-        <Grid cells={games} caption={`Estimated games activity for season ${season}`} />
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
-);
+      <SiteHeader active="events" loginReturnTo={`/hotzones${qs}`}>
+        <a class="btn" href="/discord">
+          Open Discord
+        </a>
+      </SiteHeader>
+      <main class="events-page" id="main" tabindex={-1}>
+        <p class="strap">Activity rhythms</p>
+        <h1>Hot zones</h1>
+        <p>
+          Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
+          {eventCount} scheduled gatherings.
+        </p>
+        <p>
+          Successful joins only (added or already a member); denied, error and degraded attempts
+          never count.
+        </p>
+        {retentionNote ? <p>{retentionNote}</p> : null}
+        <PeriodPicker action="/hotzones" season={season} />
+        <nav aria-label="Signals">
+          <ul>
+            <li>
+              <a href={`/hotzones/joins${qs}`}>Joins heatmap</a>
+            </li>
+            <li>
+              <a href={`/hotzones/voice${qs}`}>Voice heatmap</a>
+            </li>
+            <li>
+              <a href={`/hotzones/games${qs}`}>Games heatmap</a>
+            </li>
+          </ul>
+        </nav>
+        <section aria-labelledby="hotzones-joins-heading">
+          <h2 id="hotzones-joins-heading">
+            <a href={`/hotzones/joins${qs}`}>Joins</a>
+          </h2>
+          <Grid cells={joins} caption={`Join activity for season ${season}`} />
+        </section>
+        <section aria-labelledby="hotzones-voice-heading">
+          <h2 id="hotzones-voice-heading">
+            <a href={`/hotzones/voice${qs}`}>Voice</a>
+          </h2>
+          <p>
+            Season-independent seeded estimates of voice activity (estimates until calibration).
+          </p>
+          <Grid cells={voice} caption="Season-independent seeded estimate of voice activity" />
+        </section>
+        <section aria-labelledby="hotzones-games-heading">
+          <h2 id="hotzones-games-heading">
+            <a href={`/hotzones/games${qs}`}>Games</a>
+          </h2>
+          <p>
+            Season-independent seeded estimates of games activity (estimates until calibration).
+          </p>
+          <Grid cells={games} caption="Season-independent seeded estimate of games activity" />
+        </section>
+      </main>
+      <SiteFooter />
+    </Layout>
+  );
+};
 
 export const HotzoneSignalPage: FC<{
   appUrl: string;
@@ -134,7 +181,8 @@ export const HotzoneSignalPage: FC<{
   eventCount?: number;
   retentionNote?: string | null;
 }> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote }) => {
-  const path = season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`;
+  const qs = season === "all" ? "" : `?season=${season}`;
+  const path = `/hotzones/${signal}${qs}`;
   const estimated = signal !== "joins";
   return (
     <Layout
@@ -154,8 +202,8 @@ export const HotzoneSignalPage: FC<{
         <h1>{signal} hot zone</h1>
         {estimated ? (
           <p>
-            Estimated {signal} activity for season {season} (estimates until bot event-store
-            calibration). Total estimate: {total}.
+            Season-independent seeded estimates of {signal} activity (estimates until bot
+            event-store calibration). Total estimate: {total}.
           </p>
         ) : (
           <>
@@ -170,15 +218,16 @@ export const HotzoneSignalPage: FC<{
             {retentionNote ? <p>{retentionNote}</p> : null}
           </>
         )}
+        <PeriodPicker action={`/hotzones/${signal}`} season={season} />
         <p>
-          <a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> ·{" "}
-          <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a>
+          <a href={`/hotzones${qs}`}>All hot zones</a> · <a href={`/hotzones/joins${qs}`}>joins</a>{" "}
+          · <a href={`/hotzones/voice${qs}`}>voice</a> · <a href={`/hotzones/games${qs}`}>games</a>
         </p>
         <Grid
           cells={cells}
           caption={
             estimated
-              ? `Estimated ${signal} activity for season ${season}`
+              ? `Season-independent seeded estimate of ${signal} activity`
               : `Join activity for season ${season}`
           }
         />
