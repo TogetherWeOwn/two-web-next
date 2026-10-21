@@ -31,12 +31,17 @@ async function renderIndex(c: Ctx) {
   const games = priorGrid("games");
   // Anonymous view log (fail-open, never blocks the board).
   if (db) {
-    await recordBoardView(db, {
-      boardKey: "hotzones",
-      scope: "overall",
-      season: label,
-      resultCount: joins.total,
-    }).catch(() => {});
+    await recordBoardView(
+      db,
+      {
+        boardKey: "hotzones",
+        scope: "overall",
+        season: label,
+        resultCount: joins.total,
+      },
+      undefined,
+      c.get("requestId"),
+    ).catch(() => {});
   }
   c.header("cache-control", "public, max-age=300");
   c.header("vary", "Cookie");
@@ -68,12 +73,17 @@ async function renderSignal(c: Ctx) {
   if (signal === "joins") {
     const joins = await loadJoinsGrid(db, window);
     if (db) {
-      await recordBoardView(db, {
-        boardKey: "hotzones/joins",
-        scope: "overall",
-        season: label,
-        resultCount: joins.total,
-      }).catch(() => {});
+      await recordBoardView(
+        db,
+        {
+          boardKey: "hotzones/joins",
+          scope: "overall",
+          season: label,
+          resultCount: joins.total,
+        },
+        undefined,
+        c.get("requestId"),
+      ).catch(() => {});
     }
     c.header("cache-control", "public, max-age=300");
     c.header("vary", "Cookie");
@@ -91,12 +101,17 @@ async function renderSignal(c: Ctx) {
   }
   const prior = priorGrid(signal);
   if (db) {
-    await recordBoardView(db, {
-      boardKey: `hotzones/${signal}`,
-      scope: "overall",
-      season: label,
-      resultCount: prior.total,
-    }).catch(() => {});
+    await recordBoardView(
+      db,
+      {
+        boardKey: `hotzones/${signal}`,
+        scope: "overall",
+        season: label,
+        resultCount: prior.total,
+      },
+      undefined,
+      c.get("requestId"),
+    ).catch(() => {});
   }
   c.header("cache-control", "public, max-age=300");
   c.header("vary", "Cookie");

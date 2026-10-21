@@ -18,6 +18,7 @@
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
 import { dbFor } from "../admin/db";
+import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
 import type { RsvpClosedReason } from "../islands/contracts";
@@ -30,6 +31,7 @@ import type {
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
+import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
@@ -85,6 +87,8 @@ export interface KitEventDetailRequest {
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
   store: KitEventDetailStore;
+  /** Optional correlation ID from the caller (validated before logging, omitted otherwise). */
+  requestId?: string;
 }
 
 export interface KitEventDetailLink {
@@ -290,10 +294,23 @@ function toLink(link: EventLink): KitEventDetailLink {
   };
 }
 
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before answering the unavailable
+// outcome, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts) and the
+// event-states twin (src/kit-event-states.ts). Branded throws stay silent.
+// The unavailable outcome and headers are unchanged either way. One shared
+// helper covers both read legs, so a single branded test pins the
+// classification.
+function reportDetailLoadFailure(err: unknown, requestId: string | undefined): void {
+  if (typeof (err as { status?: unknown })?.status !== "number") {
+    alertRequestError(err, { method: "GET", route: "/e/:key", requestId });
+  }
+}
+
 export async function resolveKitEventDetail(
   req: KitEventDetailRequest,
 ): Promise<KitEventDetailOutcome> {
-  const { key, search, path, env, session, joinResult, setHeaders, store } = req;
+  const { key, search, path, env, session, joinResult, setHeaders, store, requestId } = req;
   const appUrl = env.APP_URL;
 
   // One canonical key form per event: a valid key in another letter case 301s
@@ -310,7 +327,8 @@ export async function resolveKitEventDetail(
     let db: Db | null;
     try {
       db = await store.dbForFn({ env });
-    } catch {
+    } catch (err) {
+      reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -323,7 +341,8 @@ export async function resolveKitEventDetail(
     let event: PublicEvent | null;
     try {
       event = await store.getEventFn(db, key);
-    } catch {
+    } catch (err) {
+      reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -340,7 +359,14 @@ export async function resolveKitEventDetail(
         let related: EventLink[] = [];
         try {
           related = await store.relatedFn(db, event);
-        } catch {
+        } catch (err) {
+          // The cancelled page still serves with an empty alternatives list;
+          // warn once with the exception class so the degrade is visible.
+          // Class only, never the message: it can carry SQL or wire detail.
+          console.warn("Event alternatives unavailable; serving the empty list.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
           related = [];
         }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
@@ -389,9 +415,22 @@ export async function resolveKitEventDetail(
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
+      // Decorative reads fail open like the served twin: a throwing
+      // neighbors/related store settles to its empty shape instead of
+      // rejecting the whole model. Both reads stay nonSensitive
+      // published-only, so no audit row is skipped; viewer reads below stay
+      // closed and their throws still reject.
+      const neighborsSettled = store.neighborsFn(db, event).then(
+        (neighbors) => neighbors,
+        (): EventNeighbors => ({ previous: null, next: null }),
+      );
+      const relatedSettled = store.relatedFn(db, event).then(
+        (related) => related,
+        (): EventLink[] => [],
+      );
       const [neighbors, related, attendeeRows, position, answer] = await Promise.all([
-        store.neighborsFn(db, event),
-        store.relatedFn(db, event),
+        neighborsSettled,
+        relatedSettled,
         member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
