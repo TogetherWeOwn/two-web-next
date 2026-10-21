@@ -268,6 +268,10 @@ for (const twin of TWINS) {
       const query: BoardQuery = { season: "all", scope: "overall", activity: null };
       const region = boardRegion(renderTwin(twin, query, []), `${twin} overall-empty`);
       expect(region).toMatch(/href="\/events("|\?)/);
+      expect(region).not.toContain("show every game");
+      expect(region).not.toContain(
+        `href="${boardPath({ ...query, activity: null }).replace(/&/g, "&amp;")}"`,
+      );
     });
   });
 }
