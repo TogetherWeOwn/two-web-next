@@ -150,6 +150,7 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `queue redispatch source read failed; refusing redispatch.` | The redispatch candidate load threw (`src/admin/queue-redispatch.ts` via the injected loader or `loadRedispatchCandidate`). | Fails closed with the `redispatch_unavailable` 503. | Search logs for the line and its `failureId`; then `SELECT id, kind FROM queue_failed_jobs WHERE id = <failureId>` to confirm the row is readable, and check database health with the [alert runbook](runbook-alerts.md). | `exception` (class name), `failureId` (numeric queue failure id). Never the exception message, SQL text, bindings, request URI, or any payload |
 | `queue redispatch prerequisites missing; refusing redispatch.` | No producer prerequisites on the real dispatch path (`src/admin/queue-redispatch.ts`): `SYNC_EVENT_QUEUE` unbound or no database URL resolved, so dispatch never started and nothing was written. | Fails closed with the `redispatch_unavailable` 503. | Search logs for the line and its `failureId`; then confirm the deployment carries a queue binding and a database binding (miniflare/Hyperdrive config for staging) before suspecting the database itself. | `exception` (fixed `MissingConfiguration`: nothing threw), `failureId` (numeric queue failure id). Never the env, a URI, or any payload |
 | `queue redispatch dispatch failed; refusing redispatch.` | The queue send or dispatch database threw after the attempt receipt was written (`src/admin/queue-redispatch.ts` via `dispatchRedispatch` or the injected dispatch seam). | Fails closed with the `redispatch_unavailable` 503; the attempt receipt is kept and a retry writes its own. | Search logs for the line and its `failureId`; then `SELECT count(*) FROM activity_log WHERE log_name = 'operations'` over the same window to confirm the attempt receipt landed, and check database and queue health with the [alert runbook](runbook-alerts.md). | `exception` (class name), `failureId` (numeric queue failure id). Never the exception message, SQL text, bindings, request URI, or any payload |
+| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw (`src/auth/routes.ts`). | Fails closed with the 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. See [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation) for the sibling login-start warns. | `exception` (class name), validated `request_id` |
 
 ### Queue ledger, lock and malformed-carrier warnings
 
@@ -165,7 +166,7 @@ delete a ledger row, clear a lock, or reset a sync claim to investigate.
 
 | Message | Meaning | Severity | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `queue malformed message discarded` | The carrier matched neither envelope shape, so `toQueueMessage` returned null (`src/jobs/envelope.ts:65-83`, dropped at `src/jobs/consumer.ts:86-92`): an unknown `kind`, a wrong-type or missing required key (non-string `jobId`, non-UUID `leaseToken`, a string `role-assign` key, a non-string announcement body; `src/jobs/envelope.ts:11-48`), or a W8 write-back with the wrong `action`, a missing `eventKey`/`idempotencyKey`, or `dedupeKey` not equal to `eventKey`. Ack-and-drop for this message only; the rest of the batch still runs. Member impact for a sync-event or W8 carrier: one sync write-back lost for that carrier only; a dirty revision stays dirty until reconcile re-dispatches it on its schedule. An announcement or `role-assign` discard (both run on `two-internal-action`, `src/jobs/consumer.ts:37-48`) has no reconcile backstop: that payload is lost permanently (reconcile redispatches sync events only, `src/jobs/cron.ts:71,110`). | No page. This path never fires `queue.failing` and never touches the ledger or lock. Escalation boundary: for a sync-event carrier, a lone discard with a flat stale count is a poison carrier, nothing to fix; a burst or a growing stale count after a deploy points at a producer bug, route to the owning team with the window and counts. Internal-action discards leave the stale count flat by construction, so a flat count alone does not clear those kinds. | Filter Workers Logs message/text with the exact line on the consumer Worker over the incident window (staging `two-web-jobs`, production `two-web-next-production`) and tally sightings; confirm no `queue.failing` follows in the window. Then trend the `staleEventKeys` count across reconcile passes (`*/10 * * * *`), mirroring the clock-free stale predicate (`src/jobs/events.ts:156-229`; tries = 6, `src/jobs/constants.ts:6-11`). The scheduled pass also drops not-yet-due retries before LIMIT using the scheduler clock, so this count includes sleeping retries the current pass will not dispatch: `SELECT count(*) FROM events e WHERE EXISTS (SELECT 1 FROM event_sync_attempts p WHERE p.event_id = e.id AND p.state = 'pending' AND p.request_attempts > 0 AND p.request_attempts < 6 AND p.next_attempt_at IS NOT NULL) OR (e.status IN ('published', 'cancelled') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts r WHERE r.event_id = e.id AND r.revision = e.sync_revision AND r.state = 'failed') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts b WHERE b.event_id = e.id AND b.state = 'pending' AND (b.request_attempts >= 6 OR b.next_attempt_at IS NULL)) AND (e.sync_revision > e.synced_revision OR (e.status = 'published' AND (e.discord_event_id IS NULL OR EXISTS (SELECT 1 FROM rsvps s WHERE s.event_id = e.id AND s.synced_to_discord_at IS NULL)))))`. A count that drains on later passes recovered; a count that grows points at the producer. There is nothing to replay: the payload was never recorded. Never replay a message to investigate. | None (message only): no `requestId`, event key, `kind`, queue, or exception, so correlate by time window plus revision state, not by a request key; the line cannot tell a sync-event discard from an internal-action one |
+| `queue malformed message discarded` | The carrier matched neither envelope shape, so `toQueueMessage` returned null (`src/jobs/envelope.ts:65-83`, dropped at `src/jobs/consumer.ts:86-92`): an unknown `kind`, a wrong-type or missing required key (non-string `jobId`, non-UUID `leaseToken`, a string `role-assign` key, a non-string announcement body; `src/jobs/envelope.ts:11-48`), or a W8 write-back with the wrong `action`, a missing `eventKey`/`idempotencyKey`, or `dedupeKey` not equal to `eventKey`. Ack-and-drop for this message only; the rest of the batch still runs. Member impact for a sync-event or W8 carrier: one sync write-back lost for that carrier only; a dirty revision stays dirty until reconcile re-dispatches it on its schedule. An announcement or `role-assign` discard (both run on `two-internal-action`, `src/jobs/consumer.ts:37-48`) has no reconcile backstop: that payload is lost permanently (reconcile redispatches sync events only, `src/jobs/cron.ts:71,110`). | No page. This path never fires `queue.failing` and never touches the ledger or lock. Escalation boundary: for a sync-event carrier, a lone discard with a flat stale count is a poison carrier, nothing to fix; a burst or a growing stale count after a deploy points at a producer bug, route to the owning team with the window and counts. Internal-action discards leave the stale count flat by construction, so a flat count alone does not clear those kinds. | Filter Workers Logs message/text with the exact line on the consumer Worker over the incident window (staging `two-web-jobs`; production `two-web-jobs-production` after the jobs transfer, `two-web-next-production` before it) and tally sightings; confirm no `queue.failing` follows in the window. Then trend the `staleEventKeys` count across reconcile passes (`*/10 * * * *`), mirroring the clock-free stale predicate (`src/jobs/events.ts:156-229`; tries = 6, `src/jobs/constants.ts:6-11`). The scheduled pass also drops not-yet-due retries before LIMIT using the scheduler clock, so this count includes sleeping retries the current pass will not dispatch: `SELECT count(*) FROM events e WHERE EXISTS (SELECT 1 FROM event_sync_attempts p WHERE p.event_id = e.id AND p.state = 'pending' AND p.request_attempts > 0 AND p.request_attempts < 6 AND p.next_attempt_at IS NOT NULL) OR (e.status IN ('published', 'cancelled') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts r WHERE r.event_id = e.id AND r.revision = e.sync_revision AND r.state = 'failed') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts b WHERE b.event_id = e.id AND b.state = 'pending' AND (b.request_attempts >= 6 OR b.next_attempt_at IS NULL)) AND (e.sync_revision > e.synced_revision OR (e.status = 'published' AND (e.discord_event_id IS NULL OR EXISTS (SELECT 1 FROM rsvps s WHERE s.event_id = e.id AND s.synced_to_discord_at IS NULL)))))`. A count that drains on later passes recovered; a count that grows points at the producer. There is nothing to replay: the payload was never recorded. Never replay a message to investigate. | None (message only): no `requestId`, event key, `kind`, queue, or exception, so correlate by time window plus revision state, not by a request key; the line cannot tell a sync-event discard from an internal-action one |
 | `queue ledger <op> failed` | A best-effort ledger transition failed or hit the 2 s bound (`src/jobs/consumer.ts:103`). `<op>` is one of `reserved`, `released`, `dequeued`, `failed`. Job processing continues; the terminal ack or retry still lands. | No page. A stale ledger row is a visible backlog, not a silent loss. | Read `GET /up` (`queue.status`, `pending`, `oldest_ready_wait_age_seconds`, `ready_wait_severity`; `pending >= 20` is `degraded`) per [Read `/up` without mistaking liveness for readiness](runbook.md#read-up-without-mistaking-liveness-for-readiness); then `SELECT job_id, kind, key, available_at, reserved_at, created_at FROM queue_jobs ORDER BY created_at, job_id LIMIT 100`. Never insert or delete a ledger row to investigate. | `exception` (class name only, never the message, which can carry SQL bindings or secrets) |
 | `queue lock release timed out` | The lock `release` hung past the 2 s bound (`src/jobs/consumer.ts:127`). The terminal ack still lands and the rest of the batch still runs. | No page. A stuck lock row self-heals via its TTL (`job_unique_locks.expires_at`; reads treat expired rows as gone). | Search logs for the line; then `SELECT key, expires_at, expires_at > clock_timestamp() AS still_live FROM job_unique_locks ORDER BY expires_at, key LIMIT 100`: `still_live = false` already self-healed. Never delete rows by age or clear locks as a workaround ([Queue containment](runbook.md#queue-containment-drain-and-failed-job-replay)). | Sanitized lock scope (single-line, bounded; a hostile event key cannot split the log line) |
 | `queue lock release failed` | The lock `release` rejected (`src/jobs/consumer.ts:134`). Same handling as the timeout: the ack lands, the batch continues, the TTL heals. | No page: TTL self-heal, same as the timeout row. | Same lock-table `SELECT` as the timeout row; a live row expires on its own. Same never-delete rule. | Sanitized lock scope plus `exception` (class name only) |
@@ -314,6 +315,52 @@ moderator authority and role-removal residuals in the
 Ownership flags, response behavior and the log privacy contract are unchanged
 by this section.
 
+### Kit public-read 503 alerts
+
+Eight throw legs across four Kit public-read loads emit the leak-free
+`error.alert` diagnostic before answering the branded 503
+(`src/kit-events.ts` database handle and page-model reads,
+`src/kit-past-events.ts` database handle and list reads,
+`src/kit-event-states.ts` database handle and event lookup,
+`src/events/kit-detail.ts` database handle and event lookup on the wired
+`/e/:key` Kit load). Each leg
+alerts once per distinct `class@route` fingerprint (muted five minutes per
+isolate, like every `error.alert`); the `request_id` carries the validated
+`cf-ray` value when the binding threaded one, and is absent otherwise.
+These Kit routes never emit the `http.request` line (Hono's request log
+runs only for Hono-dispatched requests), so correlate by the `request_id`
+value plus time window and route — never expect an `http.request` join
+here. Response bodies and headers are byte-stable: the binding ignores the
+thrown message. Two cancelled-page degrades warn instead of alerting (one
+per `/e/:key` twin). Find
+an alert with the message **contains** filter from
+[Find a request](#find-a-request) on `"event":"error.alert"` plus the
+route, or the warn by its exact message. Read-only checks only: a Workers
+Logs search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `error.alert` with `route: /events` | A code bug (no branded status) threw from the events-list database handle or page-model read (`loadEventsPage` in `src/kit-events.ts`). | Fails closed with the branded 503 (`Events temporarily unavailable`, `private, no-store`); pages via the existing `error.alert` Tail Worker path, no new paging. | Filter `error.alert` by `route: /events` and split by `exception`; then check database health with the [alert runbook](runbook-alerts.md). | `fingerprint` (`ExceptionClass@/events`), `exception`/`error_class` (class only), `method: GET`, validated `request_id` |
+| `error.alert` with `route: /events/past` | A code bug threw from the past-archive database handle or list read (`loadPastArchivePage` in `src/kit-past-events.ts`). | Fails closed with the branded 503, same paging as above. | Filter `error.alert` by `route: /events/past` and split by `exception`; then check database health. | Same shape with `route: /events/past` |
+| `error.alert` with `route: /e/:key` | A code bug threw from the wired Kit event-detail database handle or event lookup (`resolveKitEventDetail` in `src/events/kit-detail.ts`); the state twin (`resolveEventState` in `src/kit-event-states.ts`) emits the same line. | Fails closed with the unavailable outcome (503, `private, no-store`), same paging. | Filter `error.alert` by `route: /e/:key` and split by `exception`; then check database health. | Same shape with `route: /e/:key` |
+| `Event alternatives unavailable; serving the empty list.` | The cancelled-event alternatives lookup threw (`relatedFn` in `src/events/kit-detail.ts` or the `src/kit-event-states.ts` twin); the 410 page still serves with an empty list. | Degrades to an empty list; does not page. | Filter logs for the exact message over the window and split by `exception`; then check database health. | `exception` (class only, never the message, which can carry SQL or wire detail), validated `request_id` |
+
+Silent by design around these lines: branded throws (any numeric `status`)
+pass through with no new alert; null database handles answer the branded
+503 silently; session/journey fail-open legs serve the anonymous list
+silently; the 404-path suggestions degrade (`suggestionsFn`) stays silent
+because forged and unknown keys already miss, so warning there would fire
+on probe traffic during an outage.
+
+Agent check (fixtures only, proves fire/silent per branch):
+
+```sh
+env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  npx vitest run test/kit-public-read-503-alerts-acceptance.test.ts \
+  test/kit-public-read-503-alerts-pins.test.ts
+```
+
 ### Auth sign-in warnings
 
 This section documents one auth-scoped `console.warn` line (the oversized
@@ -371,8 +418,27 @@ secret or the live access token.
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
+| `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. A `signin_failed` redirect on `GET /auth/discord` with no exchange line points at the login-start store: see [Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation). On `GET /auth/discord/callback`, a store-acquisition or journey-consume failure stays silent (indistinguishable from a stray hit), so check database health directly via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
 | `guild auto-join failed` | Adding the fresh member to the guild (`addGuildMemberDetailed` in `src/discord.ts`) returned a non-member outcome. Read `kind`: `rate_limited` is Discord throttling (a usable backoff rides to the recovery response as a `Retry-After` header); `provider_outage` is a Discord 5xx; `transport_failure` is a fetch throw; `forbidden` (403) is a bot permission problem, not an outage; `failed` is the config-shaped outcome (blank bot token, malformed guild or user id, or any other non-429/403/5xx status), so a sustained `failed` run points at [`DISCORD_GUILD_ID` / `DISCORD_BOT_TOKEN`](config.md) and the bot's guild membership, not at Discord health. | None on sign-in: the session is still issued as a non-member session and the member lands on the `/?n=join_failed` recovery page with the invite fallback; the remembered destination is re-recorded for the retry. | Filter logs for the line and split by `kind`. A sustained `failed` run points at the guild/bot config above; `forbidden` points at the bot's guild role and permissions; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health. Never replay a member sign-in to investigate. | `request_id`, `guild_id` (the configured guild actually used, not a member identity), `kind` |
+
+### Login-start store failures and logout revocation
+
+Three auth-scoped lines cover the session-store failures around the Discord
+round trip (`src/auth/routes.ts`). None pages: each line accompanies the
+member-visible redirect or 503 the member already sees. Correlate by the
+validated `request_id`, which joins to the `http.request` line. Where a line
+carries an exception, it is the class name only, never the raw error text,
+which can quote connection strings or tokens. An `issue()` returning `false`
+(not a throw), stray callback hits and consent denials stay silent by design,
+and the callback-consume and exchange-failure lines are untouched (see
+[Auth sign-in warnings](#auth-sign-in-warnings) and
+[Discord sign-in and guild auto-join warnings](#discord-sign-in-and-guild-auto-join-warnings)).
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `auth login-start store unavailable` | The session store could not be acquired on `GET /auth/discord` (`console.warn`). | The generic sign-in failure redirect (`/?n=signin_failed`); no OAuth state is minted and no Discord call is made. | Filter logs for the message and compare against `http.request` volume on `/auth/discord`. A burst with no matching Discord-side change points at the session store: `SELECT count(*) FROM web_sessions` to confirm the table is readable, then database health via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only), validated `request_id` |
+| `auth login-start journey failed` | The one-use journey sweep or issue threw on `GET /auth/discord` (`console.warn`). An `issue()` returning `false` is not a throw and stays silent. | The same generic `/?n=signin_failed` redirect as the row above. | Same store check as the row above, plus the journey table: `SELECT count(*) FROM web_oauth_journeys` to confirm the table is readable, then database health via the [alert runbook](runbook-alerts.md). Never replay a member sign-in to investigate. | `exception` (class only), validated `request_id` |
+| `logout revocation failed` | Revoking the presented session (or its auth-status lineage) threw on `POST /logout` (`console.error`; the authoritative row lives in [Failure log lines](#failure-log-lines)). | The 503 "Sign-out temporarily unavailable" body (the branded maintenance page for HTML callers); the browser cookies are not cleared. | Search logs for the line and join by `request_id` to the matching `http.request` 503 on `POST /logout`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class only), validated `request_id` |
 
 ### Analytics write-degradation warnings
 
@@ -392,8 +458,8 @@ continues, depending on whether the write wins the deadline race. A
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
-| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN), `request_id` (only when the caller's ID validates) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text), `request_id` (only when the caller's ID validates) |
 
 The `exception` field tells a rejection apart from a deadline expiry: a
 rejected write carries the error's class name (with a `typeof` fallback for a
@@ -432,11 +498,15 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-Neither line carries a `request_id`, so correlate by time window and route,
-not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
-member identity, cookies, tokens, connection strings, and invented request IDs
-out of diagnostic output: the aggregates above are sufficient, and the
-warning's `exception` is a class name, never the message.
+Both lines carry the serving request's validated `request_id`, so join a
+warning to its `http.request` by ID, not by time window. The ID travels only
+when it validates: Hono-served searches and board views always carry one,
+while Kit-served lines omit it — no request ID is plumbed through the Kit
+bindings, so correlate those by time window and route. Keep raw
+`normalized_query` and `normalized_board_key` values, member identity,
+cookies, tokens, connection strings, and invented request IDs out of
+diagnostic output: the aggregates above are sufficient, and the warning's
+`exception` is a class name, never the message.
 
 ### Missing sync-queue binding warning
 
@@ -459,13 +529,14 @@ through the jobs Worker's own `SYNC_EVENT_QUEUE` binding. If the staging jobs
 Worker also lacks that binding, nothing re-dispatches the carrier until the
 binding is fixed: treat that case as stuck, not self-healing.
 
-In the production cutover template this self-healing does not apply: the web
-Worker `two-web-next-production` owns both the `SYNC_EVENT_QUEUE` producer
-binding (`env.production.queues.producers`) and the `*/10 * * * *` reconcile
-cron (`env.production.triggers`, `wrangler.jsonc`), and its `scheduled`
-handler (`src/worker.ts`) builds its queue from the same `env.SYNC_EVENT_QUEUE`.
-A missing binding there also stops reconcile, so the carrier stays unsent until
-the binding is fixed: treat a production warning as stuck, not late.
+In production the same split applies after the jobs transfer: the web Worker
+`two-web-next-production` owns the `SYNC_EVENT_QUEUE` producer binding
+(`env.production.queues.producers`, `wrangler.jsonc`), while the jobs Worker `two-web-jobs-production` owns the
+`*/10 * * * *` reconcile cron (`env.production.triggers`, `wrangler.jobs.jsonc`)
+and re-dispatches through its own `SYNC_EVENT_QUEUE` binding. A production
+warning is late, not lost, as long as only the web Worker lacks the binding.
+If the production jobs Worker also lacks that binding, nothing re-dispatches the carrier until the binding is fixed:
+treat that case as stuck, not self-healing.
 
 | Field | Meaning and safe values |
 | --- | --- |
@@ -493,9 +564,9 @@ the deployed Workers' queue producer bindings with
 (`SYNC_EVENT_QUEUE` bound to `two-sync-event`). Production declares its own at
 `env.production.queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE` bound
 to `two-web-next-production-sync-event`) because bindings are not inherited, so
-check the environment that served the request. On staging, if reconcile is not
-recovering events, also compare the jobs Worker's bindings with
-`wrangler.jobs.jsonc` (which has no production env).
+check the environment that served the request. If reconcile is not recovering
+events, also compare the jobs Worker's bindings with `wrangler.jobs.jsonc`
+(top level for staging, `env.production` for production).
 Source stays unchanged: route any binding fix to the authorized Operator under
 the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
@@ -669,7 +740,11 @@ line carries no fields, and the session-fallback line carries only the fixed
 no member identity either: the prune line carries the exception class (never the message), the attempt line
 carries the exception class, `outcome` and validated `request_id`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source`, `outcome` and validated `request_id` (see
-[Join journey warnings](#join-journey-warnings)). `csp.report.violation`
+[Join journey warnings](#join-journey-warnings)). The login-start store warns and the logout
+revocation error (`src/auth/routes.ts`) carry the exception class and the validated `request_id`
+only — never a token, cookie, message, or member identity (see
+[Login-start store failures and logout revocation](#login-start-store-failures-and-logout-revocation)).
+`csp.report.violation`
 (`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
 17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
 as `:id` (`src/csp-report-uri.ts`). `test/console-user-key-guard.test.ts` fails

@@ -17,6 +17,7 @@ export {
   wallTimeHm,
 } from "../events/date-format";
 import { cardDayLabel, wallTimeHm } from "../events/date-format";
+import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
  * One rowset rendered twice — list + month grid — in a single SSR pass.
@@ -78,15 +79,29 @@ export function escapeLikeTerm(raw: string): string {
 
 /** One structured line per rendered search: normalized query + visible count.
  * No user id, no session, no IP, no raw input. Fail-open — logging never
- * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape. */
+ * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape.
+ * The optional `request_id` joins the line to `http.request`: it travels only
+ * when it validates, and is omitted — never raw — otherwise. */
 export interface EventSearchLogEntry {
   event: "event_search";
   query: string;
   results: number;
+  request_id?: string;
 }
-export function eventSearchLogEntry(raw: string, results: number): EventSearchLogEntry | null {
+export function eventSearchLogEntry(
+  raw: string,
+  results: number,
+  requestId?: string | null,
+): EventSearchLogEntry | null {
   const query = normalizeEventSearch(raw);
-  return query === null ? null : { event: "event_search", query, results: Math.max(0, results) };
+  if (query === null) return null;
+  const validated = safeRequestId(requestId);
+  return {
+    event: "event_search",
+    query,
+    results: Math.max(0, results),
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  };
 }
 
 /* Past drawer (legacy showPast): opens one way, stays open; searching reveals

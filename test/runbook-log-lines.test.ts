@@ -184,30 +184,31 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("env.production.queues.producers");
     expect(section).toContain("two-web-next-production-sync-event");
     expect(section).toContain("two-sync-event");
-    // Production reconcile runs on the web Worker: a missing binding there is stuck.
-    // Pin the ownership claim itself, not just the Worker name (which is a
-    // substring of the production queue name asserted above), and tie it to
-    // the wrangler configs so a handoff that moves the cron fails here.
-    expect(section).toContain(
-      "In the production cutover template this self-healing does not apply:",
-    );
-    expect(section).toContain("Worker `two-web-next-production` owns both");
+    // Production reconcile runs on the jobs Worker after the transfer: a web-only
+    // missing binding is late, not lost. Pin the ownership claim itself, not
+    // just the Worker name (which is a substring of the production queue name
+    // asserted above), and tie it to the wrangler configs so a handoff that
+    // moves the cron fails here.
+    expect(section).toContain("In production the same split applies after the jobs transfer:");
+    expect(section).toContain("Worker `two-web-jobs-production` owns the");
     expect(section).toContain("`*/10 * * * *` reconcile");
-    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
-    expect(section).toContain("stuck, not late");
-    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
-    expect(section).toContain("which has no production env");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jobs.jsonc`)");
+    expect(section).toContain("stuck, not self-healing");
+    expect(section).toContain("its own `SYNC_EVENT_QUEUE` binding");
+    expect(section).toContain("top level for staging, `env.production` for production");
     const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
     expect(production?.name).toBe("two-web-next-production");
-    expect(section).toContain(`Worker \`${production.name}\` owns both`);
-    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(production?.triggers?.crons ?? []).toEqual([]);
     expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
     expect(production?.queues?.producers).toContainEqual({
       queue: "two-web-next-production-sync-event",
       binding: "SYNC_EVENT_QUEUE",
     });
     const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
-    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
+    const jobsProduction = jobsConfig.env?.production;
+    expect(jobsProduction?.name).toBe("two-web-jobs-production");
+    expect(section).toContain(`Worker \`${jobsProduction?.name}\` owns the`);
+    expect(jobsProduction?.triggers?.crons).toContain(RECONCILE_CRON);
   });
 
   it("source still emits the warning with the documented fields", () => {
@@ -259,7 +260,8 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("normalized_query");
     expect(section).toContain("normalized_board_key");
     expect(section).toContain("carry no member identity");
-    expect(section).toContain("Neither line carries a `request_id`");
+    expect(section).toContain("warning to its `http.request` by ID, not by time window");
+    expect(section).toContain("Kit-served lines omit it");
   });
 
   it("gives a read-only aggregate check on the analytics tables", () => {
@@ -270,7 +272,7 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("read-only");
   });
 
-  it("sources still emit the warnings with only the exception field", () => {
+  it("sources emit the warnings with the exception field plus the validated request id only", () => {
     const cases = [
       { file: "src/events/search-log.ts", message: SEARCH_WARNING },
       { file: "src/hotzones/board-log.ts", message: BOARD_WARNING },
@@ -280,11 +282,11 @@ describe("analytics write-degradation warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class only: no request id,
-      // query, board key, or member identity travels with the line.
+      // The warn payload carries the exception class plus the validated
+      // request id only: no query, board key, or member identity travels.
       const payload = source.slice(start, source.indexOf("});", start));
       expect(payload).toContain("exception");
-      expect(payload).not.toContain("request_id");
+      expect(payload).toContain("request_id");
       expect(payload).not.toContain("normalized");
       expect(source).toContain('warn("LogWriteDeadline")');
       expect(source).toContain("err.constructor.name");
