@@ -252,6 +252,7 @@ exactly once.
 | `src/about-content.ts` | content |
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
+| `src/admin-wayback.ts` | admin |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
