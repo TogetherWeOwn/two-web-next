@@ -9,6 +9,7 @@ import {
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
@@ -50,7 +51,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
         {#if totalPages === 0 && q}
-          <p role="status">No past events match your search.</p>
+          <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>No past events match “{q}”. <a href="/events/past">Clear search</a></p>
         {:else if totalPages === 0}
           <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
             <p>{PAST_EVENTS_COPY.empty}</p>
