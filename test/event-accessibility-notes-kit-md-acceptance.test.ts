@@ -446,7 +446,7 @@ describe("event .md builder: accessibility section", () => {
   it("escapes hostile notes without swallowing the calendar links", () => {
     const body = mdEvent(MD_APP_URL, mdRowWithNotes(MD_HOSTILE_NOTES));
     expect(body).toContain("## Accessibility");
-    expect(body).toContain("\\</script>\\<script>alert(\"xss\")\\</script>");
+    expect(body).toContain('\\</script>\\<script>alert("xss")\\</script>');
     expect(body).toContain("\\[details\\]");
     expect(body).toContain("\\```");
     expect(body).toContain("[Add to calendar (.ics)]");
