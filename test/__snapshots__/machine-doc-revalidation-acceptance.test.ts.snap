@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`machine-doc validator: /about.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"9438d43bd6c3f55a7b9530374039e7ad6b7fc8c4999309e96381208d31e8451a"`;
+
+exports[`machine-doc validator: /e/00000000000000000000000081.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"821dd982480a38472552c6e7a5b3a637d6c1bac1244125ddb64d076c241accd1"`;
+
+exports[`machine-doc validator: /events.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"8cfcba942a5a8b1c79c33aea022896e311f0ada0e8366563df8686ede445752f"`;
+
+exports[`machine-doc validator: /faq.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"43fbd8944cbcff7b45649730c88a1e2440ef1c4017b180ca446fc5e7970466ac"`;
+
+exports[`machine-doc validator: /join.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"62bb3fd33fc540aef835f499e72622e0655928ddb3fd382f7d11fb17fd7919e6"`;
+
+exports[`machine-doc validator: /openapi.json > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"fd287caf0504b138c9b4f979b6a8dbb0ccaf42fe7198fdef1052017e743be47c"`;
+
+exports[`machine-doc validator: /privacy.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"dd32b20cf52b9f3cd05e09544b9d0d6c2977bb0a06dc6ff700596b04d6053a23"`;
+
+exports[`machine-doc validator: /rules.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"d9dc86719c10789f94acb37a9f46f9899e7c03e9c3c9faf3eae2c9a1bd2ac596"`;
