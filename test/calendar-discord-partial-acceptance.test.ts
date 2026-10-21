@@ -113,9 +113,15 @@ describe("incomplete calendar search evidence", () => {
     failed = false;
     if (!count) emptyLocal();
     await model({ q: "  CHESS  " });
-    expect(recordSearch).toHaveBeenCalledExactlyOnceWith(db, "  CHESS  ", count);
+    expect(recordSearch).toHaveBeenCalledExactlyOnceWith(
+      db,
+      "  CHESS  ",
+      count,
+      undefined,
+      undefined,
+    );
     expect(resultLogs()).toHaveLength(1);
-    expect(JSON.parse(String(resultLogs()[0]![1]))).toEqual({
+    expect(resultLogs()[0]![1]).toEqual({
       event: "event_search",
       query: "chess",
       results: count,
@@ -136,7 +142,7 @@ describe("incomplete calendar search evidence", () => {
     await model({ q: "chess" });
     failed = false;
     await model({ q: "chess" });
-    expect(recordSearch).toHaveBeenCalledExactlyOnceWith(db, "chess", 1);
+    expect(recordSearch).toHaveBeenCalledExactlyOnceWith(db, "chess", 1, undefined, undefined);
     expect(resultLogs()).toHaveLength(1);
   });
 });
