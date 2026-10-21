@@ -90,7 +90,13 @@ function calendarFixture(args: {
   const encode = (row: typeof events.$inferSelect) =>
     columns.map((k) => {
       const v = row[k];
-      return v instanceof Date ? v.toISOString() : v;
+      if (v instanceof Date) {
+        // PostgreSQL infinity timestamps arrive as Invalid Dates via the
+        // pg-proxy wire; encode them as the "infinity" string so drizzle
+        // decodes them back to Invalid Date (like real PG infinity).
+        return Number.isFinite(v.getTime()) ? v.toISOString() : "infinity";
+      }
+      return v;
     });
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "rsvps"')) return { rows: [] };
@@ -103,6 +109,16 @@ function calendarFixture(args: {
     }
     if (sql.includes('"starts_at" >=')) return { rows: monthRows.map(encode) };
     let rows = /"ends_at" </.test(sql) ? past : upcoming;
+    // Simulate the PostgreSQL isfinite() guard: when the query carries it,
+    // infinity rows never occupy SQL limit slots. Filter before the limit
+    // slice, like real PG. (Far-future JS-overflow rows also decode to
+    // Invalid Date but pass SQL isfinite(); this suite seeds only true
+    // infinity rows, so the Invalid-Date filter is exact here.)
+    if (sql.includes("isfinite")) {
+      rows = rows.filter(
+        (r) => Number.isFinite(r.startsAt.getTime()) && Number.isFinite(r.endsAt.getTime()),
+      );
+    }
     if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
@@ -230,5 +246,47 @@ describe("month-empty past completeness", () => {
     const block = blockFor(await response.text(), MONTH_EMPTY_TESTID);
     expect(block).not.toBeNull();
     expect(block!).toContain(calendarMonthLabel("2026-10"));
+  });
+
+  it("suppresses the claim when an infinity import row would consume a drawer slot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T12:00:00Z"));
+    // 21 ended rows: one infinity-start import (ends in the past, sorts
+    // first in SQL), 19 September rows, and one August row holding the
+    // selected month. Without the SQL finite guard the infinity row
+    // occupies a limit slot, is dropped in JS, and the drawer returns 19
+    // rows — looking complete while the August row sits unread.
+    const infinityRow = eventRow({
+      eventKey: "inf-import",
+      title: "Infinity import",
+      startsAt: new Date(NaN),
+      endsAt: new Date("2020-01-01T20:00:00Z"),
+      timezone: "UTC",
+    });
+    const sepRows = Array.from({ length: 19 }, (_, i) =>
+      eventRow({
+        eventKey: `sep-inf-${i + 1}`,
+        title: `September raid ${i + 1}`,
+        startsAt: new Date(Date.UTC(2026, 8, i + 1, 20)),
+        endsAt: new Date(Date.UTC(2026, 8, i + 1, 22)),
+        timezone: "UTC",
+      }),
+    );
+    const augHold = eventRow({
+      eventKey: "aug-hold",
+      title: "August raid",
+      startsAt: new Date("2026-08-15T20:00:00Z"),
+      endsAt: new Date("2026-08-15T22:00:00Z"),
+      timezone: "UTC",
+    });
+    const src = calendarFixture({
+      upcoming: [decKeep()],
+      monthRows: [],
+      past: [infinityRow, ...sepRows, augHold],
+    });
+    const response = await src.request("/events?view=calendar&month=2026-08&past=1");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
   });
 });

@@ -505,12 +505,16 @@ export async function listCalendarPast(
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), lt(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, lt(events.endsAt, now)))
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(EVENTS_PAST_DRAWER_LIMIT);
   // Ended rows are normally renderable by construction (ends_at < now), but
   // imports can violate the end-after-start invariant with an unrenderable
-  // starts_at, and the drawer/`EmptyGap` render it unguarded.
+  // starts_at, and the drawer/`EmptyGap` render it unguarded. The SQL finite
+  // guard keeps infinity rows from occupying limit slots (like the sibling
+  // upcoming reads), so the returned length is a sound truncation signal;
+  // the JS filter stays as defence for JS-overflow timestamps that
+  // `isfinite()` cannot see.
   return withGoing(db, rows.filter(isRenderableEventWindow));
 }
 
