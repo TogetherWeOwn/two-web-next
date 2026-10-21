@@ -206,6 +206,19 @@ describe("event-detail route ownership", () => {
     expect(layout).toMatch(/^export const csr = false;/m);
   });
 
+  it("disables hydration at the event page so navigation loads a fresh document", () => {
+    // The device-timezone comparison is document-scoped island state: with
+    // csr=false every /e/:key navigation is a full document load, so a
+    // previous event's converted time can never linger under the next event's
+    // host schedule. Re-enabling hydration must fail here, not ship silently.
+    const page = readFileSync(
+      new URL("../web/src/routes/e/[key]/+page.server.ts", import.meta.url),
+      "utf8",
+    );
+    // Anchored: a commented-out export must fail too.
+    expect(page).toMatch(/^export const csr = false;/m);
+  });
+
   it("wires the load through the branded error payloads and the flash rule", () => {
     // Deleting the error-payload mapping or the flash delete must fail: a
     // refactor back to a bare error(410, "...") or a dropped delete would
@@ -764,6 +777,20 @@ describe("Kit detail presentation", () => {
     expect(jsonLdBlocks(await memberHtml())).toEqual(guest);
   });
 
+  it("serves the device-timezone action hidden with an empty result region", async () => {
+    // A fresh server render never shows a focusable dead button (no-JS keeps
+    // the host presentation) and never carries a previous event's conversion:
+    // the island unhides the action only after it binds, and fills the result
+    // only on activation. Removing `hidden` or pre-filling the region must
+    // fail here.
+    const html = await guestHtml();
+    const mount = html.slice(html.indexOf("data-event-device-timezone"));
+    expect(mount).toMatch(
+      /<button type="button" hidden[^>]*>\s*Show in my device timezone\s*<\/button>/,
+    );
+    expect(mount).toContain('<p role="status" aria-live="polite"></p>');
+  });
+
   it("renders the guest contract: pitch, share, discovery, metadata, never attendees", async () => {
     const html = await guestHtml();
     expect(html).toContain('data-testid="event-join-pitch"');
@@ -890,6 +917,25 @@ describe("Kit detail presentation", () => {
     // Svelte escapes the title text; the JSON-LD block is pre-escaped.
     expect(html).not.toContain("</script><script>");
     expect(html).toContain("alert(");
+  });
+
+  it.each([
+    [1, KEY, `/e/${KEY}/rsvp`],
+    [2, KEY, `/e/${KEY}/rsvp?attendees=2`],
+    [3, "a/b%c d-é", "/e/a%2Fb%25c%20d-%C3%A9/rsvp?attendees=3"],
+  ])("preserves page %i on the native RSVP action for %s", async (page, key, action) => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore(),
+      memberSession(),
+      null,
+      `?attendees=${page}`,
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.attendeesPaging.page).toBe(page);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail({ ...outcome.model, eventKey: key });
+    expect(html.match(/<form[^>]*action="([^"]*)"[^>]*data-rsvp-form/)?.[1]).toBe(action);
   });
 
   it("works without JavaScript: the RSVP state posts to the Hono controller", async () => {

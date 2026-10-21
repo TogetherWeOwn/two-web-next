@@ -312,7 +312,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // fixture's migrate(); they only add, so exclude them like 1019's own
       // columns when proving human rows are untouched.
       const humanRows = await sql<{ row: Record<string, unknown> }[]>`SELECT
-      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' AS row
+      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' - 'accessibility_notes' AS row
       FROM events e WHERE agent_grant_id IS NULL ORDER BY event_key`;
       expect(humanRows.map(({ row }) => row)).toEqual(humansBefore);
       expect(

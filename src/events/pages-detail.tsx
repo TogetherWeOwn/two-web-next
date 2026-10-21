@@ -79,6 +79,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -122,6 +123,12 @@ export const EventPage: FC<{
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
+          </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden>
+              Show in my device timezone
+            </button>
+            <p role="status" aria-live="polite"></p>
           </dd>
         </div>
         <div>
@@ -178,6 +185,7 @@ export const EventPage: FC<{
           attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
+        <script src="/islands/event-device-timezone.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -185,6 +193,12 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
             </section>
           ) : null}
           {!session ? (
