@@ -124,6 +124,12 @@ export const EventPage: FC<{
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden>
+              Show in my device timezone
+            </button>
+            <p role="status" aria-live="polite"></p>
+          </dd>
         </div>
         <div>
           <dt>Ends</dt>
@@ -176,6 +182,7 @@ export const EventPage: FC<{
           attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
+        <script src="/islands/event-device-timezone.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>

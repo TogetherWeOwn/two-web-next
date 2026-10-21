@@ -9,7 +9,13 @@
 // Exit 0 on success, 2 on usage/config/refusal, 1 on driver/transaction failure.
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
-import { parseDatabaseUrl } from "./db-ping-core.mjs";
+import {
+  createOperatorClient,
+  isLockTimeoutError,
+  isProductionDatabaseUrl as sharedIsProductionDatabaseUrl,
+  TLS_OVERRIDE_REFUSAL,
+  validateOperatorEnvironment,
+} from "./operator-db-core.mjs";
 import { assertDiscordId, InvalidMemberIdError } from "../src/member-erasure.ts";
 import { revokeMemberSessions } from "../src/session-revocation.ts";
 
@@ -64,81 +70,15 @@ export function parseRevokeArgs(args) {
 }
 
 export function isProductionDatabaseUrl(raw) {
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  let name = "";
-  try {
-    name = decodeURIComponent(url.pathname.slice(1)).toLowerCase();
-  } catch {
-    return false;
-  }
-  return /(^|[.-])(prod|production)([.-]|$)/.test(host) || name === "prod" || name === "production";
+  return sharedIsProductionDatabaseUrl(raw);
 }
 
 export function validateRevokeEnvironment(env, target) {
-  const raw = env.DATABASE_URL;
-  let endpoint;
-  try {
-    endpoint = parseDatabaseUrl(raw);
-  } catch {
-    throw new Error("Refusing: DATABASE_URL is missing or invalid.");
-  }
-  const host = endpoint.host[0].toLowerCase().replace(/\.$/, "");
-  const knownLocalHost = new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]).has(host);
-  if (isProductionDatabaseUrl(raw) && target !== "production")
-    throw new Error("Refusing: production database without --target production.");
-  if (!knownLocalHost && target !== "staging" && target !== "production")
-    throw new Error("Refusing: remote database needs --target staging or --target production.");
-  const url = new URL(raw);
-  if (
-    !knownLocalHost &&
-    url.searchParams.has("sslmode") &&
-    url.searchParams.get("sslmode") !== "verify-full"
-  )
-    throw new Error("Refusing: remote database must use sslmode=verify-full.");
-  if (!knownLocalHost && env.NODE_TLS_REJECT_UNAUTHORIZED === "0")
-    throw new Error("Refusing: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification.");
-  return { databaseUrl: raw };
+  return validateOperatorEnvironment(env, target);
 }
 
 export function createRevokeClient(postgres, raw) {
-  const endpoint = parseDatabaseUrl(raw);
-  const url = new URL(raw);
-  const host = endpoint.host[0].toLowerCase().replace(/\.$/, "");
-  if (
-    !new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]).has(host) &&
-    !url.searchParams.has("sslmode") &&
-    !url.searchParams.has("sslrootcert")
-  )
-    endpoint.ssl = "verify-full";
-  // Pass only the parsed endpoint fields: the raw URL's query string must
-  // never reach postgres.js, which would forward unknown keys such as
-  // sslrootcert as server startup parameters (Postgres 42704).
-  // Bounded operator waits: finite server-enforced statement and lock budgets
-  // on this CLI's own single connection. They cover the dry-run count (no
-  // transaction) and every apply statement alike, without changing global
-  // database policy. A locked target fails the whole operation; never SKIP
-  // LOCKED and never report success while a target session stays active.
-  return postgres({
-    ...endpoint,
-    max: 1,
-    connect_timeout: 10,
-    debug: false,
-    onnotice: () => {},
-    target_session_attrs: "read-write",
-    connection: {
-      timezone: "UTC",
-      search_path: "public",
-      application_name: "revoke-sessions",
-      statement_timeout: 10_000,
-      lock_timeout: 5_000,
-    },
-  });
+  return createOperatorClient(postgres, raw, "revoke-sessions");
 }
 
 export async function main(args = process.argv.slice(2), env = process.env) {
@@ -159,6 +99,8 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   }
   let target;
   try {
+    // Node reads the live process environment at connect time, not the `env` argument.
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new Error(TLS_OVERRIDE_REFUSAL);
     target = validateRevokeEnvironment(env, parsed.target);
   } catch (error) {
     console.error(`revoke-sessions: ${error instanceof Error ? error.message : "refusing."}`);
@@ -171,12 +113,24 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     const { default: postgres } = await import("postgres");
     sql = createRevokeClient(postgres, target.databaseUrl);
-    const counts = await revokeMemberSessions(sql, parsed.discordId, {
+    const result = await revokeMemberSessions(sql, parsed.discordId, {
       dryRun: parsed.mode === "dry-run",
     });
-    process.stdout.write(`${JSON.stringify({ mode: parsed.mode, counts })}\n`);
+    // Counts only: never row contents, never the connection string. counts
+    // keeps one key per table; passes and stampsPerPass report the
+    // revocation-chase forensics next to it.
+    const { passes, stampsPerPass, ...counts } = result;
+    process.stdout.write(
+      `${JSON.stringify({ mode: parsed.mode, counts, passes, stampsPerPass })}\n`,
+    );
     return 0;
-  } catch {
+  } catch (error) {
+    if (isLockTimeoutError(error)) {
+      process.stderr.write(
+        "revoke-sessions: operation failed with a lock timeout (55P03); transaction rolled back. Retry once the lock clears; verify with a dry-run first.\n",
+      );
+      return 1;
+    }
     process.stderr.write(
       "revoke-sessions: operation failed; transaction rolled back if it started. Re-run the dry-run to inspect active counts.\n",
     );
