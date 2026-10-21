@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { DiscordWidgetSnapshot } from "../src/discord-widget";
+import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -55,6 +56,7 @@ function snapshot(overrides: Partial<DiscordWidgetSnapshot> = {}): DiscordWidget
 function pageData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     inviteUrl: INVITE_URL,
+    joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO },
     widgetUrl: WIDGET_URL,
     widgetSnapshot: null,
     oneClickHref: "/join/discord",
