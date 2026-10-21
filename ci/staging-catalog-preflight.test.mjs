@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import {
   EXPECTED_SEQUENCES,
@@ -17,6 +20,8 @@ import {
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
 } from "./db-migrate.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const staging = (user = `role-stub.${PLANETSCALE_STAGING_BRANCH_ID}`, extra = "") =>
   `postgres://${user}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require${extra}`;
@@ -373,4 +378,25 @@ test("C3 check passes on bigserial defaults and flags any divergence", () => {
   assert.equal(renamed.mismatch, true);
   assert.deepEqual(renamed.missing, ["web_throttle_hits_id_seq"]);
   assert.ok(renamed.extra.includes("web_throttle_hits_seq"));
+});
+
+test("CLI usage errors exit 2 with a usage line; --selftest stays valid", () => {
+  for (const args of [["--bogus"], ["--selftest", "extra"]]) {
+    const child = spawnSync(process.execPath, ["ci/staging-catalog-preflight.mjs", ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    assert.equal(child.status, 2, `argv ${JSON.stringify(args)} must exit 2 (usage error)`);
+    assert.match(child.stderr, /usage/i);
+    assert.match(child.stderr, /staging-catalog-preflight/);
+    assert.equal(child.stdout, "");
+  }
+  // The DB-free --selftest form must keep exiting 0: usage validation must
+  // refuse bad argv without narrowing the two valid forms.
+  const selftest = spawnSync(process.execPath, ["ci/staging-catalog-preflight.mjs", "--selftest"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  assert.equal(selftest.status, 0);
+  assert.match(selftest.stdout, /selftest: PASS/);
 });
