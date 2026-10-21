@@ -33,6 +33,10 @@
 # printed: pg_dump reads the password from the PGPASSWORD env var only.
 #
 # Usage:
+#   ./bin/db-backup.sh --help
+#     Prints usage to stdout and exits 0. Handled before any branch,
+#     credential, temp-dir or storage work.
+#
 #   ./bin/db-backup.sh backup [branch]
 #     Dumps DATABASE_URL (branch defaults to BACKUP_TARGET, otherwise staging)
 #     with pg_dump -Fc to a temp file, uploads
@@ -96,10 +100,21 @@ cd "$ROOT"
 : "${BACKUP_JURISDICTION:=eu}"
 : "${BACKUP_PREFIX:=neon}"
 
+print_usage() {
+  echo "usage: $0 --help | $0 backup [branch] | $0 promote-weekly [branch] | $0 rotate [branch] [--dry-run] [--apply] [--json] | $0 check [branch] [--require-verified]"
+}
+
 usage() {
-  echo "usage: $0 backup [branch] | $0 promote-weekly [branch] | $0 rotate [branch] [--dry-run] [--apply] [--json] | $0 check [branch] [--require-verified]" >&2
+  print_usage >&2
   exit 2
 }
+
+# --help answers on stdout with exit 0 before any branch, credential, temp
+# or storage work. Every other argv path below is unchanged.
+if [ "${1:-}" = "--help" ]; then
+  print_usage
+  exit 0
+fi
 
 CMD="${1:-}"
 [ -n "$CMD" ] || usage
