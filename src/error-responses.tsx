@@ -253,6 +253,24 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
   );
 }
 
+// Over-cap 413 recovery: member-write surfaces return to their form so an
+// oversized save lands back at the editor instead of a homepage dead end.
+// Unknown and admin paths keep the homepage return. The href is derived from
+// c.req.path only (never the query string), is anchored to a single leading
+// slash so it cannot turn protocol-relative, and is JSX-escaped at render.
+function payloadTooLargeReturn(path: string): { href: string; label: string } {
+  if (/^\/members\/[^/]+$/.test(path)) {
+    return { href: path, label: "Back to your profile" };
+  }
+  const rsvp = /^\/e\/([^/]+)\/rsvp$/.exec(path);
+  if (rsvp) {
+    return { href: `/e/${rsvp[1]}`, label: "Back to the event" };
+  }
+  // Distinct from the home escape hatch below it: when the return IS the
+  // homepage, two identical "Back to the homepage" links read as a bug.
+  return { href: "/", label: "Continue to the homepage" };
+}
+
 // Like the shared 429 response: one static envelope for API/JSON callers,
 // a branded page for browsers, and no request body, field names or stack traces.
 // The /api/ prefix and the JSON-only event write methods are the fixed
@@ -276,7 +294,14 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
       ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
-  return c.html(<PayloadTooLargePage supportReference={supportReference(c)} />);
+  const back = payloadTooLargeReturn(c.req.path);
+  return c.html(
+    <PayloadTooLargePage
+      returnHref={back.href}
+      returnLabel={back.label}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Feed contracts stay non-HTML: a calendar/RSS/Markdown caller never receives

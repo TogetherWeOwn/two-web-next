@@ -469,4 +469,18 @@ describe("evidence-only source/cache verifier admission", () => {
       binding: { kind: "hyperdrive", databaseUrlOverride: false },
     });
   });
+
+  it("missing database refuses with a joinable log line and no config echo", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { DATABASE_URL: _dropped, ...noDbEnv } = env;
+    const res = await request(createMemorySessionStore(), {}, noDbEnv);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "evidence_unavailable" });
+    expect(mocks.factory).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "source evidence database missing; refusing evidence.",
+      { exception: "MissingConfiguration", incidentId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("evidence_unavailable");
+  });
 });
