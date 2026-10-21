@@ -298,7 +298,7 @@ describe("Reporting API CSP fields", () => {
     expect(warn.mock.calls).toEqual([["csp.report.dropped_oversize", { bytes: 8193 }]]);
   });
 
-  it("still answers 204/no-store when the body stream fails", async () => {
+  it("still answers 204/no-store with sink_failed accounting when the body stream fails", async () => {
     const warn = captureLogs();
     await post(
       new ReadableStream({
@@ -307,7 +307,8 @@ describe("Reporting API CSP fields", () => {
         },
       }),
     );
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([["csp.report.sink_failed", { exception: "Error" }]]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic abort");
   });
 
   it("still answers 204/no-store when the logger throws", async () => {

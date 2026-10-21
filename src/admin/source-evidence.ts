@@ -225,7 +225,15 @@ export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
     return c.json({ error: "evidence_forbidden" }, 403);
   }
   const url = databaseUrl(env);
-  if (!url) return c.json({ error: "evidence_unavailable" }, 503);
+  if (!url) {
+    // No database configured: the exception class is fixed (nothing threw),
+    // plus the incident id. Never the env, a URI, or any payload.
+    console.error("source evidence database missing; refusing evidence.", {
+      exception: "MissingConfiguration",
+      incidentId: id,
+    });
+    return c.json({ error: "evidence_unavailable" }, 503);
+  }
   const sql = postgres(url, {
     ...databaseOptions,
     connect_timeout: 2,

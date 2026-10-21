@@ -176,7 +176,7 @@ describe("CSP report stream liveness", () => {
     }
   });
 
-  it("discards an aborted read without waiting for cancellation", async () => {
+  it("accounts an aborted read as sink_failed without waiting for cancellation", async () => {
     const cancellation = deferred<void>();
     const req = request(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
     const read = vi
@@ -202,7 +202,12 @@ describe("CSP report stream liveness", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseLock).toHaveBeenCalledOnce();
     expect(parse).not.toHaveBeenCalledWith(report);
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.sink_failed", {
+      exception: "Error",
+    });
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
+      "synthetic read failure",
+    );
     cancellation.resolve();
     await completed;
   });

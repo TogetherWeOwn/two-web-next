@@ -163,8 +163,12 @@ async function recordAttemptOrRefuse(
   try {
     await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview, outcome);
     return null;
-  } catch {
-    // No raw exception message, SQL bindings or diagnostic payload in logs.
+  } catch (err) {
+    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
+    console.error("queue redispatch audit failed; refusing redispatch.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      failureId: preview.failure.id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
 }
@@ -202,7 +206,12 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   let candidate: FailedJobReplayCandidate | null;
   try {
     candidate = await (deps.loadCandidate ?? loadRedispatchCandidate)(c.env, id);
-  } catch {
+  } catch (err) {
+    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
+    console.error("queue redispatch source read failed; refusing redispatch.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      failureId: id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
   if (!candidate) return bufferedMemberJson(c, { error: "failure_not_found" }, 404);
