@@ -2,8 +2,9 @@
 //
 // POST /auth/qa/:identity shares the `qa-login` throttle (10/min per runner
 // IP, src/throttle.ts) across the whole browser-smoke job: the e2e suite holds
-// exactly 10 logins and parity's shared plus isolated logins land in the same
-// window, so a 429 here names the budget, not the verdict. Retry 429s only,
+// exactly 10 logins and parity's shared login lands in the same window (the
+// renewal session is DB-minted), so a 429 here names the budget, not the
+// verdict. Retry 429s only,
 // honoring Retry-After into a fresh window, bounded like the staging login
 // retry (e2e/qa-request.mjs) and the local sweep login
 // (e2e/local-fixture-sweep.mjs). Pure helper: the transport is injected, safe

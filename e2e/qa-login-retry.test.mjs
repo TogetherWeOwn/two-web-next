@@ -109,12 +109,13 @@ test("every staging spec login raises its block timeout by the retry budget firs
   assert.ok(logins > 0, "no staging spec logins found — the guard would pass vacuously");
 });
 
-// Kit parity QA-login retry: parity's shared (beforeAll) and
-// isolated (renewal) logins share the job-wide qa-login window with the e2e
-// suite's 10 logins, so a 429 there names the budget, not the verdict. The
-// POST retries 429s only, honoring Retry-After, bounded by
-// QA_LOGIN_MAX_ATTEMPTS; any other status passes through to the caller's own
-// assertion. Stubbed transport below: no browser, no token.
+// Kit parity QA-login retry: parity's shared (beforeAll) login shares the
+// job-wide qa-login window with the e2e suite's 10 logins (the isolated
+// renewal session is DB-minted and spends nothing), so a 429 there names
+// the budget, not the verdict. The POST retries 429s only, honoring
+// Retry-After, bounded by QA_LOGIN_MAX_ATTEMPTS; any other status passes
+// through to the caller's own assertion. Stubbed transport below: no
+// browser, no token.
 
 const parityOk = () => ({
   status: () => 204,
@@ -196,13 +197,14 @@ test("parity QA login never retries a non-429 verdict", async () => {
   }
 });
 
-// Static guards, staging-guard style: the parity spec routes both logins
-// through the bounded retry, keeps exactly-one logical counts and two logins,
-// and raises the beforeAll hook timeout by the one-login retry budget.
+// Static guards, staging-guard style: the parity spec routes its one QA login
+// through the bounded retry (the isolated renewal session is DB-minted and
+// spends no throttle budget), keeps exactly-one logical counts with one login
+// total, and raises the beforeAll hook timeout by the one-login retry budget.
 
 const paritySpecUrl = new URL("./kit-parity/parity.spec.ts", import.meta.url);
 
-test("parity routes both QA logins through the bounded 429 retry", () => {
+test("parity routes its QA login through the bounded 429 retry", () => {
   const source = readFileSync(paritySpecUrl, "utf8");
   assert.ok(
     source.includes('from "./parity-qa-login.mjs"'),
@@ -210,18 +212,22 @@ test("parity routes both QA logins through the bounded 429 retry", () => {
   );
   const sharedFn = source.indexOf("function honoMemberCookie");
   const isolatedFn = source.indexOf("async function isolatedRenewalCookie");
-  assert.ok(sharedFn >= 0 && isolatedFn > sharedFn, "both parity login helpers must exist");
+  assert.ok(sharedFn >= 0 && isolatedFn > sharedFn, "both parity session helpers must exist");
   assert.ok(
     source.slice(sharedFn, isolatedFn).includes("postParityQaLogin"),
     "honoMemberCookie must POST through postParityQaLogin",
   );
+  const isolatedEnd = source.indexOf("\nfunction ", isolatedFn + 1);
+  const isolatedBody = isolatedEnd > isolatedFn ? source.slice(isolatedFn, isolatedEnd) : "";
   assert.ok(
-    source.slice(isolatedFn).includes("postParityQaLogin"),
-    "isolatedRenewalCookie must POST through postParityQaLogin",
+    isolatedBody.length > 0 &&
+      !isolatedBody.includes("postParityQaLogin") &&
+      !isolatedBody.includes(".post("),
+    "isolatedRenewalCookie must mint its session in Postgres (no QA POST, no retry to bound)",
   );
 });
 
-test("parity keeps exactly one logical login per helper and two logins total", () => {
+test("parity keeps exactly one logical login per helper and one login total", () => {
   const source = readFileSync(paritySpecUrl, "utf8");
   assert.equal(
     source.match(/qaLoginCount \+= 1/g)?.length ?? 0,
@@ -229,21 +235,21 @@ test("parity keeps exactly one logical login per helper and two logins total", (
     "qaLoginCount must increment once per shared-helper execution (outside the retry loop)",
   );
   assert.equal(
-    source.match(/renewalLoginCount \+= 1/g)?.length ?? 0,
+    source.match(/renewalMintCount \+= 1/g)?.length ?? 0,
     1,
-    "renewalLoginCount must increment once per isolated-helper execution (outside the retry loop)",
+    "renewalMintCount must increment once per isolated-helper execution (DB mint, no login)",
   );
   assert.equal(
     source.match(/\.post\("\/auth\/qa\//g)?.length ?? 0,
-    2,
-    "parity must keep exactly its two QA login POSTs (no new logins)",
+    1,
+    "parity must keep exactly its one QA login POST (the shared member login — renewal is DB-minted)",
   );
   assert.ok(
     source.includes('"exactly one shared QA login"'),
     "shared exactly-one assert must stay",
   );
   assert.ok(
-    source.includes('"exactly one isolated renewal login"'),
+    source.includes('"exactly one isolated renewal session"'),
     "isolated exactly-one assert must stay",
   );
 });
@@ -266,7 +272,7 @@ test("parity beforeAll raises its hook timeout by the one-login retry budget", (
   );
 });
 
-test("parity isolated-login test raises its timeout by the one-login retry budget", () => {
+test("parity isolated-renewal test keeps its raised timeout as headroom", () => {
   const source = readFileSync(paritySpecUrl, "utf8");
   assert.ok(
     source.includes('from "../qa-login-retry.mjs"'),
@@ -278,13 +284,13 @@ test("parity isolated-login test raises its timeout by the one-login retry budge
   const callSite = source.indexOf("await isolatedRenewalCookie(", testStart);
   assert.ok(
     testStart >= 0 && callSite > testStart,
-    "isolated-login test must spend its login via isolatedRenewalCookie",
+    "isolated-renewal test must mint its session via isolatedRenewalCookie",
   );
   assert.ok(
     source.lastIndexOf("qaLoginRetryBudgetMs(1)", callSite) > testStart &&
       source.lastIndexOf("test.setTimeout(", callSite) > testStart,
-    "isolated-login test must raise its own timeout first with " +
-      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
-      "on the bare 30s test timeout instead of completing the bounded retry.",
+    "isolated-renewal test must keep its raised timeout " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)) as headroom for the DB " +
+      "mint plus the renewal renders — no bare 30s timeout on this path.",
   );
 });
