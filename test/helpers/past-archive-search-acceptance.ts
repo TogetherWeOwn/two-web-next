@@ -255,7 +255,7 @@ export async function compileArchiveKit() {
                 for (const [key, value] of Object.entries(next)) headers.set(key, value);
               }});
             }
-            const data = await load({url: new URL(request.url), setHeaders: next => {
+            const data = await load({url: new URL(request.url), request, setHeaders: next => {
               for (const [key, value] of Object.entries(next)) {
                 if (headers.has(key)) throw new Error("duplicate setHeaders: " + key);
                 headers.set(key, value);

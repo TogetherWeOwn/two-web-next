@@ -1,10 +1,11 @@
 // Builder-owned pins for the terminal-claim reopen timeout and failure branches.
 //
-// `reopenTerminalClaim` (src/jobs/consumer.ts:204-227) races the pendingSync /
+// `reopenTerminalClaim` (src/jobs/consumer.ts:205-232) races the pendingSync /
 // deferSync reopen against LEDGER_TIMEOUT_MS (:13, 2000 ms) after a failed
 // terminal-intent note: a hang warns "sync terminal claim reopen timed out"
-// (:208); a throw warns "sync terminal claim reopen failed" with a class-only
-// exception (:220-222); neither may hold the batch — the settlement race still
+// with the sanitized scope (:211-213); a throw warns "sync terminal claim
+// reopen failed" with a class-only exception (:225-227); neither may hold the
+// batch — the settlement race still
 // runs this delivery (docs/runbook-logs.md reopen rows). The review-pins
 // harness (test/queue-terminal-intent-review-pins.test.ts:221-289) stubs both
 // store calls to always resolve and asserts only the success path, so these
@@ -192,10 +193,10 @@ describe("terminal-claim reopen timeout", () => {
       expect(reopenWarns(TIMEOUT_WARN)).toHaveLength(1);
       await p;
 
-      // Exactly the timeout warn (message only), never the failure warn.
+      // Exactly the timeout warn with the sanitized scope, never the failure warn.
       const timeouts = reopenWarns(TIMEOUT_WARN);
       expect(timeouts).toHaveLength(1);
-      expect(timeouts[0]).toHaveLength(1);
+      expect(timeouts[0]).toEqual([TIMEOUT_WARN, { scope: "sync-event:e-pin" }]);
       expect(reopenWarns(FAILURE_WARN)).toHaveLength(0);
       // The reopen never resolved, so the defer never ran; the bot flow did.
       expect(s.upsertEvent).toHaveBeenCalledTimes(1);
@@ -233,7 +234,7 @@ describe("terminal-claim reopen timeout", () => {
 
       const timeouts = reopenWarns(TIMEOUT_WARN);
       expect(timeouts).toHaveLength(1);
-      expect(timeouts[0]).toHaveLength(1);
+      expect(timeouts[0]).toEqual([TIMEOUT_WARN, { scope: "sync-event:e-pin" }]);
       expect(reopenWarns(FAILURE_WARN)).toHaveLength(0);
       // The pending lookup resolved, then the defer hung: exactly one call each.
       expect(s.upsertEvent).toHaveBeenCalledTimes(1);
