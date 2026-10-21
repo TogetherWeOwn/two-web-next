@@ -95,9 +95,15 @@ function attributes(tag: string): Record<string, string> {
   return out;
 }
 function controls(html: string) {
-  return [...html.matchAll(/<(input|textarea|select)\b([^>]*)(?:>([\s\S]*?)<\/\1>|>)/g)].map(
-    (match) => ({ tag: match[1]!, attrs: attributes(` ${match[2]}`), body: match[3] ?? "" }),
-  );
+  return [
+    ...html.matchAll(
+      /<(input|textarea|select)\b((?:"[^"]*"|'[^']*'|[^'">])*)(?:>([\s\S]*?)<\/\1>|>)/g,
+    ),
+  ].map((match) => ({
+    tag: match[1]!,
+    attrs: attributes(` ${match[2]}`),
+    body: match[3] ?? "",
+  }));
 }
 function control(html: string, name: string) {
   const found = controls(html).filter((entry) => entry.attrs.name === name);
@@ -192,6 +198,44 @@ function refusedWithoutEffects(response: Response) {
   expect(response.headers.has("location")).toBe(false);
   expect(dbTouched).not.toHaveBeenCalled();
 }
+
+describe("bounded native form serializer controls", () => {
+  const hostile = '</textarea><img data-content-injected="yes" src=x> & "public"';
+  for (const fixture of [
+    {
+      quote: "double",
+      name: "organizer_name",
+      input:
+        '<input name="organizer_name" value="&lt;/textarea>&lt;img data-content-injected=&quot;yes&quot; src=x> &amp; &quot;public&quot;" id="quoted-input">',
+    },
+    {
+      quote: "single",
+      name: "join_url",
+      input:
+        "<input value='&lt;/textarea>&lt;img data-content-injected=&quot;yes&quot; src=x> &amp; &quot;public&quot;' name='join_url' id='quoted-input'>",
+    },
+  ]) {
+    it(`${fixture.quote}-quoted > survives serialization with attributes and controls after it`, () => {
+      const html = `<form method="post">${fixture.input}<input name="after" value="still here"></form>`;
+      expect([...nativeForm(html).body]).toEqual([
+        [fixture.name, hostile],
+        ["after", "still here"],
+      ]);
+      expect(control(html, fixture.name).attrs.id).toBe("quoted-input");
+    });
+
+    it(`${fixture.quote}-quoted input cannot be synthesized when absent, disabled or truncated`, () => {
+      expect(nativeForm('<form method="post"></form>').body.has(fixture.name)).toBe(false);
+      const disabled = fixture.input.replace("<input ", "<input disabled ");
+      expect(nativeForm(`<form method="post">${disabled}</form>`).body.has(fixture.name)).toBe(
+        false,
+      );
+      const truncated = `<form method="post"><input name="${fixture.name}" value="&lt;/textarea"></form>`;
+      expect(nativeForm(truncated).body.get(fixture.name)).toBe("</textarea");
+      expect(nativeForm(truncated).body.get(fixture.name)).not.toBe(hostile);
+    });
+  }
+});
 
 for (const field of fields) {
   describe(`Kit create ${field.name}`, () => {
