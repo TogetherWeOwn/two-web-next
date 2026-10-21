@@ -61,7 +61,15 @@ export function partialModel(overrides: Partial<CalendarPageModel> = {}): Calend
   };
 }
 
-export async function partialHtml(model = partialModel(), origin = PARTIAL_ORIGIN) {
+export async function partialHtml(
+  model = partialModel(),
+  origin = PARTIAL_ORIGIN,
+  // The shipped island admits a fragment only when its auth destinations
+  // return to the requested page, matching SSR (routes-calendar always sets
+  // loginReturnTo from the request path). Pass the request path so fragment
+  // turns stay committable; the default keeps the entry-page value.
+  loginReturnTo = PARTIAL_PATH,
+) {
   return (
     await renderEventsHtml(
       {
@@ -72,7 +80,7 @@ export async function partialHtml(model = partialModel(), origin = PARTIAL_ORIGI
         inviteUrl: PARTIAL_INVITE,
         appUrl: origin,
         canonical: `${origin}/events`,
-        loginReturnTo: PARTIAL_PATH,
+        loginReturnTo,
         joinResult: null,
         queryTooLong: false,
       },

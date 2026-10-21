@@ -22,7 +22,11 @@ import { expect, localOrigin, qaLogin, test } from "./fixtures";
 // terminal, so the journey-cancelled fixture needs no cleanup); the local
 // teardown sweep is the backstop.
 
-async function createDraft(page: Page, title: string): Promise<string> {
+async function createDraft(
+  page: Page,
+  title: string,
+  accessibilityNotes?: string,
+): Promise<string> {
   await page.goto("/admin/events");
   await page.getByRole("link", { name: "New event", exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill(title);
@@ -35,6 +39,8 @@ async function createDraft(page: Page, title: string): Promise<string> {
   await page.getByLabel("Timezone", { exact: true }).fill("UTC");
   await page.getByLabel("Location", { exact: true }).fill("Community voice");
   await page.getByLabel("Capacity (empty = unlimited)").fill("10");
+  if (accessibilityNotes !== undefined)
+    await page.getByLabel("Accessibility notes", { exact: true }).fill(accessibilityNotes);
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
   const eventKey = new URL(page.url()).pathname.split("/").at(-1)!;
@@ -52,6 +58,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
   const stamp = Date.now();
   const draftTitle = `E2E Filter Draft ${stamp}`;
   const pausedTitle = `E2E Filter Paused ${stamp}`;
+  const publishedNotes = "Step-free entrance; a quiet room is available.";
   let draftKey: string | undefined;
   let pausedKey: string | undefined;
   // Guest requests spend no QA-login budget: plain unauthenticated context.
@@ -62,7 +69,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // 1. Two fixtures with disjoint status + RSVP states: a draft (RSVPs
     // open by schema default) and a second draft published below.
     draftKey = await createDraft(page, draftTitle);
-    pausedKey = await createDraft(page, pausedTitle);
+    pausedKey = await createDraft(page, pausedTitle, publishedNotes);
 
     // 2. Publish path (subsumes the old create/publish spec): the draft is
     // hidden from guests, publishing flips the status, and the published
@@ -80,6 +87,15 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     await page.getByRole("link", { name: pausedTitle, exact: true }).first().click();
     await expect(page).toHaveURL(`/e/${pausedKey}`);
     await expect(page.getByRole("heading", { name: pausedTitle, exact: true })).toBeVisible();
+
+    const guestEventPage = await guest.newPage();
+    const publishedPage = await guestEventPage.goto(`/e/${pausedKey}`);
+    expect(publishedPage?.status()).toBe(200);
+    await expect(
+      guestEventPage.getByRole("heading", { name: pausedTitle, exact: true }),
+    ).toBeVisible();
+    await expect(guestEventPage.getByText(/^Accessibility(?: notes)?$/i)).toBeVisible();
+    await expect(guestEventPage.getByText(publishedNotes, { exact: true })).toBeVisible();
 
     // 3. Pause the published fixture's RSVPs from its edit screen. The
     // Reopen control proves the paused state stuck.

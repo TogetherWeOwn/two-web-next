@@ -177,6 +177,12 @@ them with esbuild into the checked-in `public/islands/*.js` and
 frontend framework bundle to generate. Island and stylesheet tests execute the
 minified bytes, so edit the source, rebuild, and commit both.
 
+Successful calendar fragment navigation and Back/Forward keep guest header sign-in,
+hero Join and card sign-in destinations aligned with the committed URL, retaining
+ordinary-login versus join endpoints and attribution parameters. Unsent search
+drafts and failed, superseded or invalid fragments do not install new destinations;
+replacement links and zones are admitted together without replacing the search input.
+
 ```sh
 npm run build:assets                 # regenerate public/ from assets/
 npm run build:assets:check           # fail when the output drifted
@@ -200,6 +206,7 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
