@@ -530,15 +530,15 @@ describe.skipIf(!process.env.DATABASE_URL)("profiles schema on scratch Postgres"
     await sql`insert into users (id, username) values ('900000000000000007', 'caps-one')`;
     const five = JSON.stringify(["a", "b", "c", "d", "e"]);
     const six = JSON.stringify(["a", "b", "c", "d", "e", "f"]);
-    await sql`insert into profiles (user_id, links) values ('900000000000000007', ${five}::jsonb)`;
+    await sql`insert into profiles (user_id, links) values ('900000000000000007', ${five}::text::jsonb)`;
     await expect(
-      sql`update profiles set links = ${six}::jsonb where user_id = '900000000000000007'`,
+      sql`update profiles set links = ${six}::text::jsonb where user_id = '900000000000000007'`,
     ).rejects.toThrow();
     const sixGames = JSON.stringify(["1", "2", "3", "4", "5", "6"]);
     const sevenGames = JSON.stringify(["1", "2", "3", "4", "5", "6", "7"]);
-    await sql`update profiles set featured_games = ${sixGames}::jsonb where user_id = '900000000000000007'`;
+    await sql`update profiles set featured_games = ${sixGames}::text::jsonb where user_id = '900000000000000007'`;
     await expect(
-      sql`update profiles set featured_games = ${sevenGames}::jsonb where user_id = '900000000000000007'`,
+      sql`update profiles set featured_games = ${sevenGames}::text::jsonb where user_id = '900000000000000007'`,
     ).rejects.toThrow();
   });
 
