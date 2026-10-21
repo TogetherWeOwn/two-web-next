@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { expect as expectBrowser } from "@playwright/test";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext, Page } from "playwright";
@@ -263,14 +264,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
     }
 
     // Polls until the count settles: input updates are synchronous, while
-    // reset/save refreshes land on a microtask after the native behavior.
+    // the reset refresh lands on a task after the native restore.
     async function expectCount(page: Page, id: string, text: string) {
-      // String form like the sibling suites: document exists in the page,
-      // not in the node typecheck environment.
-      await page.waitForFunction(
-        "([nodeId, expected]) => (document.getElementById(nodeId)?.textContent ?? null) === expected",
-        [id, text],
-      );
+      await expectBrowser(page.locator(`#${id}`)).toHaveText(text);
     }
 
     // Real user-edit input respects native maxlength, unlike assigning .value,

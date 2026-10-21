@@ -493,7 +493,7 @@ function fixture() {
     window: new EventTarget(),
     fetch,
     location: { pathname: "/members/100000000000000001", search: "" },
-    setTimeout: () => 0,
+    setTimeout,
     queueMicrotask,
     Intl,
   });
@@ -507,9 +507,12 @@ function fixture() {
   };
   const cancel = async () => {
     form.dispatch("reset");
+    // User-initiated reset drains microtasks before restoring native defaults.
+    // Do not use flush(): its setImmediate would also let task timers run.
+    await Promise.resolve();
     for (const key of ["bio", "games_text", "timezone"])
       form.elements[key]!.value = form.elements[key]!.defaultValue;
-    await flush();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   };
   const byId = (id: string) => root.querySelector(`[id="${id}"]`);
   const countById = (id: string) => root.querySelectorAll(`[id="${id}"]`).length;
