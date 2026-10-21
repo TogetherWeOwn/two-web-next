@@ -350,6 +350,20 @@ test("local gate query covers every swept prefix and status as bound parameters"
     gate.text.match(/starts_with\(title, \$\d+\)/g)?.length,
     LOCAL_FIXTURE_TITLE_PREFIXES.length,
   );
+  // Pin the exact SQL text: the operators (IN, OR, AND) are the load-bearing
+  // part — an OR→AND or IN→NOT IN slip makes the gate miss live fixtures and
+  // skip the sweep on dirty runs, and the value assertions above cannot see
+  // it. Placeholder positions stay derived from the frozen lists so a new
+  // prefix or status flows through both sides.
+  const statusParams = LOCAL_SWEEP_STATUSES.map((_, index) => `$${index + 1}`).join(", ");
+  const titleParams = LOCAL_FIXTURE_TITLE_PREFIXES.map(
+    (_, index) => `starts_with(title, $${LOCAL_SWEEP_STATUSES.length + index + 1})`,
+  ).join(" OR ");
+  assert.equal(
+    gate.text,
+    `select 1 as one from events where status in (${statusParams}) ` +
+      `and (${titleParams}) limit 1`,
+  );
   assert.ok(gate.text.includes("from events"), "gate reads the events table");
   assert.ok(gate.text.includes("limit 1"), "gate stops at the first live row");
   assert.ok(!gate.text.includes("delete"), "gate never writes");
