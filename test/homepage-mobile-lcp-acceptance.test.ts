@@ -9,7 +9,7 @@ import worker from "../ci/lighthouse-worker";
 //   run 39419198475 @ 4969d9d: median 2129.9795 ms (3/3 samples over)
 //   run 39518777183 @ cb97e54: median 2161.5525 ms (3/3 samples over)
 // 6/6 samples over budget across two SHAs: systematic headroom loss, not variance.
-// Full table: TOG-33579 qa-evidence. Paired build card: TOG-34456.
+// Full table: the staging QA evidence document. Paired build: the paired homepage-mobile-LCP build card.
 //
 // Local-fidelity finding (measured 2026-10-21, this branch base):
 // a single mobile Lighthouse run against the local fixture worker
