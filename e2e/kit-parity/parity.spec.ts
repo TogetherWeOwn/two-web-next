@@ -459,14 +459,17 @@ for (const target of targets) {
       expect(body).not.toContain("<iframe");
       // Per-visitor journey state: never shared-cacheable.
       expect(response.headers()["cache-control"]).toBe("no-store, private");
-      // The Hono controller still owns the one-use journey writes, served
-      // undecorated through honoFetch on both targets until enablement.
+      // The Hono controller still owns the one-use journey write, served
+      // undecorated through honoFetch on both targets until enablement. A
+      // bare landing visit never arms the pending notice: only a genuine
+      // expired-write bounce does, so an attacker link cannot pre-arm a
+      // false restored banner.
       const setCookies = (await response.headersArray())
         .filter((h) => h.name.toLowerCase() === "set-cookie")
         .map((h) => h.value)
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
-      expect(setCookies).toContain("__Host-two_expired_write=");
+      expect(setCookies).not.toContain("__Host-two_expired_write=");
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {

@@ -9,7 +9,7 @@
 // guest — the gate bounces through expiredWriteBounce, so JSON callers keep
 // 401 with a recovery link (TOG-10357 profile / TOG-12399 admin precedent).
 // No-cookie guests keep the bare refusal, live non-moderators keep 403, and
-// the OAuth round trip restores a working session with the one-shot banner.
+// the OAuth round trip restores a working session without a pre-armed banner.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
@@ -205,7 +205,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await titles()).toEqual(["Game night"]);
     });
 
-    it("recovery landing, moderator OAuth login, fresh write, banner exactly once", async () => {
+    it("recovery landing, moderator OAuth login, fresh write, no pre-armed banner", async () => {
       vi.stubGlobal(
         "fetch",
         async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -238,9 +238,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         });
         expect(callback.headers.get("location")).toBe(`/e/${EVENT_KEY}`);
         jar = mergeCookies(jar, callback);
-        expect(jar.split("; ").find((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toContain(
-          "restored",
-        );
+        // A JSON bounce arms no pending notice and the landing never mints
+        // one, so the login restores nothing to flash.
+        expect(
+          jar.split("; ").find((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=")),
+        ).toBeUndefined();
 
         // A fresh session after recovery edits successfully.
         const sessionCookie = jar.split("; ").find((c) => c.startsWith("__Host-two_session="))!;
@@ -248,14 +250,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(retry.status).toBe(200);
         expect(await titles()).toEqual(["Recovered edit"]);
 
-        // The one-shot banner lands on the return page, then is gone.
+        // No banner on the return page: nothing was armed.
         const page = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
         expect(page.status).toBe(200);
-        expect(await page.text()).toContain('data-testid="auth-error"');
-        jar = mergeCookies(jar, page);
-        expect(
-          await (await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } })).text(),
-        ).not.toContain('data-testid="auth-error"');
+        expect(await page.text()).not.toContain('data-testid="auth-error"');
       } finally {
         vi.unstubAllGlobals();
       }
