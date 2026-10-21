@@ -630,7 +630,9 @@ describe("controls: guard, root boundary, load pairing and Hono output stay unch
     expect(page).toContain(
       "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
     );
-    expect(page).toContain("<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />");
+    expect(page).toContain(
+      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />",
+    );
     expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
     expect(page).not.toContain("AdminShell");
     expect(page).not.toMatch(/page\.error/);
