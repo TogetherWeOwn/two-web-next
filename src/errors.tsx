@@ -8,6 +8,7 @@ export {
   InternalErrorPage,
   MaintenancePage,
   NotFoundPage,
+  OwnProfileOnlyPage,
   PayloadTooLargePage,
   RateLimitedPage,
 } from "./error-pages";
@@ -15,10 +16,12 @@ export { registerErrorHandlers } from "./error-registration";
 export {
   badRequest,
   databaseUnavailable,
+  databaseUnavailableBuffered,
   forbidden,
   gone,
   internalErrorHandler,
   maintenanceHandler,
+  nonOwnerProfileWrite,
   notFoundHandler,
   notFoundResponse,
   outageRepresentation,
