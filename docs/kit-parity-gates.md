@@ -91,11 +91,11 @@ baseline, or route. Run it on both the local Hono worker and built Kit Worker,
 for each viewport above. Assertions are observable rendered-page behavior:
 
 - **Voice page:** direct load `/hotzones/voice` returns 200 HTML; the visible
-  heading is `voice hot zone`; the page explains that voice activity for the
-  displayed season is estimated pending bot event-store calibration and shows a
-  numeric total estimate. The one rendered grid is a labelled, focusable
+  heading is `voice hot zone`; the page explains that voice activity is a
+  season-independent seeded estimate pending bot event-store calibration and
+  shows a numeric total estimate. The one rendered grid is a labelled, focusable
   scroll region containing a table with weekday rows and hour columns; its
-  caption is `Estimated voice activity for season all` for the fixture URL.
+  caption is `Season-independent seeded estimate of voice activity` for the fixture URL.
 - **Games page:** same contract for `/hotzones/games`, with `games` substituted
   for `voice` in the heading, estimate copy and caption.
 - **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link
