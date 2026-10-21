@@ -13,25 +13,47 @@
 // neither). Files hold either a JSON array of strings or newline/comma
 // separated IDs. Exit 0 = sets match (empty-safe), 1 = drift, 2 = usage or
 // malformed input. Output is bounded to ROLE_AUDIT_MAX_SHOWN IDs per side.
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
+  assertSnowflakeIds,
   compareModeratorSets,
   InvalidRoleAuditInputError,
+  normalizeIdList,
   renderRoleAuditReport,
   roleAuditJson,
   ROLE_AUDIT_MAX_SHOWN,
 } from "../src/probes/role-audit.ts";
 
-const USAGE =
-  "Usage: node --import ./bin/ts-hook.mjs bin/role-audit.mjs (--discord-file=<path> | --discord-ids=<csv>) (--app-file=<path> | --app-ids=<csv>) [--json]. Exit 0 = match, 1 = drift, 2 = usage/input error.";
+import {
+  emitProbeError,
+  OPERATOR_PROBE_CONTRACT,
+  OPERATOR_PROBE_MAX_INPUT_BYTES,
+  ProbeInputError,
+} from "./operator-probe-errors.mjs";
 
-function flagValue(args, name) {
-  const prefix = `${name}=`;
-  const found = args.filter((a) => a.startsWith(prefix));
-  if (found.length > 1) throw new Error(USAGE);
-  const value = found[0] ? found[0].slice(prefix.length) : undefined;
-  return value === undefined || value === "" ? undefined : value;
+const USAGE = `Usage: node --import ./bin/ts-hook.mjs bin/role-audit.mjs (--discord-file=<path> | --discord-ids=<csv>) (--app-file=<path> | --app-ids=<csv>) [--json] [--help]
+
+Compare local ID lists only; no network, database or role changes. Each side needs
+exactly one nonempty source option, supplied once. Files contain a JSON string
+array, newline text or CSV; an empty file represents an empty set. IDs must be
+10-25 decimal digits. Each input is at most 1000000 UTF-8 bytes; each drift list
+shows at most 20 IDs with exact omitted counts.
+Exit 0 = match, 1 = drift, 2 = usage/input error. --json keeps verdicts on stdout
+and emits operator-probe-error.v1 refusals only on stderr. --help prints usage
+on stdout without reading inputs.
+Contract, codes and offline examples: ${OPERATOR_PROBE_CONTRACT}`;
+
+function sourceOptions(args, side) {
+  const files = args.filter((a) => a.startsWith(`--${side}-file=`));
+  const ids = args.filter((a) => a.startsWith(`--${side}-ids=`));
+  if (files.length + ids.length !== 1) {
+    throw new ProbeInputError(`${side.toUpperCase()}_SOURCE_INVALID`);
+  }
+  const option = files[0] ?? ids[0];
+  const value = option.slice(option.indexOf("=") + 1);
+  if (value === "") throw new ProbeInputError(`${side.toUpperCase()}_SOURCE_INVALID`);
+  return { file: files.length ? value : undefined, ids: ids.length ? value : undefined };
 }
 
 /** Parse a file as a JSON string array, else newline/comma separated text. */
@@ -53,23 +75,31 @@ export function parseIdFile(raw) {
   return trimmed.split(/[\r\n,]+/);
 }
 
-function loadSide(file, ids, label) {
-  if ((file === undefined) === (ids === undefined)) throw new Error(USAGE);
+function loadSide({ file, ids }, side) {
+  let raw = ids;
   if (file !== undefined) {
-    let raw;
     try {
+      if (!statSync(file).isFile()) throw new ProbeInputError(`${side}_FILE_UNREADABLE`);
       raw = readFileSync(file, "utf8");
     } catch {
-      throw new InvalidRoleAuditInputError(`cannot read ${label} file.`);
+      throw new ProbeInputError(`${side}_FILE_UNREADABLE`);
     }
-    // Bound file reads: the report is bounded downstream, and a huge file is
-    // a usage error rather than a comparison.
-    if (raw.length > 1_000_000) {
-      throw new InvalidRoleAuditInputError(`${label} file exceeds the 1 MiB input bound.`);
-    }
-    return parseIdFile(raw);
   }
-  return String(ids).split(",");
+  if (Buffer.byteLength(raw, "utf8") > OPERATOR_PROBE_MAX_INPUT_BYTES) {
+    throw new ProbeInputError(`${side}_INPUT_TOO_LARGE`);
+  }
+  try {
+    const normalized = normalizeIdList(file !== undefined ? parseIdFile(raw) : raw.split(","));
+    assertSnowflakeIds(normalized, side);
+    return normalized;
+  } catch (err) {
+    if (err instanceof InvalidRoleAuditInputError) {
+      // Validation exceptions can quote rejected IDs. Publish only a literal
+      // side-specific refusal, never the exception text or the rejected value.
+      throw new ProbeInputError(`${side}_INPUT_INVALID`);
+    }
+    throw err;
+  }
 }
 
 export async function main(
@@ -89,34 +119,27 @@ export async function main(
     a.startsWith("--app-file=") ||
     a.startsWith("--discord-ids=") ||
     a.startsWith("--app-ids=");
-  const unknown = args.filter((a) => !known(a));
-  if (unknown.length > 0) {
-    stderr(`role-audit: unknown option(s): ${unknown.join(" ")}. ${USAGE}\n`);
-    return 2;
+  if (args.some((a) => !known(a))) {
+    return emitProbeError("role-audit", json, "UNKNOWN_OPTION", stderr);
+  }
+  if (args.filter((a) => a === "--json").length > 1) {
+    return emitProbeError("role-audit", json, "DUPLICATE_OPTION", stderr);
   }
   let discord;
   let app;
   try {
-    discord = loadSide(
-      flagValue(args, "--discord-file"),
-      flagValue(args, "--discord-ids"),
-      "discord",
-    );
-    app = loadSide(flagValue(args, "--app-file"), flagValue(args, "--app-ids"), "app");
+    // Refuse ambiguous sources on either side before opening any input file.
+    const discordSource = sourceOptions(args, "discord");
+    const appSource = sourceOptions(args, "app");
+    discord = loadSide(discordSource, "DISCORD");
+    app = loadSide(appSource, "APP");
   } catch (err) {
-    stderr(`role-audit: ${err instanceof Error ? err.message : USAGE}\n`);
-    return 2;
-  }
-  let result;
-  try {
-    result = compareModeratorSets(discord, app);
-  } catch (err) {
-    if (err instanceof InvalidRoleAuditInputError) {
-      stderr(`role-audit: ${err.message}\n`);
-      return 2;
+    if (err instanceof ProbeInputError) {
+      return emitProbeError("role-audit", json, err.code, stderr);
     }
     throw err;
   }
+  const result = compareModeratorSets(discord, app);
   if (json) {
     stdout(`${JSON.stringify(roleAuditJson(result, ROLE_AUDIT_MAX_SHOWN), null, 2)}\n`);
   } else {
