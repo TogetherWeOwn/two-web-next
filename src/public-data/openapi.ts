@@ -6,7 +6,9 @@ import {
   COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
+  PUBLIC_API_COLLECTION_FIELDS,
   PUBLIC_API_EVENT_FIELDS,
+  PUBLIC_API_META_FIELDS,
 } from "./contracts";
 
 export interface JsonSchema {
@@ -208,10 +210,10 @@ export function getOpenApiDocument(appUrl: string) {
                 total: { type: "integer" },
                 last_page: { type: "integer" },
               },
-              required: ["current_page", "per_page", "total", "last_page"],
+              required: [...PUBLIC_API_META_FIELDS],
             },
           },
-          required: ["data", "page", "limit", "meta"],
+          required: [...PUBLIC_API_COLLECTION_FIELDS],
         },
         CommunitySnapshot: {
           type: "object",

@@ -25,6 +25,12 @@ import {
   serializeEventCollection,
   serializeJoin,
 } from "../public-data/routes";
+import {
+  communitySnapshotOutputSchema,
+  joinHandoffOutputSchema,
+  publicApiEventCollectionOutputSchema,
+  publicApiEventOutputSchema,
+} from "./output-schemas";
 
 export const MCP_SERVER_NAME = "two-web-next";
 export const MCP_SERVER_VERSION = "1.0.0";
@@ -93,6 +99,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
           .max(API_PUBLIC_BOUNDS.maxPageSize)
           .default(API_PUBLIC_BOUNDS.defaultPageSize),
       }),
+      outputSchema: publicApiEventCollectionOutputSchema,
       annotations: READ_ONLY,
     },
     async ({ page, per_page }) => {
@@ -143,6 +150,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       description:
         "Read one published event by its event key. Read-only: drafts, cancelled rows and unknown keys are not found.",
       inputSchema: z.object({ event_key: z.string().min(1).max(64) }),
+      outputSchema: publicApiEventOutputSchema,
       annotations: READ_ONLY,
     },
     async ({ event_key }) => {
@@ -176,6 +184,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     {
       description:
         "Read the public community snapshot: member and online counts (null when unknown, never 0) and per-rank counts. Read-only.",
+      outputSchema: communitySnapshotOutputSchema,
       annotations: READ_ONLY,
     },
     async () => {
@@ -194,6 +203,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     {
       description:
         "Read the Discord join handoff: intro copy and the invite URL. Read-only; joining itself happens in Discord.",
+      outputSchema: joinHandoffOutputSchema,
       annotations: READ_ONLY,
     },
     async () => {
