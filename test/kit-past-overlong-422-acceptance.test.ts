@@ -134,6 +134,54 @@ function privateNoStore(response: Response) {
   expect(response.headers.get("x-two-past-cacheable")).toBeNull();
 }
 
+// Recovery labels contain only text and Svelte comments, not inline elements.
+// Walk the original tokens for assertions; never sanitize or render the result.
+function recoveryLinkText(content: string): string {
+  const text: string[] = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    const start = content.indexOf("<", cursor);
+    if (start === -1) {
+      text.push(content.slice(cursor));
+      break;
+    }
+    text.push(content.slice(cursor, start));
+    if (!content.startsWith("<!--", start)) {
+      throw new Error("Expected text and complete comments in recovery link label fixture");
+    }
+    const end = content.indexOf("-->", start + 4);
+    if (end === -1) {
+      throw new Error("Expected text and complete comments in recovery link label fixture");
+    }
+    cursor = end + 3;
+  }
+  return text.join("").replace(/\s+/g, " ").trim();
+}
+
+describe("recovery link assertion text", () => {
+  it.each([
+    ["Back to events", "Back to events"],
+    ["<!---->Back<!-- --> to<!----> events<!---->", "Back to events"],
+    ["<!--first--><!--second-->Back to the homepage<!--last-->", "Back to the homepage"],
+    [" \n Back<!-- > and < stay inside this comment -->\t to  events \n", "Back to events"],
+    ["Back<!----><!--adjacent--> to the home<!---->page", "Back to the homepage"],
+  ])("reads visible text from %j", (content, expected) => {
+    expect(recoveryLinkText(content)).toBe(expected);
+  });
+
+  it.each([
+    "Back to events<!--",
+    "Back<!--unfinished--",
+    "<!--complete-->Back<!--unfinished",
+    "<!<!--x-->-->",
+    "Back <span>to events</span>",
+  ])("rejects incomplete comments or non-text markup in %j", (content) => {
+    expect(() => recoveryLinkText(content)).toThrow(
+      "Expected text and complete comments in recovery link label fixture",
+    );
+  });
+});
+
 describe("RED: Kit past overlong answers the 422 notice", () => {
   it("knows 422 as a Kit error status", () => {
     expect(isKitErrorStatus(422)).toBe(true);
@@ -182,10 +230,7 @@ describe("RED: Kit past overlong answers the 422 notice", () => {
     const links = [...main!.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map(([, attrs, content]) => ({
       testid: attrs!.match(/data-testid="([^"]*)"/)?.[1],
       href: attrs!.match(/href="([^"]*)"/)?.[1],
-      text: content!
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/\s+/g, " ")
-        .trim(),
+      text: recoveryLinkText(content!),
     }));
     expect(links).toEqual([
       { testid: "error-events", href: "/events", text: "Back to events" },
