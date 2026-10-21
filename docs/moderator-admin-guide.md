@@ -480,11 +480,11 @@ number. There is no drag-and-drop ordering.
 
 | Field | Rule |
 |---|---|
-| Headline | Required, at most 255 Unicode code points. |
+| Headline | Required, at most 255 Unicode code points after trimming. |
 | Body | Optional supporting text, at most 1000 Unicode code points after trimming. |
-| Link | Optional full HTTP(S) URL, at most 255 characters. |
-| Image URL | Optional full HTTPS URL on `cdn.discordapp.com` or an additional public host approved by maintainers in `FEATURED_IMAGE_HOSTS`, at most 255 characters; no credentials or custom port. This site's host is not automatically allowed for new input. No upload or check that the image exists. |
-| Image description | Required when an image URL is supplied, at most 255 Unicode code points. Describe the image accessibly. |
+| Link | Optional full HTTP(S) URL, at most 255 UTF-16 units after trimming. |
+| Image URL | Optional full HTTPS URL on `cdn.discordapp.com` or an additional public host approved by maintainers in `FEATURED_IMAGE_HOSTS`, at most 255 UTF-16 units after trimming; no credentials or custom port. This site's host is not automatically allowed for new input. No upload or check that the image exists. |
+| Image description | Required when an image URL is supplied, at most 255 Unicode code points after trimming. Describe the image accessibly. |
 | Published | Unchecked by default; a stored publication setting, not proof of homepage display. |
 | Position | Whole number from 0 to 2147483647; defaults to 0, lower numbers sort first. |
 | Show from / Show until | Optional UTC `YYYY-MM-DD HH:mm[:ss[.ffffff]]` (a space or `T` may separate date and time); seconds 00-59; up to 6 fractional digits; when both exist, until must be strictly after from. Unlike event times, these are UTC. |
@@ -492,6 +492,16 @@ number. There is no drag-and-drop ordering.
 The editor reloads stored window bounds at full microsecond precision, so saving
 unrelated changes keeps the existing precision: leave the two fields as loaded.
 Retyping a bound to minute precision narrows it on purpose.
+
+Each length-capped field states its budget under the input, and a live counter
+shows the current count in the same units the server counts: Unicode code
+points for headline, body and image description (an emoji counts once;
+accents written as combining marks count separately), UTF-16 units for the
+two URLs. Counts ignore surrounding whitespace, like the server. An
+over-budget value says how far over it is, and clearing an image URL lifts
+the description requirement; nothing is truncated or blocked while typing.
+Saving an over-budget draft returns the form with the submitted values and
+the field errors, so shorten the text and save again.
 
 ### Preview and safe editing
 

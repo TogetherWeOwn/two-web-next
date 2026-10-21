@@ -25,6 +25,12 @@ const SUITES = [
     min: 36,
   },
   {
+    file: "test/featured-editorial-limits-counter.test.ts",
+    env: "FEATURED_NATIVE_BROWSER_TESTS",
+    title: "featured editorial-limits counter in Chromium",
+    min: 3,
+  },
+  {
     file: "test/calendar-search-unicode-boundaries.test.ts",
     env: "CALENDAR_SEARCH_BROWSER_TESTS",
     title: "native calendar search input (real Chromium typing/paste)",

@@ -10,6 +10,11 @@ import AdminShell from "#lib/AdminShell.svelte";
 // No JavaScript: a plain POST and a cancel link, like the Hono panel. The
 // deferred dirty-draft/double-submit guard island is progressive markup
 // (like join/+page.svelte): with csr=false the no-JS contract still holds.
+// The editorial-limits island is the same shared progressive enhancement the
+// Hono panel loads: static budget hints with JavaScript disabled, live
+// trimmed-unit counts when it runs.
+const limitsIsland =
+  '<script type="module" src="/islands/admin-featured-editorial-limits.js"></' + "script>";
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
@@ -22,29 +27,40 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
         validator so valid headlines and image descriptions survive. -->
     <div class="field">
       <label for="f-title">Headline</label>
-      <input id="f-title" name="title" type="text" value="" required />
+      <input id="f-title" name="title" type="text" value="" data-featured-limit={255} data-featured-units="code-points" aria-describedby="f-title-hint" required />
+      <p id="f-title-hint" class="hint">
+        Up to 255 code points — the server trims whitespace, then counts.
+      </p>
     </div>
     <div class="field">
       <label for="f-body">Body</label>
-      <textarea id="f-body" name="body" rows={4}></textarea>
+      <textarea id="f-body" name="body" rows={4} data-featured-limit={1000} data-featured-units="code-points" aria-describedby="f-body-hint"></textarea>
+      <p id="f-body-hint" class="hint">
+        Up to 1000 code points — the server trims whitespace, then counts.
+      </p>
     </div>
     <div class="field">
       <label for="f-url">Link (full http(s) URL, or empty)</label>
-      <input id="f-url" name="url" type="url" value="" />
+      <input id="f-url" name="url" type="url" value="" data-featured-limit={255} data-featured-units="utf16" aria-describedby="f-url-hint" />
+      <p id="f-url-hint" class="hint">
+        Up to 255 UTF-16 units — the server trims whitespace, then counts.
+      </p>
     </div>
     <div class="field">
       <label for="f-image-url">Image URL</label>
-      <input id="f-image-url" name="image_url" type="url" value="" aria-describedby="f-image-url-hint" />
+      <input id="f-image-url" name="image_url" type="url" value="" data-featured-limit={255} data-featured-units="utf16" aria-describedby="f-image-url-hint" />
       <p id="f-image-url-hint" class="hint">
         HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image
-        hosts are blocked by the site's security policy.
+        hosts are blocked by the site's security policy. Up to 255 UTF-16 units — the
+        server trims whitespace, then counts.
       </p>
     </div>
     <div class="field">
       <label for="f-image-alt">Image description</label>
-      <input id="f-image-alt" name="image_alt" type="text" value="" aria-describedby="f-image-alt-hint" />
+      <input id="f-image-alt" name="image_alt" type="text" value="" data-featured-limit={255} data-featured-units="code-points" aria-describedby="f-image-alt-hint" />
       <p id="f-image-alt-hint" class="hint">
         Required when an image URL is set — one plain sentence for screen-reader visitors.
+        Up to 255 code points — the server trims whitespace, then counts.
       </p>
     </div>
     <div class="field">
@@ -75,5 +91,6 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </div>
   </form>
 </section>
+{@html limitsIsland}
 {@html island}
 </AdminShell>

@@ -56,38 +56,94 @@ export const FeaturedFormPage: FC<{
         >
           {/* Native maxlength counts UTF-16 units and truncates supplementary
               characters early; the 255-code-point limits belong to the server
-              validator so valid headlines and image descriptions survive. */}
-          <Field name="title" label="Headline" errors={errors}>
+              validator so valid headlines and image descriptions survive.
+              The persistent hints below state each budget up front, and the
+              editorial-limits island counts the same trimmed units live. */}
+          <Field
+            name="title"
+            label="Headline"
+            errors={errors}
+            hint="Up to 255 code points — the server trims whitespace, then counts."
+          >
             {(id) => (
-              <input id={id} name="title" type="text" value={val(values, "title")} required />
+              <input
+                id={id}
+                name="title"
+                type="text"
+                value={val(values, "title")}
+                data-featured-limit={255}
+                data-featured-units="code-points"
+                required
+              />
             )}
           </Field>
-          <Field name="body" label="Body" errors={errors}>
+          <Field
+            name="body"
+            label="Body"
+            errors={errors}
+            hint="Up to 1000 code points — the server trims whitespace, then counts."
+          >
             {(id) => (
-              <textarea id={id} name="body" rows={4}>
+              <textarea
+                id={id}
+                name="body"
+                rows={4}
+                data-featured-limit={1000}
+                data-featured-units="code-points"
+              >
                 {val(values, "body")}
               </textarea>
             )}
           </Field>
-          <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
-            {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
+          <Field
+            name="url"
+            label="Link (full http(s) URL, or empty)"
+            errors={errors}
+            hint="Up to 255 UTF-16 units — the server trims whitespace, then counts."
+          >
+            {(id) => (
+              <input
+                id={id}
+                name="url"
+                type="url"
+                value={val(values, "url")}
+                data-featured-limit={255}
+                data-featured-units="utf16"
+              />
+            )}
           </Field>
           <Field
             name="image_url"
             label="Image URL"
             errors={errors}
-            hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy."
+            hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy. Up to 255 UTF-16 units — the server trims whitespace, then counts."
           >
-            {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
+            {(id) => (
+              <input
+                id={id}
+                name="image_url"
+                type="url"
+                value={val(values, "image_url")}
+                data-featured-limit={255}
+                data-featured-units="utf16"
+              />
+            )}
           </Field>
           <Field
             name="image_alt"
             label="Image description"
             errors={errors}
-            hint="Required when an image URL is set — one plain sentence for screen-reader visitors."
+            hint="Required when an image URL is set — one plain sentence for screen-reader visitors. Up to 255 code points — the server trims whitespace, then counts."
           >
             {(id) => (
-              <input id={id} name="image_alt" type="text" value={val(values, "image_alt")} />
+              <input
+                id={id}
+                name="image_alt"
+                type="text"
+                value={val(values, "image_alt")}
+                data-featured-limit={255}
+                data-featured-units="code-points"
+              />
             )}
           </Field>
           <div class="field">
@@ -138,6 +194,7 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      <script type="module" src="/islands/admin-featured-editorial-limits.js" />
       <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
