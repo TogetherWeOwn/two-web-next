@@ -9,7 +9,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { keyedMemberRead } from "../member-reads";
-import type { SeasonWindow } from "../hotzones/season";
+import { pgSeasonBound, type SeasonWindow } from "../hotzones/season";
 import { OVERALL_CAP, RELATIVE_NEIGHBORS } from "./captions";
 
 // The window constants live in ./captions (the pure caption module both
@@ -169,10 +169,13 @@ export async function loadMemberRanking(
   if (!db) return [];
   // Raw sql`` interpolation does not serialize Date bounds the way the
   // query builder does (see src/hotzones/aggregates.ts): pass ISO strings so
-  // the postgres driver binds them as timestamptz.
+  // the postgres driver binds them as timestamptz. Year-0 bounds cannot bind
+  // (Postgres has no year 0): clamp them to the empty range at 0001-01-01,
+  // leaving every other bound untouched. The values change; the statement
+  // shape pinned by the member-read classifier does not.
   const dateFilter =
     window.kind === "window"
-      ? sql`and events.starts_at >= ${window.start.toISOString()} and events.starts_at < ${window.end.toISOString()}`
+      ? sql`and events.starts_at >= ${pgSeasonBound(window.start).toISOString()} and events.starts_at < ${pgSeasonBound(window.end).toISOString()}`
       : sql``;
   const gameFilter = game === null ? sql`` : sql`and lower(trim(events.game)) = ${game}`;
   if (scope === "relative") {

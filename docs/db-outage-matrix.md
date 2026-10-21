@@ -9,7 +9,15 @@ trusted origin; the inventory still inspects the real router and pins every
 middleware registration, including TrustHosts and same-origin guards. The
 retired `/health`, `/healthz` and `/db-ping` diagnostics are not registered;
 join-attempt detail and both admin/API RSVP pause/reopen routes are covered.
-The legacy `/auth/discord/redirect` alias remains database-free; the ordinary login start and callback persist a one-use journey, so they fail closed to `/?n=signin_failed` before any Discord call. Four static admin aliases
+The legacy `/auth/discord/redirect` alias remains database-free. The ordinary
+login start persists a one-use journey and retains its `/?n=signin_failed`
+redirect when persistence fails. A matching-state callback whose journey
+consume throws a classified database outage instead reaches the branded 503
+(`src/auth/routes.ts:157-164`, `src/error-responses.tsx:65`), before any Discord
+call. Genuine strays keep `signin_failed`/`signin_denied`; store acquisition
+and unclassified consume errors keep their existing fallback. Offline throwing
+store and replay controls live in `test/callback-journey-outage.test.ts`.
+Four static admin aliases
 redirect only after a valid moderator session; the featured edit alias must
 resolve its imported ID and returns a branded 503 when that lookup is down.
 All five admin aliases refuse with 503 when the production session store is
