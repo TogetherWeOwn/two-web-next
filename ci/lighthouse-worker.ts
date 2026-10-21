@@ -124,7 +124,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1)` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1)` &&
           params.length === 1 &&
           isInstant(params[0])
         ) {
@@ -136,7 +136,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // closed list deliberately does not know.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
           params.length === 2 &&
           isInstant(params[0]) &&
           params[1] === EVENTS_UPCOMING_PAGE_SIZE + 1
@@ -147,18 +147,19 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // faithfully against the single fixture row so one never 500s silently.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and "events"."starts_at" >= $2 and "events"."starts_at" < $3) order by "events"."starts_at" asc, "events"."id" asc limit $4` &&
-          params.length === 4 &&
-          isInstant(params[0]) &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."status" <> $1 and "events"."ends_at" >= $2 and "events"."starts_at" < $3 and "events"."ends_at" > $4) order by "events"."starts_at" asc, "events"."id" asc limit $5` &&
+          params.length === 5 &&
+          params[0] === "cancelled" &&
           isInstant(params[1]) &&
           isInstant(params[2]) &&
-          params[3] === EVENTS_MONTH_GRID_LIMIT
+          isInstant(params[3]) &&
+          params[4] === EVENTS_MONTH_GRID_LIMIT
         ) {
-          const startsAt = fixture.startsAt.getTime();
-          const inWindow =
-            startsAt >= new Date(params[1]).getTime() && startsAt < new Date(params[2]).getTime();
+          const overlaps =
+            fixture.startsAt.getTime() < new Date(params[2]).getTime() &&
+            fixture.endsAt.getTime() > new Date(params[3]).getTime();
           return {
-            rows: fixture.endsAt >= new Date(params[0]) && inWindow ? [encoded] : [],
+            rows: fixture.endsAt >= new Date(params[1]) && overlaps ? [encoded] : [],
           };
         }
         // Grid day-jumps resolve the card's list page: the anchor row, then the
@@ -166,7 +167,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // counts exactly when the anchor is the fixture itself.
         if (
           sql ===
-            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $2)` &&
+            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $2)` &&
           params.length === 2 &&
           params[0] === fixtureKey &&
           isInstant(params[1])
@@ -180,7 +181,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // before it.
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $2) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $3) and "events"."id" < $4)))` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $2) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $3) and "events"."id" < $4)))` &&
           params.length === 4 &&
           isInstant(params[0]) &&
           params[1] === fixture.id &&
