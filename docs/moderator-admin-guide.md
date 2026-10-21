@@ -140,6 +140,21 @@ is not confirmation that your changes saved. Validation errors still use their
 normal field errors. If the outage continues, use the response's support reference
 when contacting the maintainers.
 
+## Busy inventory reads and retrying
+
+The event, featured-content and activity-log inventory lists each run inside
+one transaction with transaction-local `lock_timeout` and `statement_timeout`
+database bounds of two seconds each, covering the event list's second
+Going-count statement as well. These are per-statement bounds, not a
+whole-request deadline: each inventory statement gets its own budget, and the
+bounds expire with the transaction without changing pooled connection defaults.
+
+If an inventory statement times out, the read transaction rolls back before
+the existing private, no-store 503 outage response is returned. A refused
+inventory never renders as an empty list: wait briefly, then reload the page.
+If the outage continues, use the response's support reference when contacting
+the maintainers.
+
 ## Correct a rejected draft
 
 Event and featured-content create/edit forms show the actual validation errors
