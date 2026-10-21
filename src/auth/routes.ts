@@ -87,7 +87,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
   // Legacy login links: retain only the existing guarded-next value, never OAuth input.
   app.get("/auth/discord/redirect", (c) => {
     const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store");
+    c.header("cache-control", "no-store, private");
     return c.redirect(
       next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
       302,

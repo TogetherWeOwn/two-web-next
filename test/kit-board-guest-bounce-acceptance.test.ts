@@ -474,7 +474,8 @@ describe("passing controls: gate order and callback safety are unchanged", () =>
     expect(err.status).toBe(503);
     expect(err.intendedCookie).toBeUndefined();
     expect(a.loadRankingFn).not.toHaveBeenCalled();
-    expect(a.setHeaders).not.toHaveBeenCalled();
+    expect(a.setHeaders).toHaveBeenCalledTimes(1);
+    expect(a.setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
   it("signed-in non-member is a branded 403 before grammar, with no read and no cookie", async () => {
@@ -486,7 +487,8 @@ describe("passing controls: gate order and callback safety are unchanged", () =>
     expect(err.status).toBe(403);
     expect(err.intendedCookie).toBeUndefined();
     expect(a.loadRankingFn).not.toHaveBeenCalled();
-    expect(a.setHeaders).not.toHaveBeenCalled();
+    expect(a.setHeaders).toHaveBeenCalledTimes(1);
+    expect(a.setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
   it("bad grammar for a member is a branded 400 before any read, with no cookie", async () => {

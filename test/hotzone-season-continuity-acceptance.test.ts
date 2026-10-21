@@ -467,7 +467,10 @@ describe("hot-zone continuity controls (cache, grammar, privacy)", () => {
       recordBoardViewFn: async () => {},
     });
     expect(data.season).toBe("2026-09");
-    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=300",
+      vary: "Cookie",
+    });
   });
 
   it.each(["presence", "2026-13", "2026-Q5", ""])(
