@@ -42,6 +42,7 @@ export const load: PageServerLoad = async ({ parent, params, url, setHeaders }) 
   const raw: Record<string, string> = {};
   for (const [k, v] of url.searchParams) if (!(k in raw)) raw[k] = v;
   const outcome = await resolveKitEventEdit(params.key, raw, {
+    appUrl: env.APP_URL,
     db,
     get: getEvent,
     list: listRoster,
