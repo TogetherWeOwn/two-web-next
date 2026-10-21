@@ -63,6 +63,7 @@ const cookiesFrom = (res: Response) =>
 
 const JOIN_LOG = "discord token exchange failed on the join journey";
 const LOGIN_LOG = "discord sign-in failed";
+const THROTTLE_NULL_LOG = "Throttle store unavailable; allowing the request.";
 
 const JOIN_ROUTE = "/join/callback";
 const LOGIN_ROUTE = "/auth/discord/callback";
@@ -456,7 +457,13 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
       expect(recordsFor(logs, LOGIN_LOG).map((r) => r.args)).toEqual([
         [LOGIN_LOG, { ...rejectedUserMeta, request_id: res.headers.get("x-request-id") }],
       ]);
-      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+      // DB-free env: both login throttles fail open with a null-store line
+      // before the sign-in failure line.
+      expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+        [THROTTLE_NULL_LOG, { bucket: "login-redirect:anon" }],
+        [THROTTLE_NULL_LOG, { bucket: "login-callback:anon" }],
+      ]);
+      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 3, error: 0 });
       expect(fake.attempts).toEqual([]);
       expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
       const html = await (await app.request("/?n=signin_failed", {}, e)).text();
@@ -686,6 +693,7 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
 
 describe("join callback: post-bot-success downstream failures stay redacted", () => {
   const MODERATOR_LOOKUP_LOG = "moderator recompute lookup failed";
+  const MODERATOR_TRANSPORT_LOG = "moderator recompute lookup transport failed";
   const MEMBER_PATH = "/api/v10/guilds/326474832151838730/members/42";
 
   type RecordedCall = { url: string; method: string };
@@ -750,7 +758,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     return { logs, calls, res };
   }
 
-  it("moderator transport throw after a successful bot add: 302, non-moderator session, clean stream", async () => {
+  it("moderator transport throw after a successful bot add: 302, non-moderator session, class-only transport warn, clean stream", async () => {
     const { fake, env: e } = isolatedJoin();
     const created = captureIssuedSessions(e);
     const { logs, calls, res } = await postBotRoundTrip(e, () => {
@@ -773,8 +781,13 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
     const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
     expect(await home.text()).toContain("Rick");
-    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
-    streamClean(logs, JOIN_ROUTE);
+    // The transport degrade warns once, class-only: the canary-bearing
+    // message and cause stay out of the line (streamClean pins that).
+    expect(recordsFor(logs, MODERATOR_TRANSPORT_LOG).map((r) => r.args)).toEqual([
+      [MODERATOR_TRANSPORT_LOG, { exception: "TypeError", guild_id: "326474832151838730" }],
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+    streamClean(logs, JOIN_ROUTE, [MODERATOR_TRANSPORT_LOG]);
     leakFree(
       await res.text(),
       res.headers.get("location"),

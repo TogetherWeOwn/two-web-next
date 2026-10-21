@@ -149,8 +149,10 @@ export async function checkJoinThrottle(
   max: number,
 ): Promise<ThrottleVerdict> {
   if (!sql) {
-    // Fail open with a bucket-naming line so every caller (generic
-    // middleware, join funnel, profile writes) reports a missing store.
+    // Fail open with a bucket-naming line so the generic middleware and the
+    // join funnel report a missing store. (Profile writes never reach this
+    // branch: no URL admits without calling here, and a URL always builds a
+    // client — routing them through here would log member Discord IDs.)
     console.warn("Throttle store unavailable; allowing the request.", { bucket });
     return { limited: false };
   }

@@ -36,6 +36,12 @@ vi.mock("../src/admin/db", async (importOriginal) => {
 const NOW = new Date("2030-01-10T20:00:00Z");
 const APP_URL = "https://next.example.test";
 const READ = "Sitemap events read.";
+// DB-free route requests fail the events-read throttle open with one
+// null-store line before the read's own diagnostic.
+const THROTTLE_NULL = [
+  "Throttle store unavailable; allowing the request.",
+  { bucket: "events-read:anon" },
+];
 const CAPACITY = "Event egress read reached capacity.";
 const FEED_SKIP = "listFeed skipped unrenderable rows.";
 const SITEMAP_SKIP = "sitemapEvents skipped unrenderable rows.";
@@ -268,7 +274,7 @@ describe("sitemap fallback outcomes without status/cache drift", () => {
 
   it("classifies no configured binding instead of calling it an empty read", async () => {
     await expectSitemap(await request(env()));
-    expect(logs).toEqual([[READ, { outcome: "no_binding" }]]);
+    expect(logs).toEqual([THROTTLE_NULL, [READ, { outcome: "no_binding" }]]);
   });
 
   it.each([
@@ -278,7 +284,10 @@ describe("sitemap fallback outcomes without status/cache drift", () => {
   ])("classifies acquisition failure safely: %s", async (_name, error) => {
     vi.mocked(dbFor).mockRejectedValueOnce(error());
     await expectSitemap(await request(env(fixture([]).db)));
-    expect(logs).toEqual([[READ, { outcome: "acquire_failed", exception: "ReadFailure" }]]);
+    expect(logs).toEqual([
+      THROTTLE_NULL,
+      [READ, { outcome: "acquire_failed", exception: "ReadFailure" }],
+    ]);
   });
 
   it.each([
@@ -288,14 +297,17 @@ describe("sitemap fallback outcomes without status/cache drift", () => {
     const broken = fixture([], { error: error() });
     await expectSitemap(await request(env(broken.db)));
     expect(broken.seen).toHaveLength(1);
-    expect(logs).toEqual([[READ, { outcome: "query_failed", exception: "ReadFailure" }]]);
+    expect(logs).toEqual([
+      THROTTLE_NULL,
+      [READ, { outcome: "query_failed", exception: "ReadFailure" }],
+    ]);
   });
 
   it("records a genuinely successful empty read, not fallback", async () => {
     const empty = fixture([]);
     await expectSitemap(await request(env(empty.db)));
     expectQuery(empty.seen, "sitemap");
-    expect(logs).toEqual([[READ, { outcome: "ok", returned: 0 }]]);
+    expect(logs).toEqual([THROTTLE_NULL, [READ, { outcome: "ok", returned: 0 }]]);
   });
 
   it("healthy control preserves published entries and excludes hidden statuses", async () => {
@@ -313,7 +325,7 @@ describe("sitemap fallback outcomes without status/cache drift", () => {
   it("records successful nonempty reads without logging event data", async () => {
     const healthy = fixture([row(1), row(2)]);
     await expectSitemap(await request(env(healthy.db)), [key(1), key(2)]);
-    expect(logs).toEqual([[READ, { outcome: "ok", returned: 2 }]]);
+    expect(logs).toEqual([THROTTLE_NULL, [READ, { outcome: "ok", returned: 2 }]]);
   });
 });
 

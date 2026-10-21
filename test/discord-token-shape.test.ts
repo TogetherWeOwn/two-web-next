@@ -219,7 +219,18 @@ for (const journey of journeys) {
         if (journey.name === "login") {
           expect(res.status).toBe(302);
           expect(res.headers.get("location")).toBe("/?n=signin_failed");
+          // DB-free env: both login throttles fail open with a null-store
+          // line before the sign-in failure line. (The join journey below
+          // carries a healthy JOIN_DEPS store, so it stays quiet.)
           expect(warn.mock.calls).toEqual([
+            [
+              "Throttle store unavailable; allowing the request.",
+              { bucket: "login-redirect:anon" },
+            ],
+            [
+              "Throttle store unavailable; allowing the request.",
+              { bucket: "login-callback:anon" },
+            ],
             [
               "discord sign-in failed",
               { ...rejectedMeta, request_id: res.headers.get("x-request-id") },
