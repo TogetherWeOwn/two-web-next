@@ -147,6 +147,10 @@ const relation = `(${identifier}(?:\\s*\\.\\s*${identifier})?)`;
 //   an E-string, including ambiguous ones.
 const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/;
 const QUOTE_ABSORBING_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
+// PostgreSQL scan.l: newline is CR or LF; non_newline_space includes VT.
+// Share the exact classes between comment stripping and statement splitting.
+const PG_NEWLINE = /[\r\n]/;
+const PG_NON_NEWLINE_SPACE = /[ \t\f\v]/;
 
 class UnterminatedSqlError extends Error {}
 
@@ -169,8 +173,8 @@ function stripComments(sql) {
     const rest = sql.slice(index);
     const char = sql[index];
     if (state === "line-comment") {
-      if (char === "\n") {
-        output += "\n";
+      if (PG_NEWLINE.test(char)) {
+        output += char;
         if (eGapNewline === false) eGapNewline = true;
         state = "normal";
       }
@@ -189,7 +193,7 @@ function stripComments(sql) {
           output += " ";
         }
       } else {
-        if (char === "\n") output += "\n";
+        if (PG_NEWLINE.test(char)) output += char;
         index += 1;
       }
       continue;
@@ -268,9 +272,9 @@ function stripComments(sql) {
     } else {
       // Whitespace (and its newlines) extends an E-string gap; anything else
       // — including a dollar-quote opener — ends it.
-      if (char === "\n") {
+      if (PG_NEWLINE.test(char)) {
         if (eGapNewline === false) eGapNewline = true;
-      } else if (!/[ \t\r\f]/.test(char)) {
+      } else if (!PG_NON_NEWLINE_SPACE.test(char)) {
         eGapNewline = null;
       }
       const dollar = rest.match(DOLLAR_TAG)?.[0];
@@ -353,9 +357,9 @@ function splitStatements(sql) {
       state = "double-quote";
       current += char;
     } else {
-      if (char === "\n") {
+      if (PG_NEWLINE.test(char)) {
         if (eGapNewline === false) eGapNewline = true;
-      } else if (!/[ \t\r\f]/.test(char)) {
+      } else if (!PG_NON_NEWLINE_SPACE.test(char)) {
         eGapNewline = null;
       }
       const dollar = rest.match(DOLLAR_TAG)?.[0];

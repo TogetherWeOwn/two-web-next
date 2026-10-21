@@ -177,7 +177,10 @@ merging statements. PostgreSQL string continuation across a newline inherits
 the first literal's escape mode and is comment-sensitive (line comments
 preserve it, block comments break it), so an `E'...'` literal followed by a
 newline gap rejects instead of risking a hidden statement; no historical
-migration uses that shape.
+migration uses that shape. Both scanners use PostgreSQL's whitespace classes:
+CR and LF are newlines, and space, tab, form feed, and vertical tab extend the
+gap. Line comments end at CR or LF, so a CR-only line ending cannot hide the
+next statement.
 The check applies only to added/changed migration SQL and does not rewrite or
 bless historical migrations. Session configuration (`SET`, `RESET`, and
 `DISCARD` in any spelling, which could change object resolution, ownership, or

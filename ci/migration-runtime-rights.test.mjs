@@ -523,6 +523,59 @@ test("rejects E-string newline continuation instead of hiding later statements",
   assert.match(hiddenDelete(" /* c */\n"), /E-string newline continuation is not supported/);
 });
 
+test("rejects E-string continuation across PostgreSQL newline and space characters", () => {
+  // Reverting CR-newline or VT-space handling in either scanner must not hide
+  // the DELETE grant. Block-comment gaps exercise the split scanner after
+  // comment stripping; PostgreSQL itself refuses those ambiguous gaps.
+  const gaps = new Set(["\r", "\r\n", "\v\n", "\n\v", "\r\v", "\f\r", "\r\n\v"]);
+  for (const newline of ["\n", "\r", "\r\n"]) {
+    gaps.add(` -- c${newline}`);
+    gaps.add(` -- c${newline}\v`);
+    gaps.add(` /* c */${newline}`);
+    gaps.add(` /* c${newline} */`);
+    for (const space of [" ", "\t", "\f", "\v"]) {
+      gaps.add(`${space}${newline}`);
+      gaps.add(`${newline}${space}`);
+    }
+  }
+  for (const gap of gaps) {
+    assert.match(
+      migration(
+        `CREATE TABLE public.events (id integer primary key);${tableGrants}SELECT E'x'${gap}'a\\'b'; GRANT DELETE ON TABLE public.events TO two_web_app; SELECT 'y'; -- '`,
+      ).join("\n"),
+      /E-string newline continuation is not supported/,
+      JSON.stringify(gap),
+    );
+  }
+});
+
+test("ends line comments at CR as well as LF without hiding later statements", () => {
+  const table = `CREATE TABLE public.events (id integer primary key);${tableGrants}`;
+  for (const newline of ["\r", "\r\n", "\n"]) {
+    for (const [statement, refusal] of [
+      ["GRANT DELETE ON TABLE public.events TO two_web_app;", /unreviewed runtime privilege/i],
+      ["CREATE TABLE public.unreviewed (id integer);", /no reviewed runtime-rights entry/i],
+      ["SET ROLE two_web_migrate;", /SET is forbidden/i],
+    ]) {
+      assert.match(
+        migration(`${table} -- harmless${newline}${statement}\n`).join("\n"),
+        refusal,
+        `${JSON.stringify(newline)} ${statement}`,
+      );
+    }
+  }
+  // CR/VT inside literal or quoted-identifier contents do not end them, and
+  // VT alone does not end a line comment (PostgreSQL newline is only CR/LF).
+  for (const sql of [
+    "SELECT '-- c\r GRANT DELETE ON TABLE public.events TO two_web_app;';",
+    'SELECT 1 AS "-- c\r GRANT DELETE ON TABLE public.events TO two_web_app;";',
+    "SELECT $$-- c\r GRANT DELETE ON TABLE public.events TO two_web_app;$$;",
+    "-- c\v GRANT DELETE ON TABLE public.events TO two_web_app;\nSELECT 1;",
+  ]) {
+    assert.deepEqual(migration(`${table}${sql}`), [], JSON.stringify(sql));
+  }
+});
+
 test("allows plain-string continuation and separated E-strings", () => {
   const table = `CREATE TABLE public.events (id integer primary key);${tableGrants}`;
   // Plain-plus-plain continuation lexes identically with or without
