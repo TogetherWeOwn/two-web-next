@@ -21,7 +21,8 @@ const localEnv = {
 const remoteEnv = {
   APP_URL: STAGING_APP_URL,
   SEED_CONFIRM: "staging",
-  DATABASE_URL: "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb",
+  DATABASE_URL:
+    "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb?sslmode=verify-full",
   SEED_STAGING_DB_HOST: "ep-staging.example.neon.tech",
   SEED_STAGING_DB_NAME: "neondb",
   SEED_PRODUCTION_DB_HOSTS: "ep-live.example.neon.tech,ep-live-pooler.example.neon.tech",
@@ -30,7 +31,7 @@ const remotePlanetScaleEnv = {
   APP_URL: STAGING_APP_URL,
   SEED_CONFIRM: "staging",
   DATABASE_URL:
-    "postgres://fixture:synthetic-password@staging-abc123.pg.psdb.cloud/planetseed_staging",
+    "postgres://fixture:synthetic-password@staging-abc123.pg.psdb.cloud/planetseed_staging?sslmode=verify-full",
   SEED_STAGING_DB_HOST: "staging-abc123.pg.psdb.cloud",
   SEED_STAGING_DB_NAME: "planetseed_staging",
   SEED_PRODUCTION_DB_HOSTS: "main-abc123.pg.psdb.cloud,ep-live.example.neon.tech",

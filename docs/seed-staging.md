@@ -44,7 +44,7 @@ metadata through env:
 | --- | --- |
 | `APP_URL` | Exactly `https://next.togetherweown.com` (optional trailing slash) |
 | `SEED_CONFIRM` | Exactly `staging`, for dry-run as well as apply |
-| `DATABASE_URL` | Authorized staging connection, env only |
+| `DATABASE_URL` | Authorized staging connection with `sslmode=verify-full` (or `sslrootcert=system`), env only |
 | `SEED_STAGING_DB_HOST` | Exact staging endpoint hostname (`*.neon.tech` or `*.pg.psdb.cloud`), including `-pooler` if a Neon pooler is used |
 | `SEED_STAGING_DB_NAME` | Exact staging database name |
 | `SEED_PRODUCTION_DB_HOSTS` | Comma-separated verified production endpoint hostnames; include direct **and** pooled endpoints |
@@ -62,14 +62,17 @@ seeding stays operator-gated.
 Both modes refuse missing confirmation, `APP_ENV=production`, production apex
 `APP_URL` (including `www`, case variants and trailing-dot hosts), unknown app
 hosts, invalid PostgreSQL URLs, denied database hosts, and denied database names.
-`prod`/`production` host labels and database names are always denied. Remote
-targets must be the exact allowlisted staging endpoint/name (`*.neon.tech` or
-`*.pg.psdb.cloud`) with the staging app URL and a non-empty production host
-denylist. Local apps may target only
-`agent_test@agent-testdb:5432/two_web_next` with an empty password. Driver URL query
-parameters other than `sslmode=require` or `sslmode=verify-full` are refused, so
-`host`, `dbname`, `options`, or service parameters cannot redirect a checked URL.
-No unknown remote endpoint is accepted by default.
+`NODE_TLS_REJECT_UNAUTHORIZED=0` is refused on every host. `prod`/`production`
+host labels and database names are always denied, detected by the shared
+`bin/operator-db-core.mjs` floor (imported, not copied); there is no production
+escape. Remote targets must be the exact allowlisted staging endpoint/name
+(`*.neon.tech` or `*.pg.psdb.cloud`) with the staging app URL, a non-empty
+production host denylist, and `sslmode=verify-full` (or `sslrootcert=system`);
+`sslmode=require` and missing TLS are refused, never silently defaulted. Local
+apps may target only `agent_test@agent-testdb:5432/two_web_next` with an empty
+password. Driver URL query parameters other than `sslmode` or `sslrootcert=system`
+are refused, so `host`, `dbname`, `options`, or service parameters cannot redirect
+a checked URL. No unknown remote endpoint is accepted by default.
 
 Apply refuses collisions with non-seed event keys, fixture user IDs, or featured
 natural keys, and refuses duplicate featured keys. It changes only its own
@@ -113,7 +116,7 @@ counts for additional rows created manually or by a running recurrence job.
 ```sh
 npm run check
 # Credential-free unit tests plus DB integration using the configured test service:
-npx vitest run test/seed-staging.test.ts
+npx vitest run test/seed-staging.test.ts test/seed-staging-guard-parity-acceptance.test.ts
 ```
 
 The tests verify guards without connecting, the fixture mix and QA ID alignment,
