@@ -12,6 +12,14 @@ import { OPERATOR_ERRORS, OperatorCliError } from "./operator-cli-errors.mjs";
 export const LOCAL_HOSTS = new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]);
 export const TLS_OVERRIDE_REFUSAL = OPERATOR_ERRORS.E_TLS_OVERRIDE.message;
 
+// Pinned by fixture-admission IPv6 acceptance: the remote-TLS refusal text.
+// The message lives once in operator-cli-errors.mjs (E_TLS_REQUIRED); this
+// pin fails fast on drift and keeps the guard discoverable here.
+const TLS_REQUIRED_PIN = "Refusing: remote database must use sslmode=verify-full";
+if (!OPERATOR_ERRORS.E_TLS_REQUIRED.message.includes(TLS_REQUIRED_PIN)) {
+  throw new Error("TLS floor message drift: E_TLS_REQUIRED must contain the pinned refusal.");
+}
+
 /** Production-looking connection strings need `--target production`. */
 export function isProductionDatabaseUrl(raw) {
   let url;
