@@ -376,10 +376,15 @@ test("lighthouse-origin selftest passes against the canonical import", async () 
   assert.match(stdout, /selftest: ok/, "lighthouse-origin selftest must stay green");
 });
 
-test("staging guard keeps its pinned staging literal", () => {
-  assert.ok(
-    read("e2e/staging-guard.mjs").includes("next.togetherweown.com"),
-    "e2e/staging-guard.mjs is a fail-closed guard: it keeps its own staging literal",
+test("staging guard keeps its pinned staging literal", async () => {
+  const constants = await canonical();
+  const source = read("e2e/staging-guard.mjs");
+  const raw = source.match(/https:\/\/[^\s"']+/g) ?? [];
+  const literals = [...new Set(raw.map((url) => url.replace(/[.,;]+$/, "")))];
+  assert.deepEqual(
+    literals,
+    [constants.STAGING_ORIGIN],
+    `e2e/staging-guard.mjs is a fail-closed guard: its pinned staging literal drifted from ${CANONICAL_FILE}: found ${JSON.stringify(literals)} canonical=${constants.STAGING_ORIGIN}`,
   );
 });
 
