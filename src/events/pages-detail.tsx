@@ -198,27 +198,41 @@ export const EventPage: FC<{
             </section>
           ) : null}
         </div>
-        <section class="event-share" aria-labelledby="event-share-heading">
-          <h2 id="event-share-heading">Save the date</h2>
-          <p>
-            <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
-              Add to calendar (.ics)
-            </a>
-            {gcalUrl ? (
-              <>
-                {" · "}
-                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
-                  Google Calendar
-                </a>
-              </>
-            ) : null}
-            {" · "}
-            <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
-              Copy link
-            </a>
-          </p>
-          <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-        </section>
+        {e.status === "past" ? (
+          <section class="event-share" aria-labelledby="event-share-heading">
+            <h2 id="event-share-heading">Share this event</h2>
+            <p>
+              <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
+                Copy link
+              </a>
+              {" · "}
+              <a href="/events/past">Browse past events</a>
+            </p>
+            <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          </section>
+        ) : (
+          <section class="event-share" aria-labelledby="event-share-heading">
+            <h2 id="event-share-heading">Save the date</h2>
+            <p>
+              <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
+                Add to calendar (.ics)
+              </a>
+              {gcalUrl ? (
+                <>
+                  {" · "}
+                  <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
+                    Google Calendar
+                  </a>
+                </>
+              ) : null}
+              {" · "}
+              <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
+                Copy link
+              </a>
+            </p>
+            <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          </section>
+        )}
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
         <section
