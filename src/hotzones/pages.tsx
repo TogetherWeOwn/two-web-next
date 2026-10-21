@@ -4,6 +4,7 @@
 // timestamps, no discord_id/created_at strings. Voice/games grids always carry
 // an estimate label until bot event-store calibration.
 import type { FC } from "hono/jsx";
+import { hotzonesTitle } from "../discovery-titles";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
@@ -105,7 +106,7 @@ export const HotzonesIndexPage: FC<{
   const qs = season === "all" ? "" : `?season=${season}`;
   return (
     <Layout
-      title="Hot zones — Together We Own"
+      title={`${hotzonesTitle(season)} — Together We Own`}
       canonical={canonicalUrl(appUrl, `/hotzones${qs}`)}
       shareDescription="When the community is most active, by hour and weekday."
       robots="noindex, follow"

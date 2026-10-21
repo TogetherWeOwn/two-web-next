@@ -14,6 +14,7 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
+import { pastEventsTitle } from "../../../../../src/discovery-titles";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
 import { canonicalUrl } from "../../../../../src/seo";
@@ -30,7 +31,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
 </script>
 
 <Shell
-  title="Past events"
+  title={pastEventsTitle(page, q)}
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"
   description="Look back at the community’s game nights and tournaments."
