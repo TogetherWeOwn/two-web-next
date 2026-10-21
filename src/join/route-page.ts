@@ -29,6 +29,9 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // is the only way back into /join/discord.
     const next = safeNext(c.req.query("next"));
     const source = sanitizeSource(c.req.query("source"));
+    // Sanitized like /discord and the join callback: a bad
+    // DISCORD_INVITE_URL renders the hardcoded fallback, never a dead,
+    // relative or hostile href.
     return render.joinPage(c, {
       inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,

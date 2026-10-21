@@ -33,7 +33,7 @@ let {
   </div>
 {/snippet}
 
-<Shell title="{title} — Together We Own" theme="home" accountChrome={guestChrome}>
+<Shell title={title} theme="home" accountChrome={guestChrome}>
   <section class="hero recovery-hero" aria-labelledby="recovery-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>

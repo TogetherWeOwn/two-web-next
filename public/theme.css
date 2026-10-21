@@ -57,7 +57,7 @@
 .base-theme:not(.content-theme) .btn {
   font-family: Display, 'Display Fallback', 'Arial Narrow', sans-serif;
 }
-.base-theme .btn:hover { background: #ccff3a; color: var(--paper); }
+.base-theme .btn:hover { background: var(--brand); filter: brightness(1.1); color: var(--paper); }
 .base-theme .btn:active { transform: translateY(1px); }
 .base-theme .counts { font-size: 1rem; margin: 1.5rem 0 0; font-variant-numeric: tabular-nums; }
 .base-theme .counts strong { color: var(--ink); }
