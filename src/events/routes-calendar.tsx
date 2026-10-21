@@ -110,6 +110,7 @@ export function registerCalendarRoutes(
       includeDrafts: session?.moderator ?? false,
       discord: discordEventsSource(c.env),
       now,
+      requestId: c.get("requestId"),
     });
     const {
       state,
