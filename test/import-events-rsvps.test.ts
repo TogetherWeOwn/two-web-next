@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createImportFixtureClients } from "./helpers/import-events-rsvps-db";
 // Standalone operator scripts intentionally run directly under Node, not the TS app.
 // @ts-expect-error standalone mjs has no type declarations
-import { connectDatabase, main, parentFirst, parseArgs, reportExitCode } from "../bin/import/events-rsvps.mjs";
+import { connectDatabase, EventsRsvpsUsageError, main, parentFirst, parseArgs, reportExitCode } from "../bin/import/events-rsvps.mjs";
 
 const event = (id: string, parent: string | null = null) => ({ id, event_key: `key-${id}`, parent_event_id: parent });
 
@@ -11,8 +11,9 @@ describe("legacy events import controls", () => {
     expect(parseArgs([])).toEqual({ dryRun: true });
     expect(parseArgs(["--dry-run"])).toEqual({ dryRun: true });
     expect(parseArgs(["--apply"])).toEqual({ dryRun: false });
-    for (const args of [["--apply", "--dry-run"], ["--apply", "--apply"], ["postgres://synthetic.invalid/db"], ["--help"]]) {
-      expect(() => parseArgs(args)).toThrow();
+    expect(parseArgs(["--help"])).toEqual({ dryRun: true, help: true });
+    for (const args of [["--apply", "--dry-run"], ["--apply", "--apply"], ["postgres://synthetic.invalid/db"], ["--bogus"]]) {
+      expect(() => parseArgs(args)).toThrow(EventsRsvpsUsageError);
     }
   });
 
@@ -104,14 +105,17 @@ describe("legacy events import controls", () => {
   it("does not disclose argv/env secrets on failure", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
+      // An argv URL is a usage error (exit 2 with the usage line), never an
+      // import failure; neither path may echo the URL or env secrets.
       expect(
         await main(["postgres://synthetic:do-not-print@invalid/db"], {
           LEGACY_DATABASE_URL: "synthetic-source-secret",
           DATABASE_URL: "synthetic-target-secret",
         }),
-      ).toBe(1);
+      ).toBe(2);
       expect(await main([], {})).toBe(1);
       const output = JSON.stringify(log.mock.calls);
+      expect(output).toMatch(/usage/i);
       expect(output).not.toContain("do-not-print");
       expect(output).not.toContain("synthetic-source-secret");
       expect(output).not.toContain("synthetic-target-secret");

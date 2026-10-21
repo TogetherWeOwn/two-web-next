@@ -5,7 +5,8 @@ import { IDEMPOTENCY_KEY_RETENTION_DAYS } from "../src/jobs/constants";
 
 // The operator CLI is standalone JS, not part of the Workers TypeScript bundle.
 // @ts-expect-error Standalone import tooling has no declaration file.
-import { databaseConfig, parseOptions, safeFailure, validateGrant, IDEMPOTENCY_RETENTION_DAYS } from "../bin/import/audit.mjs";
+// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
+import { AuditUsageError, databaseConfig, parseOptions, safeFailure, validateGrant, IDEMPOTENCY_RETENTION_DAYS } from "../bin/import/audit.mjs";
 
 const cli = fileURLToPath(new URL("../bin/import/audit.mjs", import.meta.url));
 
@@ -29,6 +30,7 @@ describe("audit import CLI (no credentials required)", () => {
 
   it("rejects unknown/credential arguments and contradictory modes", () => {
     for (const args of [["--url=postgres://secret"], ["postgres://secret"], ["--apply", "--dry-run"]]) {
+      expect(() => parseOptions(args)).toThrow(AuditUsageError);
       expect(() => parseOptions(args)).toThrow("invalid_options");
     }
   });
@@ -58,12 +60,20 @@ describe("audit import CLI (no credentials required)", () => {
     const help = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8", env: {} });
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("--dry-run");
-    const failure = spawnSync(process.execPath, [cli, "--url=private-secret"], {
+    // A credential-shaped argv is a usage error (exit 2 with the usage line),
+    // never an import failure; the value must not leak either way.
+    const usage = spawnSync(process.execPath, [cli, "--url=private-secret"], {
       encoding: "utf8",
       env: {},
     });
+    expect(usage.status).toBe(2);
+    expect(usage.stderr).toMatch(/usage/i);
+    expect(usage.stdout).toBe("");
+    expect(usage.stderr).not.toContain("private-secret");
+    // Bare without configuration still fails closed as an import failure.
+    const failure = spawnSync(process.execPath, [cli], { encoding: "utf8", env: {} });
     expect(failure.status).toBe(1);
     expect(failure.stderr).toContain("Audit import failed");
-    expect(failure.stderr).not.toContain("private-secret");
+    expect(failure.stderr).not.toMatch(/usage/i);
   });
 });

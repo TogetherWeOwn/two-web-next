@@ -37,6 +37,7 @@ pinned to 5432; an explicit nonzero URL port is honored.
 node bin/import/events-rsvps.mjs             # default: read-only dry run
 node bin/import/events-rsvps.mjs --dry-run   # explicit read-only dry run
 node bin/import/events-rsvps.mjs --apply     # explicit transactional writes
+node bin/import/events-rsvps.mjs --help      # print usage; reads no env, opens no connections
 ```
 
 Run the dry run, inspect its per-table counts, resolve rejected rows, and only
