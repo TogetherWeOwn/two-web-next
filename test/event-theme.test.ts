@@ -198,6 +198,9 @@ describe("event detail theme", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
-    expect(css.length).toBeLessThan(6000);
+    // 6150: the four Display stacks each carry the metric-matched
+    // 'Display Fallback' (+80 bytes over the pre-unification 5992); the
+    // ci/bundle-budget.json ceiling (7168 raw) is unchanged.
+    expect(css.length).toBeLessThan(6150);
   });
 });
