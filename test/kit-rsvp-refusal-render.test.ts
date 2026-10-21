@@ -115,6 +115,14 @@ describe("Kit RSVP refusal presentation", () => {
     expect(html).toContain('role="alert"');
   });
 
+  it("marks Events as the current location, like its Hono oracle", () => {
+    const html = renderRefusal(
+      rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" }),
+    );
+    expect(html).toContain('<a href="/events" aria-current="location">Events</a>');
+    expect(html).not.toContain('aria-current="page">Events');
+  });
+
   it("keeps the served shell chrome: event theme, no account area, skip link", () => {
     const html = renderRefusal(
       rsvpRefusalModelFor({ status: 503, retryAfter: null, eventKey: "EVT" }),

@@ -98,7 +98,8 @@ const lineup = $derived(
   description={model.shareDescription}
   shareTitle="{model.title} — Together We Own"
   theme="event"
-  activeNav="events"
+  activeNav="event"
+  member={model.viewerMember}
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >

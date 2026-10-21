@@ -13,6 +13,7 @@ import app from "./app";
 import type { Env } from "../src/env";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
+import { FALLBACK_INVITE } from "../src/invite";
 import { createMemorySessionStore } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { cookieFor, MODERATOR } from "./helpers/member-data";
@@ -428,6 +429,48 @@ describe("static .md routes (DB-free)", () => {
         expect(mb).toContain(phrase);
       }
     }
+  });
+
+  // Same hostile list as the Hono /join funnel pins: /join.md is the
+  // markdownAlternate advertised on /join, so it degrades through the same
+  // shared rule instead of echoing the raw env (or a bare gap on empty).
+  const hostileJoinInvites = [
+    "",
+    "not a URL",
+    "javascript:alert(1)",
+    "https://evil.test/Ab12",
+    "//discord.gg/Ab12",
+    "/relative/path",
+    "http://discord.gg/Ab12",
+    "https://discord.gg/Ab12/extra",
+    "https://discord.com/login",
+  ];
+
+  it.each(hostileJoinInvites)(
+    "/join.md degrades a bad invite to the hardcoded fallback: %s",
+    async (configured) => {
+      const res = await app.request(
+        "/join.md",
+        {},
+        { ...baseEnv(APP_URL), DISCORD_INVITE_URL: configured },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain(FALLBACK_INVITE);
+      expect(body).not.toContain("Use  instead");
+      if (configured) expect(body).not.toContain(configured);
+    },
+  );
+
+  it("/join.md keeps a plain valid invite on its own destination", async () => {
+    const configured = "https://discord.gg/Ab12";
+    const res = await app.request(
+      "/join.md",
+      {},
+      { ...baseEnv(APP_URL), DISCORD_INVITE_URL: configured },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(`Use ${configured} instead`);
   });
 
   it("advises staging crawlers off every machine format", async () => {
