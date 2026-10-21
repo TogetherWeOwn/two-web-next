@@ -5,6 +5,7 @@
 import type { Hono } from "hono";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
+import { inviteDestination } from "../invite";
 import { safeNext, sanitizeSource } from "./service";
 import { background, type JoinRender } from "./route-shared";
 
@@ -28,8 +29,11 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // is the only way back into /join/discord.
     const next = safeNext(c.req.query("next"));
     const source = sanitizeSource(c.req.query("source"));
+    // Sanitized like /discord and the join callback: a bad
+    // DISCORD_INVITE_URL renders the hardcoded fallback, never a dead,
+    // relative or hostile href.
     return render.joinPage(c, {
-      inviteUrl: c.env.DISCORD_INVITE_URL,
+      inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,
       widgetSnapshot,
       next,
