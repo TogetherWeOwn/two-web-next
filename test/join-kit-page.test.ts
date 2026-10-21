@@ -91,10 +91,14 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
     expect(page).not.toContain("<iframe");
   });
 
-  it("renders the one-shot flash banner with the Hono copy", () => {
-    expect(page).toContain("You are in. Finish Discord");
-    expect(page).toContain("You are already in the server.");
-    expect(page).toContain("Rejoin with the Discord invite");
+  it("renders the one-shot flash banner from the shared Hono copy", () => {
+    // Single-sourced: the sentences live in src/home-copy.ts (the same module
+    // the Hono banner renders) and ride to this page as load data, never as
+    // duplicated literals in the page source.
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.added");
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.alreadyInServer");
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.reinvite");
+    expect(load).toContain("HOME_JOIN_RESULT_COPY");
   });
 
   it("renders presence aggregates only, never member names", () => {
