@@ -1,4 +1,5 @@
 import { uniqueKey } from "./sync-event";
+import { queueExceptionClass } from "./queue-error";
 import type { QueueLedger, QueueMessage } from "./types";
 
 type Sendable = { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> };
@@ -43,11 +44,10 @@ export function trackingQueue(
         return await queue.send({ ...msg, jobId }, opts);
       } catch (err) {
         await ledger.dequeued(jobId).catch((e: unknown) => {
-          console.warn(
-            "queue ledger compensation failed",
-            jobId,
-            e instanceof Error ? e.constructor.name : typeof e,
-          );
+          console.warn("queue ledger compensation failed", {
+            job_id: jobId,
+            exception: queueExceptionClass(e),
+          });
         });
         throw err;
       }
