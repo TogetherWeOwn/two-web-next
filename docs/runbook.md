@@ -1294,7 +1294,9 @@ and `null` otherwise, so an arbitrary manual tag never reaches the public body.
 `node bin/revision-check.mjs <origin> [<sha>] [--json] [--help]` reads it: with
 a SHA it fails unless that commit is live, without one it only logs what is
 live. `--json` emits a versioned verdict (`version`, `mode`, `commit`,
-`verified`, `code`, `next_action`) to stdout with no attempt chatter;
+`verified`, `code`, `next_action`, plus `expected_commit` in verify mode) to
+stdout with no attempt chatter; in verify mode `commit` is the live commit on
+success and `null` on failure while `expected_commit` is the requested SHA.
 `--help` prints usage to stdout and probes nothing.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty

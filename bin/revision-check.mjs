@@ -125,6 +125,20 @@ function verifyNextAction(code) {
   return "live /up is unreadable; check origin reachability";
 }
 
+// Test hook for CLI tests: REVISION_CHECK_ATTEMPTS (1-6) and
+// REVISION_CHECK_DELAY_MS (0-10000) override verify retries. Unset or invalid
+// values fall back to production defaults (6 attempts, 10s delay). Human and
+// JSON verify arms share this so offline fixtures stay fast without changing
+// deploy behavior.
+export function revisionRetryConfig(env = process.env) {
+  const attempts = Number.parseInt(env.REVISION_CHECK_ATTEMPTS ?? "", 10);
+  const delayMs = Number.parseInt(env.REVISION_CHECK_DELAY_MS ?? "", 10);
+  return {
+    attempts: Number.isInteger(attempts) && attempts >= 1 && attempts <= 6 ? attempts : 6,
+    delayMs: Number.isInteger(delayMs) && delayMs >= 0 && delayMs <= 10_000 ? delayMs : 10_000,
+  };
+}
+
 if (isMainEntry()) {
   let parsed;
   try {
@@ -190,12 +204,17 @@ if (isMainEntry()) {
     }
   } else if (parsed && parsed.json) {
     try {
-      const revision = await verifyRevision(parsed.origin, parsed.expected, { log: () => {} });
+      const retry = revisionRetryConfig();
+      const revision = await verifyRevision(parsed.origin, parsed.expected, {
+        ...retry,
+        log: () => {},
+      });
       console.log(
         JSON.stringify({
           version: 1,
           mode: "verify",
           commit: revision.commit,
+          expected_commit: parsed.expected,
           verified: true,
           code: "verify.verified",
           next_action: "deployed revision verified; no further action",
@@ -208,7 +227,8 @@ if (isMainEntry()) {
         JSON.stringify({
           version: 1,
           mode: "verify",
-          commit: parsed.expected,
+          commit: null,
+          expected_commit: parsed.expected,
           verified: false,
           code,
           next_action: verifyNextAction(code),
@@ -231,7 +251,7 @@ if (isMainEntry()) {
     }
   } else if (parsed) {
     try {
-      const revision = await verifyRevision(parsed.origin, parsed.expected);
+      const revision = await verifyRevision(parsed.origin, parsed.expected, revisionRetryConfig());
       summarize(
         `Deployed revision verified: version \`${revision.version_id}\`, commit \`${revision.commit}\``,
       );

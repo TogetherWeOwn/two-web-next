@@ -196,8 +196,12 @@ export function parseAlertArgs(args) {
   return { help: false, receiptFile, dryRun };
 }
 
-async function main() {
-  const args = process.argv.slice(2);
+export async function main({
+  args = process.argv.slice(2),
+  env = process.env,
+  probe = runProbe,
+  readImpl = readFile,
+} = {}) {
   let parsed;
   try {
     parsed = parseAlertArgs(args);
@@ -211,7 +215,7 @@ async function main() {
     return;
   }
   if (parsed.dryRun) {
-    if (!process.env.QA_AUTH_TOKEN) {
+    if (!env.QA_AUTH_TOKEN) {
       console.error(
         "alert-probe dry-run failed: QA_AUTH_TOKEN is required; no delivery claimed. code=missing_token",
       );
@@ -219,7 +223,7 @@ async function main() {
       return;
     }
     try {
-      await readFile(parsed.receiptFile, "utf8");
+      await readImpl(parsed.receiptFile, "utf8");
     } catch {
       console.error(
         "alert-probe dry-run failed: cannot read receipt file; no delivery claimed. code=unreadable_receipt",
@@ -236,21 +240,21 @@ async function main() {
     );
     return;
   }
-  if (!process.env.QA_AUTH_TOKEN) {
+  if (!env.QA_AUTH_TOKEN) {
     console.error(`${FAILURE_LINE} code=missing_token`);
     process.exitCode = 2;
     return;
   }
   try {
-    await readFile(parsed.receiptFile, "utf8");
+    await readImpl(parsed.receiptFile, "utf8");
   } catch {
     console.error(`${FAILURE_LINE} code=unreadable_receipt`);
     process.exitCode = 2;
     return;
   }
   try {
-    const result = await runProbe({
-      token: process.env.QA_AUTH_TOKEN,
+    const result = await probe({
+      token: env.QA_AUTH_TOKEN,
       receiptFile: parsed.receiptFile,
     });
     console.log(JSON.stringify(result, null, 2));
