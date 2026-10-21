@@ -60,6 +60,12 @@ const SUITES = [
     title: "admin editor expiry departure in Chromium",
     min: 4,
   },
+  {
+    file: "test/event-device-timezone.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "event device timezone browser acceptance",
+    min: 30,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");

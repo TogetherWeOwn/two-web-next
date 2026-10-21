@@ -3,6 +3,8 @@
 // (web/src/routes/faq/). Pure data: no session, no cookie, no
 // database — importing this module must never connect to anything.
 
+import { SUBSCRIPTION_GUIDANCE } from "./events/subscription-copy";
+
 export const FAQS: Array<{
   section: string;
   sectionId: string;
@@ -69,6 +71,11 @@ export const FAQS: Array<{
       [
         "Where do I find events, and do I need an account to look?",
         "On the site's Events page: game nights, tournaments, whatever the community puts on. Anyone can read it — including signed-out visitors arriving from a Discord link.",
+      ],
+      [
+        "How do I subscribe to events in my calendar?",
+        "On Events or Past events, open “How to subscribe to the calendar”. " +
+          SUBSCRIPTION_GUIDANCE.join(" ").replace("feed URL below", "feed URL shown there"),
       ],
       [
         "How do I RSVP, and what do the answers mean?",

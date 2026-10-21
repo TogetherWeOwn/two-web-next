@@ -107,8 +107,12 @@ it.each([
   expect(html).toContain('class="schedule-heading"');
   const scripts =
     path === "/events/past"
-      ? ['<script src="/islands/past-events.js" defer="">']
+      ? [
+          '<script src="/islands/copy-link.js" defer="">',
+          '<script src="/islands/past-events.js" defer="">',
+        ]
       : [
+          '<script src="/islands/copy-link.js" defer="">',
           '<script src="/islands/events-calendar.js" defer="">',
           // Main's signed-in tab recovery controller is first-party, not vendor JS.
           '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">',
