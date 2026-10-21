@@ -256,7 +256,12 @@ describe("controls: at/under-cap profile writes keep the current behavior", () =
         contentType,
       );
       expect(response.status).toBe(403);
-      expect(await response.text()).toBe("Forbidden");
+      // JSON Accept selects the machine envelope (browsers get the branded
+      // own-profile page); the bare "Forbidden" text is gone on this leg.
+      expect(await response.json()).toEqual({
+        error: "forbidden",
+        message: "You can only edit your own profile.",
+      });
       expect(throttle).toHaveBeenCalledOnce();
       expect(get).toHaveBeenCalledOnce();
       expect(store.save).not.toHaveBeenCalled();
