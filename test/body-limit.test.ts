@@ -150,7 +150,17 @@ describe("every registered write route is body-limited", () => {
         env,
       );
       if (bytes === max) expect(response.status).not.toBe(413);
-      else {
+      else if (key === "POST /mcp") {
+        // Route-native machine failure: an /mcp overcap answers the documented
+        // JSON-RPC error (null id, static transport code), never the shared
+        // generic envelope or the branded page, whatever Accept says.
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: ERROR.message },
+        });
+      } else {
         expect(response.status).toBe(413);
         expect(await response.json()).toEqual(ERROR);
       }
