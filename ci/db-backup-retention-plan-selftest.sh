@@ -91,6 +91,11 @@ case "$op" in
     cp "$file" "$dest"
     ;;
   get)
+    if [ -n "${FAIL_GET_GENERIC:-}" ]; then
+      case "$path" in
+        *"$FAIL_GET_GENERIC"*) echo "✘ [ERROR] fetch failed." >&2; exit 1 ;;
+      esac
+    fi
     [ -f "$dest" ] || { echo "✘ [ERROR] The specified key does not exist." >&2; exit 1; }
     if [ "$pipe" = 1 ]; then cat "$dest"; else cp "$dest" "$file"; fi
     ;;
@@ -263,11 +268,25 @@ s_empty() {
   [ "$(grep -c '^delete: ' "$T/out" || true)" = 0 ] || fail "empty preview must plan zero deletes"
   ok "empty preview plans zero deletes"
   local rc=0
+  : > "$CALL_LOG"
   "$BIN" rotate staging --apply >"$T/applied" 2>"$T/err" || rc=$?
   [ "$rc" = 0 ] || fail "empty --apply exits 0 (rc=$rc): $(cat "$T/err")"
   ok "empty --apply exits 0"
+  [ "$(grep -c ' object put' "$CALL_LOG" || true)" = 0 ] || fail "empty text apply ran manifest PUTs: $(cat "$CALL_LOG")"
+  [ "$(delete_ops)" = 0 ] || fail "empty text apply ran object deletes: $(cat "$CALL_LOG")"
+  ok "empty text apply performs zero manifest PUTs and zero deletes"
   cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "empty apply rewrote the manifest"
   ok "empty apply leaves the manifest byte-identical"
+  : > "$CALL_LOG"
+  rc=0
+  "$BIN" rotate staging --apply --json >"$T/applied.json" 2>"$T/err" || rc=$?
+  [ "$rc" = 0 ] || fail "empty --apply --json exits 0 (rc=$rc): $(cat "$T/err")"
+  ok "empty JSON apply exits 0"
+  [ "$(grep -c ' object put' "$CALL_LOG" || true)" = 0 ] || fail "empty JSON apply ran manifest PUTs: $(cat "$CALL_LOG")"
+  [ "$(delete_ops)" = 0 ] || fail "empty JSON apply ran object deletes: $(cat "$CALL_LOG")"
+  ok "empty JSON apply performs zero manifest PUTs and zero deletes"
+  cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "empty JSON apply rewrote the manifest"
+  ok "empty JSON apply leaves the manifest byte-identical"
 }
 
 s_exact_limit() {
@@ -280,10 +299,24 @@ s_exact_limit() {
   [ "$(grep -c '^keep: ' "$T/out" || true)" = 11 ] || fail "exact-limit preview must keep all 11 archives"
   ok "exact-limit preview keeps all 11 archives"
   local rc=0
+  : > "$CALL_LOG"
   "$BIN" rotate staging --apply >"$T/applied" 2>"$T/err" || rc=$?
   [ "$rc" = 0 ] || fail "exact-limit --apply exits 0 (rc=$rc): $(cat "$T/err")"
+  [ "$(grep -c ' object put' "$CALL_LOG" || true)" = 0 ] || fail "exact-limit text apply ran manifest PUTs: $(cat "$CALL_LOG")"
+  [ "$(delete_ops)" = 0 ] || fail "exact-limit text apply ran object deletes: $(cat "$CALL_LOG")"
+  ok "exact-limit text apply performs zero manifest PUTs and zero deletes"
   cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "exact-limit apply rewrote the manifest"
   ok "exact-limit apply leaves the manifest byte-identical"
+  : > "$CALL_LOG"
+  rc=0
+  "$BIN" rotate staging --apply --json >"$T/applied.json" 2>"$T/err" || rc=$?
+  [ "$rc" = 0 ] || fail "exact-limit --apply --json exits 0 (rc=$rc): $(cat "$T/err")"
+  ok "exact-limit JSON apply exits 0"
+  [ "$(grep -c ' object put' "$CALL_LOG" || true)" = 0 ] || fail "exact-limit JSON apply ran manifest PUTs: $(cat "$CALL_LOG")"
+  [ "$(delete_ops)" = 0 ] || fail "exact-limit JSON apply ran object deletes: $(cat "$CALL_LOG")"
+  ok "exact-limit JSON apply performs zero manifest PUTs and zero deletes"
+  cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "exact-limit JSON apply rewrote the manifest"
+  ok "exact-limit JSON apply leaves the manifest byte-identical"
 }
 
 s_mixtures() {
@@ -295,6 +328,21 @@ s_mixtures() {
   { daily_key 1; daily_key 2; weekly_key 1; weekly_key 2; } | sort > "$T/expected.delete"
   diff -u "$T/expected.delete" "$T/sets.delete" || fail "mixture delete set must be exactly the 4 expired archives"
   ok "mixture preview deletes exactly the expired archives"
+  local md1 md2 mw1 mw2
+  md1="$(daily_key 1)"; md2="$(daily_key 2)"; mw1="$(weekly_key 1)"; mw2="$(weekly_key 2)"
+  "$BIN" rotate staging --json >"$T/mixture-preview.json" 2>"$T/err" || fail "mixture preview --json exits 0"
+  python3 - "$T/mixture-preview.json" "$md1" "$md2" "$mw1" "$mw2" <<'PY' || fail "mixture preview JSON must null receipts for legacy deletes only"
+import json, pathlib, sys
+doc, md1, md2, mw1, mw2 = pathlib.Path(sys.argv[1]).read_text(), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+plan = json.loads(doc)
+assert plan["code"] == "retention.plan.preview", plan
+by_key = {action["key"]: action["receipt"] for action in plan["actions"]}
+assert by_key[md1] is None, by_key
+assert by_key[mw2] is None, by_key
+assert by_key[md2] == md2 + ".digest.json", by_key
+assert by_key[mw1] == mw1 + ".digest.json", by_key
+PY
+  ok "mixture preview JSON nulls receipts for legacy deletes only"
   local rc=0
   "$BIN" rotate staging --apply >"$T/applied" 2>"$T/err" || rc=$?
   [ "$rc" = 0 ] || fail "mixture --apply exits 0 (rc=$rc): $(cat "$T/err")"
@@ -541,6 +589,59 @@ PY
   ok "partial JSON reports completed vs failed with a safe next action"
   cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "partial JSON apply rewrote the manifest"
   ok "partial JSON apply leaves the manifest unchanged"
+  # Mixture partial JSON also nulls receipts for legacy deletes.
+  reset_store
+  seed_store 9 6 "1,5" "2"
+  cp "$STUB_R2/$MANIFEST" "$T/manifest-before"
+  local md1 md2 mw1 mw2
+  md1="$(daily_key 1)"; md2="$(daily_key 2)"; mw1="$(weekly_key 1)"; mw2="$(weekly_key 2)"
+  rc=0
+  FAIL_DELETE_MATCH="20250102T000000Z.dump" "$BIN" rotate staging --apply --json >"$T/mixture-partial.json" 2>"$T/err" || rc=$?
+  [ "$rc" != 0 ] || fail "mixture partial --json must exit non-zero"
+  python3 - "$T/mixture-partial.json" "$md1" "$md2" "$mw1" "$mw2" <<'PY' || fail "mixture partial JSON must report completed vs failed with legacy receipt nulls"
+import json, pathlib, sys
+doc, md1, md2, mw1, mw2 = pathlib.Path(sys.argv[1]).read_text(), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+partial = json.loads(doc)
+assert partial["code"] == "retention.plan.partial_failure", partial
+assert partial["mode"] == "apply", partial
+assert sorted(partial["completed"]) == sorted([mw1, mw2, md1]), partial
+assert partial["failed"] == [md2], partial
+by_key = {action["key"]: action["receipt"] for action in partial["actions"]}
+assert by_key[md1] is None, by_key
+assert by_key[mw2] is None, by_key
+assert by_key[md2] == md2 + ".digest.json", by_key
+assert by_key[mw1] == mw1 + ".digest.json", by_key
+assert md2 in partial["nextAction"], partial
+PY
+  ok "mixture partial JSON nulls receipts for legacy deletes only"
+  cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "mixture partial JSON apply rewrote the manifest"
+  ok "mixture partial JSON apply leaves the manifest unchanged"
+  # Generic probe-GET failure must fail the apply (archive branch).
+  reset_store
+  seed_store 9 4 "" ""
+  cp "$STUB_R2/$MANIFEST" "$T/manifest-before"
+  local gd1 gd2
+  gd1="$(daily_key 1)"; gd2="$(daily_key 2)"
+  rc=0
+  FAIL_DELETE_MATCH="20250102T000000Z.dump" FAIL_GET_GENERIC="20250102T000000Z.dump" "$BIN" rotate staging --apply >"$T/out-generic" 2>"$T/err-generic" || rc=$?
+  [ "$rc" != 0 ] || fail "generic probe failure must fail the apply (archive branch, rc=$rc)"
+  ok "generic probe failure fails the apply (archive branch)"
+  [ -f "$STUB_R2/$gd2" ] || fail "generic probe failure dropped still-existing archive $gd2"
+  cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "generic probe failure rewrote the manifest (archive branch)"
+  ok "generic probe failure leaves the archive and manifest intact (archive branch)"
+  # Generic probe-GET failure must fail the apply (receipt branch).
+  reset_store
+  seed_store 9 4 "" ""
+  cp "$STUB_R2/$MANIFEST" "$T/manifest-before"
+  local rd2 rreceipt
+  rd2="$(daily_key 2)"; rreceipt="$rd2.digest.json"
+  rc=0
+  FAIL_DELETE_MATCH="20250102T000000Z.dump.digest.json" FAIL_GET_GENERIC="20250102T000000Z.dump.digest.json" "$BIN" rotate staging --apply >"$T/out-generic-receipt" 2>"$T/err-generic-receipt" || rc=$?
+  [ "$rc" != 0 ] || fail "generic probe failure must fail the apply (receipt branch, rc=$rc)"
+  ok "generic probe failure fails the apply (receipt branch)"
+  [ -f "$STUB_R2/$rreceipt" ] || fail "generic probe failure dropped still-existing receipt $rreceipt"
+  cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "generic probe failure rewrote the manifest (receipt branch)"
+  ok "generic probe failure leaves the receipt and manifest intact (receipt branch)"
 }
 
 s_guards() {
