@@ -22,7 +22,7 @@ button.link { background: none; border: 0; color: var(--brand); cursor: pointer;
 footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 2rem; }
 .facts { list-style: none; margin: 1.5rem 0; padding: 0; display: grid; gap: 1rem; }
 dl.facts > div { display: block; }
-.card { border: 1px solid #d8cfc0; background: #fffdf8; padding: 1rem 1.25rem; border-radius: .5rem; }
+.card, fieldset { border: 1px solid #d8cfc0; background: #fffdf8; padding: 1rem 1.25rem; border-radius: .5rem; }
 .card dt, .card h2, .card h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
 .card dd, .card p { margin: 0; color: var(--muted); }
 .counts { color: var(--muted); font-size: .95rem; }
@@ -47,9 +47,7 @@ dl.facts > div { display: block; }
 .field { margin: 1rem 0; }
 .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
 .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-.field .hint { color: #6b6257; font-size: .85rem; }
-.hint { color: #6b6257; font-size: .85rem; }
-fieldset { border: 1px solid #d8cfc0; padding: .75rem 1rem 1rem; margin: 1rem 0; max-width: 36rem; }
+.field .hint, .hint { color: #6b6257; font-size: .85rem; }
 legend { font-weight: 700; padding: 0 .5rem; }
 .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
 .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
