@@ -154,7 +154,13 @@ export function registerJoinCallbackRoutes(
     const store =
       state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
     const admitted =
-      store && (await store.journeys.consume(await hashToken(state!), "join").catch(() => false));
+      store &&
+      (await store.journeys.consume(await hashToken(state!), "join").catch((err: unknown) => {
+        // A classified store outage is not an expired link. Let the shared
+        // handler render its branded 503 without logging driver details here.
+        if (isDatabaseUnavailable(err)) throw err;
+        return false;
+      }));
 
     // Only an admitted callback owns the jar's journey. A stale tab or stray
     // hit must leave the newer tab's state and return intent intact.

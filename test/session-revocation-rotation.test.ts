@@ -139,7 +139,14 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
       await plainHold.done;
 
       // Complete count: the plain session and the successor minted mid-flight.
-      await expect(revocation).resolves.toEqual({ web_sessions: 2 });
+      // Pass count depends on the race interleaving, so pin the count plus
+      // the pass invariants rather than an exact pass array.
+      const converged = await revocation!;
+      expect(converged).toMatchObject({ web_sessions: 2 });
+      expect(converged.passes).toBe(converged.stampsPerPass.length);
+      expect(converged.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        converged.web_sessions,
+      );
       expect(await liveCount(VICTIM)).toBe(0);
       expect(await store.get("converge-successor")).toBeNull();
       expect(await store.get("converge-plain")).toBeNull();
@@ -295,7 +302,12 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
       hold.release();
       await hold.done;
 
-      await expect(revocation).resolves.toEqual({ web_sessions: 1 });
+      const won = await revocation!;
+      expect(won).toMatchObject({ web_sessions: 1 });
+      expect(won.passes).toBe(won.stampsPerPass.length);
+      expect(won.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        won.web_sessions,
+      );
       expect(await rotation).toBe(false);
       expect(await store.get("ahead-successor")).toBeNull();
       expect(await liveCount(VICTIM)).toBe(0);
@@ -311,6 +323,8 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
 
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: true })).toEqual({
       web_sessions: 2,
+      passes: 0,
+      stampsPerPass: [],
     });
     expect(await liveCount(VICTIM)).toBe(2);
     // Legitimate rotation still yields exactly one live successor; the
@@ -321,6 +335,8 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
     expect(await liveCount(VICTIM)).toBe(2);
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: true })).toEqual({
       web_sessions: 2,
+      passes: 0,
+      stampsPerPass: [],
     });
     expect(await liveCount(VICTIM)).toBe(2);
     // A revoked successor grants nothing through its predecessor.
@@ -341,6 +357,8 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
 
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: false })).toEqual({
       web_sessions: 1,
+      passes: 1,
+      stampsPerPass: [1],
     });
     const rows = await fixture.client<{ token_hash: string; revoked: boolean }[]>`
       select token_hash, revoked_at is not null as revoked from web_sessions order by token_hash`;
@@ -353,6 +371,8 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
     // A second run with nothing revocable live reports zero and does not throw.
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: false })).toEqual({
       web_sessions: 0,
+      passes: 1,
+      stampsPerPass: [0],
     });
   });
 
@@ -361,6 +381,8 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
     expect(await store.rotate("seq-source", session("seq-successor"))).toBe(true);
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: false })).toEqual({
       web_sessions: 1,
+      passes: 1,
+      stampsPerPass: [1],
     });
     expect(await liveCount(VICTIM)).toBe(0);
     expect(await store.get("seq-successor")).toBeNull();

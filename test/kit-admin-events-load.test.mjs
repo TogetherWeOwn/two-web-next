@@ -74,11 +74,17 @@ const parent = async () => ({ actor });
 const refused = () =>
   Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" });
 
+// Inventory reads install transaction-local timeouts before their SELECTs.
+function inventoryDb(db) {
+  const tx = { ...db, select: vi.fn(db.select), execute: vi.fn(async () => []) };
+  return { ...db, tx, transaction: vi.fn(async (fn) => fn(tx)) };
+}
+
 /** Drizzle builders are lazy thenables: one chain per select, queued results. */
 function rowsDb(eventRows, countRows = []) {
   let outstanding = [eventRows, countRows];
   const queries = [];
-  return {
+  return inventoryDb({
     queries,
     select: () => {
       const query = {};
@@ -97,15 +103,15 @@ function rowsDb(eventRows, countRows = []) {
         );
       return chain;
     },
-  };
+  });
 }
 
 function throwingDb(err) {
-  return {
+  return inventoryDb({
     select: () => {
       throw err;
     },
-  };
+  });
 }
 
 function rejectingDb(err) {
@@ -114,7 +120,7 @@ function rejectingDb(err) {
     chain[m] = () => chain;
   }
   chain.then = (_resolve, reject) => Promise.resolve().then(() => reject(err));
-  return { select: () => chain };
+  return inventoryDb({ select: () => chain });
 }
 
 const eventRow = (i) => ({
@@ -231,6 +237,16 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
 
     const [eventsRead, goingRead] = db.queries;
     const dialect = new PgDialect();
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(db.tx.execute).toHaveBeenCalledOnce();
+    expect(dialect.sqlToQuery(db.tx.execute.mock.calls[0][0])).toMatchObject({
+      sql: "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+      params: ["2000ms", "2000ms"],
+    });
+    expect(db.tx.select).toHaveBeenCalledTimes(2);
+    expect(db.tx.execute.mock.invocationCallOrder[0]).toBeLessThan(
+      db.tx.select.mock.invocationCallOrder[0],
+    );
     const predicate = dialect.sqlToQuery(eventsRead.where[0][0]);
     expect(predicate.sql).toContain('"events"."title" ilike');
     expect(predicate.sql).toContain('"events"."status" =');

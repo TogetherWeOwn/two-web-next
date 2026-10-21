@@ -126,7 +126,7 @@ describe("moderator event writes with a malformed bearer", () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
       error: "Unauthorized",
-      recovery: "/auth/recover?next=%2Fevents",
+      recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
     });
     expect(get).toHaveBeenCalled();
   });

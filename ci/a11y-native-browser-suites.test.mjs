@@ -43,10 +43,22 @@ const SUITES = [
     min: 6,
   },
   {
+    file: "test/profile-device-timezone.test.ts",
+    env: "PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS",
+    title: "profile device timezone in Chromium",
+    min: 49,
+  },
+  {
     file: "test/admin-editor-expiry-departure.test.ts",
     env: "ADMIN_EDITOR_EXPIRY_BROWSER_TESTS",
     title: "admin editor expiry departure in Chromium",
     min: 4,
+  },
+  {
+    file: "test/event-device-timezone.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "event device timezone browser acceptance",
+    min: 30,
   },
 ];
 
