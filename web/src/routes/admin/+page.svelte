@@ -43,6 +43,7 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
         <p data-testid="join-funnel-empty">No join attempts in the window.</p>
       {:else}
         <p id="join-funnel-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the wide table on narrow screens (axe scrollable-region-focusable requires it); region pattern matches src/admin/pages/dashboard.tsx. -->
         <div
           class="admin-table-scroll"
           role="region"
@@ -79,6 +80,7 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
         <p data-testid="top-zero-searches-empty">No missed searches.</p>
       {:else}
         <p id="top-zero-searches-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the wide table on narrow screens (axe scrollable-region-focusable requires it); region pattern matches src/admin/pages/dashboard.tsx. -->
         <div
           class="admin-table-scroll"
           role="region"
