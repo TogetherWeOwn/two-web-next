@@ -1,13 +1,17 @@
 import type { FC } from "hono/jsx";
 import type { DiscordWidgetSnapshot } from "../discord-widget";
+import { JOIN_INTRO } from "../home-copy";
 import type { JOIN_START_FAILED_NOTICE } from "../join/route-shared";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { JoinResultBanner, Layout, SiteFooter, SiteHeader } from "../page-shell";
 
+// The intro literal lives in ../home-copy (single source both renderers read);
+// this re-export keeps the existing importers (md alternate, public API,
+// pages barrel) working untouched.
 // Join carries the same share tags as home (TOG-5624): the funnel lives on
 // shared links. The intro doubles as the share description, same as legacy.
-export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
+export { JOIN_INTRO };
 
 export const Join: FC<{
   inviteUrl: string;

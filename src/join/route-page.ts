@@ -5,6 +5,7 @@
 import type { Hono } from "hono";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
+import { inviteDestination } from "../invite";
 import { safeNext, sanitizeSource } from "./service";
 import { background, JOIN_START_FAILED_NOTICE, type JoinRender } from "./route-shared";
 
@@ -34,8 +35,11 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // hostile or mistyped value leaves no trace in the HTML.
     const notice =
       c.req.query("notice") === JOIN_START_FAILED_NOTICE ? JOIN_START_FAILED_NOTICE : null;
+    // Sanitized like /discord and the join callback: a bad
+    // DISCORD_INVITE_URL renders the hardcoded fallback, never a dead,
+    // relative or hostile href.
     return render.joinPage(c, {
-      inviteUrl: c.env.DISCORD_INVITE_URL,
+      inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,
       widgetSnapshot,
       next,

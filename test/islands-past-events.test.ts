@@ -240,7 +240,7 @@ describe("PastEvents contract and SSR drift", () => {
     expect(named!.params.at(-1)).toBe("");
     expect(occupancy!.sql).not.toContain('inner join "users"');
     expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
-    expect(source.queries.filter((q) => /join/i.test(q.sql))).toEqual([named]);
+    expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([named]);
   });
 });
 
