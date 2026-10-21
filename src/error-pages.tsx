@@ -217,6 +217,28 @@ export const ForbiddenPage: FC<{ inviteUrl: string; supportReference?: string }>
   </ErrorShell>
 );
 
+// 403 for a signed-in member writing another member's profile: only the
+// member's own profile can be edited, so the recovery links back to the
+// viewer's own profile (/profile) — never the join-to-unlock path (re-signing
+// in cannot mint ownership) and never the refused target (no leak surface).
+// Static copy only: no session, DB, target-id or target-field reads.
+export const OwnProfileOnlyPage: FC = () => (
+  <ErrorShell code="403" title="Only your own profile">
+    <p class="lead">
+      You can only edit your own profile — this save was refused and nothing was changed. Head back
+      to your profile and try again from there.
+    </p>
+    <p class="recovery-actions">
+      <a class="btn" href="/profile" data-testid="error-own-profile">
+        Back to your profile
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
+    </p>
+  </ErrorShell>
+);
+
 // 410. Generic retired-page shell, distinct from the event-specific
 // EventGonePage: unknown and URL-freeze-retired paths stay 404, while an
 // explicitly retired document answers here. No session or DB reads.

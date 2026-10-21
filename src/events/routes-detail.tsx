@@ -1,7 +1,12 @@
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
-import { databaseUnavailable, forbidden, NotFoundPage } from "../errors";
+import {
+  databaseUnavailable,
+  databaseUnavailableBuffered,
+  forbidden,
+  NotFoundPage,
+} from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
@@ -123,7 +128,7 @@ export function registerDetailRoutes(
           }
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
-          if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+          if (!db) return databaseUnavailableBuffered(c);
           const e = await getPublicEvent(db, key);
           if (!e) return notFound();
           if (e.status === "cancelled") {

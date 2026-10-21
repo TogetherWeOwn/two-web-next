@@ -1,8 +1,8 @@
 // GET /profile and GET /members/:user: the profile page render. Split out of
 // src/profiles/routes.tsx; registered after the gate so every read is
 // member-gated and access-logged by routes-gate.ts.
-import { NotFoundPage } from "../errors";
-import { bufferedMemberHtml, bufferedMemberText, declareMemberResult } from "../member-reads";
+import { databaseUnavailableBuffered, NotFoundPage } from "../errors";
+import { bufferedMemberHtml, declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import { readJoinResult } from "../return-journey";
 import { ProfilePage } from "./pages";
@@ -22,7 +22,7 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
       );
     if (!SNOWFLAKE.test(id)) return notFound();
     const store = await storeFor(c);
-    if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
+    if (!store) return databaseUnavailableBuffered(c);
     const member = await store.find(id);
     // Borrowed non-SQL stores declare retrieved keys, never the requested id.
     declareMemberResult(member ? [member.id] : []);
