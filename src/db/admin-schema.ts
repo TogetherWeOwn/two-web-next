@@ -32,7 +32,7 @@ import { agentEventGrants } from "./schema";
 //   roster, so an FK would reject every admin write with 23503. The W-auth
 //   slice owns the roster question; this slice stores the snowflake.
 
-export const events = pgTable(
+const eventsTable = pgTable(
   "events",
   {
     id: serial("id").primaryKey(),
@@ -43,6 +43,7 @@ export const events = pgTable(
     title: text("title").notNull(),
     game: text("game"),
     description: text("description"),
+    accessibilityNotes: text("accessibility_notes"),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     // IANA zone the host typed the wall time in. The instants above are the
@@ -76,7 +77,7 @@ export const events = pgTable(
     recurrenceEndsOn: timestamp("recurrence_ends_on"),
     // The self-reference needs the column type spelled out (drizzle self-FK
     // inference cycle — tsc rejects the bare `() => events.id` form).
-    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, {
+    parentEventId: integer("parent_event_id").references((): AnyPgColumn => eventsTable.id, {
       onDelete: "set null",
     }),
     recurrenceIndex: integer("recurrence_index"),
@@ -93,6 +94,15 @@ export const events = pgTable(
     index("events_starts_at_id_index").on(t.startsAt, t.id),
   ],
 );
+
+type EventSelect = Omit<typeof eventsTable.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
+};
+
+export const events = eventsTable as Omit<typeof eventsTable, "$inferSelect"> & {
+  readonly $inferSelect: EventSelect;
+};
 
 // An attempted request is immutable for the lifetime of its idempotency key.
 // One pending attempt per event also orders requests when retries outlive the
