@@ -381,7 +381,10 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     eventStore.mockClear();
     const cached = await get("/api/public/events", { headers: { "if-none-match": etag! } });
     expect(cached.status).toBe(304);
-    expect(cached.headers.get("cache-control")).toBe("public, max-age=60");
+    // Remaining TTL on a real clock: a hit within the same second still
+    // answers 60, a hit after a slow tick answers 59. Same tolerance as the
+    // anonymous-card retire pins; exact values stay pinned under a fake clock.
+    expect(cached.headers.get("cache-control")).toMatch(/^public, max-age=(59|60)$/);
     expect(eventStore).not.toHaveBeenCalled();
   });
 
