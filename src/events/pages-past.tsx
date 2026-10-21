@@ -15,6 +15,7 @@ import {
   pastEventsUrl,
 } from "../islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
+import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 
@@ -73,6 +74,7 @@ export const PastEventsPage: FC<{
         </a>{" "}
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
+      {subscriptionHelp(appUrl)}
       <div data-archive-state>
         {q ? (
           <p role="status">
@@ -118,6 +120,7 @@ export const PastEventsPage: FC<{
       </p>
       <p role="status" data-archive-feedback></p>
     </section>
+    <script src="/islands/copy-link.js" defer />
     <script src="/islands/past-events.js" defer />
   </ScheduleShell>
 );

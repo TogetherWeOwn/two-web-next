@@ -15,9 +15,9 @@
 // retry enabled and focus restored to that control (disabling it in flight
 // drops focus to BODY). Response-less transport requires SSR
 // recovery with mutations disabled; 401/419/302-to-login shows
-// the session-expired notice with the SSR login link (`?next=` return path,
-// never the update endpoint, board-8135, board-9254) — never the native confirm
-// (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
+// the session-expired notice with the recovery link (or SSR guest login link).
+// Both carry a page return path, never the update endpoint (board-8135, board-9254)
+// or the native confirm (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
 // page reloads into the fresh SSR (board-7419 clock-ended hole stays shut).
 // Sync notes mirror the contract copy: a fresh write answers
 // `synced_to_discord_at: null`, so success shows "Saved. Syncing to
@@ -135,6 +135,17 @@
     }
     return "/join/discord?next=" + encodeURIComponent(next);
   }
+  // Only the shared recovery landing may replace the guest sign-in link.
+  // Rebuild its query so response data cannot become an executable href.
+  function safeRecoveryUrl(raw) {
+    var prefix = "/auth/recover?next=";
+    if (typeof raw !== "string" || raw.indexOf(prefix) !== 0) return null;
+    try {
+      return prefix + encodeURIComponent(decodeURIComponent(raw.slice(prefix.length)));
+    } catch {
+      return null;
+    }
+  }
   var loginUrl = safeLoginUrl(
     root.getAttribute("data-login-url"),
     "/join/discord?next=" +
@@ -241,7 +252,7 @@
     });
   }
 
-  function notice(testid, role, text, withLogin, shouldFocus) {
+  function notice(testid, role, text, withLogin, shouldFocus, recoveryHref) {
     clearOutcome();
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) {
@@ -256,7 +267,7 @@
     if (withLogin) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = loginUrl;
+      a.href = recoveryHref || loginUrl;
       a.textContent = COPY.guestCta;
       el.appendChild(a);
     }
@@ -779,8 +790,30 @@
           }
           if (sessionExpiredResponse(res)) {
             controller.refused = true;
-            setBusy(false, button);
-            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, focusOwned);
+            var showExpired = function (data) {
+              if (inflight !== controller) return;
+              setBusy(false, button);
+              notice(
+                TESTID.sessionExpired,
+                "alert",
+                COPY.sessionExpired,
+                true,
+                focusOwned,
+                safeRecoveryUrl(data && data.recovery),
+              );
+            };
+            // Keep the same feedback deadline and ownership while reading the
+            // refusal. Missing/unreadable bodies retain the guest join link.
+            try {
+              if (typeof res.json === "function")
+                return res.json().then(showExpired, function () {
+                  showExpired(null);
+                });
+            } catch {
+              showExpired(null);
+              return;
+            }
+            showExpired(null);
             return;
           }
           if (res.status === 429) {

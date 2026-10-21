@@ -19,6 +19,8 @@ const {
   periodPickerHtml,
 } = $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
+// Every signal link keeps the selected season; absent/all stays canonical.
+const qs = $derived(season === "all" ? "" : `?season=${season}`);
 </script>
 
 <Shell
@@ -42,23 +44,23 @@ const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=
   {@html periodPickerHtml}
   <nav aria-label="Signals">
     <ul>
-      <li><a href="/hotzones/joins">Joins heatmap</a></li>
-      <li><a href="/hotzones/voice">Voice heatmap</a></li>
-      <li><a href="/hotzones/games">Games heatmap</a></li>
+      <li><a href="/hotzones/joins{qs}">Joins heatmap</a></li>
+      <li><a href="/hotzones/voice{qs}">Voice heatmap</a></li>
+      <li><a href="/hotzones/games{qs}">Games heatmap</a></li>
     </ul>
   </nav>
   <section aria-labelledby="hotzones-joins-heading">
-    <h2 id="hotzones-joins-heading"><a href="/hotzones/joins">Joins</a></h2>
+    <h2 id="hotzones-joins-heading"><a href="/hotzones/joins{qs}">Joins</a></h2>
     {@html joinsHtml}
   </section>
   <section aria-labelledby="hotzones-voice-heading">
-    <h2 id="hotzones-voice-heading"><a href="/hotzones/voice">Voice</a></h2>
-    <p>Estimated voice activity (estimates until calibration).</p>
+    <h2 id="hotzones-voice-heading"><a href="/hotzones/voice{qs}">Voice</a></h2>
+    <p>Season-independent seeded estimates of voice activity (estimates until calibration).</p>
     {@html voiceHtml}
   </section>
   <section aria-labelledby="hotzones-games-heading">
-    <h2 id="hotzones-games-heading"><a href="/hotzones/games">Games</a></h2>
-    <p>Estimated games activity (estimates until calibration).</p>
+    <h2 id="hotzones-games-heading"><a href="/hotzones/games{qs}">Games</a></h2>
+    <p>Season-independent seeded estimates of games activity (estimates until calibration).</p>
     {@html gamesHtml}
   </section>
 </Shell>

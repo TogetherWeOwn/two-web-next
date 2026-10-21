@@ -20,6 +20,14 @@ export const EVENTS_JSON_URL = "/events.json";
 export const GOING_COUNT_ISLAND = "going-count";
 export const GOING_COUNT_TESTID = "event-going-count";
 export const SPOTS_LEFT_TESTID = "event-spots-left";
+/** Stale-qualification note the binder renders inside the badge on refresh
+ * failure (`role="status"`, "could not refresh" copy with last-saved
+ * context). Mirrors the attendees-live stale/retry precedent. */
+export const GOING_COUNT_STALE_TESTID = "event-going-count-stale";
+/** Explicit aggregate-only retry button inside the stale note (`Try again`,
+ * keyboard-reachable native button; re-issues the same keyed GET, never an
+ * RSVP write). */
+export const GOING_COUNT_RETRY_TESTID = "event-going-count-retry";
 /** DOM CustomEvent replacing the Livewire `going-count-updated` broadcast. */
 export const GOING_UPDATED_EVENT = "going-count-updated";
 
@@ -89,7 +97,9 @@ export function renderGoingCount(eventKey: string, s: GoingCountState): string {
 
 /** Owned overall read deadline for one aggregate refresh: headers plus
  * response-body completion, at most 5 seconds. On expiry the binder aborts
- * the owned fetch and keeps the last good badge with no announcement. */
+ * the owned fetch and keeps the last good numbers, qualified as stale via
+ * {@link GOING_COUNT_STALE_TESTID} with an aggregate-only retry; a confirmed
+ * RSVP state is never retracted. */
 export const GOING_COUNT_READ_DEADLINE_MS = 5_000;
 
 export interface GoingRefreshRequest {

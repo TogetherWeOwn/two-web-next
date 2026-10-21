@@ -9,7 +9,9 @@
 // JoinSessionHooks.
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { exceptionClass } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
+import { isDatabaseUnavailable } from "../db/errors";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
@@ -22,6 +24,12 @@ import {
 } from "../discord";
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
+import {
+  databaseUnavailable,
+  outageRepresentation,
+  prefersHtmlError,
+  varyAccept,
+} from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
@@ -99,7 +107,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const state = crypto.randomUUID();
-    const store = await hooks.storeFor(c).catch(() => null);
+    const store = await hooks.storeFor(c).catch((err: unknown) => {
+      // The store never materialized, so no journey exists to sweep: one
+      // class-only warn joins the signin_failed redirect for triage.
+      console.warn("auth login-start store unavailable", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
+      return null;
+    });
     if (!store) return c.redirect("/?n=signin_failed", 302);
     // No-DDL storeFor connects lazily, so an unreachable database surfaces on
     // first use instead of in storeFor: fail the login the same way, never a 500.
@@ -109,7 +125,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       await store.journeys.sweepExpired();
       if (!(await store.journeys.issue(await hashToken(state), "auth")))
         return c.redirect("/?n=signin_failed", 302);
-    } catch {
+    } catch (err) {
+      // A throwing sweep/issue is a store failure, not a refused issue (a
+      // false return stays silent above): one class-only warn for triage.
+      console.warn("auth login-start journey failed", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
       return c.redirect("/?n=signin_failed", 302);
     }
     // Return journey (legacy login_next): a safe ?next= rides the
@@ -152,7 +174,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         ? await hooks.storeFor(c).catch(() => null)
         : null;
     const admitted =
-      store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
+      store &&
+      (await store.journeys.consume(await hashToken(state!), "auth").catch((err: unknown) => {
+        // A classified store outage is not a stray callback. Preserve the
+        // shared outage boundary and the unclassified-failure fallback.
+        if (isDatabaseUnavailable(err)) throw err;
+        return false;
+      }));
     if (!admitted || !store) {
       // Stray hit (bad state, bare hit, OAuth error without a matching
       // state, replay after the journey was spent): not the real hit, so
@@ -312,9 +340,23 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
             await store.revokeLineage(statusHash);
           }
-        } catch {
+        } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone.
+          // this browser's cookie as if the server row were gone. The failure
+          // logs bounded facts only — the class, never the message, which can
+          // quote connection details. Explicit JSON callers get the correlated
+          // envelope; absent/wildcard callers keep the legacy text bytes and
+          // browsers the branded page (explicit-HTML opt-in).
+          console.error("logout revocation failed", {
+            exception: exceptionClass(err),
+            request_id: safeRequestId(c.get("requestId")),
+          });
+          c.header("cache-control", "no-store, private");
+          varyAccept(c);
+          if (prefersHtmlError(c)) return databaseUnavailable(c);
+          if (outageRepresentation(c) === "application/json") {
+            return databaseUnavailable(c, true);
+          }
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }
