@@ -70,9 +70,18 @@ const MONTH_NAMES = [
 /** Query text kept in a title, in code points, before the ellipsis. */
 export const TITLE_QUERY_LIMIT = 40;
 
-/** Trimmed query capped at TITLE_QUERY_LIMIT code points; "" when blank. */
+/** Trimmed query capped at TITLE_QUERY_LIMIT code points; "" when blank.
+ * Mirrors matchQuery (src/events/search-log.ts): the calendar keeps raw q in
+ * state while searching uses the NUL-stripped, newline-normalized form, so the
+ * title must apply the same normalization or a NUL-only query titles as a
+ * search while the page renders the month grid. */
 function titleQuery(q: string | undefined | null): string {
-  const points = Array.from((q ?? "").trim());
+  const cleaned = (q ?? "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+  const points = Array.from(cleaned);
   if (points.length <= TITLE_QUERY_LIMIT) return points.join("");
   return `${points.slice(0, TITLE_QUERY_LIMIT).join("")}…`;
 }
@@ -103,6 +112,12 @@ export function pastEventsTitle(page: number, q?: string | null): string {
 /** Hot zones index: "all" keeps "Hot zones"; a season names itself. */
 export function hotzonesTitle(season: string): string {
   return season === "all" ? "Hot zones" : `Hot zones — ${season}`;
+}
+
+/** Hot-zone signal page: "all" keeps "<signal> hot zone"; a season names itself. */
+export function hotzoneSignalTitle(signal: string, season: string): string {
+  const base = `${signal} hot zone`;
+  return season === "all" ? base : `${base} — ${season}`;
 }
 
 // Static entries come from the public route slots (seo-slots.ts); published
