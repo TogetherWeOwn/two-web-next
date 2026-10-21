@@ -8,12 +8,14 @@
 import type { Context, Hono } from "hono";
 import type { Env } from "../env";
 import { dbFor } from "../admin/db";
+import { alertRequestError } from "../alerts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
 import { isDatabaseUnavailable } from "../db/errors";
 import { robotsTagFor } from "../headers";
 import { inviteDestination } from "../invite";
+import { requestRoute } from "../request-log";
 import { rulesLastUpdated } from "../rules-last-updated";
 import {
   FEED_MD_CACHE,
@@ -67,13 +69,30 @@ function mdUnavailable(c: Ctx): Response {
   return c.body("Events temporarily unavailable", 503, { "content-type": MARKDOWN_MIME });
 }
 
-/** Reads stay inside the markdown envelope: a dead database 503s as Markdown. Other errors rethrow. */
+/** Unexpected-fault envelope in the route's own media type: static guidance, never internals. */
+function mdInternal(c: Ctx): Response {
+  c.header("cache-control", "no-store, private");
+  return c.body("Events temporarily unavailable. Try again shortly.", 500, {
+    "content-type": MARKDOWN_MIME,
+  });
+}
+
+/**
+ * Reads stay inside the markdown envelope: a dead database 503s as Markdown,
+ * and unexpected query/serializer faults alert once (class fingerprint, the
+ * same privacy boundary as the global handler) and 500 as Markdown.
+ */
 async function mdRead<T>(c: Ctx, run: () => Promise<T>): Promise<T | Response> {
   try {
     return await run();
   } catch (err) {
     if (isDatabaseUnavailable(err)) return mdUnavailable(c);
-    throw err;
+    alertRequestError(err, {
+      method: c.req.method,
+      route: requestRoute(c),
+      requestId: c.get("requestId"),
+    });
+    return mdInternal(c);
   }
 }
 
@@ -120,9 +139,13 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return mdUnavailable(c);
-    const rows = await mdRead(c, () => listFeed(db, ["published"]));
-    if (rows instanceof Response) return rows;
-    return mdOk(c, mdEvents(c.env.APP_URL, rows.map(toMdEvent)), FEED_MD_CACHE);
+    // Query and serialization stay inside the envelope together: a corrupt
+    // row faults Markdown either way.
+    const built = await mdRead(c, async () =>
+      mdEvents(c.env.APP_URL, (await listFeed(db, ["published"])).map(toMdEvent)),
+    );
+    if (built instanceof Response) return built;
+    return mdOk(c, built, FEED_MD_CACHE);
   });
 
   // Same suffix pattern as the per-event ICS export: one canonical key form
@@ -143,8 +166,14 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (e instanceof Response) return e;
     if (!e) return mdError(c, "Not found", 404);
     if (e.status === "draft") return mdError(c, "Forbidden", 403);
-    if (e.status === "cancelled") return mdError(c, mdEventGone(c.env.APP_URL, e), 410);
+    if (e.status === "cancelled") {
+      const gone = await mdRead(c, async () => mdEventGone(c.env.APP_URL, e));
+      if (gone instanceof Response) return gone;
+      return mdError(c, gone, 410);
+    }
     const robots = e.status === "past" ? NOINDEX : undefined;
-    return mdOk(c, mdEvent(c.env.APP_URL, toMdEvent(e)), FEED_MD_CACHE, robots);
+    const built = await mdRead(c, async () => mdEvent(c.env.APP_URL, toMdEvent(e)));
+    if (built instanceof Response) return built;
+    return mdOk(c, built, FEED_MD_CACHE, robots);
   });
 }

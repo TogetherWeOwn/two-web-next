@@ -21,6 +21,7 @@ export {
   maintenanceHandler,
   notFoundHandler,
   notFoundResponse,
+  outageRepresentation,
   payloadTooLarge,
   prefersHtmlError,
   rateLimitExceeded,

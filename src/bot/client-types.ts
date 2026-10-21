@@ -23,4 +23,11 @@ export type BotClientOptions = {
   keyId: string | undefined;
   timeoutSeconds?: number;
   fetchFn?: typeof fetch;
+  /**
+   * Keep stdout clean for machine callers: the per-call success diagnostic
+   * moves to stderr (alongside refusals) instead of stdout. The
+   * internal-action CLIs set this in `--json` mode so stdout carries exactly
+   * one document.
+   */
+  stderrDiagnostics?: boolean;
 };

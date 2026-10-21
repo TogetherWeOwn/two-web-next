@@ -31,9 +31,9 @@ describe("Kit home port: shared server models, no duplicated content", () => {
   it("loads every panel from the shared Hono-side readers", () => {
     const server = read(serverPath);
     expect(server).toContain("readCounts");
-    expect(server).toContain("loadHomeUpcomingMerged");
+    expect(server).toContain("cachedHomeUpcoming");
     expect(server).toContain("discordEventsSource");
-    expect(server).toContain("listVisibleFeatured");
+    expect(server).toContain("cachedFeatured");
     expect(server).toContain("dbFor");
     expect(server).toContain("inviteDestination");
     // Session, notice, flash and cache policy ride the framework-free
