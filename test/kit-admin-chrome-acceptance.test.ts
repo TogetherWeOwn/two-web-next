@@ -423,6 +423,7 @@ export function renderBoundary(status, message, url, routeId) {
     rendered: { head: string; body: string },
     label: string,
     route: AdminRoute,
+    heading: string,
   ) {
     expect(rendered.body, `${label} brands the admin panel`).toContain("TWO admin");
     expect(rendered.body, `${label} keeps the admin nav`).toContain('aria-label="Administration"');
@@ -434,8 +435,19 @@ export function renderBoundary(status, message, url, routeId) {
       expect(rendered.body, `${label} links back to the list`).toMatch(
         dashboardLinkPattern(route.listLink),
       );
+    } else {
+      for (const editRoute of EDIT_ROUTES) {
+        expect(
+          rendered.body,
+          `${label} ${route.id} must not offer ${editRoute.listLink.label} recovery`,
+        ).not.toMatch(dashboardLinkPattern(editRoute.listLink));
+      }
     }
     expect(rendered.head, `${label} titles the admin panel`).toContain("TWO admin");
+    expect(
+      rendered.head.match(/<title>[^<]*<\/title>/g),
+      `${label} titles the status like Hono`,
+    ).toEqual([`<title>${heading} — TWO admin</title>`]);
     expect(rendered.head, `${label} stays out of search indexes`).toContain("noindex");
   }
 
@@ -455,7 +467,7 @@ export function renderBoundary(status, message, url, routeId) {
 
   it.each(ROUTES)("$id outage: branded 503 in admin chrome with no public CTAs", (route) => {
     const rendered = renderFor(route)(503, CANARY, renderUrl(route), route.routeId);
-    expectAdminChrome(rendered, "503", route);
+    expectAdminChrome(rendered, "503", route, OUTAGE_HEADING);
     expectNoLeak(rendered, "503");
     expect(rendered.body, "503 names the outage like Hono").toMatch(
       new RegExp(`<h1[^>]*>${OUTAGE_HEADING}</h1>`),
@@ -466,7 +478,7 @@ export function renderBoundary(status, message, url, routeId) {
     "$id missing row: Hono-matching 404 with list + dashboard links",
     (route) => {
       const rendered = renderFor(route)(404, CANARY, renderUrl(route), route.routeId);
-      expectAdminChrome(rendered, "404", route);
+      expectAdminChrome(rendered, "404", route, route.missingHeading);
       expectNoLeak(rendered, "404");
       expect(rendered.body, "404 names the missing row like Hono").toMatch(
         new RegExp(`<h1[^>]*>${route.missingHeading}</h1>`),
@@ -478,7 +490,7 @@ export function renderBoundary(status, message, url, routeId) {
     "$id unexpected failure: generic admin-chrome fallback, never the public shell",
     (route) => {
       const rendered = renderFor(route)(500, CANARY, renderUrl(route), route.routeId);
-      expectAdminChrome(rendered, "500", route);
+      expectAdminChrome(rendered, "500", route, GENERIC_HEADING);
       expectNoLeak(rendered, "500");
       expect(rendered.body, "500 stays generic").toMatch(/something went wrong/i);
     },
