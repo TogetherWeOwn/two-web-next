@@ -81,3 +81,9 @@ test("database guard permits only the disposable CI target", () => {
     assert.throws(() => requireTestDatabase(url));
   }
 });
+
+test("throttle reset script requires the CI runner and disposable database", () => {
+  const reset = readFileSync(new URL("./reset-throttle.mjs", import.meta.url), "utf8");
+  assert.match(reset, /requireGithubRunner\(\)/);
+  assert.match(reset, /requireTestDatabase\(process\.env\.DATABASE_URL\)/);
+});
