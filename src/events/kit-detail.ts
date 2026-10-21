@@ -103,6 +103,9 @@ export interface KitEventDetailModel {
   description: string | null;
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
+  /** Trimmed accessibility notes; null when the event has none. The section
+   * renders only when set, mirroring the served detail page. */
+  accessibilityNotes: string | null;
   location: string | null;
   status: string;
   isDraft: boolean;
@@ -449,6 +452,9 @@ export async function resolveKitEventDetail(
           game: event.game,
           description: event.description,
           shareDescription: event.description || "An event at Together We Own.",
+          // Trimmed notes, null when absent or blank: the served detail
+          // page's section rule (src/events/pages-detail.tsx).
+          accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           status: event.status,
           isDraft: event.status === "draft",

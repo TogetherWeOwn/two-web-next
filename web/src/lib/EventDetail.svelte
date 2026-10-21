@@ -218,6 +218,16 @@ const lineup = $derived(
           <p>{model.description}</p>
         </section>
       {/if}
+      {#if model.accessibilityNotes}
+        <section
+          class="event-description"
+          data-testid="event-accessibility"
+          aria-labelledby="event-accessibility-heading"
+        >
+          <h2 id="event-accessibility-heading">Accessibility</h2>
+          <p>{model.accessibilityNotes}</p>
+        </section>
+      {/if}
       {#if model.showJoinPitch}
         <section class="event-pitch" data-testid="event-join-pitch" aria-label="Join the community">
           <p>
