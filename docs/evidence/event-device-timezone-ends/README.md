@@ -43,3 +43,20 @@ The independent browser proof is `test/event-device-timezone-ends.test.ts`,
 executed with `A11Y_BROWSER_TESTS=true`; CI verifies all 30 browser cases
 actually ran. The Starts proof lives in
 [the Starts evidence](../event-device-timezone/README.md).
+
+## Merge-queue size correction
+
+The queue build on base `75d0ca063` measured client JS at 241,157B against
+an unchanged 241,152B ceiling; the local locked build reproduced it exactly.
+Rendering one attendee heading with a conditional count suffix instead of two
+identical heading branches saves 150B raw / 15B gzip in the detail node.
+Two rebuilt trees measure 51 client files, 241,007B raw / 96,989B gzip;
+all budgets stay unchanged. Both device-timezone mounts are untouched.
+
+Before/after SSR output matches after removing Svelte comments for guest,
+unpaged, first-page, last-page and past-end roster states. Eight additional
+opened no-JS captures (unpaged and first-page member states, both widths)
+form four byte-identical pairs using the same built styles and local assets.
+The paired acceptance suites pass: Ends 34/34, Starts 32/32, detail/pins 54/54,
+and attendee paging/current-page 44/44 on a fresh disposable test database.
+These remain local proofs, not staging or deployment evidence.
