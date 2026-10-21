@@ -515,8 +515,7 @@
     try {
       var payload = res.json();
       if (payload && typeof payload.then === "function") {
-        payload.then(fromBody, noBody);
-        return;
+        return payload.then(fromBody, noBody);
       }
       fromBody(payload);
     } catch {
@@ -543,8 +542,7 @@
     try {
       var outcome = res.json();
       if (outcome && typeof outcome.then === "function") {
-        outcome.then(settle, unproven);
-        return;
+        return outcome.then(settle, unproven);
       }
       settle(outcome);
     } catch {
