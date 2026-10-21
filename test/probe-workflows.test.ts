@@ -563,6 +563,11 @@ describe("production deployment preserves configured triggers", () => {
     // steady-state jobs deploy deliberately.
     expect(workflow).not.toContain("wrangler.jobs.jsonc");
     expect(workflow).not.toContain("two-web-jobs-production");
+    // The drift probe stays unwired from the promotion lane until the
+    // post-transfer follow-up wires it deliberately: wiring it now would fail
+    // every production promotion while triggers are still web-owned. That
+    // follow-up removes this assertion when it adds the probe step.
+    expect(workflow).not.toContain("check-production-triggers");
   });
 
   it("pins production crons and queue consumers to the reviewed config", () => {

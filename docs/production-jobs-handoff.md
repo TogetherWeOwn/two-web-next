@@ -115,6 +115,30 @@ npx --no-install wrangler queues consumer list two-web-next-production-sync-even
 npx --no-install wrangler queues consumer list two-web-next-production-internal-action
 npx --no-install wrangler queues info two-web-next-production-sync-event
 npx --no-install wrangler queues info two-web-next-production-internal-action
+# Record each queue's pre-transfer delivery state: the step-7 resume and any
+# rollback resume only queues this transfer paused, and preserve pauses that
+# predate it. wrangler queues info prints no delivery state, so the read is
+# the Queues REST API's settings.delivery_paused, like the staging rollback
+# (token from the environment, never argv). A failed or unknown read fails
+# the run instead of recording a guess.
+for q in two-web-next-production-sync-event two-web-next-production-internal-action; do
+  delivery=$(CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" QUEUE="$q" node -e '
+    (async () => {
+      const r = await fetch("https://api.cloudflare.com/client/v4/accounts/" + process.env.CF_ACCT + "/queues", {
+        headers: { authorization: "Bearer " + process.env.CF_TOKEN },
+      });
+      const d = await r.json();
+      if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+      const found = (d.result ?? []).filter((x) => x.queue_name === process.env.QUEUE);
+      if (found.length !== 1) { console.error(process.env.QUEUE + ": expected exactly one queue, got " + found.length); process.exit(1); }
+      const paused = found[0].settings?.delivery_paused;
+      if (paused === true) console.log("paused");
+      else if (paused === false) console.log("active");
+      else { console.error(process.env.QUEUE + ": unknown delivery state " + JSON.stringify(paused)); process.exit(1); }
+    })();
+  ') || exit 1
+  echo "$q: pre-transfer delivery is $delivery (step-0 record)"
+done
 curl -fsS https://togetherweown.com/up
 # Assert the exact transitional diff: the probe must report ONLY web-owned
 # consumers/crons plus the undeployed jobs script. Any other drift aborts.
@@ -126,6 +150,13 @@ node ci/check-production-triggers.mjs
 # terminally and the backlog leaves the queue needing manual replay.
 node ci/check-jobs-secrets.mjs --env=production
 
+# Pin the deploy tag before the first mutation: step 4 tags the jobs Worker
+# version with the exact SHA of this verified checkout, so the version stays
+# traceable to the CI run that passed on it. An empty or short value fails
+# here, before any consumer moves, instead of tagging the deploy with junk.
+DEPLOY_SHA="$(git rev-parse HEAD)" || exit 1
+printf '%s' "$DEPLOY_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "DEPLOY_SHA is not an exact commit SHA: $DEPLOY_SHA" >&2; exit 1; }
+
 # 2. Pause delivery (reversible; producers keep enqueueing, backlog retained).
 npx --no-install wrangler queues pause-delivery two-web-next-production-sync-event
 npx --no-install wrangler queues pause-delivery two-web-next-production-internal-action
@@ -134,11 +165,20 @@ npx --no-install wrangler queues pause-delivery two-web-next-production-internal
 # versions promotion never detaches: without the removes the next step
 # collides with the still-attached worker:two-web-next-production consumer.
 for q in two-web-next-production-sync-event two-web-next-production-internal-action; do
-  # Capture before grepping: a failed list piped into grep reads as "no
+  # Capture before parsing: a failed list piped into grep reads as "no
   # consumer" without pipefail, and the attach then collides with the
   # still-attached web consumer. A failed list fails the run instead.
-  out=$(npx --no-install wrangler queues consumer list "$q") || exit 1
-  if printf '%s' "$out" | grep -q "two-web-next-production"; then
+  # Uses --json with exact script-name matching: table grep would match the
+  # queue name inside wrangler's empty-list message (No consumers found for
+  # queue "two-web-next-production-sync-event"), so re-entry after the web
+  # consumer is already gone would try to remove a nonexistent consumer.
+  out=$(npx --no-install wrangler queues consumer list "$q" --json) || exit 1
+  present=$(CONSUMERS_JSON="$out" QUEUE="$q" node -e '
+    const d = JSON.parse(process.env.CONSUMERS_JSON);
+    if (!Array.isArray(d)) { console.error(process.env.QUEUE + ": consumer list is not an array"); process.exit(1); }
+    console.log(d.some((c) => (c.script ?? c.script_name ?? null) === "two-web-next-production") ? "yes" : "no");
+  ') || exit 1
+  if [ "$present" = "yes" ]; then
     npx --no-install wrangler queues consumer remove "$q" two-web-next-production
   else
     echo "no two-web-next-production consumer on $q"
@@ -197,7 +237,9 @@ npx --no-install wrangler deployments status --name two-web-next-production --js
 npx --no-install wrangler deployments status --name two-web-jobs-production --json
 curl -fsS https://togetherweown.com/up
 
-# 7. Resume the existing transport and reconcile.
+# 7. Resume the existing transport and reconcile. Resume only queues the
+# step-0 record shows were active before the transfer: a queue paused before
+# the transfer stays paused (skip its resume line).
 npx --no-install wrangler queues resume-delivery two-web-next-production-sync-event
 npx --no-install wrangler queues resume-delivery two-web-next-production-internal-action
 curl -fsS https://togetherweown.com/up
@@ -215,11 +257,12 @@ construction: the reconcile pass takes the Postgres single-flight advisory
 lock, and the prune pass is an idempotent delete. Double-ownership of a
 consumer is never safe, which is why step 3 detaches before step 4 attaches.
 
-Record with the transfer evidence: the step-0 readouts, the probe outputs at
-steps 0 and 6, the secrets-gate pass, both jobs versions, the before/after
-consumer lists and schedule read-backs, and the before/after `/up` queue
-envelopes (pending/delayed/failing counts). The transfer is done when the
-step-6 probe exits 0 and delivery is resumed.
+Record with the transfer evidence: the step-0 readouts (including the
+pre-transfer delivery state per queue), the probe outputs at steps 0 and 6,
+the secrets-gate pass, both jobs versions, the before/after consumer lists
+and schedule read-backs, and the before/after `/up` queue envelopes
+(pending/delayed/failing counts). The transfer is done when the step-6 probe
+exits 0 and delivery is resumed.
 
 ## Rollback (restores ownership once)
 
@@ -256,10 +299,12 @@ detach it instead.
    restore. Re-read both consumer lists (exactly
    `worker:two-web-next-production`, once per queue) and confirm
    `https://togetherweown.com/up` is healthy or degraded.
-6. Resume only the pauses this rollback made, after re-confirming the hold
-   is active, no deploy or migrate run appeared, and `/up` is healthy or
-   degraded. Never purge, delete/recreate queues, age-delete ledger rows or
-   clear unique locks.
+6. Resume delivery per the step-0 pre-transfer record, after re-confirming
+   the hold is active, no deploy or migrate run appeared, and `/up` is
+   healthy or degraded: resume a queue the transfer paused (active at step
+   0, paused now) and a queue only this rollback paused; leave a queue
+   paused before the transfer paused. Never purge, delete/recreate queues,
+   age-delete ledger rows or clear unique locks.
 
 A Worker rollback does not undo schema, data, Discord side effects or queue
 messages. Keep required bindings in place; never delete a queue to roll back.
