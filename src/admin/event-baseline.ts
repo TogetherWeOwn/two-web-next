@@ -2,13 +2,13 @@
 // moderators editing the same event silently overwrote each other: the form
 // carried no baseline and the committing update overwrote every field. The
 // edit form now carries a server-minted hash of exactly the saved content it
-// displays (the nine editable fields), and the POST compares it inside the
+// displays (all twelve editable fields), and the POST compares it inside the
 // committing row lock. A mismatch refuses the save before any mutation; a
 // missing or malformed baseline can never silently save.
 //
 // Deliberately wall-clock-free: updated_at is not an input, so a content
 // change is detected even when the timestamp shares the same millisecond.
-// Status, agent_version and recurrence live outside the form's nine fields
+// Status, agent_version and recurrence live outside the form's editable fields
 // and stay out of the baseline (publish/cancel keep their own guards).
 // Moderators are authorized to save from a fresh read, so the mint is a plain
 // content hash, not a signed token: there is nothing to forge that a GET
@@ -20,15 +20,18 @@ import { sha256Hex } from "../bot/signer";
 export const EVENT_BASELINE_FIELD = "saved_baseline";
 
 /**
- * Exactly the stored content the edit form displays. Accessibility notes are
- * optional like on EventRow (older in-memory fixtures omit the column); the
- * mint normalizes a missing carrier to null, matching the stored default.
+ * Exactly the stored content the edit form displays. Newer optional columns
+ * may be absent in older in-memory fixtures; the mint normalizes a missing
+ * carrier to null, matching the stored default.
  */
 export type BaselineContent = {
   title: string;
   game: string | null;
   description: string | null;
   accessibilityNotes?: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
@@ -53,6 +56,9 @@ export async function eventContentBaseline(row: BaselineContent): Promise<string
       row.timezone,
       row.location,
       row.capacity,
+      row.organizer_name ?? null,
+      row.join_url ?? null,
+      row.join_instructions ?? null,
     ]),
   );
 }

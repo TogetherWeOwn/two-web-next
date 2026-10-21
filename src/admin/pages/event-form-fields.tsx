@@ -7,6 +7,7 @@ import type { FC } from "hono/jsx";
 import { EVENT_BASELINE_FIELD } from "../event-baseline";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
+import { EventHostJoinFields } from "./event-host-join-fields";
 import { ValidationSummary } from "./validation-summary";
 
 /**
@@ -143,42 +144,7 @@ export const EventFormFields: FC<{
             />
           )}
         </Field>
-        <Field
-          name="organizer_name"
-          label="Organizer display name (optional)"
-          errors={errors}
-          hint="Use a name the organizer has agreed to show publicly. Do not enter contact details."
-        >
-          {(id) => (
-            <input
-              id={id}
-              name="organizer_name"
-              type="text"
-              value={val(values, "organizer_name")}
-              data-event-text-limit={500}
-            />
-          )}
-        </Field>
-        <Field
-          name="join_url"
-          label="Public joining link (optional)"
-          errors={errors}
-          hint="HTTPS or HTTP link visible to everyone. Never use attendee-only or private links."
-        >
-          {(id) => <input id={id} name="join_url" type="url" value={val(values, "join_url")} />}
-        </Field>
-        <Field
-          name="join_instructions"
-          label="Public joining instructions (optional)"
-          errors={errors}
-          hint="Share only verified details that are safe for anyone to see. Do not enter contact details."
-        >
-          {(id) => (
-            <textarea id={id} name="join_instructions" rows={4} data-event-text-limit={5000}>
-              {val(values, "join_instructions")}
-            </textarea>
-          )}
-        </Field>
+        <EventHostJoinFields values={values} errors={errors} />
         <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
           {(id) => (
             <input

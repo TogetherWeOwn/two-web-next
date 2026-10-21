@@ -204,6 +204,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </p>
       {/if}
     </div>
+    <!-- Escaped server output from the same fields Hono renders; never caller-supplied HTML. -->
+    {@html view.hostJoinFieldsHtml}
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input
