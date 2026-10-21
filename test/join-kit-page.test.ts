@@ -101,6 +101,13 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
     expect(load).toContain("HOME_JOIN_RESULT_COPY");
   });
 
+  it("passes the shared copy values through the load unswapped", () => {
+    // Exact-shape pin: both values are strings, so swapping them (banner
+    // sentence as the lead paragraph) would typecheck and stay green under
+    // identifier-presence pins. This needle fails that swap first.
+    expect(load).toContain("joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO }");
+  });
+
   it("renders presence aggregates only, never member names", () => {
     expect(page).toContain("members online");
     expect(page).toContain("Voice and stage channels");
