@@ -100,7 +100,7 @@ export function registerMemberLeaderboardRoutes(
     const view = c.get("boardView");
     if (!view || c.res.status !== 200) return;
     const { db, ...entry } = view;
-    await recordBoardView(db, entry).catch(() => {});
+    await recordBoardView(db, entry, undefined, c.get("requestId")).catch(() => {});
   });
   app.get(MEMBER_BOARD_PATH, render);
 }

@@ -41,7 +41,16 @@ const copy = $derived(kitErrorCopy(code));
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
-    {:else if code === 403 || code === 429 || code === 500}
+    {:else if code === 403}
+      <!-- 403 names the join-to-unlock path; re-signing in cannot mint the member bit. -->
+      <p class="recovery-actions">
+        <a class="btn" href="/join" data-testid="error-join-unlock">Join to unlock member pages</a>
+        <a href={inviteUrl} data-testid="error-invite" rel="noopener">
+          Use the Discord invite instead
+        </a>
+        <a href="/" data-testid="error-home">Back to the homepage</a>
+      </p>
+    {:else if code === 429 || code === 500}
       <!-- These statuses share invite recovery, not their headings or lead copy. -->
       <p class="recovery-actions">
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
