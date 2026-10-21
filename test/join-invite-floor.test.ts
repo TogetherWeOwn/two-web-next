@@ -1,13 +1,16 @@
 // route-inventory: GET /join
+// route-inventory: GET /join.md
 // The join page renders the invite floor, not the raw env value: with a
 // misconfigured or hostile DISCORD_INVITE_URL (evil host, javascript:,
 // non-Discord scheme), the Hono join-invite href serves FALLBACK_INVITE and
 // the configured value leaves no trace in the HTML — the same rule /discord
-// already applies through inviteDestination. Valid configured
-// invites pass through unchanged, so the existing join-invite href pins keep
-// passing. The Kit load cannot run in the root test process
-// (cloudflare:workers), so its boundary is pinned by reading it as text, the
-// same way test/join-kit-page.test.ts pins the Kit markup contract.
+// already applies through inviteDestination. The /join.md alternate applies
+// the same floor at its route, so the markdown invite matches the page.
+// Valid configured invites pass through unchanged, so the existing
+// join-invite href pins keep passing. The Kit load cannot run in the root
+// test process (cloudflare:workers), so its boundary is pinned by reading it
+// as text, the same way test/join-kit-page.test.ts pins the Kit markup
+// contract.
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +68,30 @@ describe("GET /join invite floor", () => {
       expect(html).toContain(
         `href="${configured.replaceAll("&", "&amp;")}" data-testid="join-invite"`,
       );
+      expect(console.error).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("GET /join.md invite floor", () => {
+  it.each(hostileInvites)(
+    "serves the fallback invite and never the configured value: %s",
+    async (configured) => {
+      const res = await app.request("/join.md", {}, { ...env, DISCORD_INVITE_URL: configured });
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain(`Use ${FALLBACK_INVITE} instead`);
+      expect(body).not.toContain(configured);
+    },
+  );
+
+  it.each(validInvites)(
+    "passes a usable configured invite through unchanged: %s",
+    async (configured) => {
+      const res = await app.request("/join.md", {}, { ...env, DISCORD_INVITE_URL: configured });
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain(`Use ${configured} instead`);
       expect(console.error).not.toHaveBeenCalled();
     },
   );
