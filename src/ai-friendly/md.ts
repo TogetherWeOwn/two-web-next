@@ -230,7 +230,7 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
     for (const e of rows) out.push(...mdEventBlock(appUrl, e));
   }
   out.push(
-    `Per-event Markdown: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page.`,
+    `Per-event Markdown template: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page (replace :key with the event key).`,
     "",
   );
   return out.join("\n");
@@ -321,13 +321,13 @@ export function llmsTxt(appUrl: string): string {
     "## Events",
     "",
     `- [Upcoming events](${canonicalUrl(appUrl, "/events")}): published events only. Machine list: ${canonicalUrl(appUrl, "/events.md")}`,
-    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
+    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} (template: replace :key with an event key) with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
     "",
     "## Notes",
     "",
     "- There is no public listing of members: profiles are members-only and never appear here.",
     "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser, there are no remote tools.",
-    "- Event times below render in each event's own timezone next to the UTC instant on the page.",
+    "- Event times render in each event's own timezone next to the UTC instant on each event page.",
     "",
   );
   return out.join("\n");
