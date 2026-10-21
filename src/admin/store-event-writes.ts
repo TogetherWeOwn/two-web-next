@@ -26,6 +26,7 @@ import {
 } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
+import { retireApiPublicEventCache } from "../public-data/cache";
 import { eventContentBaseline } from "./event-baseline";
 import {
   audit,
@@ -112,6 +113,7 @@ export async function createEvent(
   // Committed: a new event can appear on the calendar once published, so the
   // anonymous entries retire here too (N6), never on a throw above.
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return { row, writeBack: null };
 }
@@ -234,6 +236,7 @@ export async function updateEvent(
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
 }
@@ -270,6 +273,7 @@ export async function updateEventIfBaselineMatches(
     });
   // Committed: same retirement point as updateEvent, only after success.
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
 }
@@ -351,6 +355,7 @@ export async function patchEvent(
     });
   // Committed: same retirement point as updateEvent, only after success.
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
 }
@@ -556,6 +561,7 @@ export async function transitionEvent(
   });
   // Committed: publish/cancel moves the row between guest views (N6).
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
 }
