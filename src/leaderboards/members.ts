@@ -15,7 +15,8 @@ import type { SeasonWindow } from "../hotzones/season";
 /** Neighbors shown above and below the viewer in the relative scope. */
 export const RELATIVE_NEIGHBORS = 5;
 /**
- * Longest accepted `?activity=` game name (after trimming, in characters).
+ * Longest accepted `?activity=` game name (after trimming, in code points,
+ * counted before lowercasing — exactly as the event form counts).
  * Aligned to the event-form saved-game max (src/admin/validation-event-form.ts):
  * every game name the form can save is admitted by the filter.
  */
@@ -43,17 +44,24 @@ export function parseScopeParam(raw: string | null | undefined): ScopeParse {
 export type ActivityParse = { ok: true; game: string | null } | { ok: false; message: string };
 
 /**
- * `?activity=`: absent/blank/`all` = every game; otherwise one normalized game name
+ * `?activity=`: absent/blank = every game; otherwise one normalized game name
  * (trimmed, lowercased, 1-100 characters, no control characters — the same
- * charset the event form saves). A well-formed name that matches no event is
- * a valid, empty board.
+ * charset the event form saves). `all` is a game like any other: nothing
+ * emits `activity=all` (both board forms label the field "blank for every
+ * game"), so a gathering named All filters to its own board. A well-formed
+ * name that matches no event is a valid, empty board.
  */
 export function parseActivityParam(raw: string | null | undefined): ActivityParse {
   if (raw === null || raw === undefined) return { ok: true, game: null };
-  const game = raw.trim().toLowerCase();
+  const trimmed = raw.trim();
   // The filter form submits a blank field as `activity=`: that means every game.
-  if (game === "" || game === "all") return { ok: true, game: null };
-  if ([...game].length > ACTIVITY_MAX_LENGTH || containsControlCharacters(game))
+  if (trimmed === "") return { ok: true, game: null };
+  // Mirror the save-side rule exactly: the event form counts the trimmed name
+  // before any lowercasing (src/admin/validation-event-form.ts), so the length
+  // check runs here — lowercasing first would expand İ (U+0130) to two code
+  // points and 400 a savable 100-character name on both boards.
+  const game = trimmed.toLowerCase();
+  if ([...trimmed].length > ACTIVITY_MAX_LENGTH || containsControlCharacters(game))
     return { ok: false, message: "Unknown activity" };
   return { ok: true, game };
 }

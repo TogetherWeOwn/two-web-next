@@ -48,9 +48,9 @@ describe("member leaderboard grammar", () => {
     for (const raw of ["", "ALL", "neighbors"]) expect(parseScopeParam(raw).ok).toBe(false);
   });
 
-  it("normalizes one game and treats absent or all as every game", () => {
+  it("normalizes one game and treats absent or blank as every game", () => {
     expect(parseActivityParam(null)).toEqual({ ok: true, game: null });
-    expect(parseActivityParam("all")).toEqual({ ok: true, game: null });
+    expect(parseActivityParam("all")).toEqual({ ok: true, game: "all" });
     expect(parseActivityParam("")).toEqual({ ok: true, game: null });
     expect(parseActivityParam("   ")).toEqual({ ok: true, game: null });
     expect(parseActivityParam("  Chess ")).toEqual({ ok: true, game: "chess" });
