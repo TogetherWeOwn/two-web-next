@@ -3,13 +3,28 @@ import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 
+// The single flag reference for this tool: --help prints it to stdout,
+// usage errors print it to stderr.
+export const AUDIT_USAGE =
+  "Usage: node bin/import/audit.mjs [--dry-run | --apply] [--enable-grants]\nConnection URLs come only from LEGACY_DATABASE_URL and DATABASE_URL.";
+
+// Usage errors ("invoked wrong", exit 2) are a distinct class from import
+// failures ("ran and failed", exit 1): a bad flag must print the usage line,
+// never the safeFailure prose. The message stays "invalid_options".
+export class AuditUsageError extends Error {
+  constructor() {
+    super("invalid_options");
+    this.name = "AuditUsageError";
+  }
+}
+
 export function parseOptions(args) {
   const allowed = new Set(["--dry-run", "--apply", "--enable-grants", "--help"]);
   if (
     args.some((arg) => !allowed.has(arg)) ||
     (args.includes("--apply") && args.includes("--dry-run"))
   ) {
-    throw new Error("invalid_options");
+    throw new AuditUsageError();
   }
   return {
     dryRun: !args.includes("--apply"),
@@ -351,8 +366,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     const options = parseOptions(args);
     if (options.help) {
-      console.log("Usage: node bin/import/audit.mjs [--dry-run | --apply] [--enable-grants]");
-      console.log("Connection URLs come only from LEGACY_DATABASE_URL and DATABASE_URL.");
+      console.log(AUDIT_USAGE);
       return 0;
     }
     const schemas = databaseConfig(env);
@@ -370,6 +384,10 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     console.log(JSON.stringify(result));
     return 0;
   } catch (error) {
+    if (error instanceof AuditUsageError) {
+      console.error(AUDIT_USAGE);
+      return 2;
+    }
     console.error(safeFailure(error));
     return 1;
   } finally {

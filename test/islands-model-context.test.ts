@@ -205,6 +205,7 @@ describe("model-context island stub contract", () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({
       ok: true,
       status: 200,
+      text: async () => "{}",
       json: async () => ({}),
     }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
@@ -240,7 +241,12 @@ describe("model-context island stub contract", () => {
   });
 
   it("get_event fetches the valid key and rejects junk without a request", async () => {
-    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "{}",
+      json: async () => ({}),
+    }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
     runInNewContext(binder, {
       AbortController,
@@ -267,6 +273,7 @@ describe("model-context island stub contract", () => {
     const fetchImpl = vi.fn(async (url: string) => ({
       ok: true,
       status: 200,
+      text: async () => JSON.stringify({ url }),
       json: async () => ({ url }),
     }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
@@ -342,6 +349,7 @@ describe("model-context island stub contract", () => {
       return {
         ok: true,
         status: 200,
+        text: async () => "{}",
         json: async () => ({}),
       };
     });
@@ -386,12 +394,16 @@ describe("model-context island stub contract", () => {
     const secondGen = calls.slice(4).map(([, options]) => options.signal!);
     expect(secondGen).toHaveLength(4);
     for (const signal of secondGen) expect(signal.aborted).toBe(false);
-    // Reads after restore ride the fresh controller, not the aborted one.
+    // Reads after restore ride the fresh controller, not the aborted one: the
+    // fetch stub above throws on an aborted signal at fetch time, so resolving
+    // here proves liveness when the request issued. Settlement then aborts the
+    // per-call controller to release the connection, so the captured signal
+    // reads aborted after success.
     const restored = calls[4]![0];
     await expect(restored.execute({})).resolves.toEqual({});
     const lastInit = fetchImpl.mock.calls.at(-1)?.[1];
     expect(lastInit?.signal).toBeInstanceOf(AbortSignal);
-    expect(lastInit?.signal?.aborted).toBe(false);
+    expect(lastInit?.signal?.aborted).toBe(true);
     // Teardown is repeatable (no once): leaving again aborts the new set.
     listeners.get("pagehide")?.({ persisted: true });
     for (const signal of secondGen) expect(signal.aborted).toBe(true);
@@ -428,6 +440,563 @@ describe("model-context island stub contract", () => {
     const tool = (ctx.registerTool.mock.calls as Array<[Registered]>)
       .map(([t]) => t)
       .find((t) => t.name === "two_get_community")!;
-    await expect(tool.execute({})).rejects.toThrow(/503/);
+    const error = (await tool.execute({}).then(
+      () => null,
+      (failure: unknown) => failure,
+    )) as (Error & { code?: unknown }) | null;
+    // The island constructs the failure inside its vm realm, so pin the shape
+    // rather than the outer Error identity.
+    expect(typeof error?.message).toBe("string");
+    expect(error?.code).toBe("unavailable");
+    expect(error?.message).toMatch(/try again/);
+    expect(error?.message).not.toMatch(/503/);
+  });
+});
+
+// C3 review pins (builder-owned): settle aborts and releases, 404 maps to
+// not_found, the byte cap measures UTF-8 bytes, the Retry-After floor holds,
+// and oversize streaming bodies stop early. The acceptance suite owns the
+// broader bounds contract; these cases pin the review findings without
+// touching its files.
+type C3Timer = { fn: () => void; ms: number; cleared: boolean; fired: boolean };
+type C3FetchCall = { url: string; init?: RequestInit };
+
+function c3Island(fetchImpl: (url: string, init?: RequestInit) => Promise<unknown>) {
+  const registered: Registered[] = [];
+  const fetched: C3FetchCall[] = [];
+  const timers: C3Timer[] = [];
+  const listeners = new Map<string, (event?: { persisted?: boolean }) => void>();
+  const wrappedFetch = async (url: string, init?: RequestInit) => {
+    fetched.push({ url, init });
+    return fetchImpl(url, init);
+  };
+  const fakeSetTimeout = (fn: () => void, ms = 0) => {
+    timers.push({ fn, ms: Number(ms) || 0, cleared: false, fired: false });
+    return timers.length;
+  };
+  const fakeClearTimeout = (id: number) => {
+    const t = timers[id - 1];
+    if (t) t.cleared = true;
+  };
+  const ctx = {
+    registerTool: (tool: Registered, options?: { signal?: AbortSignal }) => {
+      registered.push({ ...tool, options });
+    },
+    provideContext: () => {},
+    clearContext: () => {},
+  };
+  runInNewContext(binder, {
+    AbortController,
+    TextEncoder,
+    TextDecoder,
+    fetch: wrappedFetch,
+    setTimeout: fakeSetTimeout,
+    clearTimeout: fakeClearTimeout,
+    document: { cookie: "", modelContext: ctx },
+    navigator: {},
+    window: {
+      addEventListener: (kind: string, fn: (event?: { persisted?: boolean }) => void) => {
+        listeners.set(kind, fn);
+      },
+      removeEventListener: (kind: string) => {
+        listeners.delete(kind);
+      },
+    },
+  });
+  const byName = new Map(registered.map((t) => [t.name, t]));
+  return {
+    byName,
+    fetched,
+    timers,
+    fireTimers() {
+      for (const t of timers) {
+        if (!t.cleared && !t.fired) {
+          t.fired = true;
+          t.fn();
+        }
+      }
+    },
+  };
+}
+
+function c3Headers(entries: Record<string, string>) {
+  const lower = new Map<string, string>();
+  for (const [k, v] of Object.entries(entries)) lower.set(k.toLowerCase(), v);
+  return { get: (name: string) => lower.get(name.toLowerCase()) ?? null };
+}
+
+function c3MultibyteJson(totalBytes: number): string {
+  // {"a":"<pad>"} with two-byte "é" chars (one ASCII byte when the pad length
+  // is odd) so the byte count hits exactly while chars stay well under bytes.
+  const overhead = new TextEncoder().encode(JSON.stringify({ a: "" })).length;
+  const padBytes = totalBytes - overhead;
+  if (padBytes < 1) throw new Error(`fixture cannot hit ${totalBytes} bytes`);
+  const pad = padBytes % 2 === 0 ? "é".repeat(padBytes / 2) : `x${"é".repeat((padBytes - 1) / 2)}`;
+  const body = JSON.stringify({ a: pad });
+  if (new TextEncoder().encode(body).length !== totalBytes) {
+    throw new Error(`fixture missed ${totalBytes} bytes`);
+  }
+  return body;
+}
+
+function c3CountingIsland(fetchImpl: (url: string, init?: RequestInit) => Promise<unknown>) {
+  const registered: Registered[] = [];
+  const fetched: C3FetchCall[] = [];
+  const timers: C3Timer[] = [];
+  const listeners = new Map<string, (event?: { persisted?: boolean }) => void>();
+  const counts = { adds: 0, removes: 0, aborts: 0 };
+  const RealAC = AbortController;
+  class CountingAbortController extends RealAC {
+    constructor() {
+      super();
+      const sig = this.signal;
+      const origAdd = sig.addEventListener.bind(sig);
+      const origRemove = sig.removeEventListener.bind(sig);
+      sig.addEventListener = ((
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: AddEventListenerOptions | boolean,
+      ) => {
+        if (type === "abort") counts.adds += 1;
+        return origAdd(type as "abort", listener as EventListener, options);
+      }) as typeof sig.addEventListener;
+      sig.removeEventListener = ((
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: EventListenerOptions | boolean,
+      ) => {
+        if (type === "abort") counts.removes += 1;
+        return origRemove(type as "abort", listener as EventListener, options);
+      }) as typeof sig.removeEventListener;
+      const origAbort = this.abort.bind(this);
+      this.abort = (() => {
+        counts.aborts += 1;
+        return origAbort();
+      }) as typeof this.abort;
+    }
+  }
+  const wrappedFetch = async (url: string, init?: RequestInit) => {
+    fetched.push({ url, init });
+    return fetchImpl(url, init);
+  };
+  const fakeSetTimeout = (fn: () => void, ms = 0) => {
+    timers.push({ fn, ms: Number(ms) || 0, cleared: false, fired: false });
+    return timers.length;
+  };
+  const fakeClearTimeout = (id: number) => {
+    const t = timers[id - 1];
+    if (t) t.cleared = true;
+  };
+  const ctx = {
+    registerTool: (tool: Registered, options?: { signal?: AbortSignal }) => {
+      registered.push({ ...tool, options });
+    },
+    provideContext: () => {},
+    clearContext: () => {},
+  };
+  runInNewContext(binder, {
+    AbortController: CountingAbortController,
+    TextEncoder,
+    TextDecoder,
+    fetch: wrappedFetch,
+    setTimeout: fakeSetTimeout,
+    clearTimeout: fakeClearTimeout,
+    document: { cookie: "", modelContext: ctx },
+    navigator: {},
+    window: {
+      addEventListener: (kind: string, fn: (event?: { persisted?: boolean }) => void) => {
+        listeners.set(kind, fn);
+      },
+      removeEventListener: (kind: string) => {
+        listeners.delete(kind);
+      },
+    },
+  });
+  const byName = new Map(registered.map((t) => [t.name, t]));
+  return {
+    byName,
+    fetched,
+    timers,
+    counts,
+    fireTimers() {
+      for (const t of timers) {
+        if (!t.cleared && !t.fired) {
+          t.fired = true;
+          t.fn();
+        }
+      }
+    },
+    firePagehide() {
+      listeners.get("pagehide")?.({ persisted: false });
+    },
+  };
+}
+
+describe("model-context C3 review pins", () => {
+  it("aborts the per-call fetch when the deadline fires", async () => {
+    let captured: AbortSignal | undefined;
+    const b = c3Island(async (_url: string, init?: RequestInit) => {
+      captured = init?.signal as AbortSignal | undefined;
+      return new Promise(() => {});
+    });
+    const pending = b.byName.get("two_get_community")!.execute({});
+    pending.catch(() => {});
+    await Promise.resolve();
+    expect(captured).toBeInstanceOf(AbortSignal);
+    expect(captured!.aborted).toBe(false);
+    b.fireTimers();
+    const failure = (await pending.then(
+      () => null,
+      (err: unknown) => err,
+    )) as (Error & { code?: unknown }) | null;
+    expect(failure?.code).toBe("timeout");
+    expect(captured!.aborted).toBe(true);
+  });
+
+  it("settled successes already hold aborted signals instead of waiting for pagehide", async () => {
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => "{}",
+    }));
+    const tool = b.byName.get("two_get_community")!;
+    await expect(tool.execute({})).resolves.toEqual({});
+    await expect(tool.execute({})).resolves.toEqual({});
+    await expect(tool.execute({})).resolves.toEqual({});
+    expect(b.fetched).toHaveLength(3);
+    for (const call of b.fetched) {
+      const signal = call.init?.signal as AbortSignal | undefined;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal!.aborted).toBe(true);
+    }
+  });
+
+  it("maps 404 on get_event to not_found with no retry hint", async () => {
+    const b = c3Island(async () => ({
+      ok: false,
+      status: 404,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => "",
+    }));
+    const failure = (await b.byName
+      .get("two_get_event")!
+      .execute({ event_key: EVENT_KEY })
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )) as (Error & { code?: unknown; retryAfter?: unknown }) | null;
+    expect(b.fetched).toHaveLength(1);
+    expect(failure?.code).toBe("not_found");
+    expect(typeof failure?.message).toBe("string");
+    expect(failure?.message).toBe("No published event with that key.");
+    expect(failure?.message).not.toMatch(/try again|retry|later/i);
+    expect(failure?.retryAfter).toBeUndefined();
+  });
+
+  it("measures the cap in UTF-8 bytes: multibyte at-cap succeeds, char-under/byte-over refuses", async () => {
+    const atCap = c3MultibyteJson(32768);
+    expect(atCap.length).toBeLessThan(32768);
+    const ok = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => atCap,
+    }));
+    await expect(ok.byName.get("two_get_community")!.execute({})).resolves.toEqual(
+      JSON.parse(atCap),
+    );
+    // 20008 chars / 40008 bytes: a .length mutant sees under-cap and resolves.
+    const overBytes = c3MultibyteJson(40008);
+    expect(overBytes.length).toBeLessThan(32768);
+    const over = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => overBytes,
+    }));
+    const failure = (await over.byName
+      .get("two_get_community")!
+      .execute({})
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )) as (Error & { code?: unknown }) | null;
+    expect(failure?.code).toBe("invalid_response");
+  });
+
+  it.each(["0", "-5"])("floors Retry-After %s at 1 second", async (raw) => {
+    const b = c3Island(async () => ({
+      ok: false,
+      status: 429,
+      type: "basic",
+      headers: c3Headers({ "retry-after": raw }),
+      text: async () => "{}",
+    }));
+    const failure = (await b.byName
+      .get("two_get_community")!
+      .execute({})
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )) as (Error & { code?: unknown; retryAfter?: unknown }) | null;
+    expect(b.fetched).toHaveLength(1);
+    expect(failure?.code).toBe("rate_limited");
+    expect(failure?.retryAfter).toBe(1);
+  });
+
+  it("stops an oversize streaming body early: cancel observed, tail never read", async () => {
+    const chunk = new TextEncoder().encode(`x`.repeat(8000));
+    const chunks = [chunk, chunk, chunk, chunk, chunk];
+    let reads = 0;
+    let cancelled = false;
+    let textCalled = false;
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => {
+        textCalled = true;
+        return "";
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (cancelled) return { done: true, value: undefined };
+            if (reads >= chunks.length) return { done: true, value: undefined };
+            const value = chunks[reads];
+            reads += 1;
+            return { done: false, value };
+          },
+          cancel: async () => {
+            cancelled = true;
+          },
+        }),
+      },
+    }));
+    const failure = (await b.byName
+      .get("two_get_community")!
+      .execute({})
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )) as (Error & { code?: unknown }) | null;
+    expect(failure?.code).toBe("invalid_response");
+    expect(textCalled).toBe(false);
+    expect(cancelled).toBe(true);
+    // 5 x 8000B: the 5th chunk passes 32768, so at most 5 reads run and the
+    // 6th (done) read never issues.
+    expect(reads).toBeLessThanOrEqual(5);
+    const signal = b.fetched[0]!.init?.signal as AbortSignal | undefined;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("streams a small body to success without touching text()", async () => {
+    const full = new TextEncoder().encode(JSON.stringify({ ok: true }));
+    const split = Math.ceil(full.length / 2);
+    const parts = [full.slice(0, split), full.slice(split)];
+    let reads = 0;
+    let textCalled = false;
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => {
+        textCalled = true;
+        return "";
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (reads >= parts.length) return { done: true, value: undefined };
+            const value = parts[reads];
+            reads += 1;
+            return { done: false, value };
+          },
+          cancel: async () => {},
+        }),
+      },
+    }));
+    await expect(b.byName.get("two_get_community")!.execute({})).resolves.toEqual({ ok: true });
+    expect(textCalled).toBe(false);
+    expect(reads).toBe(2);
+  });
+
+  it("streams a split multibyte character without mojibake", async () => {
+    const payload = { title: "café — live" };
+    const body = JSON.stringify(payload);
+    const bytes = new TextEncoder().encode(body);
+    // Split between the two bytes of é (c3 a9): without { stream: true }
+    // each half decodes as U+FFFD and the title corrupts.
+    let splitAt = -1;
+    for (let i = 0; i + 1 < bytes.length; i++) {
+      if (bytes[i] === 0xc3 && bytes[i + 1] === 0xa9) {
+        splitAt = i + 1;
+        break;
+      }
+    }
+    expect(splitAt).toBeGreaterThan(0);
+    const parts = [bytes.slice(0, splitAt), bytes.slice(splitAt)];
+    let reads = 0;
+    let textCalled = false;
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => {
+        textCalled = true;
+        return "";
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (reads >= parts.length) return { done: true, value: undefined };
+            const value = parts[reads];
+            reads += 1;
+            return { done: false, value };
+          },
+          cancel: async () => {},
+        }),
+      },
+    }));
+    await expect(b.byName.get("two_get_community")!.execute({})).resolves.toEqual(payload);
+    expect(textCalled).toBe(false);
+    expect(reads).toBe(2);
+  });
+
+  it("streams an exactly-32768-byte body to success", async () => {
+    const body = c3MultibyteJson(32768);
+    const bytes = new TextEncoder().encode(body);
+    expect(bytes.length).toBe(32768);
+    // A >= mutant rejects this valid boundary; real browsers always stream.
+    const parts = [
+      bytes.slice(0, 8192),
+      bytes.slice(8192, 16384),
+      bytes.slice(16384, 24576),
+      bytes.slice(24576),
+    ];
+    let reads = 0;
+    let cancelled = false;
+    let textCalled = false;
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => {
+        textCalled = true;
+        return "";
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (reads >= parts.length) return { done: true, value: undefined };
+            const value = parts[reads];
+            reads += 1;
+            return { done: false, value };
+          },
+          cancel: async () => {
+            cancelled = true;
+          },
+        }),
+      },
+    }));
+    await expect(b.byName.get("two_get_community")!.execute({})).resolves.toEqual(JSON.parse(body));
+    expect(textCalled).toBe(false);
+    expect(cancelled).toBe(false);
+    expect(reads).toBe(4);
+  });
+
+  it("refuses a streamed 32769-byte body with cancel", async () => {
+    const body = c3MultibyteJson(32769);
+    const bytes = new TextEncoder().encode(body);
+    expect(bytes.length).toBe(32769);
+    const parts = [
+      bytes.slice(0, 8192),
+      bytes.slice(8192, 16384),
+      bytes.slice(16384, 24576),
+      bytes.slice(24576),
+    ];
+    let reads = 0;
+    let cancelled = false;
+    let textCalled = false;
+    const b = c3Island(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => {
+        textCalled = true;
+        return "";
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (cancelled) return { done: true, value: undefined };
+            if (reads >= parts.length) return { done: true, value: undefined };
+            const value = parts[reads];
+            reads += 1;
+            return { done: false, value };
+          },
+          cancel: async () => {
+            cancelled = true;
+          },
+        }),
+      },
+    }));
+    const failure = (await b.byName
+      .get("two_get_community")!
+      .execute({})
+      .then(
+        () => null,
+        (err: unknown) => err,
+      )) as (Error & { code?: unknown }) | null;
+    expect(failure?.code).toBe("invalid_response");
+    expect(textCalled).toBe(false);
+    expect(cancelled).toBe(true);
+    expect(reads).toBeLessThanOrEqual(4);
+    const signal = b.fetched[0]!.init?.signal as AbortSignal | undefined;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("releases queue entries and page listeners on settle", async () => {
+    const b = c3CountingIsland(async () => ({
+      ok: true,
+      status: 200,
+      type: "basic",
+      headers: c3Headers({}),
+      text: async () => "{}",
+    }));
+    const tool = b.byName.get("two_get_community")!;
+    await expect(tool.execute({})).resolves.toEqual({});
+    expect(b.counts.adds).toBe(1);
+    expect(b.counts.removes).toBe(1);
+    await expect(tool.execute({})).resolves.toEqual({});
+    await expect(tool.execute({})).resolves.toEqual({});
+    expect(b.fetched).toHaveLength(3);
+    expect(b.counts.adds).toBe(3);
+    expect(b.counts.removes).toBe(3);
+    for (const call of b.fetched) {
+      const signal = call.init?.signal as AbortSignal | undefined;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal!.aborted).toBe(true);
+    }
+    // A release no-op keeps 3 adds / 0 removes; pristine settles hold no
+    // listeners before pagehide. Pagehide then settles nothing new: no extra
+    // adds or removes, and aborts are exactly per-call (3) plus the four
+    // registrations plus the page controller (1). A leaked listener would
+    // forward the page abort into 3 extra per-call aborts (11 total).
+    expect(b.counts.aborts).toBe(3);
+    b.firePagehide();
+    expect(b.counts.adds).toBe(3);
+    expect(b.counts.removes).toBe(3);
+    expect(b.counts.aborts).toBe(8);
   });
 });
