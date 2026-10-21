@@ -115,6 +115,7 @@ export function registerCalendarRoutes(
       state,
       upcoming,
       past: localPast,
+      pastMayBeTruncated,
       zone,
       totalPages,
       emptyState,
@@ -156,6 +157,7 @@ export function registerCalendarRoutes(
         state={state}
         upcoming={upcoming}
         past={localPast}
+        pastMayBeTruncated={pastMayBeTruncated}
         zone={zone}
         now={now}
         totalPages={totalPages}

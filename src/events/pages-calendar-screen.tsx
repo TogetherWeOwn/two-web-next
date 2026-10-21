@@ -54,6 +54,7 @@ export const EventsCalendarPage: FC<{
   state: CalendarState;
   upcoming: CalRow[];
   past: PublicEvent[];
+  pastMayBeTruncated?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
@@ -77,6 +78,7 @@ export const EventsCalendarPage: FC<{
   state,
   upcoming,
   past,
+  pastMayBeTruncated: pastMayBeTruncatedProp = past.length >= EVENTS_PAST_DRAWER_LIMIT,
   zone,
   now,
   totalPages,
@@ -120,7 +122,7 @@ export const EventsCalendarPage: FC<{
   const monthHasInMonthRows = [...upcoming, ...past].some((e) =>
     wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`),
   );
-  const pastMayBeTruncated = past.length >= EVENTS_PAST_DRAWER_LIMIT;
+  const pastMayBeTruncated = pastMayBeTruncatedProp;
   const monthCouldHoldPast = state.month <= wallMonth(now, zone);
   const monthEmpty =
     emptyState === null &&

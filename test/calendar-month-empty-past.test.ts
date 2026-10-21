@@ -94,7 +94,18 @@ function calendarFixture(args: {
         // PostgreSQL infinity timestamps arrive as Invalid Dates via the
         // pg-proxy wire; encode them as the "infinity" string so drizzle
         // decodes them back to Invalid Date (like real PG infinity).
-        return Number.isFinite(v.getTime()) ? v.toISOString() : "infinity";
+        // PG-finite/JS-overflow rows (marked __pgFiniteOverflow) encode their
+        // invalid starts_at as a far-future timestamp string: real PG returns
+        // a finite timestamp beyond the JS Date range, which the driver also
+        // decodes to Invalid Date.
+        if (Number.isFinite(v.getTime())) return v.toISOString();
+        if (
+          (row as unknown as Record<string, unknown>).__pgFiniteOverflow === true &&
+          k === "startsAt"
+        ) {
+          return "280000-06-01T18:00:00Z";
+        }
+        return "infinity";
       }
       return v;
     });
@@ -110,13 +121,15 @@ function calendarFixture(args: {
     if (sql.includes('"starts_at" >=')) return { rows: monthRows.map(encode) };
     let rows = /"ends_at" </.test(sql) ? past : upcoming;
     // Simulate the PostgreSQL isfinite() guard: when the query carries it,
-    // infinity rows never occupy SQL limit slots. Filter before the limit
-    // slice, like real PG. (Far-future JS-overflow rows also decode to
-    // Invalid Date but pass SQL isfinite(); this suite seeds only true
-    // infinity rows, so the Invalid-Date filter is exact here.)
+    // true infinity rows never occupy SQL limit slots. Filter before the
+    // limit slice, like real PG. PG-finite/JS-overflow rows (__pgFiniteOverflow)
+    // pass real SQL isfinite() and occupy a slot, decoding to Invalid Date in
+    // JS — so the simulation keeps them here and the JS filter drops them.
     if (sql.includes("isfinite")) {
       rows = rows.filter(
-        (r) => Number.isFinite(r.startsAt.getTime()) && Number.isFinite(r.endsAt.getTime()),
+        (r) =>
+          (r as unknown as Record<string, unknown>).__pgFiniteOverflow === true ||
+          (Number.isFinite(r.startsAt.getTime()) && Number.isFinite(r.endsAt.getTime())),
       );
     }
     if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
@@ -283,6 +296,49 @@ describe("month-empty past completeness", () => {
       upcoming: [decKeep()],
       monthRows: [],
       past: [infinityRow, ...sepRows, augHold],
+    });
+    const response = await src.request("/events?view=calendar&month=2026-08&past=1");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
+  });
+
+  it("suppresses the claim when a PG-finite JS-overflow row would consume a drawer slot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T12:00:00Z"));
+    // 21 ended rows: one PG-finite/JS-overflow import (starts beyond the JS
+    // Date range, ends in the past, sorts first in SQL), 19 September rows,
+    // and one August row holding the selected month. SQL isfinite() passes
+    // the overflow row so it occupies a limit slot, is dropped in JS, and a
+    // post-filter length would misread the drawer as complete.
+    const overflowRow = eventRow({
+      eventKey: "overflow-import",
+      title: "Overflow import",
+      startsAt: new Date(NaN),
+      endsAt: new Date("2020-01-01T20:00:00Z"),
+      timezone: "UTC",
+    });
+    (overflowRow as unknown as Record<string, unknown>).__pgFiniteOverflow = true;
+    const sepRows = Array.from({ length: 19 }, (_, i) =>
+      eventRow({
+        eventKey: `sep-ovf-${i + 1}`,
+        title: `September raid ${i + 1}`,
+        startsAt: new Date(Date.UTC(2026, 8, i + 1, 20)),
+        endsAt: new Date(Date.UTC(2026, 8, i + 1, 22)),
+        timezone: "UTC",
+      }),
+    );
+    const augHold = eventRow({
+      eventKey: "aug-hold-ovf",
+      title: "August raid",
+      startsAt: new Date("2026-08-15T20:00:00Z"),
+      endsAt: new Date("2026-08-15T22:00:00Z"),
+      timezone: "UTC",
+    });
+    const src = calendarFixture({
+      upcoming: [decKeep()],
+      monthRows: [],
+      past: [overflowRow, ...sepRows, augHold],
     });
     const response = await src.request("/events?view=calendar&month=2026-08&past=1");
     expect(response.status).toBe(200);

@@ -76,6 +76,7 @@ export interface CalendarPageModel {
   state: CalendarState;
   upcoming: (PublicEvent | DiscordTransient)[];
   past: PublicEvent[];
+  pastMayBeTruncated?: boolean;
   zone: string;
   totalPages: number;
   emptyState: ReturnType<typeof calendarEmptyState>;
@@ -205,6 +206,7 @@ export async function loadCalendarPageModel(args: {
     state,
     upcoming,
     past: localPast,
+    pastMayBeTruncated: localPast.mayBeTruncated,
     zone,
     totalPages,
     emptyState,
