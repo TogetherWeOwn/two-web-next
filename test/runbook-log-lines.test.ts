@@ -184,30 +184,31 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("env.production.queues.producers");
     expect(section).toContain("two-web-next-production-sync-event");
     expect(section).toContain("two-sync-event");
-    // Production reconcile runs on the web Worker: a missing binding there is stuck.
-    // Pin the ownership claim itself, not just the Worker name (which is a
-    // substring of the production queue name asserted above), and tie it to
-    // the wrangler configs so a handoff that moves the cron fails here.
-    expect(section).toContain(
-      "In the production cutover template this self-healing does not apply:",
-    );
-    expect(section).toContain("Worker `two-web-next-production` owns both");
+    // Production reconcile runs on the jobs Worker after the transfer: a web-only
+    // missing binding is late, not lost. Pin the ownership claim itself, not
+    // just the Worker name (which is a substring of the production queue name
+    // asserted above), and tie it to the wrangler configs so a handoff that
+    // moves the cron fails here.
+    expect(section).toContain("In production the same split applies after the jobs transfer:");
+    expect(section).toContain("Worker `two-web-jobs-production` owns the");
     expect(section).toContain("`*/10 * * * *` reconcile");
-    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
-    expect(section).toContain("stuck, not late");
-    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
-    expect(section).toContain("which has no production env");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jobs.jsonc`)");
+    expect(section).toContain("stuck, not self-healing");
+    expect(section).toContain("its own `SYNC_EVENT_QUEUE` binding");
+    expect(section).toContain("top level for staging, `env.production` for production");
     const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
     expect(production?.name).toBe("two-web-next-production");
-    expect(section).toContain(`Worker \`${production.name}\` owns both`);
-    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(production?.triggers?.crons ?? []).toEqual([]);
     expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
     expect(production?.queues?.producers).toContainEqual({
       queue: "two-web-next-production-sync-event",
       binding: "SYNC_EVENT_QUEUE",
     });
     const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
-    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
+    const jobsProduction = jobsConfig.env?.production;
+    expect(jobsProduction?.name).toBe("two-web-jobs-production");
+    expect(section).toContain(`Worker \`${jobsProduction?.name}\` owns the`);
+    expect(jobsProduction?.triggers?.crons).toContain(RECONCILE_CRON);
   });
 
   it("source still emits the warning with the documented fields", () => {
@@ -259,7 +260,8 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("normalized_query");
     expect(section).toContain("normalized_board_key");
     expect(section).toContain("carry no member identity");
-    expect(section).toContain("Neither line carries a `request_id`");
+    expect(section).toContain("warning to its `http.request` by ID, not by time window");
+    expect(section).toContain("Kit-served lines omit it");
   });
 
   it("gives a read-only aggregate check on the analytics tables", () => {
@@ -270,7 +272,7 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("read-only");
   });
 
-  it("sources still emit the warnings with only the exception field", () => {
+  it("sources emit the warnings with the exception field plus the validated request id only", () => {
     const cases = [
       { file: "src/events/search-log.ts", message: SEARCH_WARNING },
       { file: "src/hotzones/board-log.ts", message: BOARD_WARNING },
@@ -280,15 +282,102 @@ describe("analytics write-degradation warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class only: no request id,
-      // query, board key, or member identity travels with the line.
+      // The warn payload carries the exception class plus the validated
+      // request id only: no query, board key, or member identity travels.
       const payload = source.slice(start, source.indexOf("});", start));
       expect(payload).toContain("exception");
-      expect(payload).not.toContain("request_id");
+      expect(payload).toContain("request_id");
       expect(payload).not.toContain("normalized");
       expect(source).toContain('warn("LogWriteDeadline")');
       expect(source).toContain("err.constructor.name");
     }
+  });
+});
+
+describe("kit session-store outage warning docs", () => {
+  const AUTH_STATUS_DOWN = "auth status store unavailable";
+  const KIT_SESSION_DOWN = "kit session store unavailable";
+  const KIT_BRIDGE_DOWN = "kit session bridge store unavailable";
+  const KIT_EVENTS_DOWN = "kit events session store unavailable";
+  const HEADING = "### Kit session-store outage warnings";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents all four exact warnings at warn severity with their fields", () => {
+    const section = warningSection();
+    expect(section).toContain(AUTH_STATUS_DOWN);
+    expect(section).toContain(KIT_SESSION_DOWN);
+    expect(section).toContain(KIT_BRIDGE_DOWN);
+    expect(section).toContain(KIT_EVENTS_DOWN);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("`exception`");
+    expect(section).toContain("validated `request_id`");
+    expect(section).toContain("no Hono");
+  });
+
+  it("states the outage-not-logout contract, the once-per-leg rule, and the silence boundaries", () => {
+    const section = warningSection();
+    expect(section).toContain("never reported as a logout");
+    expect(section).toContain("None pages");
+    expect(section).toContain("At most one line per leg");
+    expect(section).toContain("never twice");
+    expect(section).toContain("stay silent by design");
+  });
+
+  it("gives a read-only store check on the sessions table", () => {
+    const section = warningSection();
+    expect(section).toContain("SELECT count(*) FROM web_sessions");
+    expect(section).toContain("read-only");
+    expect(section).toContain("runbook-alerts.md");
+  });
+
+  it("sources emit the warnings with class-only fields, request_id on the probe leg only", () => {
+    const cases = [
+      { file: "src/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
+      { file: "src/kit-session.ts", message: KIT_SESSION_DOWN, requestId: false },
+      { file: "src/kit-session.ts", message: KIT_BRIDGE_DOWN, requestId: false },
+      { file: "src/kit-session.ts", message: KIT_EVENTS_DOWN, requestId: false },
+    ];
+    for (const { file, message, requestId } of cases) {
+      const source = readFileSync(file, "utf8");
+      const call = `console.warn("${message}"`;
+      const start = source.indexOf(call);
+      expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
+      // The warn payload carries the exception class plus, on the Hono probe
+      // leg only, the validated request id: no message, token, cookie, or
+      // member identity travels on any leg.
+      const payload = source.slice(start, source.indexOf("});", start));
+      expect(payload).toContain("exception");
+      if (requestId) {
+        expect(payload).toContain("request_id");
+      } else {
+        expect(payload).not.toContain("request_id");
+      }
+    }
+  });
+
+  it("links the new lines from the bridge and login-start triage rows", () => {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const link = "[Kit session-store outage warnings](#kit-session-store-outage-warnings)";
+    // The Kit bridge triage row points at the new section for store-outage warns.
+    const bridgeRow = docs
+      .split("\n")
+      .find((l) => l.startsWith("| `kit session bridge unavailable; rendering without locals.` |"));
+    expect(bridgeRow, "missing Kit bridge triage row").toBeDefined();
+    expect(bridgeRow as string).toContain(link);
+    // The login-start section points at the new section for the sibling probe leg.
+    const loginStart = docs.indexOf("### Login-start store failures and logout revocation");
+    expect(loginStart, "missing login-start section").toBeGreaterThanOrEqual(0);
+    const loginSection = docs.slice(loginStart, docs.indexOf("### Analytics", loginStart));
+    expect(loginSection).toContain(link);
   });
 });
 

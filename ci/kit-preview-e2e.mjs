@@ -208,9 +208,18 @@ function check(label, condition, detail = "") {
 
 function expectShell(document) {
   const count = (pattern) => [...document.matchAll(pattern)].length;
+  const scripts = [...document.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
   check("one document head is assembled", count(/<head(?:\s|>)/gi) === 1);
   check("one semantic main is rendered", count(/<main(?:\s|>)/gi) === 1);
-  check("one script element is rendered", count(/<script(?:\s|>)/gi) === 1);
+  // No hydration bundle or inline bootstrap (csr=false, CSP script-src
+  // 'self'): exactly the two deferred first-party island binders, in Hono's
+  // order. The copy-link binder arrived with the calendar subscription help.
+  check(
+    "only the copy-link and archive island binders load",
+    scripts.length === 2 &&
+      scripts[0] === '<script src="/islands/copy-link.js" defer>' &&
+      scripts[1] === '<script src="/islands/past-events.js" defer>',
+  );
   check("one canonical URL is rendered", count(/<link rel="canonical"/g) === 1);
   check("archive shell carries the schedule theme", document.includes('data-theme="schedule"'));
   check(

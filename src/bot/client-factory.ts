@@ -24,6 +24,7 @@ export function createBotClient(opts: BotClientOptions) {
       keyId: opts.keyId as string,
       timeoutSeconds,
       fetchFn,
+      stderrDiagnostics: opts.stderrDiagnostics ?? false,
     };
   };
 

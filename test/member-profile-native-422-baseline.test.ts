@@ -135,7 +135,9 @@ describe("native profile 422 response (route level)", () => {
     expect(html).toContain("Choose a valid IANA timezone");
     const timezoneInput = html.match(/<input\b[^>]*name="timezone"[^>]*>/)?.[0] ?? "";
     expect(timezoneInput).toContain('aria-invalid="true"');
-    expect(timezoneInput).toContain('aria-describedby="profile-timezone-error"');
+    expect(timezoneInput).toContain(
+      'aria-describedby="profile-timezone-help profile-timezone-error"',
+    );
     // Nothing was persisted.
     expect(save).not.toHaveBeenCalled();
     expect(await store.find(ID)).toMatchObject({
