@@ -9,7 +9,9 @@
 // (.github/workflows/e2e.yml) so each 60 s rolling window holds only its own
 // step's logins; this static test counts every login site in every step and
 // fails loudly when a new site would push any step over, pointing at the fix
-// direction (fewer logins, not retries).
+// direction (fewer logins, not retries). The parity pair is pinned exactly,
+// not just bounded, and direct, non-inline, and helper-form logins are pinned
+// to zero wherever they would spend the throttle invisibly to the census.
 
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -61,12 +63,42 @@ function countParityLogins() {
   assert.ok(files.length > 0, "no kit-parity spec files found");
   return files.map((file) => {
     const source = readFileSync(new URL(`./${file}`, dir), "utf8");
-    // Quote-agnostic: fixtures post template literals (`/auth/qa/${id}`) and
-    // these callsites have been refactored before, so a quote-only match that
-    // sees zero logins must not read as a clean budget.
-    const calls = source.match(/\.post\(\s*["'`]\/auth\/qa\//g) ?? [];
+    // Wide match: inline paths, absolute https URLs, and template-origin
+    // `${origin}/...` forms all spend the same throttle budget, and these
+    // callsites have been refactored before — so a narrow inline-only match
+    // that sees zero logins must not read as a clean budget. Non-inline
+    // forms are additionally pinned to zero below.
+    const calls = source.match(/\.post\(\s*["'`][^"'`]*\/auth\/qa\//g) ?? [];
     return { file: `kit-parity/${file}`, count: calls.length };
   });
+}
+
+// Any .post( whose first argument contains /auth/qa/, whatever precedes it:
+// inline paths, absolute https URLs, and template-origin `${origin}/...`
+// forms all spend the same throttle budget. The match stays inside the first
+// string literal so a following /auth/qa/ mention cannot false-positive.
+function countQaLoginPosts(relativePath) {
+  const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
+  return (source.match(/\.post\(\s*["'`][^"'`]*\/auth\/qa\//g) ?? []).length;
+}
+
+// Non-inline QA URLs (absolute `https://.../auth/qa/...` or template-origin
+// `${origin}/auth/qa/...`) spend the same throttle budget while hiding which
+// bucket they hit, so they are pinned to zero across this window: keep window
+// QA logins inline. (A variable-held QA path still evades static counting —
+// treat any new post(variable) in this window as a budget question in review.)
+function countNonInlineQaLoginPosts(relativePath) {
+  const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
+  return (source.match(/\.post\(\s*["'`](?!\/auth\/qa\/)[^"'`]*\/auth\/qa\//g) ?? []).length;
+}
+
+// The qaLogin helper is counted per journey spec above, which excludes
+// kit-parity — so a helper call in a parity file would spend the shared
+// throttle invisibly to the census. Parity logs in through its two counted
+// POST call sites instead.
+function countQaLoginCalls(relativePath) {
+  const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
+  return (source.match(/qaLogin\s*\(/g) ?? []).length;
 }
 
 function countAuthPerfLogins() {
@@ -110,6 +142,19 @@ test("every browser-smoke step holds its own QA logins under the throttle budget
     .join(", ");
   const authPerf = countAuthPerfLogins();
   const pacing = pacingPositions();
+  const directSites = specs
+    .map((row) => ({ file: row.file, count: countQaLoginPosts(`./${row.file}`) }))
+    .filter((row) => row.count > 0);
+  const nonInlineSites = [
+    "./local-global-teardown.ts",
+    ...specs.map((row) => `./${row.file}`),
+    ...parity.map((row) => `./${row.file}`),
+  ]
+    .map((file) => ({ file, count: countNonInlineQaLoginPosts(file) }))
+    .filter((row) => row.count > 0);
+  const parityHelperLogins = parity
+    .map((row) => ({ file: row.file, count: countQaLoginCalls(`./${row.file}`) }))
+    .filter((row) => row.count > 0);
 
   assert.equal(
     teardown,
@@ -144,18 +189,34 @@ test("every browser-smoke step holds its own QA logins under the throttle budget
       `than retrying across the window — the wait does not fit the 30 s test ` +
       `timeout.`,
   );
-  assert.ok(
-    parityTotal > 0,
-    `kit-parity census found no QA logins: the guard inspected nothing and ` +
-      `passed vacuously. If the parity login callsites moved or changed ` +
-      `shape, teach countParityLogins the new shape instead of shipping a ` +
-      `blind guard.`,
+  assert.equal(
+    parityTotal,
+    2,
+    `kit-parity specs must keep exactly two QA-login POST call sites (found ${parityTotal}: ${parityBreakdown || "none"}): ` +
+      `one shared member login plus one isolated renewal login. A third parity login ` +
+      `reddened fast runs before — cut a login elsewhere first, and reshape renewal ` +
+      `coverage with the Test Author rather than editing their spec to satisfy this pin.`,
   );
-  assert.ok(
-    parityTotal <= budget,
-    `kit-parity performs ${parityTotal} QA logins against the shared qa-login ` +
-      `throttle (${budget}/min per runner IP): ${parityBreakdown}. Reuse the ` +
-      `shared bearer instead of minting new sessions.`,
+  assert.deepEqual(
+    directSites,
+    [],
+    `journey specs must log in through qaLogin (counted above), not direct POSTs: ` +
+      `${directSites.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
+      `Route the new login through qaLogin so the budget counts it.`,
+  );
+  assert.deepEqual(
+    nonInlineSites,
+    [],
+    `QA logins in this window must use inline /auth/qa/ paths (counted above), not absolute or template-origin URLs: ` +
+      `${nonInlineSites.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
+      `A non-inline QA URL spends the same throttle budget while hiding its bucket.`,
+  );
+  assert.deepEqual(
+    parityHelperLogins,
+    [],
+    `kit-parity specs must log in through the two counted POST call sites above, not the qaLogin helper: ` +
+      `${parityHelperLogins.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
+      `A helper login here spends the shared throttle invisibly to the budget census.`,
   );
   assert.ok(
     authPerf <= budget,

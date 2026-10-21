@@ -17,6 +17,8 @@ import {
   scrubSecrets,
   type ParityTarget,
 } from "../kit-parity";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
 // against BOTH the Hono worker and the built Kit Worker in one run, and
@@ -36,6 +38,10 @@ const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
 test.beforeAll(async ({ playwright }) => {
+  // Hook timeout: the config's 30s covers the setup itself; the shared QA
+  // login's bounded 429 waits get their own budget (qa-login-retry.mjs), one
+  // login — a capped 65s wait dies on the bare hook timeout without this raise.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   for (const target of targets) {
     contexts.set(
       target.name,
@@ -118,10 +124,16 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    // The e2e suite's 10 logins share this window: a 429 honors Retry-After
+    // into a fresh window instead of failing the file (parity-qa-login.mjs).
+    const response = await postParityQaLogin(
+      () =>
+        api(hono).post("/auth/qa/qa-member", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      { identity: "qa-member" },
+    );
     expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -176,10 +188,16 @@ async function isolatedRenewalCookie(
     if (!token) throw new Error("Missing ephemeral CI QA token");
     // Use a separate QA account: issuing a fresh session revokes other live
     // sessions for the same user and would invalidate the shared member jar.
-    const response = await login.post("/auth/qa/qa-moderator", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    // Same bounded 429 retry as the shared login: a throttled window honors
+    // Retry-After instead of failing the journey.
+    const response = await postParityQaLogin(
+      () =>
+        login.post("/auth/qa/qa-moderator", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      { identity: "qa-moderator" },
+    );
     expect(response.status(), "isolated QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -755,6 +773,11 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
+      // Test timeout: the config's 30s also bounds this test; the Kit path's
+      // isolated QA login spends one bounded 429 budget (qa-login-retry.mjs) —
+      // a capped 65s wait dies on the bare timeout without this raise. The
+      // Hono path replays the memoized login, so the budget is idle there.
+      test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
