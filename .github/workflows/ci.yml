@@ -590,6 +590,9 @@ jobs:
       - name: Backup restore-proof selftest (no network, no database)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-restore-proof/selftest.py
+      - name: Backup retention-plan selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-retention-plan-selftest.sh
       - name: Scrub QA token selftest (offline fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/scrub-qa-token-selftest
