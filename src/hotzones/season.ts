@@ -70,6 +70,24 @@ export function seasonLabel(raw: string | null | undefined): string {
   return raw;
 }
 
+/** Current UTC month/quarter season values for the period-picker shortcuts.
+///
+/// Pure UTC getters only, never viewer-local dates. `now` is the injectable
+/// request clock: callers use the default (the request-time clock) and tests
+/// inject a fixed instant for deterministic quarter/year boundaries. */
+export function utcPeriodShortcuts(now: Date = new Date()): {
+  month: string;
+  quarter: string;
+} {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const quarter = Math.floor((month - 1) / 3) + 1;
+  return {
+    month: `${year}-${String(month).padStart(2, "0")}`,
+    quarter: `${year}-Q${quarter}`,
+  };
+}
+
 /**
  * Clamp a season-window bound to something Postgres can bind. Postgres has
  * no year 0, so a literal `0000-..` ISO bound fails with 22008 — and
