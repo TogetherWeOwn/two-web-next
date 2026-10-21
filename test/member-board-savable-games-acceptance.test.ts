@@ -13,15 +13,18 @@
 // The fix (build card): the `?activity=` grammar admits every game name the
 // event form can save (<=100 chars, no control characters) on both twins —
 // Hono GET /leaderboards/members and the Kit member-board load — through the
-// single shared parser. Trim/lowercase normalization and blank/`all` handling
-// are unchanged; `season`/`scope` grammars, ranking, windows, opt-outs and
-// erasure are unchanged. Still-refused input (overlong, control-bearing) keeps
+// single shared parser. Trim/lowercase normalization and blank handling are
+// unchanged; `all` now selects the game named All (no `activity=all` emitter
+// exists; blank is every game). `season`/`scope` grammars, ranking, windows,
+// opt-outs and erasure are unchanged. Still-refused input (overlong,
+// control-bearing) keeps
 // the branded 400 recovery UX with zero database work (Hono) / 400 before any
 // read (Kit), never outage copy.
 //
 // Coverage:
 // - Parser: the three named savable names, the `& : / . ' -` punctuation
-//   matrix, the 100/101 length edge, blank/`all` handling, control refusal.
+//   matrix, the 100/101 length edge, blank handling and the All game, control
+//   refusal.
 // - Hono: each savable name serves a valid 200 board (ranking read bound to
 //   the normalized game, reads + logs written); an unmatched savable name
 //   renders the valid empty board, never a 400.
@@ -220,13 +223,13 @@ describe("savable parser: admits the event-form charset", () => {
       ok: true,
       game: "catan: cities",
     });
-    // Blank/`all` handling is unchanged: still every game.
+    // Blank handling is unchanged: still every game. `all` selects the game named All.
     expect(parseActivityParam(null)).toEqual({ ok: true, game: null });
     expect(parseActivityParam("")).toEqual({ ok: true, game: null });
     expect(parseActivityParam("   ")).toEqual({ ok: true, game: null });
-    expect(parseActivityParam("all")).toEqual({ ok: true, game: null });
-    expect(parseActivityParam("ALL")).toEqual({ ok: true, game: null });
-    expect(parseActivityParam("  all  ")).toEqual({ ok: true, game: null });
+    expect(parseActivityParam("all")).toEqual({ ok: true, game: "all" });
+    expect(parseActivityParam("ALL")).toEqual({ ok: true, game: "all" });
+    expect(parseActivityParam("  all  ")).toEqual({ ok: true, game: "all" });
   });
 
   it("covers the savable punctuation matrix & : / . ' -", () => {
@@ -474,7 +477,7 @@ describe("savable games: Hono and Kit enforce identically through the shared par
     ...CONTROLS.map((input) => ({ input, game: null, admitted: false })),
     { input: null, game: null, admitted: true },
     { input: "", game: null, admitted: true },
-    { input: "all", game: null, admitted: true },
+    { input: "all", game: "all", admitted: true },
   ];
 
   it("every matrix row agrees across parser, Hono status and Kit outcome", async () => {
