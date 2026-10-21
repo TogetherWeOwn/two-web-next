@@ -5,6 +5,7 @@ import { internalErrorHandler } from "../src/errors";
 import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
+import type { MemberStatsSource } from "../src/profiles/stats";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { requestLog } from "../src/request-log";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
@@ -188,7 +189,7 @@ describe("narrow database outage classification", () => {
 });
 
 describe("profile failures after a successful session and data read", () => {
-  async function fixture() {
+  async function fixture(stats?: MemberStatsSource) {
     const sessions = createMemorySessionStore();
     const cookie = await cookieFor(sessions, MEMBER);
     // Main #145: self-reads name no other member and write no audit row, so
@@ -215,6 +216,7 @@ describe("profile failures after a successful session and data read", () => {
       sessionStore: sessions,
       store,
       throttle: async () => ({ limited: false }),
+      ...(stats ? { stats } : {}),
       accessLog: async () => {
         throw refused();
       },
@@ -375,6 +377,32 @@ describe("profile failures after a successful session and data read", () => {
       }
     },
   );
+
+  it("warns that retrying stats discards the retained draft on a classified save outage", async () => {
+    const { cookie, store, profile } = await fixture(async () => {
+      throw refused();
+    });
+    vi.spyOn(store, "save").mockRejectedValue(refused());
+    const res = await profile.request(
+      `/members/${MEMBER.userId}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie,
+          accept: "text/html",
+          origin: env.APP_URL,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ bio: "new fixture", games: [] }),
+      },
+      env,
+    );
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).toContain("new fixture");
+    expect(body).toContain("Retry loading member stats");
+    expect(body).toContain("Reloading discards your unsaved changes.");
+  });
 });
 
 describe("public session failure boundaries", () => {

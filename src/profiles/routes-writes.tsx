@@ -188,6 +188,7 @@ export function registerWriteRoutes(
             isOwner
             isModerator={c.get("viewer").moderator}
             appUrl={c.env.APP_URL}
+            statsDraftWarning
             errors={{ save: uncertain ? PROFILE_COPY.saveUncertain : PROFILE_COPY.saveFailed }}
             values={draftValues(input, member)}
           />,
