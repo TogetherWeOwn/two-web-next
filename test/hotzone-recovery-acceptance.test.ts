@@ -46,11 +46,14 @@
 // forked list restored) fail these tests. Positive controls (statuses,
 // shell, order, valid/503 stability, zero spend) pass now and must stay
 // green. Hermetic doubles only: no live DB, no network.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { Hono } from "hono";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { emptyGrid } from "../src/hotzones/aggregates";
@@ -233,6 +236,91 @@ function expectKitRecoveryWired(sources: { path: string; body: string }[], label
   expect(direct || imported, `${label} recovery wired to a hotzone route`).toBe(true);
 }
 
+// Executed Kit boundary pins: the real hotzones +error.svelte SSR-rendered
+// per status with a mocked $app/state page, in the style of the kit-home and
+// kit-event-states harnesses. Source greps alone keep the suite green when the
+// 400 predicate drifts to 418, when 503 joins the recovery condition, or when
+// the season/signal branches swap their content — the concatenated sources
+// still contain every test id and grammar string. These renders assert
+// boundary-specific markers (hotzone test ids plus the 400 grammar lead versus
+// the 404 signal lead), never the generic recovery-code/error-home markers the
+// shared ErrorShell also renders, so each mutant turns the suite red.
+const webRequire = createRequire(join(root, "web/package.json"));
+const { compile: compileHotzoneBoundary } = webRequire("svelte/compiler") as {
+  compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
+};
+
+type RenderHotzoneBoundary = (status: number) => string;
+
+let renderHotzoneBoundary: RenderHotzoneBoundary;
+let hotzoneBoundaryScratch = "";
+
+beforeAll(async () => {
+  hotzoneBoundaryScratch = mkdtempSync(join(tmpdir(), "hotzone-boundary-"));
+  const mockState = join(hotzoneBoundaryScratch, "mock-app-state.mjs");
+  writeFileSync(
+    mockState,
+    "export const page = globalThis.__HOTZONE_BOUNDARY_PAGE__ ??= { status: 400 };\n",
+  );
+  (globalThis as { __HOTZONE_BOUNDARY_PAGE__?: { status: number } }).__HOTZONE_BOUNDARY_PAGE__ = {
+    status: 400,
+  };
+  const entry = join(hotzoneBoundaryScratch, "hotzone-boundary-entry.mjs");
+  writeFileSync(
+    entry,
+    `
+import { render } from "svelte/server";
+import HotzoneError from ${JSON.stringify(join(root, "web/src/routes/hotzones/+error.svelte"))};
+export function renderHotzoneBoundary(status) {
+  globalThis.__HOTZONE_BOUNDARY_PAGE__.status = status;
+  const { head, body } = render(HotzoneError);
+  return "<head>" + head + "</head><body>" + body + "</body>";
+}
+`,
+  );
+  const outfile = join(hotzoneBoundaryScratch, "hotzone-boundary-bundle.mjs");
+  await build({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "warning",
+    absWorkingDir: root,
+    nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+    alias: { "#lib": join(root, "web/src/lib/") },
+    plugins: [
+      {
+        name: "hotzone-boundary-mock-app-state",
+        setup(plugin) {
+          plugin.onResolve({ filter: /^\$app\/state$/ }, () => ({ path: mockState }));
+        },
+      },
+      {
+        name: "hotzone-boundary-svelte-ssr",
+        setup(plugin) {
+          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+            const source = readFileSync(args.path, "utf8");
+            const { js } = compileHotzoneBoundary(source, {
+              generate: "server",
+              dev: false,
+              filename: args.path,
+            });
+            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+          });
+        },
+      },
+    ],
+  });
+  ({ renderHotzoneBoundary } = (await import(pathToFileURL(outfile).href)) as unknown as {
+    renderHotzoneBoundary: RenderHotzoneBoundary;
+  });
+}, 60000);
+
+afterAll(() => {
+  if (hotzoneBoundaryScratch) rmSync(hotzoneBoundaryScratch, { recursive: true, force: true });
+});
+
 describe("hotzone bad-season recovery (Hono 400)", () => {
   it.each(PATHS)("answers %s with grammar plus index and signal links", async (path) => {
     const f = fixture();
@@ -286,6 +374,7 @@ describe("hotzone unknown-signal recovery (Hono 404)", () => {
       });
       expect(response.status, unknown).toBe(404);
       expect(response.headers.get("content-type"), unknown).toContain("text/html");
+      expect(response.headers.get("cache-control"), unknown).toBe("no-store, private");
       const body = await response.text();
       expectBrandedShell(body, "404", unknown);
       expectSignalNames(body, unknown);
@@ -304,6 +393,7 @@ describe("hotzone unknown-signal recovery (Hono 404)", () => {
     f.poison();
     const response = await f.request("/hotzones/bogus");
     expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
     const body = await response.text();
     expectSignalNames(body, "absent season");
     expectHotzoneLinks(body, "absent season");
@@ -443,6 +533,97 @@ describe("hotzone unknown-signal recovery (Kit 404)", () => {
     const page = readSource("web/src/routes/+error.svelte");
     expect(page).not.toContain(INDEX_TESTID);
     for (const signal of SIGNALS) expect(page).not.toContain(SIGNAL_TESTID(signal));
+  });
+});
+
+describe("hotzone Kit boundary executed branches", () => {
+  it("renders 400 with the season grammar plus hotzone recovery, never signal content", () => {
+    const html = renderHotzoneBoundary(400);
+    // Boundary-specific: the grammar lead plus the hotzone index and signals.
+    expect(html).toContain("That season did not match");
+    expect(html).toContain("2026");
+    expect(html).toContain("2026-09");
+    expect(html).toContain("2026-Q3");
+    expect(html).toContain("Browse all hot zones");
+    expect(html).toContain(`data-testid="${INDEX_TESTID}"`);
+    for (const signal of SIGNALS) {
+      expect(html).toContain(`data-testid="${SIGNAL_TESTID(signal)}"`);
+    }
+    // A swapped branch would serve the signal lead here instead of grammar.
+    expect(html).not.toContain("Unknown hot zone signal");
+    // A drifted predicate (400 to 418) would delegate to the generic 400
+    // shell: Browse-events recovery, never hotzone links.
+    expect(html).not.toContain('data-testid="error-events"');
+    expect(html).not.toContain('data-testid="error-join"');
+    expect(html).not.toContain('data-testid="error-invite"');
+    expect(html).not.toContain('data-testid="error-retry"');
+  });
+
+  it("renders 404 with the signal list plus hotzone recovery, never grammar", () => {
+    const html = renderHotzoneBoundary(404);
+    expect(html).toContain("Unknown hot zone signal");
+    expect(html).toContain("Browse all hot zones");
+    expect(html).toContain(`data-testid="${INDEX_TESTID}"`);
+    for (const signal of SIGNALS) {
+      expect(html).toContain(`data-testid="${SIGNAL_TESTID(signal)}"`);
+      expect(html).toContain(`/hotzones/${signal}`);
+    }
+    // A swapped branch would serve the season grammar here instead.
+    expect(html).not.toContain("That season did not match");
+    // The generic 404 shell offers join/events recovery, never hotzone links.
+    expect(html).not.toContain('data-testid="error-join"');
+    expect(html).not.toContain('data-testid="error-all-events"');
+    expect(html).not.toContain('data-testid="error-events"');
+    expect(html).not.toContain('data-testid="error-invite"');
+    expect(html).not.toContain('data-testid="error-retry"');
+  });
+
+  it("delegates 503 to the shared shell with no hotzone recovery", () => {
+    const html = renderHotzoneBoundary(503);
+    // Adding 503 to the recovery condition would render hotzone links and
+    // signal content here; the outage must keep the shared shell instead.
+    expect(html).not.toContain(INDEX_TESTID);
+    for (const signal of SIGNALS) expect(html).not.toContain(SIGNAL_TESTID(signal));
+    expect(html).not.toContain("That season did not match");
+    expect(html).not.toContain("Unknown hot zone signal");
+    expect(html).not.toContain("Browse all hot zones");
+    expect(html).not.toContain(`data-testid="${HOME_TESTID}"`);
+    // The shared 503 branch: invite plus retry, exactly as the root boundary.
+    expect(html).toContain('data-testid="error-invite"');
+    expect(html).toContain('data-testid="error-retry"');
+  });
+
+  it("delegates 418 to the shared shell with no hotzone recovery", () => {
+    const html = renderHotzoneBoundary(418);
+    // A drifted 400 predicate (400 to 418) would render hotzone recovery for
+    // this status; unknown statuses must fall back to the shared 500 shell.
+    expect(html).not.toContain(INDEX_TESTID);
+    for (const signal of SIGNALS) expect(html).not.toContain(SIGNAL_TESTID(signal));
+    expect(html).not.toContain("That season did not match");
+    expect(html).not.toContain("Unknown hot zone signal");
+    expect(html).not.toContain("Browse all hot zones");
+    expect(html).toContain('data-testid="error-invite"');
+    expect(html).toContain(`data-testid="${HOME_TESTID}"`);
+  });
+
+  it("checks the season before the signal in the binding load body", () => {
+    // The import-order pin above keeps passing when the two load lines swap;
+    // this pin reads the executed load body top to bottom so swapping
+    // +page.server.ts:30-31 (season no longer first at the binding) fails.
+    const source = readSource("web/src/routes/hotzones/[signal]/+page.server.ts");
+    const loadBody = source.slice(source.indexOf("export const load"));
+    expect(loadBody).toContain("parseSeasonParam");
+    expect(loadBody).toContain("isHotzoneSignal");
+    const seasonPos = loadBody.indexOf("parseSeasonParam");
+    const signalPos = loadBody.indexOf("isHotzoneSignal");
+    expect(seasonPos).toBeGreaterThanOrEqual(0);
+    expect(signalPos).toBeGreaterThanOrEqual(0);
+    expect(seasonPos).toBeLessThan(signalPos);
+    const err400 = loadBody.indexOf("error(400");
+    const err404 = loadBody.indexOf("error(404");
+    expect(err400).toBeGreaterThanOrEqual(0);
+    expect(err404).toBeGreaterThanOrEqual(0);
+    expect(err400).toBeLessThan(err404);
   });
 });
 
