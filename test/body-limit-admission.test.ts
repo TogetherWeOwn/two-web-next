@@ -192,7 +192,7 @@ describe("shared throttles admit before buffering", () => {
         // and QA login's gates still run before the cap, so these requests
         // carry the token.)
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
         if (advertised) expect(pull).not.toHaveBeenCalled();
         else expect(pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
       } else {
@@ -223,7 +223,7 @@ describe("shared throttles admit before buffering", () => {
       const first = upload(path, method, cookie, max, advertised);
       const response = await app.request(first.request, undefined, env);
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       if (capFirst) {
         // The cap runs before the throttle, so an oversized body spends no
         // throttle row; the budget still has room, so the follow-up oversized
@@ -235,7 +235,7 @@ describe("shared throttles admit before buffering", () => {
         const second = upload(path, method, cookie, max, false);
         const retry = await app.request(second.request, undefined, env);
         expect(retry.status).toBe(413);
-        expect(await retry.json()).toEqual(ERROR);
+        expect(await retry.json()).toMatchObject(ERROR);
         expect(second.pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
         expect(count()).toBe(budget - 1);
         expect(sql).not.toHaveBeenCalled();

@@ -88,6 +88,15 @@ const recordsFor = (logs: DiagnosticRecord[], message: string) =>
       args: withheld(record.args, [TOK, SECRET]) as unknown[],
     }));
 
+// The null throttle store intentionally warns once per guarded request
+// (fail-open allow, contracted by the silent-fallback slice and pinned by
+// its own acceptance); this file only owns V6 session-store silence, so it
+// filters that contracted line before asserting channel counts. The line
+// stays in streamClean's leak scan.
+const THROTTLE_NULL_STORE_WARN = "Throttle store unavailable; allowing the request.";
+const v6ChannelCounts = (logs: DiagnosticRecord[]) =>
+  channelCounts(logs.filter((record) => record.args[0] !== THROTTLE_NULL_STORE_WARN));
+
 /** Nothing a member, an operator or a log tail can read may carry a synthetic secret. */
 const leakFree = (...surfaces: unknown[]) => {
   const text = surfaces.map((s) => JSON.stringify(s) ?? String(s)).join("\n");
@@ -171,7 +180,7 @@ describe("login start warns on session-store failure", () => {
       LOGIN_NULL_STORE,
       { exception: "StoreAcquisitionFailed", request_id: res.headers.get("x-request-id") },
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     streamClean(logs, LOGIN_START_ROUTE, [LOGIN_NULL_STORE]);
     leakFree(line, [...res.headers], res.headers.getSetCookie());
   });
@@ -194,7 +203,7 @@ describe("login start warns on session-store failure", () => {
       LOGIN_JOURNEY_FAILED,
       { exception: "JourneyWriteFailed", request_id: res.headers.get("x-request-id") },
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     streamClean(logs, LOGIN_START_ROUTE, [LOGIN_JOURNEY_FAILED]);
     leakFree(line, [...res.headers], res.headers.getSetCookie());
   });
@@ -217,7 +226,7 @@ describe("login start warns on session-store failure", () => {
       LOGIN_JOURNEY_FAILED,
       { exception: "JourneyWriteFailed", request_id: res.headers.get("x-request-id") },
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     streamClean(logs, LOGIN_START_ROUTE, [LOGIN_JOURNEY_FAILED]);
     leakFree(line, [...res.headers], res.headers.getSetCookie());
   });
@@ -229,7 +238,7 @@ describe("login start warns on session-store failure", () => {
     const res = await app.request("/auth/discord", {}, e);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGIN_START_ROUTE);
   });
 
@@ -240,7 +249,7 @@ describe("login start warns on session-store failure", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toContain("https://discord.com/oauth2/authorize");
     expect(res.headers.getSetCookie().join(";")).toContain("__Host-two_oauth_state=");
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGIN_START_ROUTE);
   });
 });
@@ -255,7 +264,7 @@ describe("callback strays and denials stay silent; the callback path is untouche
     const res = await app.request(path, { headers: { cookie } }, e);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
   });
 
@@ -270,7 +279,7 @@ describe("callback strays and denials stay silent; the callback path is untouche
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
   });
 
@@ -297,7 +306,7 @@ describe("callback strays and denials stay silent; the callback path is untouche
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_denied");
     expect(calls).toHaveLength(0);
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
   });
 
@@ -335,7 +344,7 @@ describe("callback strays and denials stay silent; the callback path is untouche
         },
       ],
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
   });
 });
@@ -363,7 +372,7 @@ describe("logout revocation failure errors once; the 503 behavior is unchanged",
       LOGOUT_REVOKE_FAILED,
       { exception: "RevocationFailed", request_id: res.headers.get("x-request-id") },
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 1 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 1 });
     streamClean(logs, LOGOUT_ROUTE, [LOGOUT_REVOKE_FAILED]);
     leakFree(line, [...res.headers], res.headers.getSetCookie());
   });
@@ -389,7 +398,7 @@ describe("logout revocation failure errors once; the 503 behavior is unchanged",
       LOGOUT_REVOKE_FAILED,
       { exception: "RevocationFailed", request_id: res.headers.get("x-request-id") },
     ]);
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 1 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 1 });
     streamClean(logs, LOGOUT_ROUTE, [LOGOUT_REVOKE_FAILED]);
     leakFree(line, [...res.headers], res.headers.getSetCookie());
   });
@@ -406,7 +415,7 @@ describe("logout revocation failure errors once; the 503 behavior is unchanged",
     expect(
       res.headers.getSetCookie().filter((c) => c.startsWith(`${SESSION_COOKIE}=`)).length,
     ).toBeGreaterThan(0);
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGOUT_ROUTE);
   });
 
@@ -423,7 +432,7 @@ describe("logout revocation failure errors once; the 503 behavior is unchanged",
     expect(
       res.headers.getSetCookie().filter((c) => c.startsWith(`${SESSION_COOKIE}=`)).length,
     ).toBeGreaterThan(0);
-    expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
+    expect(v6ChannelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     streamClean(logs, LOGOUT_ROUTE);
   });
 });
