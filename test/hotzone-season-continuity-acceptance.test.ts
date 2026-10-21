@@ -9,7 +9,11 @@
 //
 // - Links: every existing index nav, section-heading, signal-switch and back
 //   link carries the selected `?season=` on Hono and Kit; absent/all stays
-//   canonical with no query. No new filter UI.
+//   canonical with no query outside the picker. The native period-picker form
+//   and its This month / This quarter shortcut anchors are exempt from the
+//   page-wide and every-href scans: those scans run on markup outside the
+//   `#hotzone-period-heading` picker section (reconciled 2026-10-21; every
+//   nav/heading/switch/back pin stays semantically intact).
 // - Honesty: voice/games descriptions and grid captions name season-independent
 //   seeded estimates (estimate + season-independent + seeded); joins labels
 //   keep `for season <label>`. The deterministic prior cells and totals do
@@ -147,6 +151,19 @@ function fixture() {
 const hotzoneHrefs = (html: string) =>
   [...html.matchAll(/href="(\/hotzones[^"]*)"/g)].map((m) => m[1]!);
 
+// The native period picker (GET form + server-derived This month / This
+// quarter shortcuts) lives in its own labelled section; its shortcut anchors
+// necessarily carry `?season=` state that differs from the committed season.
+// Continuity pins the existing nav, heading, switch and back links outside
+// that section, so every scan below runs on picker-stripped markup.
+const stripPeriodPicker = (html: string) =>
+  html.replace(
+    /<section\b[^>]*aria-labelledby="hotzone-period-heading"[^>]*>[\s\S]*?<\/section>/g,
+    "",
+  );
+
+const continuityHrefs = (html: string) => hotzoneHrefs(stripPeriodPicker(html));
+
 const captions = (html: string) =>
   [...html.matchAll(/<caption>([^<]+)<\/caption>/g)].map((m) => m[1]!);
 
@@ -197,7 +214,7 @@ describe("hot-zone season continuity (Hono index links)", () => {
       // Nav link plus section-heading link: the seasoned href appears twice.
       expect(html.split(`href="${href}"`).length - 1, href).toBe(2);
     }
-    for (const href of hotzoneHrefs(html)) {
+    for (const href of continuityHrefs(html)) {
       expect(href, `index link ${href}`).toContain(`season=${season}`);
     }
   });
@@ -206,15 +223,15 @@ describe("hot-zone season continuity (Hono index links)", () => {
     const { request } = fixture();
     const html = await (await request("/hotzones")).text();
     for (const signal of SIGNALS) expect(html).toContain(`href="/hotzones/${signal}"`);
-    expect(html).not.toContain("?season=");
-    expect(hotzoneHrefs(html)).not.toHaveLength(0);
+    expect(stripPeriodPicker(html)).not.toContain("?season=");
+    expect(continuityHrefs(html)).not.toHaveLength(0);
   });
 
   it("index stays canonical with no ?season=all when season is all", async () => {
     const { request } = fixture();
     const html = await (await request("/hotzones?season=all")).text();
     for (const signal of SIGNALS) expect(html).toContain(`href="/hotzones/${signal}"`);
-    expect(html).not.toContain("?season=");
+    expect(stripPeriodPicker(html)).not.toContain("?season=");
   });
 });
 
@@ -232,7 +249,7 @@ describe("hot-zone season continuity (Hono signal links)", () => {
       for (const other of SIGNALS) {
         expect(html).toContain(`href="/hotzones/${other}?season=${season}"`);
       }
-      for (const href of hotzoneHrefs(html)) {
+      for (const href of continuityHrefs(html)) {
         expect(href, `${signal} link ${href}`).toContain(`season=${season}`);
       }
     },
@@ -244,7 +261,7 @@ describe("hot-zone season continuity (Hono signal links)", () => {
       const { request } = fixture();
       const html = await (await request(`/hotzones/${signal}`)).text();
       expect(html).toContain('href="/hotzones"');
-      expect(html).not.toContain("?season=");
+      expect(stripPeriodPicker(html)).not.toContain("?season=");
     },
   );
 
@@ -254,7 +271,7 @@ describe("hot-zone season continuity (Hono signal links)", () => {
       const { request } = fixture();
       const html = await (await request(`/hotzones/${signal}?season=all`)).text();
       expect(html).toContain('href="/hotzones"');
-      expect(html).not.toContain("?season=");
+      expect(stripPeriodPicker(html)).not.toContain("?season=");
     },
   );
 });
@@ -266,7 +283,7 @@ describe("hot-zone season continuity (Kit index + signal links)", () => {
       const href = `/hotzones/${signal}?season=${season}`;
       expect(html.split(`href="${href}"`).length - 1, href).toBe(2);
     }
-    for (const href of hotzoneHrefs(html)) {
+    for (const href of continuityHrefs(html)) {
       expect(href, `Kit index link ${href}`).toContain(`season=${season}`);
     }
   });
@@ -275,7 +292,7 @@ describe("hot-zone season continuity (Kit index + signal links)", () => {
     for (const season of ["all"] as const) {
       const html = renderKit(null, kitFixture(null, season));
       for (const signal of SIGNALS) expect(html).toContain(`href="/hotzones/${signal}"`);
-      expect(html).not.toContain("?season=");
+      expect(stripPeriodPicker(html)).not.toContain("?season=");
     }
   });
 
@@ -289,7 +306,7 @@ describe("hot-zone season continuity (Kit index + signal links)", () => {
       for (const other of SIGNALS) {
         expect(html).toContain(`href="/hotzones/${other}?season=${season}"`);
       }
-      for (const href of hotzoneHrefs(html)) {
+      for (const href of continuityHrefs(html)) {
         expect(href, `Kit ${signal} link ${href}`).toContain(`season=${season}`);
       }
     },
@@ -298,7 +315,7 @@ describe("hot-zone season continuity (Kit index + signal links)", () => {
   it.each([...SIGNALS])("Kit …/%s stays canonical with no query when season is all", (signal) => {
     const html = renderKit(signal, kitFixture(signal, "all"));
     expect(html).toContain('href="/hotzones"');
-    expect(html).not.toContain("?season=");
+    expect(stripPeriodPicker(html)).not.toContain("?season=");
   });
 });
 
