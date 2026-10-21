@@ -274,14 +274,14 @@ describe("Kit recovery UX the build must not change", () => {
     expect(html).toContain('href="/" data-testid="error-home">Back to the homepage</a>');
   });
 
-  it("leaves the catastrophic fallback minimal, with both placeholders and no form", () => {
+  it("leaves the catastrophic fallback minimal, with the status placeholder, no message disclosure and no form", () => {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const fallback = readFileSync(join(root, "web/src/error.html"), "utf8");
     expect(fallback).toContain("%sveltekit.status%");
-    expect(fallback).toContain("%sveltekit.error.message%");
+    expect(fallback).not.toContain("%sveltekit.error.message%");
     expect(fallback).toContain("<!doctype html>");
     expect(fallback).toContain('<html lang="en">');
-    expect(fallback).toContain('<meta charset="utf-8" />');
+    expect(fallback).toContain('<meta charset="utf-8">');
     expect(fallback).not.toContain('data-testid="error-events-search"');
     expect(fallback).not.toContain('action="/events"');
   });
