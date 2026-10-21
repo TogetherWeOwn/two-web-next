@@ -19,6 +19,7 @@ const limits = [
   { field: "title", max: 100 },
   { field: "game", max: 100 },
   { field: "description", max: 1000 },
+  { field: "accessibility_notes", max: 1000 },
   { field: "location", max: 255 },
   { field: "organizer_name", max: 500 },
   { field: "join_instructions", max: 5000 },
@@ -87,15 +88,20 @@ describe("admin event code-point contract", () => {
       ({ characters }) => {
         const value = text(characters, max);
         expect(eventTextLimitError(value, field, max)).toBe("");
-        expect(parseEventForm({ ...base, [field]: value })[field]).toBe(value);
+        const parsed = parseEventForm({ ...base, [field]: value });
+        expect(field === "accessibility_notes" ? parsed.accessibilityNotes : parsed[field]).toBe(
+          value,
+        );
         const message = `Keep the ${field} to ${max} characters.`;
-        expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         const serverMessage =
-          field === "organizer_name"
-            ? "Keep the organizer name to 500 characters."
-            : field === "join_instructions"
-              ? "Keep joining instructions to 5000 characters."
-              : message;
+          field === "accessibility_notes"
+            ? "Keep accessibility notes to 1000 characters."
+            : field === "organizer_name"
+              ? "Keep the organizer name to 500 characters."
+              : field === "join_instructions"
+                ? "Keep joining instructions to 5000 characters."
+                : message;
+        expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         try {
           parseEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
@@ -141,7 +147,7 @@ describe("admin event code-point contract", () => {
     expect(serverMessage(under)).toBe("");
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the six scoped %s controls and retains native POST",
+    "enhances only the seven scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
@@ -155,7 +161,7 @@ describe("admin event code-point contract", () => {
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(6);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(7);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
@@ -339,7 +345,12 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await page.evaluate<Record<string, string>[]>("window.submissions");
               expect(submissions).toHaveLength(1);
               expect(submissions[0]![field]).toBe(value);
-              expect(parseEventForm(submissions[0]!)[field]).toBe(value);
+              const parsedSubmission = parseEventForm(submissions[0]!);
+              expect(
+                field === "accessibility_notes"
+                  ? parsedSubmission.accessibilityNotes
+                  : parsedSubmission[field],
+              ).toBe(value);
               // A real user insertion must remain visible, but prevent native submission.
               await input.focus();
               await input.press("End");

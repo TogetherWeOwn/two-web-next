@@ -34,7 +34,9 @@ import {
 import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
-export type PublicEvent = typeof events.$inferSelect & {
+export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
   goingCount: number;
   /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
    * `full` verdict, spots-left text and Going/waitlist CTA so the page never

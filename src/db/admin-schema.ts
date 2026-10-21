@@ -43,6 +43,7 @@ const eventsTable = pgTable(
     title: text("title").notNull(),
     game: text("game"),
     description: text("description"),
+    accessibilityNotes: text("accessibility_notes"),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     // IANA zone the host typed the wall time in. The instants above are the
@@ -99,9 +100,10 @@ const eventsTable = pgTable(
 
 type EventSelect = Omit<
   typeof eventsTable.$inferSelect,
-  "organizer_name" | "join_url" | "join_instructions"
+  "accessibilityNotes" | "organizer_name" | "join_url" | "join_instructions"
 > & {
   /** Optional for older in-memory row fixtures; live database rows include these nullable columns. */
+  accessibilityNotes?: string | null;
   organizer_name?: string | null;
   join_url?: string | null;
   join_instructions?: string | null;

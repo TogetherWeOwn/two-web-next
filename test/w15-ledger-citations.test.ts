@@ -120,15 +120,23 @@ describe("w15 acceptance-ledger lifecycle row", () => {
     expect(row!, "no lifecycle citation may dangle past the store barrel").not.toMatch(
       /src\/admin\/store\.ts:\d+/,
     );
-    expect(row!).toContain("src/admin/store-event-writes.ts:452-509");
-    expect(row!).toContain("src/admin/store-event-writes.ts:512-563");
+    expect(row!).toContain("src/admin/store-event-writes.ts:460-517");
+    expect(row!).toContain("src/admin/store-event-writes.ts:520-571");
     const writes = read("src/admin/store-event-writes.ts").split("\n");
+    const transitionStart = writes.findIndex((line) =>
+      line.includes("export async function transitionEvent"),
+    );
+    const rsvpStart = writes.findIndex((line) =>
+      line.includes("export async function setRsvpOpen"),
+    );
+    expect(transitionStart, "transitionEvent declaration exists").toBeGreaterThanOrEqual(0);
+    expect(rsvpStart, "setRsvpOpen declaration exists").toBeGreaterThanOrEqual(0);
     // transitionEvent (cancelled-terminal guard via nextStatus) ...
-    expect(writes[451]).toContain("export async function transitionEvent");
-    expect(writes.slice(451, 509).join("\n")).toContain("nextStatus(from, to)");
+    expect(writes.slice(transitionStart, transitionStart + 57).join("\n")).toContain(
+      "nextStatus(from, to)",
+    );
     // ... and setRsvpOpen (draft/ended reopen refusal).
-    expect(writes[511]).toContain("export async function setRsvpOpen");
-    expect(writes.slice(511, 563).join("\n")).toContain(
+    expect(writes.slice(rsvpStart, rsvpStart + 51).join("\n")).toContain(
       "Only published events that have not ended can pause or reopen RSVPs.",
     );
   });

@@ -25,6 +25,7 @@ export type EventFormInput = {
   title: string;
   game: string | null;
   description: string | null;
+  accessibilityNotes?: string | null;
   startsAtUtc: Date;
   endsAtUtc: Date;
   timezone: string;
@@ -57,6 +58,7 @@ export function parseEventForm(
   for (const field of [
     "game",
     "description",
+    "accessibility_notes",
     "location",
     "organizer_name",
     "join_url",
@@ -73,6 +75,9 @@ export function parseEventForm(
   const description = str(data.description);
   if (description && [...description].length > 1000)
     fields.description = "Keep the description to 1000 characters.";
+  const accessibilityNotes = str(data.accessibility_notes);
+  if (accessibilityNotes && [...accessibilityNotes].length > 1000)
+    fields.accessibility_notes = "Keep accessibility notes to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
@@ -94,6 +99,7 @@ export function parseEventForm(
     "title",
     "game",
     "description",
+    "accessibility_notes",
     "location",
     "organizer_name",
     "join_url",
@@ -160,6 +166,7 @@ export function parseEventForm(
     title: title!,
     game,
     description,
+    accessibilityNotes,
     startsAtUtc: startsAtUtc!,
     endsAtUtc: endsAtUtc!,
     timezone,
