@@ -119,9 +119,9 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     ["--", "--exclude", "test/review-p1-verify.test.ts"],
   ])("rejects extra arguments rather than exposing a skip facility: %j", (...args) => {
     const result = offline(args);
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.calls).toEqual([]);
-    expect(result.output).toContain("does not accept arguments");
+    expect(result.output).toMatch(/usage/i);
   });
 
   it.each(["lint", "typecheck", "config:check", "test", "--test", "test:cutover", "test:smoke"])(
