@@ -15,6 +15,7 @@ import {
   pastEventsUrl,
 } from "../islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
+import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 
@@ -73,6 +74,7 @@ export const PastEventsPage: FC<{
         </a>{" "}
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
+      {subscriptionHelp(appUrl)}
       {/* Plain GET navigation outside the binder's swapped zones: submitting
           starts from page 1 with JS off, and fragment turns never swallow it.
           Same shape as the calendar search form. */}
@@ -141,6 +143,7 @@ export const PastEventsPage: FC<{
       </p>
       <p role="status" data-archive-feedback></p>
     </section>
+    <script src="/islands/copy-link.js" defer />
     <script src="/islands/past-events.js" defer />
   </ScheduleShell>
 );

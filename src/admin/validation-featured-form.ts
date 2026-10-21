@@ -3,7 +3,7 @@
 // every public name below, so all existing importers keep working untouched.
 
 import { isFeaturedImageUrl } from "../image-policy";
-import { fail, str, type FieldErrors } from "./validation-shared";
+import { containsControlCharacters, fail, str, type FieldErrors } from "./validation-shared";
 import { parseWall } from "./validation-wall-time";
 
 export type FeaturedFormInput = {
@@ -40,8 +40,9 @@ export function parseFeaturedForm(
   if (!title) fields.title = "Give it a headline.";
   else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
   // Postgres text cannot store NUL: reject it here so the form returns a
-  // field-level 422 instead of a persistence failure. Only NUL is rejected
-  // in this slice; all other characters keep today's behavior.
+  // field-level 422 instead of a persistence failure. NUL keeps its
+  // field-specific copy; every other refused character below shares the
+  // event form's single refusal copy.
   if (title?.includes("\0")) fields.title = "Headline cannot contain NUL characters.";
   const body = str(data.body);
   // Featured body is the homepage slot's short editorial blurb: 1000 Unicode
@@ -70,6 +71,17 @@ export function parseFeaturedForm(
   if (imageAlt && [...imageAlt].length > 255)
     fields.image_alt = "Keep the alt text to 255 characters.";
   if (imageAlt?.includes("\0")) fields.image_alt = "Alt text cannot contain NUL characters.";
+  // Like the event form: refuse other Cc and targeted invisible/bidi format
+  // characters through the shared oracle, with the event form's single copy.
+  // Check the submitted text, not its trimmed value: trim removes BOM. NUL
+  // is also a Cc, so NUL-bearing input skips this loop and keeps its
+  // field-specific copy above. Tab/LF/CR and genuine emoji ZWJ sequences
+  // still pass; length, host and optional-empty behavior are unchanged.
+  for (const field of ["title", "body", "image_alt"] as const) {
+    const raw = data[field];
+    if (typeof raw !== "string" || raw.includes("\0")) continue;
+    if (containsControlCharacters(raw)) fields[field] = "Remove control or invisible characters.";
+  }
 
   let position = 0;
   const posRaw = str(data.position);
