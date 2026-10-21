@@ -6,11 +6,19 @@
 // down. One register function behind the same barrel pattern as the event
 // routes; `src/index.tsx` only calls it.
 import type { Hono } from "hono";
+import { AlertRateLimit, alertRequestError } from "./alerts";
 import type { Env } from "./env";
-import { inviteDestination } from "./invite";
+import { InviteConfigError, inviteDestination, isInviteConfigUsable } from "./invite";
 import { safeNext } from "./join/service";
 import { About, Faq, Rules } from "./pages";
+import { requestRoute } from "./request-log";
 import { rulesLastUpdated } from "./rules-last-updated";
+
+// Dedicated per-fingerprint mute for the broken-invite page (one alert per
+// five minutes for InviteConfigError@/discord). A dedicated limiter keeps a
+// broken deploy's page from competing with unrelated request-error mutes,
+// and the dynamic clock keeps the window honest under time control.
+const inviteAlerts = new AlertRateLimit(undefined, () => Date.now());
 
 export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // `/discord` — the front door, and the only web-to-Discord conversion path (ports two-web
@@ -20,7 +28,24 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // forever. `no-store` for the same reason at the edge.
   app.get("/discord", (c) => {
     c.header("cache-control", "no-store, private");
-    return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
+    const configured = c.env.DISCORD_INVITE_URL;
+    const destination = inviteDestination(configured);
+    // A broken invite config pages once per window instead of spamming: the
+    // warn above stays rate-limited in inviteDestination, and this alert
+    // mutes per InviteConfigError@/discord for five minutes. Fallback serving
+    // is unchanged; a usable config stays silent on both lines.
+    if (!isInviteConfigUsable(configured)) {
+      alertRequestError(
+        new InviteConfigError(),
+        {
+          method: c.req.method,
+          route: requestRoute(c),
+          requestId: c.get("requestId"),
+        },
+        { limiter: inviteAlerts },
+      );
+    }
+    return c.redirect(destination, 302);
   });
 
   // Vanity aliases (post-cutover): `/login` is the sign-in entry, `/community`

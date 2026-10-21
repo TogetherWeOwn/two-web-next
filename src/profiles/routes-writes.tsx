@@ -3,8 +3,9 @@
 // gate, then admission (throttle, owner only), then the save — an oversized
 // body 413s with zero throttle spend and no session/store read.
 import { requestBodyLimit } from "../body-limit";
-import { alertRequestError } from "../alerts";
+import { alertRequestError, exceptionClass } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
+import { createRateLimitedWarn } from "../log-budget";
 import {
   BadRequestPage,
   InternalErrorPage,
@@ -51,6 +52,12 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
 
+// Malformed-body warns share one bucket: a body-spraying prober emits at
+// most burst warns, then one shed per window, instead of one line per 400.
+// 415s (admission refusal before the body is read) and well-formed
+// validation 422s stay silent and spend nothing.
+const malformedLog = createRateLimitedWarn({ shedLine: "profile.write.shed" });
+
 export function registerWriteRoutes(
   app: ProfileApp,
   deps: ProfileDeps,
@@ -83,7 +90,15 @@ export function registerWriteRoutes(
         if (prefersHtmlError(c)) return c.html(<BadRequestPage code="415" />, 415);
         return c.text("Unsupported Media Type", 415);
       }
-    } catch {
+    } catch (err) {
+      // Body-parse failure only: the refused content-type plus the exception
+      // class, never body bytes. The 400 shape is unchanged.
+      const requestId = safeRequestId(c.get("requestId"));
+      malformedLog.warn("profile.write.malformed_body", {
+        exception: exceptionClass(err),
+        content_type: mediaType(c.req.header("content-type")),
+        ...(requestId ? { request_id: requestId } : {}),
+      });
       return badRequest(c);
     }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return badRequest(c);
