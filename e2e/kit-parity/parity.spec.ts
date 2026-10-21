@@ -525,8 +525,17 @@ for (const target of targets) {
       expect(indexBody).toContain('href="/hotzones/joins"');
       expect(indexBody).toContain('href="/hotzones/voice"');
       expect(indexBody).toContain('href="/hotzones/games"');
-      expect(indexBody).toContain("Estimated voice activity (estimates until calibration).");
-      expect(indexBody).toContain("Estimated games activity (estimates until calibration).");
+      expect(indexBody).toContain(
+        "Season-independent seeded estimates of voice activity (estimates until calibration).",
+      );
+      expect(indexBody).toContain(
+        "Season-independent seeded estimates of games activity (estimates until calibration).",
+      );
+      // The singular captions pin the real index loaders through rendering
+      // on both targets: a reworded season claim on either loader line (not
+      // just the exact old string) fails here.
+      expect(indexBody).toContain("Season-independent seeded estimate of voice activity");
+      expect(indexBody).toContain("Season-independent seeded estimate of games activity");
       const joinsBody = await (await api(target).get("/hotzones/joins")).text();
       expect(joinsBody).toMatch(/across [1-9]\d* scheduled gatherings/);
       expect(joinsBody).toContain("joins hot zone");
@@ -535,11 +544,11 @@ for (const target of targets) {
       expect(joinsBody).toContain('href="/hotzones"');
       const voiceBody = await (await api(target).get("/hotzones/voice")).text();
       expect(voiceBody).toContain("voice hot zone");
-      expect(voiceBody).toContain("Estimated voice activity for season");
+      expect(voiceBody).toContain("Season-independent seeded estimate of voice activity");
       expect(voiceBody).toContain("estimates until bot event-store calibration");
       const gamesBody = await (await api(target).get("/hotzones/games")).text();
       expect(gamesBody).toContain("games hot zone");
-      expect(gamesBody).toContain("Estimated games activity for season");
+      expect(gamesBody).toContain("Season-independent seeded estimate of games activity");
       expect(gamesBody).toContain("estimates until bot event-store calibration");
     });
 
