@@ -509,6 +509,7 @@ describe("Kit board gating and grammar unchanged", () => {
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       db,
       expect.objectContaining({ boardKey: "members", resultCount: 2 }),
+      undefined,
     );
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
