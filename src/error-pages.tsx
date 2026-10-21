@@ -187,8 +187,12 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
 // loop and no OAuth start — re-signing in cannot mint the member bit. The
 // primary recovery names the join-to-unlock path (/join); the invite URL that
 // works during an outage and the way back home stay. Moderator-only areas
-// stay locked by design, and the lead says so. No session or DB reads.
-export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+// stay locked by design, and the lead says so. The Support reference
+// correlates the refusal for incident follow-up. No session or DB reads.
+export const ForbiddenPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
+  inviteUrl,
+  supportReference,
+}) => (
   <ErrorShell
     code="403"
     title="You do not have access to this"
@@ -209,13 +213,14 @@ export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
 // 410. Generic retired-page shell, distinct from the event-specific
 // EventGonePage: unknown and URL-freeze-retired paths stay 404, while an
 // explicitly retired document answers here. No session or DB reads.
-export const GonePage: FC = () => (
+export const GonePage: FC<{ supportReference?: string }> = ({ supportReference }) => (
   <ErrorShell code="410" title="This page is gone">
     <p class="lead">The page was removed. The lobby is still open — come in and say hello.</p>
     <p class="recovery-actions">
@@ -226,6 +231,7 @@ export const GonePage: FC = () => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
@@ -233,10 +239,11 @@ export const GonePage: FC = () => (
 // primary action only recovers the place, never the draft: member-write
 // surfaces return to their form (via returnHref/returnLabel), unknown and
 // admin paths keep the homepage return.
-export const PayloadTooLargePage: FC<{ returnHref?: string; returnLabel?: string }> = ({
-  returnHref = "/",
-  returnLabel = "Continue to the homepage",
-}) => (
+export const PayloadTooLargePage: FC<{
+  returnHref?: string;
+  returnLabel?: string;
+  supportReference?: string;
+}> = ({ returnHref = "/", returnLabel = "Continue to the homepage", supportReference }) => (
   <ErrorShell code="413" title="That request is too large">
     <p class="lead">Reduce the size of your request and try again.</p>
     <p>The refused request was not saved, so you will need to enter it again.</p>
@@ -248,6 +255,7 @@ export const PayloadTooLargePage: FC<{ returnHref?: string; returnLabel?: string
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 

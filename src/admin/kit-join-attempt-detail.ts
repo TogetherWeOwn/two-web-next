@@ -18,6 +18,7 @@
 // ever reaches any table.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { alertRequestError } from "../alerts";
 import { getJoinAttempt, type JoinAttemptRow } from "./reads";
 
 /** Kit-serializable detail view: the stable UTC instant travels as ISO text. */
@@ -68,10 +69,13 @@ export async function resolveKitJoinAttemptDetail(
     // A classified outage answers the shared 503 (the Hono guard's
     // memberReadBoundary turns the read's rethrown outage into the
     // databaseUnavailable envelope; SvelteKit would otherwise render its 500
-    // error page for the uncaught rejection). Anything else still throws so
-    // the hook's member-read boundary can refuse it without releasing trace
-    // identifiers, exactly like the Hono guard's boundary.
+    // error page for the uncaught rejection). A code bug emits the leak-free
+    // error.alert diagnostic first so it never looks like a downstream
+    // outage, mirroring src/admin/kit-activity-log.ts, then still throws;
+    // SvelteKit renders its branded 500 shell, which the boundary releases
+    // only after its audit decision, so no trace identifiers escape.
     if (isDatabaseUnavailable(err)) return { kind: "unavailable" };
+    alertRequestError(err, { method: "GET", route: "/admin/join-attempts/:id" });
     throw err;
   }
   if (!found) return { kind: "notFound" };
