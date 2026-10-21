@@ -481,6 +481,60 @@ test("censuses non-ASCII identifiers instead of passing them silently", () => {
     ),
     [],
   );
+  // A trailing non-ASCII letter must not truncate the census to the ASCII
+  // prefix: public.events + e-caron is a distinct table the reviewed
+  // public.events grants do not cover. An ASCII-only census identifier
+  // matches the events prefix and returns [] here, so these suffix forms
+  // pin that line.
+  assert.match(
+    migration(`CREATE TABLE public.events\u011b (id integer primary key);${tableGrants}`).join(
+      "\n",
+    ),
+    /no reviewed runtime-rights entry for created table: public\.events\u011b/,
+  );
+  // A non-ASCII serial column name owns a distinct backing sequence that
+  // must be censused too.
+  assert.match(
+    migration(
+      `CREATE TABLE public.events (id\u011b serial, id integer primary key);${tableGrants}
+      GRANT USAGE ON SEQUENCE public.events_id_seq TO two_web_app;
+      GRANT SELECT ON SEQUENCE public.events_id_seq TO two_web_app;`,
+    ).join("\n"),
+    /no reviewed runtime-rights entry for created sequence: public\.events_id\u011b_seq/,
+  );
+});
+
+test("rejects E-string newline continuation instead of hiding later statements", () => {
+  // PostgreSQL concatenates a string literal with a following bare literal
+  // across a newline gap and inherits the first literal's escape mode, so
+  // lexing the second segment as a plain string swallows the GRANT below
+  // while PostgreSQL applies it (relacl two_web_app=d). The guard rejects
+  // the shape instead. All three payloads returned [] pre-fix.
+  const hiddenDelete = (gap) =>
+    migration(
+      `CREATE TABLE public.events (id integer primary key);${tableGrants}SELECT E'x'${gap}'a\\'b'; GRANT DELETE ON TABLE public.events TO two_web_app; SELECT 'y'; -- '`,
+    ).join("\n");
+  assert.match(hiddenDelete("\n"), /E-string newline continuation is not supported/);
+  assert.match(hiddenDelete(" -- c\n"), /E-string newline continuation is not supported/);
+  // A block comment in the gap breaks continuation in PostgreSQL (the chunk
+  // then fails there), but the split scanner sees comment-stripped text
+  // where the comment has become a space, so it rejects the ambiguous gap
+  // rather than risk inheriting wrongly.
+  assert.match(hiddenDelete(" /* c */\n"), /E-string newline continuation is not supported/);
+});
+
+test("allows plain-string continuation and separated E-strings", () => {
+  const table = `CREATE TABLE public.events (id integer primary key);${tableGrants}`;
+  // Plain-plus-plain continuation lexes identically with or without
+  // inheritance, so it stays allowed.
+  assert.deepEqual(migration(`${table}SELECT 'a'\n'b';`), []);
+  // No newline gap, or the newline stays inside one literal: nothing to
+  // continue.
+  assert.deepEqual(migration(`${table}SELECT E'a', E'b';`), []);
+  assert.deepEqual(migration(`${table}SELECT E'a\nb';`), []);
+  // A second E prefix breaks continuation in PostgreSQL (the chunk fails
+  // there), so passing fails closed like the other PG-error shapes.
+  assert.deepEqual(migration(`${table}SELECT E'a'\nE'b';`), []);
 });
 
 function gitFixture() {

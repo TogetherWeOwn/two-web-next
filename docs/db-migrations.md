@@ -173,7 +173,11 @@ closed. The lexer mirrors PostgreSQL on `E'...'` escapes (only at token starts)
 and dollar quotes (including `$` after digits or non-ASCII identifier
 characters), accepts non-ASCII identifier characters and dollar-quote tags,
 and rejects unterminated strings, quotes, and comments rather than silently
-merging statements.
+merging statements. PostgreSQL string continuation across a newline inherits
+the first literal's escape mode and is comment-sensitive (line comments
+preserve it, block comments break it), so an `E'...'` literal followed by a
+newline gap rejects instead of risking a hidden statement; no historical
+migration uses that shape.
 The check applies only to added/changed migration SQL and does not rewrite or
 bless historical migrations. Session configuration (`SET`, `RESET`, and
 `DISCARD` in any spelling, which could change object resolution, ownership, or

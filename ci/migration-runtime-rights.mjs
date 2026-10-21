@@ -132,16 +132,37 @@ const relation = `(${identifier}(?:\\s*\\.\\s*${identifier})?)`;
 //   to open there fails closed as well.
 // - Dollar-quote tags follow identifier-start rules ($$ or $tag$), including
 //   non-ASCII letters; $1$ is a parameter followed by $, never a quote.
+// - PostgreSQL concatenates a string literal with a following bare '...'
+//   literal when the gap holds only whitespace and line comments with a
+//   newline, and the continuation inherits the FIRST literal's escape mode
+//   (probed: SELECT E'x'\n'a\'b' yields xa'b, and a GRANT hidden after such
+//   a sandwich applies while a non-inheriting guard returns []). A second E
+//   prefix, a dollar quote, or any block comment in the gap breaks the
+//   continuation (each probed chunk then fails in PostgreSQL, so passing
+//   such text fails closed). Inheriting the mode is comment-sensitive in
+//   two scanners and no historical migration continues an E-string, so a
+//   bare quote opening on an E-string newline gap rejects instead. The
+//   split scanner sees comment-stripped text where a block comment has
+//   become a space, so it rejects every whitespace-plus-newline gap after
+//   an E-string, including ambiguous ones.
 const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/;
 const QUOTE_ABSORBING_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 
 class UnterminatedSqlError extends Error {}
+
+// Valid SQL the guard refuses to model; surfaced with its reason like
+// unterminated input.
+class UnsupportedSqlError extends Error {}
 
 function stripComments(sql) {
   let output = "";
   let index = 0;
   let state = "normal";
   let quoteIsEscapeString = false;
+  // Null when no E-string gap is open, otherwise whether a newline followed
+  // the E-string. A bare quote opening on a newline gap rejects (see the
+  // lexer rules above).
+  let eGapNewline = null;
   let dollarTag = "";
   let blockDepth = 0;
   while (index < sql.length) {
@@ -150,6 +171,7 @@ function stripComments(sql) {
     if (state === "line-comment") {
       if (char === "\n") {
         output += "\n";
+        if (eGapNewline === false) eGapNewline = true;
         state = "normal";
       }
       index += 1;
@@ -183,7 +205,10 @@ function stripComments(sql) {
         output += "'";
         index += 2;
       } else {
-        if (char === "'") state = "normal";
+        if (char === "'") {
+          state = "normal";
+          eGapNewline = quoteIsEscapeString ? false : null;
+        }
         index += 1;
       }
       continue;
@@ -211,13 +236,23 @@ function stripComments(sql) {
       continue;
     }
     if (rest.startsWith("--")) {
+      // A line comment preserves a pending E-string gap: PostgreSQL
+      // continuation survives it (its newline terminates the comment).
       state = "line-comment";
       index += 2;
     } else if (rest.startsWith("/*")) {
+      // A block comment breaks continuation in PostgreSQL, so it breaks the
+      // pending gap too.
+      eGapNewline = null;
       state = "block-comment";
       blockDepth = 1;
       index += 2;
     } else if (char === "'") {
+      if (eGapNewline === true)
+        throw new UnsupportedSqlError(
+          "E-string newline continuation is not supported; use a single string literal",
+        );
+      eGapNewline = null;
       state = "single-quote";
       quoteIsEscapeString =
         index > 0 &&
@@ -226,10 +261,18 @@ function stripComments(sql) {
       output += char;
       index += 1;
     } else if (char === '"') {
+      eGapNewline = null;
       state = "double-quote";
       output += char;
       index += 1;
     } else {
+      // Whitespace (and its newlines) extends an E-string gap; anything else
+      // — including a dollar-quote opener — ends it.
+      if (char === "\n") {
+        if (eGapNewline === false) eGapNewline = true;
+      } else if (!/[ \t\r\f]/.test(char)) {
+        eGapNewline = null;
+      }
       const dollar = rest.match(DOLLAR_TAG)?.[0];
       if (dollar && (index === 0 || !QUOTE_ABSORBING_CHAR.test(sql[index - 1]))) {
         state = "dollar-quote";
@@ -253,6 +296,10 @@ function splitStatements(sql) {
   let current = "";
   let state = "normal";
   let quoteIsEscapeString = false;
+  // Same E-string gap rule as stripComments, on comment-stripped text: a
+  // block comment has become a space here, so any whitespace-plus-newline
+  // gap after an E-string rejects, including ambiguous ones.
+  let eGapNewline = null;
   let dollarTag = "";
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index];
@@ -267,7 +314,10 @@ function splitStatements(sql) {
       if (char === "'" && sql[index + 1] === "'") {
         current += "'";
         index += 1;
-      } else if (char === "'") state = "normal";
+      } else if (char === "'") {
+        state = "normal";
+        eGapNewline = quoteIsEscapeString ? false : null;
+      }
       continue;
     }
     if (state === "double-quote") {
@@ -287,6 +337,11 @@ function splitStatements(sql) {
       continue;
     }
     if (char === "'") {
+      if (eGapNewline === true)
+        throw new UnsupportedSqlError(
+          "E-string newline continuation is not supported; use a single string literal",
+        );
+      eGapNewline = null;
       state = "single-quote";
       quoteIsEscapeString =
         index > 0 &&
@@ -294,9 +349,15 @@ function splitStatements(sql) {
         (index < 2 || !QUOTE_ABSORBING_CHAR.test(sql[index - 2]));
       current += char;
     } else if (char === '"') {
+      eGapNewline = null;
       state = "double-quote";
       current += char;
     } else {
+      if (char === "\n") {
+        if (eGapNewline === false) eGapNewline = true;
+      } else if (!/[ \t\r\f]/.test(char)) {
+        eGapNewline = null;
+      }
       const dollar = rest.match(DOLLAR_TAG)?.[0];
       if (dollar && (index === 0 || !QUOTE_ABSORBING_CHAR.test(sql[index - 1]))) {
         state = "dollar-quote";
@@ -454,7 +515,11 @@ export function validateMigrationSql(fileName, source) {
     statements = splitStatements(sql);
   } catch (error) {
     return [
-      `${fileName}: ${error instanceof UnterminatedSqlError ? error.message : "unparseable migration SQL"}`,
+      `${fileName}: ${
+        error instanceof UnterminatedSqlError || error instanceof UnsupportedSqlError
+          ? error.message
+          : "unparseable migration SQL"
+      }`,
     ];
   }
   for (const statement of statements) {
