@@ -249,7 +249,7 @@ export function validatePreviewPair(kitRaw, honoRaw) {
     if (!isAllowlistedHost(url.hostname)) {
       return {
         ok: false,
-        error: `kit-parity-gates: ${label} host ${url.hostname} is not staging-allowlisted (next.togetherweown.com or *.workers.dev)`,
+        error: `kit-parity-gates: ${label} host ${url.hostname} is not staging-allowlisted (${STAGING_HOST} or *.workers.dev)`,
       };
     }
     parsed.push(url.origin);
