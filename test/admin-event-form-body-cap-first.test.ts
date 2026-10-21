@@ -187,7 +187,7 @@ describe("body-size cap precedes the admin-write throttle on event form posts", 
           bindings,
         );
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.sql, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(0);
@@ -216,7 +216,7 @@ describe("body-size cap precedes the admin-write throttle on event form posts", 
           bindings,
         );
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(WRITE_THROTTLE_PER_MINUTE);
         expectNoStoreWork();

@@ -53,7 +53,20 @@ function lineupLine(e: Pick<MdEvent, "goingCount" | "goingOccupancy" | "capacity
   return `- Lineup: ${e.goingCount} going${seats}${full ? " (full)" : ""}`;
 }
 
-/** Keep author-written text inline-safe: links can never form, blocks can never start. */
+/**
+ * Keep event-authored text inert in machine Markdown: no author-controlled
+ * HTML, link (including autolink) or image nodes can form when a CommonMark
+ * reader parses the output. Backslashes first (so later escapes stay literal),
+ * then brackets (link/image labels), then `<` (tags, comments, autolinks —
+ * every inline HTML/autolink node opens with `<`). Line-leading block openers
+ * still take a `\` prefix so blocks can never start. `&` is deliberately left
+ * alone: entities expand after tag parsing, so `&lt;` stays text while prose
+ * like `AT&T` stays byte-identical. Emphasis, code spans and Unicode pass
+ * through — they form no HTML/link/image nodes.
+ *
+ * Markup only: a hostile sentence that reads as an instruction stays a
+ * sentence. Escaping says nothing about natural-language prompt injection.
+ */
 const MD_BLOCK_START =
   /^\s{0,3}(#{1,6}\s|>\s?|\d+[.)]\s|[-*+]\s|```|~~~|={1,}\s*$|-{1,}\s*$|\*{3,}\s*$|_{3,}\s*$|<)/;
 const MD_INDENTED_CODE = /^( {4}|\t)/;
@@ -63,6 +76,7 @@ export function mdText(value: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]")
+    .replace(/</g, "\\<")
     .replace(/\r\n|\r/g, "\n")
     .split("\n")
     .map((line) => (MD_BLOCK_START.test(line) || MD_INDENTED_CODE.test(line) ? `\\${line}` : line))
