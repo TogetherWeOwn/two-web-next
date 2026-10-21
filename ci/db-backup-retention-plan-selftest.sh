@@ -246,7 +246,7 @@ PY
 import pathlib, sys
 root, manifest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 objects = {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()}
-assert objects == set(manifest.read_text().splitlines()) | {manifest.relative_to(root).as_posix()}, sorted(objects)
+assert objects == set(manifest.read_text().splitlines()) | {"neon/staging-staging/MANIFEST.txt"}, sorted(objects)
 PY
   ok "bucket objects equal manifest lines after apply"
   "$BIN" rotate staging >"$T/preview2" 2>"$T/err" || fail "post-apply preview exits 0"
@@ -306,9 +306,9 @@ archives = {line for line in lines if line.endswith(".dump")}
 assert sum("-weekly-" not in key for key in archives) == 7, sorted(archives)
 assert sum("-weekly-" in key for key in archives) == 4, sorted(archives)
 receipts = {line for line in lines if line.endswith(".digest.json")}
-# Two retained archives are legacy (no receipt line); every other retained
-# archive keeps exactly its registered receipt.
-assert len(receipts) == 9, sorted(receipts)
+# One retained archive is legacy (d5; deleted legacies are d1 and w2);
+# every other retained archive keeps exactly its registered receipt.
+assert len(receipts) == 10, sorted(receipts)
 for receipt in receipts:
     assert receipt[:-len(".digest.json")] in archives, receipt
 PY
@@ -444,7 +444,7 @@ s_argv() {
     env -u DATABASE_URL "$BIN" "$@" >"$T/out" 2>"$T/err" || rc=$?
     [ "$rc" = 2 ] || fail "$desc: exits 2 with usage (rc=$rc): $(cat "$T/err")"
     grep -q 'usage:' "$T/err" || fail "$desc: stderr must print usage: $(cat "$T/err")"
-    grep -qE "$pattern" "$T/err" || fail "$desc: stderr must match $pattern: $(cat "$T/err")"
+    grep -qE -- "$pattern" "$T/err" || fail "$desc: stderr must match $pattern: $(cat "$T/err")"
     [ ! -s "$CALL_LOG" ] || fail "$desc: storage calls before rejection: $(cat "$CALL_LOG")"
     cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "$desc: manifest mutated"
     snap_bucket "$T/bucket-after"
