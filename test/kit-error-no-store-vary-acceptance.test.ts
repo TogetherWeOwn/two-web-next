@@ -57,6 +57,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
@@ -995,18 +996,34 @@ describe("Hono past-archive twins", () => {
     expect(response.headers.get("cache-control")).toBe("no-store, private");
   });
 
-  it("RED: browsing render sets Vary: Cookie next to its cache-control", () => {
-    // Route-level proof needs a database, so this leg pins the render path in
-    // source: the cache-hit arm already re-emits a stored Vary, but the fresh
-    // render after listPast sets cache-control with no Vary today.
-    const pastHandler = read("src/events/routes-calendar.tsx").split('app.get("/events/past"')[1]!;
-    // Whole-handler window: the fix lands wherever the Builder puts it next
-    // to the render's cache-control line. The cache-hit arm cannot false-pass
-    // — it re-emits a stored variable, never the literal below.
-    const renderSegment = pastHandler.slice(0, pastHandler.indexOf("return pastResponse;"));
+  // Executed route legs on a pg-proxy fake behind the ADMIN_DB seam: no
+  // database. An empty archive still takes the fresh-render arm that sets
+  // cache-control, so it distinguishes the guard from its inversion or an
+  // unconditional set.
+  const pastApp = (): Hono<{ Bindings: Env }> => {
+    const app = new Hono<{ Bindings: Env }>();
+    registerCalendarRoutes(app, dummyReader, dummyReader);
+    return app;
+  };
+  const pastEnv = {
+    APP_URL,
+    ADMIN_DB: drizzle(async () => ({ rows: [] })) as unknown as Db,
+  } as unknown as Env;
 
-    expect(renderSegment).toContain('c.header("cache-control"');
-    expect(renderSegment).toMatch(/c\.header\(["']vary["'],\s*["']Cookie["']\)/);
+  it("RED: browsing render is public and varies on Cookie", async () => {
+    const response = await pastApp().request("/events/past", {}, pastEnv);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+    expect(response.headers.get("vary")).toContain("Cookie");
+  });
+
+  it("GREEN: searching render stays private no-store with no Vary", async () => {
+    const response = await pastApp().request("/events/past?q=chess", {}, pastEnv);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBeNull();
   });
 });
 
@@ -1056,23 +1073,17 @@ describe("binding and dispatch locks", () => {
   });
 
   it.each([
-    ['error(400, "Unknown season")', "400"],
-    ['error(404, "Not found")', "404"],
-  ])(
-    "RED: hotzone signal binding %s pre-check carries no-store or delegates to the helper",
-    (anchor) => {
-      // Either the binding sets no-store before its grammar pre-check throws,
-      // or the pre-check is gone and the helper (pinned above) owns the
-      // headers. Two occurrences today means pre-check plus catch mapping.
-      const binding = read("web/src/routes/hotzones/[signal]/+page.server.ts");
-      const occurrences = binding.split(anchor).length - 1;
-      if (occurrences < 2) return;
-      const first = binding.indexOf(anchor);
-      expect(
-        /setHeaders\(\{[^}]*no-store[^}]*\}\)/.test(binding.slice(Math.max(0, first - 400), first)),
-      ).toBe(true);
-    },
-  );
+    ["season grammar", /if \(!parseSeasonParam\(.*\)\) \{[\s\S]*?error\(\d+, "[^"]*"\);/],
+    ["signal vocabulary", /if \(!SIGNALS\.includes\(.*\)\) \{[\s\S]*?error\(\d+, "[^"]*"\);/],
+  ])("RED: hotzone signal binding %s pre-check arm sets its own no-store", (_name, arm) => {
+    // Each pre-check arm bypasses the helper, so it must carry its own
+    // setHeaders: scope to the arm's block, not a window before the anchor.
+    const binding = read("web/src/routes/hotzones/[signal]/+page.server.ts");
+    const block = binding.match(arm)?.[0] ?? "";
+
+    expect(block).toMatch(/setHeaders\(\{\s*"cache-control":\s*"private, no-store"\s*\}\)/);
+    expect(block).toMatch(/error\(40[04],/);
+  });
 
   it("GREEN: decorateKitResponse still sets no cache-control — helpers own the headers", () => {
     const ownership = read("src/route-ownership.ts");
