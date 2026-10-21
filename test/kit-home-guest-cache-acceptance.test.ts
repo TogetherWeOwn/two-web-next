@@ -556,17 +556,28 @@ describe("Kit home guest cache: correlation and DTOs", () => {
     f.setDown(true);
 
     await load(loadArgs({ cfRay: CF_RAY }).args);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("Home events unavailable; serving the fallback.");
-    const fields = warn.mock.calls[0]?.[1] as { request_id?: unknown };
-    expect(fields.request_id).toBe(CF_RAY);
+    // A full outage warns once per leg, exactly like Hono: the featured leg
+    // settles first, then the events leg.
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]?.[0]).toBe("Home featured unavailable; serving the fallback.");
+    expect(warn.mock.calls[1]?.[0]).toBe("Home events unavailable; serving the fallback.");
+    for (const call of warn.mock.calls) {
+      const fields = call[1] as { request_id?: unknown; exception?: unknown };
+      expect(fields.request_id).toBe(CF_RAY);
+      expect(fields.exception).toBe("ReadFailure");
+    }
 
     // An outage is never stored, so the hostile ray also reaches the reader —
-    // and the reader drops it instead of logging raw caller text.
+    // and both legs drop it instead of logging raw caller text.
     await load(loadArgs({ cfRay: MALFORMED_RAY }).args);
-    expect(warn).toHaveBeenCalledTimes(2);
-    const hostile = warn.mock.calls[1]?.[1] as { request_id?: unknown };
-    expect(hostile.request_id).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(4);
+    expect(warn.mock.calls[2]?.[0]).toBe("Home featured unavailable; serving the fallback.");
+    expect(warn.mock.calls[3]?.[0]).toBe("Home events unavailable; serving the fallback.");
+    for (const call of warn.mock.calls.slice(2)) {
+      const fields = call[1] as { request_id?: unknown; exception?: unknown };
+      expect(fields.request_id).toBeUndefined();
+      expect(fields.exception).toBe("ReadFailure");
+    }
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MALFORMED_RAY);
   });
 
