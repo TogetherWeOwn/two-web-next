@@ -44,6 +44,9 @@ export const GET: RequestHandler = async ({ request, cookies, url, setHeaders })
       sessionForFn: kitEventsSessionFor(env),
       journeyForFn: kitEventsJourneyFor(env),
       discordForFn: discordEventsSource,
+      // Same correlation source as the Hono request log: the validated
+      // cf-ray (safeRequestId inside the alert drops anything else).
+      requestId: request.headers.get("cf-ray") ?? undefined,
     });
     // Error renders never carry the banner (Hono's middleware gates on
     // 200): the overlong-query notice rewrites to the Hono 422 downstream,
