@@ -19,6 +19,7 @@ export {
   gone,
   internalErrorHandler,
   maintenanceHandler,
+  MCP_TRANSPORT_ERROR_CODE,
   notFoundHandler,
   notFoundResponse,
   payloadTooLarge,

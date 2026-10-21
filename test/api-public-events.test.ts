@@ -279,7 +279,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
       const res = await get(`/api/public/events/${missing}`);
       expect(res.status, missing).toBe(404);
       expect(await res.json()).toEqual({
-        error: { code: "not_found", message: "No published event with that key." },
+        error: {
+          code: "not_found",
+          message: "No published event with that key.",
+          request_id: expect.any(String),
+          next: "Check the event key and retry.",
+        },
       });
     }
   });
@@ -288,7 +293,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     const res = await get("/api/public/events/not-a-key!!!");
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({
-      error: { code: "invalid_request", message: "That event key is not valid." },
+      error: {
+        code: "invalid_request",
+        message: "That event key is not valid.",
+        request_id: expect.any(String),
+        next: "Fix the request and retry.",
+      },
     });
     const raw = await (await get("/api/public/events/x")).text();
     expect(raw).not.toContain("not-a-key");
@@ -350,7 +360,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     const res = await get("/api/public/events");
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({
-      error: { code: "unavailable", message: "Event data is temporarily unavailable." },
+      error: {
+        code: "unavailable",
+        message: "Event data is temporarily unavailable.",
+        request_id: expect.any(String),
+        next: "Retry the read shortly.",
+      },
     });
   });
 
@@ -366,7 +381,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
       expect(res.headers.get("retry-after")).toBe("60");
       expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(await res.json()).toEqual({
-        error: { code: "rate_limited", message: "Too many requests. Try again in 60 seconds." },
+        error: {
+          code: "rate_limited",
+          message: "Too many requests. Try again in 60 seconds.",
+          request_id: expect.any(String),
+          next: "Wait for Retry-After, then retry.",
+        },
       });
     }
     expect(eventStore).not.toHaveBeenCalled();

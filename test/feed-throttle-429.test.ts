@@ -166,9 +166,11 @@ describe("non-feed 429 representations (unchanged)", () => {
     expect(res.headers.get("content-type")).toMatch(/application\/json/);
     expect(res.headers.get("retry-after")).toBe(String(WAIT));
     expect(await res.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: `Too many requests. Try again in ${WAIT} seconds.`,
       retry_after: WAIT,
+      next: "Wait for Retry-After, then retry.",
     });
   });
 });

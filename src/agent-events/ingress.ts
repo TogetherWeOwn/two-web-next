@@ -14,6 +14,7 @@ import {
   ulid,
 } from "./payload";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
@@ -71,11 +72,7 @@ export async function admitAgentEvent(
     warnPreAuthRefusal(requestId);
     return {
       status: 401,
-      body: {
-        reason: "unauthenticated",
-        message: "A valid machine credential is required.",
-        request_id: requestId,
-      },
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
     };
   }
 
@@ -133,20 +130,16 @@ async function processAgentEvent(
     if (hasIngressControlBytes(doc.op) || hasIngressControlBytes(doc.idempotency_key)) {
       return {
         status: 422,
-        body: {
-          reason: "validation_failed",
-          message: "The `op` and `idempotency_key` fields must not contain control characters.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "validation_failed",
+          "The `op` and `idempotency_key` fields must not contain control characters.",
+          requestId,
+        ),
       };
     }
     return {
       status: 401,
-      body: {
-        reason: "unauthenticated",
-        message: "A valid machine credential is required.",
-        request_id: requestId,
-      },
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
     };
   }
 
@@ -170,11 +163,7 @@ async function processAgentEvent(
       );
       return {
         status: 422,
-        body: {
-          reason: "payload_too_deep",
-          message: PAYLOAD_TOO_DEEP_MESSAGE,
-          request_id: requestId,
-        },
+        body: ingressDenial("payload_too_deep", PAYLOAD_TOO_DEEP_MESSAGE, requestId),
       };
     }
     throw err;
@@ -209,7 +198,7 @@ async function processAgentEvent(
     eventKey: string | null = null,
   ): Promise<Answer> => {
     await audit(sql, grant, op, eventKey, key, dig, requestId, result, reason);
-    return { status, body: { reason, message, request_id: requestId } };
+    return { status, body: ingressDenial(reason, message, requestId) };
   };
 
   if (!cfg.enabled) {
@@ -245,11 +234,11 @@ async function processAgentEvent(
   if (hasIngressControlBytes(op) || hasIngressControlBytes(idem)) {
     return {
       status: 422,
-      body: {
-        reason: "validation_failed",
-        message: "The `op` and `idempotency_key` fields must not contain control characters.",
-        request_id: requestId,
-      },
+      body: ingressDenial(
+        "validation_failed",
+        "The `op` and `idempotency_key` fields must not contain control characters.",
+        requestId,
+      ),
     };
   }
 
@@ -441,12 +430,11 @@ async function processAgentEvent(
       }
       return {
         status: 503,
-        body: {
-          reason: "operation_busy",
-          message:
-            "Another operation on this event is still running. Retry with the same idempotency key.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "operation_busy",
+          "Another operation on this event is still running. Retry with the same idempotency key.",
+          requestId,
+        ),
       };
     }
     throw err;
