@@ -2,8 +2,11 @@
 // resolves to the admin GET form it came from, and non-admin paths resolve
 // to nothing. Pure string matching — no session, cookie or DB reads — so the
 // link stays offerable during the outage it reports.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { adminWayBack } from "../src/admin-wayback";
+import { adminWayBack, adminWayBackForStatus } from "../src/admin-wayback";
 
 describe("adminWayBack", () => {
   it("maps event create to the create form", () => {
@@ -76,5 +79,35 @@ describe("adminWayBack", () => {
     for (const path of ["/", "/events", "/events/game-night/rsvp", "/auth/discord", "/api/admin"]) {
       expect(adminWayBack(path)).toBeNull();
     }
+  });
+});
+
+describe("adminWayBackForStatus", () => {
+  it("resolves an admin path on 429", () => {
+    expect(adminWayBackForStatus(429, "/admin/events/game-night")).toEqual({
+      href: "/admin/events/game-night",
+      label: "Back to the event editor",
+    });
+  });
+
+  it.each([400, 403, 404, 410, 413, 500, 503])(
+    "resolves nothing on %s even for admin paths",
+    (status) => {
+      expect(adminWayBackForStatus(status, "/admin/events/game-night")).toBeNull();
+    },
+  );
+
+  it("resolves nothing off /admin even on 429", () => {
+    for (const path of ["/", "/events", "/join"]) {
+      expect(adminWayBackForStatus(429, path)).toBeNull();
+    }
+  });
+});
+
+describe("+error.svelte delegates the Kit way back to the status gate", () => {
+  it("calls adminWayBackForStatus with the status and page path", () => {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const page = readFileSync(resolve(root, "web/src/routes/+error.svelte"), "utf8");
+    expect(page).toContain("adminWayBackForStatus(status, page.url.pathname)");
   });
 });
