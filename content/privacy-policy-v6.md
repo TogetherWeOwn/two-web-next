@@ -28,7 +28,8 @@ Concretely, the website keeps:
   `/u/<handle>`; the handle defaults to your Discord username and you can
   change it. Every profile field has a Public or Members-only toggle:
   display name, avatar, ladder rank and member-since date start public,
-  while bio, games, timezone and Steam start members-only. Search
+  while bio, games, timezone, Steam, banner, links, featured games and
+  accent start members-only. Search
   indexing stays off unless you opt in.
 - **Your linked Steam account, if you link one** — linking is optional and
   link-only: Discord stays the only way to sign in. We keep your Steam ID,
@@ -41,7 +42,12 @@ Concretely, the website keeps:
 - **Your banner, links and featured games** — a banner image you upload, up
   to 5 links, up to 6 featured games, and an accent colour. The banner is
   size-limited and re-encoded to strip metadata, then stored in R2
-  (Cloudflare object storage) and follows your visibility choices.
+  (Cloudflare object storage) and follows your visibility choices,
+  starting members-only.
+- **Profile reports** — when someone reports a public profile, we keep the
+  report: which profile was reported, the reason, and the reporter's
+  Discord ID when they are signed in. Kept for 90 days, then deleted, so
+  moderators can act on it.
 - **Your sign-in session** — a record holding your Discord ID, name, avatar,
   whether you are in our server, and whether you are a moderator (worked out
   from your Discord roles when you sign in). Signing out ends it at once; the
@@ -80,10 +86,16 @@ What we never store, ever — in the website database: email addresses (we never
 Profiles have two audiences: Public (anyone on the web) or Members
 (signed-in members of our server). Each field carries your choice: display
 name, avatar, ladder rank and member-since date are public by default,
-while bio, games, timezone and Steam are members-only by default, and
+while bio, games, timezone, Steam, banner, links, featured games and
+accent are members-only by default, and
 every field has its own toggle. Leaving a field empty hides it. The
-public view shows your display name only — never your Discord username or
-ID; the members view adds your username and a Message on Discord button.
+public view shows your display name only — never your Discord user ID.
+Two things can still carry your username until you change them: your
+profile address starts as your Discord username, and your display name
+falls back to your username when you have no Discord display name. Change
+the handle before sharing your profile if you do not want your username
+public. The members view adds your username and a Message on Discord
+button.
 Only you can edit your profile. If you leave the server, your public
 profile shows a not-found page while members still see it marked former
 member.
@@ -104,8 +116,9 @@ which moderator made each change and what changed; each content row also keeps
 its author's Discord ID as its authorship mark.
 
 Anyone can report a public profile with its Report button; the report goes
-to a moderator queue. Moderators can hide any profile field, and every
-hide is written to the audit log.
+to a moderator queue and is kept for 90 days. Moderators can hide any
+profile field, and every hide is written to the audit log, which keeps
+moderation evidence and is never edited per request.
 
 Private support-ticket transcripts live in Discord, not in this site's
 database: staff-only, kept for 90 days, then deleted.
@@ -149,8 +162,9 @@ no third-party scripts. The one third-party embed is the live lobby widget on
 the join page: an iframe served by Discord showing who is online right now,
 loaded only when you scroll to it and sent no referrer. If it is unavailable,
 the page shows a plain line of text from our own site instead. Avatars and
-other pictures load from our own site or straight from Discord's image server
-(`cdn.discordapp.com`), which is told only that the request came from this
+other pictures load from our own site, straight from Discord's image server
+(`cdn.discordapp.com`), or — on profiles showing a linked Steam account —
+from Steam's image servers, each told only that the request came from this
 site. This policy page itself ships no JavaScript at all — elsewhere on the
 site, interactivity comes from small first-party scripts served from this
 site, such as the copy-link button and the RSVP button on event pages.
@@ -164,14 +178,16 @@ served it — never your IP address or who you are.
 
 Ask anytime to be removed — DM a moderator or open a private support ticket —
 and we delete your rows: your member record, profile, RSVPs, sign-in sessions
-and join attempts, plus your linked Steam account data and banner image.
+and join attempts, plus your linked Steam account data, banner image and
+reports about your profile.
 Signing in again later starts a fresh record.
 
-Two evidence records are exceptions, because they are kept tamper-proof as
+Three evidence records are exceptions, because they are kept tamper-proof as
 evidence and are not edited on request. The access log (who looked at whose
 records, described above) is not rewritten for one person; it deletes itself
 after 90 days. The moderator edit history keeps the name of the moderator who
-made each change.
+made each change. Profile-field hides stay in the audit log under the same
+rule: moderation evidence that is never edited per request.
 
 Two further traces also stay, and neither is erased with your rows. Moderator
 content you authored keeps your Discord ID on the content row as its
@@ -193,4 +209,4 @@ Version 4 names the two further Deletion traces alongside the two tamper-proof e
 
 Version 5 clarifies that anonymous board-view telemetry and viewer-linked member-data access auditing are separate records. No collection, erasure category or retention period changes.
 
-Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. Erasure gains linked-account rows and the banner image; no retention period changes.
+Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. Erasure gains linked-account rows, the banner image and profile reports; existing retention periods are unchanged.
