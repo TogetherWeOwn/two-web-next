@@ -240,14 +240,10 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
     async function openCalendar(
       options: { javaScript?: boolean } = {},
     ): Promise<{ page: Page; submissions: string[] }> {
-      const html = await eventsHtml();
       const islandSource = readFileSync(
         new NodeURL("../public/islands/events-calendar.js", import.meta.url),
         "utf8",
       );
-      // The rendered markup itself must carry no maxlength; otherwise real
-      // typing/paste below is truncated before any submission exists.
-      expect(searchInputTag(html)).not.toMatch(/\bmaxlength\s*=/i);
       const submissions: string[] = [];
       let base = "";
       const server = createServer(async (request, reply) => {
@@ -266,16 +262,35 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
           const q = url.searchParams.get("q") ?? "";
           if (request.method === "GET" && url.search !== "") {
             submissions.push(q);
-            // Mirror the route contract without a DB: admitted queries render,
-            // over-limit queries get the 422 notice page.
-            if ([...q].length > 255) {
-              reply.writeHead(422, { "content-type": "text/html; charset=utf-8" });
-              reply.end(`<main><p role="alert">${EVENTS_SEARCH_TOO_LONG_COPY}</p></main>`);
-              return;
-            }
           }
-          reply.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          reply.end(html);
+          // Render the real route per request URL/query with the ephemeral origin,
+          // preserving mocked reads. The island validates that the fetched
+          // fragment's canonical is same-origin /events and that every auth
+          // destination's sole next equals the committed address; serving one
+          // pre-rendered /events document (APP_URL https://next.example.test,
+          // next=/events) for a query would be refused as an invalid page.
+          // Admitted queries render 200 with the committed query in their auth
+          // destinations; over-limit queries render the route's real 422 notice.
+          const headers: Record<string, string> = {};
+          const islandHeader = request.headers["x-two-island"];
+          if (typeof islandHeader === "string") headers["x-two-island"] = islandHeader;
+          const cookieHeader = request.headers.cookie;
+          if (typeof cookieHeader === "string") headers.cookie = cookieHeader;
+          const response = await app.request(
+            url.pathname + url.search,
+            { headers },
+            { ...env, APP_URL: base },
+          );
+          const body = await response.text();
+          const outHeaders: Record<string, string> = {
+            "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8",
+          };
+          const cacheControl = response.headers.get("cache-control");
+          if (cacheControl) outHeaders["cache-control"] = cacheControl;
+          const vary = response.headers.get("vary");
+          if (vary) outHeaders.vary = vary;
+          reply.writeHead(response.status, outHeaders);
+          reply.end(body);
         } catch (error) {
           reply.writeHead(500);
           reply.end(String(error));
@@ -285,6 +300,12 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
       base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      // The rendered markup itself must carry no maxlength; otherwise real
+      // typing/paste below is truncated before any submission exists.
+      // Check the same ephemeral-origin bytes the browser will receive.
+      const initial = await app.request("/events", undefined, { ...env, APP_URL: base });
+      expect(initial.status).toBe(200);
+      expect(searchInputTag(await initial.text())).not.toMatch(/\bmaxlength\s*=/i);
       const context = await browser.newContext({
         javaScriptEnabled: options.javaScript === true,
         permissions: ["clipboard-read", "clipboard-write"],
@@ -501,7 +522,12 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       await pasteReal(page, value);
       await expect.poll(() => submissions.length).toBe(1);
       expect(submissions[0]).toBe(value);
-      expect(await feedbackText(page)).toBe("");
+      // Wait for the committed response, not just request arrival: the island
+      // push-commits the search URL only after the fragment validates and swaps.
+      // A refused fragment leaves the entry URL and installs load-error feedback,
+      // so reading feedback before the response would pass vacuously.
+      await page.waitForURL(/\/events\?.*q=/);
+      await expect.poll(() => feedbackText(page)).toBe("");
     });
   },
 );

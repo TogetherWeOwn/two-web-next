@@ -269,7 +269,7 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     expectShedLines(warn, 1);
   });
 
-  it("does not spend tokens on malformed or sampled-out reports", async () => {
+  it("spends the shared budget on sampled-in malformed reports, never on sampled-out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(Math, "random").mockReturnValue(0.9);
     for (let i = 0; i < 80; i += 1) {
@@ -277,10 +277,19 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       await expectFunnel(await post(validBody(), makeEnv("0")));
       await expectFunnel(await post(validBody(), makeEnv("0.5")));
     }
-    expect(warn).not.toHaveBeenCalled();
+    // Malformed at rate 1 is sampled in and bucket-bounded like a violation:
+    // 20 malformed rows plus one shed for the 60 dropped, never the bytes.
+    const malformed = warn.mock.calls.filter((call) => call[0] === "csp.report.malformed");
+    expect(malformed).toHaveLength(20);
+    for (const call of malformed) {
+      expect(call).toEqual(["csp.report.malformed", { bytes: 8 }]);
+    }
+    expectShedLines(warn, 1);
+    expect(warn).toHaveBeenCalledTimes(21);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("not-json");
+    // Budget spent: further valid reports shed silently within the window.
     for (let i = 0; i < 21; i += 1) await expectFunnel(await post(validBody()));
     expect(warn).toHaveBeenCalledTimes(21);
-    expectShedLines(warn, 1);
   });
 
   it("does not mint extra tokens if the clock moves backwards", async () => {
@@ -335,8 +344,15 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     for (const body of burst) {
       await expectFunnel(await post(body, env));
     }
+    // Valid, oversize, malformed string, silent empty, and a non-CSP typed
+    // envelope (malformed: never logged as a violation).
     expect(warn.mock.calls.map((call) => call[0]).sort()).toEqual(
-      ["csp.report.dropped_oversize", "csp.report.violation"].sort(),
+      [
+        "csp.report.dropped_oversize",
+        "csp.report.malformed",
+        "csp.report.malformed",
+        "csp.report.violation",
+      ].sort(),
     );
     expect(bindingAccess).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();

@@ -64,12 +64,13 @@ jobs:
       - name: Internal-action smoke against the staging bot
         run: |
           if [ "$SMOKE_ANNOUNCEMENT_ONLY" = "true" ]; then
-            npm run smoke:internal-action -- --announcement-only --channel-key="$SMOKE_CHANNEL_KEY"
+            npm run smoke:internal-action -- --announcement-only --channel-key="$SMOKE_CHANNEL_KEY" --apply
           else
             npm run smoke:internal-action -- \
               --discord-id="$SMOKE_DISCORD_ID" \
               --role-key="$SMOKE_ROLE_KEY" \
-              --channel-key="$SMOKE_CHANNEL_KEY"
+              --channel-key="$SMOKE_CHANNEL_KEY" \
+              --apply
           fi
         env:
           SMOKE_ANNOUNCEMENT_ONLY: ${{ inputs.announcement_only }}

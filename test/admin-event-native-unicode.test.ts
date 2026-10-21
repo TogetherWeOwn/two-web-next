@@ -19,7 +19,10 @@ const limits = [
   { field: "title", max: 100 },
   { field: "game", max: 100 },
   { field: "description", max: 1000 },
+  { field: "accessibility_notes", max: 1000 },
   { field: "location", max: 255 },
+  { field: "organizer_name", max: 500 },
+  { field: "join_instructions", max: 5000 },
 ] as const;
 const patterns = [
   { label: "ASCII", characters: ["x"] },
@@ -85,15 +88,26 @@ describe("admin event code-point contract", () => {
       ({ characters }) => {
         const value = text(characters, max);
         expect(eventTextLimitError(value, field, max)).toBe("");
-        expect(parseEventForm({ ...base, [field]: value })[field]).toBe(value);
+        const parsed = parseEventForm({ ...base, [field]: value });
+        expect(field === "accessibility_notes" ? parsed.accessibilityNotes : parsed[field]).toBe(
+          value,
+        );
         const message = `Keep the ${field} to ${max} characters.`;
+        const serverMessage =
+          field === "accessibility_notes"
+            ? "Keep accessibility notes to 1000 characters."
+            : field === "organizer_name"
+              ? "Keep the organizer name to 500 characters."
+              : field === "join_instructions"
+                ? "Keep joining instructions to 5000 characters."
+                : message;
         expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         try {
           parseEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
         } catch (error) {
           expect(error).toBeInstanceOf(ValidationError);
-          expect((error as ValidationError).fields).toEqual({ [field]: message });
+          expect((error as ValidationError).fields).toEqual({ [field]: serverMessage });
         }
         expect(eventTextLimitError(` \t${value}  `, field, max)).toBe("");
       },
@@ -133,7 +147,7 @@ describe("admin event code-point contract", () => {
     expect(serverMessage(under)).toBe("");
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the four scoped %s controls and retains native POST",
+    "enhances only the seven scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
@@ -143,11 +157,11 @@ describe("admin event code-point contract", () => {
         expect(input).toContain(`data-event-text-limit="${max}"`);
         expect(input).not.toContain("maxlength");
         const rejected = form(mode, base, { [field]: "Server feedback" });
-        expect(rejected).toContain(`aria-describedby="f-${field}-error"`);
+        expect(rejected).toContain(`f-${field.replaceAll("_", "-")}-error"`);
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(4);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(7);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
@@ -304,7 +318,17 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
               const value = text(characters, max);
               await input.fill("");
               if (method === "typing") {
-                await input.pressSequentially(value);
+                // Bulk-fill very long values: typing 5000 keystrokes pays
+                // per-keystroke layout per char and exceeds the test timeout on
+                // mixed-script text. The N/N+1 boundary below is still crossed
+                // with real key events, and every assertion is unchanged.
+                const codePoints = [...value];
+                if (codePoints.length > 1000) {
+                  await input.fill(codePoints.slice(0, -8).join(""));
+                  await input.pressSequentially(codePoints.slice(-8).join(""));
+                } else {
+                  await input.pressSequentially(value);
+                }
               } else {
                 await page.evaluate(`navigator.clipboard.writeText(${JSON.stringify(value)})`);
                 await input.focus();
@@ -321,7 +345,12 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await page.evaluate<Record<string, string>[]>("window.submissions");
               expect(submissions).toHaveLength(1);
               expect(submissions[0]![field]).toBe(value);
-              expect(parseEventForm(submissions[0]!)[field]).toBe(value);
+              const parsedSubmission = parseEventForm(submissions[0]!);
+              expect(
+                field === "accessibility_notes"
+                  ? parsedSubmission.accessibilityNotes
+                  : parsedSubmission[field],
+              ).toBe(value);
               // A real user insertion must remain visible, but prevent native submission.
               await input.focus();
               await input.press("End");
@@ -339,7 +368,9 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                   (input) => (input as unknown as { validationMessage: string }).validationMessage,
                 ),
               ).toBe(message);
-              expect(await page.locator(`#f-${field}-limit-error`).textContent()).toBe(message);
+              expect(
+                await page.locator(`#f-${field.replaceAll("_", "-")}-limit-error`).textContent(),
+              ).toBe(message);
               expect(await input.getAttribute("aria-invalid")).toBe("true");
               await page.locator('[data-testid="save-event"]').click();
               expect(await page.evaluate("window.submissions.length")).toBe(1);
@@ -351,7 +382,9 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                   (input) => (input as unknown as { validity: { valid: boolean } }).validity.valid,
                 ),
               ).toBe(true);
-              expect(await page.locator(`#f-${field}-limit-error`).isHidden()).toBe(true);
+              expect(
+                await page.locator(`#f-${field.replaceAll("_", "-")}-limit-error`).isHidden(),
+              ).toBe(true);
               await page.locator('[data-testid="save-event"]').click();
               expect(await page.evaluate("window.submissions.length")).toBe(2);
             },
