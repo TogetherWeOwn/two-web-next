@@ -224,10 +224,15 @@ function catalogAliases(sql) {
 }
 
 // CTE-name alternation safe to interpolate: $ is the only identifier
-// character with regex meaning. The trailing lookahead keeps a CTE name from
-// matching a longer identifier's prefix (`c` in `FROM cx`).
+// character with regex meaning. The backslash escape ahead of it is
+// unreachable through cteNames (IDENT has no backslash; raw backslashes are
+// rejected pre-blanking) but keeps the escaping complete so the alternation
+// stays literal. The trailing lookahead keeps a CTE name from matching a
+// longer identifier's prefix (`c` in `FROM cx`).
 function cteTargetPattern(ctes) {
-  const names = [...ctes].map((name) => name.replace(/\$/g, "\\$")).join("|");
+  const names = [...ctes]
+    .map((name) => name.replace(/\\/g, "\\\\").replace(/\$/g, "\\$"))
+    .join("|");
   return new RegExp(
     `(?:FROM|JOIN|,)\\s*(?:${names})(?![${ID_CONT}])(?:\\s+AS\\s+(${IDENT})|\\s+(${IDENT}))?`,
     "giud",
@@ -1204,6 +1209,19 @@ test("allowlist checks reject non-fixed SQL spellings", async () => {
   // parsed, not blanket-rejected.
   assertCatalogColumns(mutant("SELECT p$.prokind FROM pg_catalog.pg_proc p$"), CATALOG_COLUMNS);
   assertBareTokens(mutant("SELECT p$.prokind::text FROM pg_catalog.pg_proc p$"));
+  // CTE names interpolate into the target pattern literally: a backslash in a
+  // name must not form a regex escape (`C\D` matching `Cx`), and $ must not
+  // anchor or optionalize the name.
+  const escapedNames = cteTargetPattern(new Set(["A$B", "C\\D"]));
+  // The pattern carries the global flag, so each probe resets lastIndex.
+  const matchesTarget = (sql) => {
+    escapedNames.lastIndex = 0;
+    return escapedNames.test(sql);
+  };
+  assert.ok(matchesTarget("FROM a$b"));
+  assert.ok(matchesTarget("FROM c\\d"));
+  assert.equal(matchesTarget("FROM cx"), false);
+  assert.equal(matchesTarget("FROM a"), false);
   // Dollar-quoted literals would desync the standard-quote blanker and hide
   // following column references, so both the bare and tagged forms fail.
   assert.throws(
