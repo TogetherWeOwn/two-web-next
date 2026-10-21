@@ -8,15 +8,19 @@
 // Rows carry rank + display name + count only: no timestamps, no presence.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { containsControlCharacters } from "../admin/validation-shared";
 import { keyedMemberRead } from "../member-reads";
 import { pgSeasonBound, type SeasonWindow } from "../hotzones/season";
 
 /** Neighbors shown above and below the viewer in the relative scope. */
 export const RELATIVE_NEIGHBORS = 5;
-/** Longest accepted `?activity=` game name (after trimming). */
-export const ACTIVITY_MAX_LENGTH = 64;
-
-const ACTIVITY_RE = /^[a-z0-9 _-]+$/;
+/**
+ * Longest accepted `?activity=` game name (after trimming, in code points,
+ * counted before lowercasing — exactly as the event form counts).
+ * Aligned to the event-form saved-game max (src/admin/validation-event-form.ts):
+ * every game name the form can save is admitted by the filter.
+ */
+export const ACTIVITY_MAX_LENGTH = 100;
 
 export type MemberScope = "overall" | "relative";
 export type ScopeParse = { ok: true; scope: MemberScope } | { ok: false; message: string };
@@ -40,16 +44,24 @@ export function parseScopeParam(raw: string | null | undefined): ScopeParse {
 export type ActivityParse = { ok: true; game: string | null } | { ok: false; message: string };
 
 /**
- * `?activity=`: absent/blank/`all` = every game; otherwise one normalized game name
- * (trimmed, lowercased, 1-64 characters of `[a-z0-9 _-]`). A well-formed name
- * that matches no event is a valid, empty board.
+ * `?activity=`: absent/blank = every game; otherwise one normalized game name
+ * (trimmed, lowercased, 1-100 characters, no control characters — the same
+ * charset the event form saves). `all` is a game like any other: nothing
+ * emits `activity=all` (both board forms label the field "blank for every
+ * game"), so a gathering named All filters to its own board. A well-formed
+ * name that matches no event is a valid, empty board.
  */
 export function parseActivityParam(raw: string | null | undefined): ActivityParse {
   if (raw === null || raw === undefined) return { ok: true, game: null };
-  const game = raw.trim().toLowerCase();
+  const trimmed = raw.trim();
   // The filter form submits a blank field as `activity=`: that means every game.
-  if (game === "" || game === "all") return { ok: true, game: null };
-  if (game.length > ACTIVITY_MAX_LENGTH || !ACTIVITY_RE.test(game))
+  if (trimmed === "") return { ok: true, game: null };
+  // Mirror the save-side rule exactly: the event form counts the trimmed name
+  // before any lowercasing (src/admin/validation-event-form.ts), so the length
+  // check runs here — lowercasing first would expand İ (U+0130) to two code
+  // points and 400 a savable 100-character name on both boards.
+  const game = trimmed.toLowerCase();
+  if ([...trimmed].length > ACTIVITY_MAX_LENGTH || containsControlCharacters(game))
     return { ok: false, message: "Unknown activity" };
   return { ok: true, game };
 }
