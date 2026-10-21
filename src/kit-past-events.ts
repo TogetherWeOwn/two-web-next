@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import {
@@ -133,11 +134,34 @@ export interface PastArchiveLoadArgs<Row = never> {
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
+  /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
+  requestId?: string;
 }
 
 /** Branded-outage marker: the Kit binding maps every throw to error(503). */
 export function pastArchiveUnavailable(): Error & { status: number } {
   return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
+}
+
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before mapping to the branded
+// 503, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts). Branded
+// throws pass through with the same outage headers and no new alert, so the
+// binding maps them once. Headers and bodies are byte-stable either way:
+// the binding ignores the thrown message.
+function reportPastArchiveLoadFailure(
+  err: unknown,
+  setHeaders: (headers: Record<string, string>) => void,
+  requestId?: string,
+): never {
+  const headers = { "cache-control": "private, no-store" };
+  if (typeof (err as { status?: unknown })?.status === "number") {
+    setHeaders(headers);
+    throw err;
+  }
+  alertRequestError(err, { method: "GET", route: "/events/past", requestId });
+  setHeaders(headers);
+  throw pastArchiveUnavailable();
 }
 
 export async function loadPastArchivePage<Row>({
@@ -147,6 +171,7 @@ export async function loadPastArchivePage<Row>({
   setHeaders,
   dbForFn,
   listPastFn,
+  requestId,
 }: PastArchiveLoadArgs<Row>): Promise<{
   rows: Row[];
   page: number;
@@ -164,9 +189,8 @@ export async function loadPastArchivePage<Row>({
   let db: Db | null;
   try {
     db = await dbForFn({ env });
-  } catch {
-    setHeaders({ "cache-control": "private, no-store" });
-    throw pastArchiveUnavailable();
+  } catch (err) {
+    reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
   if (!db) {
     setHeaders({ "cache-control": "private, no-store" });
@@ -182,8 +206,7 @@ export async function loadPastArchivePage<Row>({
       "x-two-past-cacheable": String(!input.searching && rows.length > 0),
     });
     return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
-  } catch {
-    setHeaders({ "cache-control": "private, no-store" });
-    throw pastArchiveUnavailable();
+  } catch (err) {
+    reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
 }

@@ -166,7 +166,7 @@ delete a ledger row, clear a lock, or reset a sync claim to investigate.
 
 | Message | Meaning | Severity | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `queue malformed message discarded` | The carrier matched neither envelope shape, so `toQueueMessage` returned null (`src/jobs/envelope.ts:65-83`, dropped at `src/jobs/consumer.ts:86-92`): an unknown `kind`, a wrong-type or missing required key (non-string `jobId`, non-UUID `leaseToken`, a string `role-assign` key, a non-string announcement body; `src/jobs/envelope.ts:11-48`), or a W8 write-back with the wrong `action`, a missing `eventKey`/`idempotencyKey`, or `dedupeKey` not equal to `eventKey`. Ack-and-drop for this message only; the rest of the batch still runs. Member impact for a sync-event or W8 carrier: one sync write-back lost for that carrier only; a dirty revision stays dirty until reconcile re-dispatches it on its schedule. An announcement or `role-assign` discard (both run on `two-internal-action`, `src/jobs/consumer.ts:37-48`) has no reconcile backstop: that payload is lost permanently (reconcile redispatches sync events only, `src/jobs/cron.ts:71,110`). | No page. This path never fires `queue.failing` and never touches the ledger or lock. Escalation boundary: for a sync-event carrier, a lone discard with a flat stale count is a poison carrier, nothing to fix; a burst or a growing stale count after a deploy points at a producer bug, route to the owning team with the window and counts. Internal-action discards leave the stale count flat by construction, so a flat count alone does not clear those kinds. | Filter Workers Logs message/text with the exact line on the consumer Worker over the incident window (staging `two-web-jobs`, production `two-web-next-production`) and tally sightings; confirm no `queue.failing` follows in the window. Then trend the `staleEventKeys` count across reconcile passes (`*/10 * * * *`), mirroring the clock-free stale predicate (`src/jobs/events.ts:156-229`; tries = 6, `src/jobs/constants.ts:6-11`). The scheduled pass also drops not-yet-due retries before LIMIT using the scheduler clock, so this count includes sleeping retries the current pass will not dispatch: `SELECT count(*) FROM events e WHERE EXISTS (SELECT 1 FROM event_sync_attempts p WHERE p.event_id = e.id AND p.state = 'pending' AND p.request_attempts > 0 AND p.request_attempts < 6 AND p.next_attempt_at IS NOT NULL) OR (e.status IN ('published', 'cancelled') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts r WHERE r.event_id = e.id AND r.revision = e.sync_revision AND r.state = 'failed') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts b WHERE b.event_id = e.id AND b.state = 'pending' AND (b.request_attempts >= 6 OR b.next_attempt_at IS NULL)) AND (e.sync_revision > e.synced_revision OR (e.status = 'published' AND (e.discord_event_id IS NULL OR EXISTS (SELECT 1 FROM rsvps s WHERE s.event_id = e.id AND s.synced_to_discord_at IS NULL)))))`. A count that drains on later passes recovered; a count that grows points at the producer. There is nothing to replay: the payload was never recorded. Never replay a message to investigate. | None (message only): no `requestId`, event key, `kind`, queue, or exception, so correlate by time window plus revision state, not by a request key; the line cannot tell a sync-event discard from an internal-action one |
+| `queue malformed message discarded` | The carrier matched neither envelope shape, so `toQueueMessage` returned null (`src/jobs/envelope.ts:65-83`, dropped at `src/jobs/consumer.ts:86-92`): an unknown `kind`, a wrong-type or missing required key (non-string `jobId`, non-UUID `leaseToken`, a string `role-assign` key, a non-string announcement body; `src/jobs/envelope.ts:11-48`), or a W8 write-back with the wrong `action`, a missing `eventKey`/`idempotencyKey`, or `dedupeKey` not equal to `eventKey`. Ack-and-drop for this message only; the rest of the batch still runs. Member impact for a sync-event or W8 carrier: one sync write-back lost for that carrier only; a dirty revision stays dirty until reconcile re-dispatches it on its schedule. An announcement or `role-assign` discard (both run on `two-internal-action`, `src/jobs/consumer.ts:37-48`) has no reconcile backstop: that payload is lost permanently (reconcile redispatches sync events only, `src/jobs/cron.ts:71,110`). | No page. This path never fires `queue.failing` and never touches the ledger or lock. Escalation boundary: for a sync-event carrier, a lone discard with a flat stale count is a poison carrier, nothing to fix; a burst or a growing stale count after a deploy points at a producer bug, route to the owning team with the window and counts. Internal-action discards leave the stale count flat by construction, so a flat count alone does not clear those kinds. | Filter Workers Logs message/text with the exact line on the consumer Worker over the incident window (staging `two-web-jobs`; production `two-web-jobs-production` after the jobs transfer, `two-web-next-production` before it) and tally sightings; confirm no `queue.failing` follows in the window. Then trend the `staleEventKeys` count across reconcile passes (`*/10 * * * *`), mirroring the clock-free stale predicate (`src/jobs/events.ts:156-229`; tries = 6, `src/jobs/constants.ts:6-11`). The scheduled pass also drops not-yet-due retries before LIMIT using the scheduler clock, so this count includes sleeping retries the current pass will not dispatch: `SELECT count(*) FROM events e WHERE EXISTS (SELECT 1 FROM event_sync_attempts p WHERE p.event_id = e.id AND p.state = 'pending' AND p.request_attempts > 0 AND p.request_attempts < 6 AND p.next_attempt_at IS NOT NULL) OR (e.status IN ('published', 'cancelled') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts r WHERE r.event_id = e.id AND r.revision = e.sync_revision AND r.state = 'failed') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts b WHERE b.event_id = e.id AND b.state = 'pending' AND (b.request_attempts >= 6 OR b.next_attempt_at IS NULL)) AND (e.sync_revision > e.synced_revision OR (e.status = 'published' AND (e.discord_event_id IS NULL OR EXISTS (SELECT 1 FROM rsvps s WHERE s.event_id = e.id AND s.synced_to_discord_at IS NULL)))))`. A count that drains on later passes recovered; a count that grows points at the producer. There is nothing to replay: the payload was never recorded. Never replay a message to investigate. | None (message only): no `requestId`, event key, `kind`, queue, or exception, so correlate by time window plus revision state, not by a request key; the line cannot tell a sync-event discard from an internal-action one |
 | `queue ledger <op> failed` | A best-effort ledger transition failed or hit the 2 s bound (`src/jobs/consumer.ts:103`). `<op>` is one of `reserved`, `released`, `dequeued`, `failed`. Job processing continues; the terminal ack or retry still lands. | No page. A stale ledger row is a visible backlog, not a silent loss. | Read `GET /up` (`queue.status`, `pending`, `oldest_ready_wait_age_seconds`, `ready_wait_severity`; `pending >= 20` is `degraded`) per [Read `/up` without mistaking liveness for readiness](runbook.md#read-up-without-mistaking-liveness-for-readiness); then `SELECT job_id, kind, key, available_at, reserved_at, created_at FROM queue_jobs ORDER BY created_at, job_id LIMIT 100`. Never insert or delete a ledger row to investigate. | `exception` (class name only, never the message, which can carry SQL bindings or secrets) |
 | `queue lock release timed out` | The lock `release` hung past the 2 s bound (`src/jobs/consumer.ts:127`). The terminal ack still lands and the rest of the batch still runs. | No page. A stuck lock row self-heals via its TTL (`job_unique_locks.expires_at`; reads treat expired rows as gone). | Search logs for the line; then `SELECT key, expires_at, expires_at > clock_timestamp() AS still_live FROM job_unique_locks ORDER BY expires_at, key LIMIT 100`: `still_live = false` already self-healed. Never delete rows by age or clear locks as a workaround ([Queue containment](runbook.md#queue-containment-drain-and-failed-job-replay)). | Sanitized lock scope (single-line, bounded; a hostile event key cannot split the log line) |
 | `queue lock release failed` | The lock `release` rejected (`src/jobs/consumer.ts:134`). Same handling as the timeout: the ack lands, the batch continues, the TTL heals. | No page: TTL self-heal, same as the timeout row. | Same lock-table `SELECT` as the timeout row; a live row expires on its own. Same never-delete rule. | Sanitized lock scope plus `exception` (class name only) |
@@ -314,6 +314,52 @@ moderator authority and role-removal residuals in the
 ([residuals](threat-model.md#gaps-and-residual-risks)).
 Ownership flags, response behavior and the log privacy contract are unchanged
 by this section.
+
+### Kit public-read 503 alerts
+
+Eight throw legs across four Kit public-read loads emit the leak-free
+`error.alert` diagnostic before answering the branded 503
+(`src/kit-events.ts` database handle and page-model reads,
+`src/kit-past-events.ts` database handle and list reads,
+`src/kit-event-states.ts` database handle and event lookup,
+`src/events/kit-detail.ts` database handle and event lookup on the wired
+`/e/:key` Kit load). Each leg
+alerts once per distinct `class@route` fingerprint (muted five minutes per
+isolate, like every `error.alert`); the `request_id` carries the validated
+`cf-ray` value when the binding threaded one, and is absent otherwise.
+These Kit routes never emit the `http.request` line (Hono's request log
+runs only for Hono-dispatched requests), so correlate by the `request_id`
+value plus time window and route — never expect an `http.request` join
+here. Response bodies and headers are byte-stable: the binding ignores the
+thrown message. Two cancelled-page degrades warn instead of alerting (one
+per `/e/:key` twin). Find
+an alert with the message **contains** filter from
+[Find a request](#find-a-request) on `"event":"error.alert"` plus the
+route, or the warn by its exact message. Read-only checks only: a Workers
+Logs search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `error.alert` with `route: /events` | A code bug (no branded status) threw from the events-list database handle or page-model read (`loadEventsPage` in `src/kit-events.ts`). | Fails closed with the branded 503 (`Events temporarily unavailable`, `private, no-store`); pages via the existing `error.alert` Tail Worker path, no new paging. | Filter `error.alert` by `route: /events` and split by `exception`; then check database health with the [alert runbook](runbook-alerts.md). | `fingerprint` (`ExceptionClass@/events`), `exception`/`error_class` (class only), `method: GET`, validated `request_id` |
+| `error.alert` with `route: /events/past` | A code bug threw from the past-archive database handle or list read (`loadPastArchivePage` in `src/kit-past-events.ts`). | Fails closed with the branded 503, same paging as above. | Filter `error.alert` by `route: /events/past` and split by `exception`; then check database health. | Same shape with `route: /events/past` |
+| `error.alert` with `route: /e/:key` | A code bug threw from the wired Kit event-detail database handle or event lookup (`resolveKitEventDetail` in `src/events/kit-detail.ts`); the state twin (`resolveEventState` in `src/kit-event-states.ts`) emits the same line. | Fails closed with the unavailable outcome (503, `private, no-store`), same paging. | Filter `error.alert` by `route: /e/:key` and split by `exception`; then check database health. | Same shape with `route: /e/:key` |
+| `Event alternatives unavailable; serving the empty list.` | The cancelled-event alternatives lookup threw (`relatedFn` in `src/events/kit-detail.ts` or the `src/kit-event-states.ts` twin); the 410 page still serves with an empty list. | Degrades to an empty list; does not page. | Filter logs for the exact message over the window and split by `exception`; then check database health. | `exception` (class only, never the message, which can carry SQL or wire detail), validated `request_id` |
+
+Silent by design around these lines: branded throws (any numeric `status`)
+pass through with no new alert; null database handles answer the branded
+503 silently; session/journey fail-open legs serve the anonymous list
+silently; the 404-path suggestions degrade (`suggestionsFn`) stays silent
+because forged and unknown keys already miss, so warning there would fire
+on probe traffic during an outage.
+
+Agent check (fixtures only, proves fire/silent per branch):
+
+```sh
+env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  npx vitest run test/kit-public-read-503-alerts-acceptance.test.ts \
+  test/kit-public-read-503-alerts-pins.test.ts
+```
 
 ### Auth sign-in warnings
 
@@ -483,13 +529,14 @@ through the jobs Worker's own `SYNC_EVENT_QUEUE` binding. If the staging jobs
 Worker also lacks that binding, nothing re-dispatches the carrier until the
 binding is fixed: treat that case as stuck, not self-healing.
 
-In the production cutover template this self-healing does not apply: the web
-Worker `two-web-next-production` owns both the `SYNC_EVENT_QUEUE` producer
-binding (`env.production.queues.producers`) and the `*/10 * * * *` reconcile
-cron (`env.production.triggers`, `wrangler.jsonc`), and its `scheduled`
-handler (`src/worker.ts`) builds its queue from the same `env.SYNC_EVENT_QUEUE`.
-A missing binding there also stops reconcile, so the carrier stays unsent until
-the binding is fixed: treat a production warning as stuck, not late.
+In production the same split applies after the jobs transfer: the web Worker
+`two-web-next-production` owns the `SYNC_EVENT_QUEUE` producer binding
+(`env.production.queues.producers`, `wrangler.jsonc`), while the jobs Worker `two-web-jobs-production` owns the
+`*/10 * * * *` reconcile cron (`env.production.triggers`, `wrangler.jobs.jsonc`)
+and re-dispatches through its own `SYNC_EVENT_QUEUE` binding. A production
+warning is late, not lost, as long as only the web Worker lacks the binding.
+If the production jobs Worker also lacks that binding, nothing re-dispatches the carrier until the binding is fixed:
+treat that case as stuck, not self-healing.
 
 | Field | Meaning and safe values |
 | --- | --- |
@@ -517,9 +564,9 @@ the deployed Workers' queue producer bindings with
 (`SYNC_EVENT_QUEUE` bound to `two-sync-event`). Production declares its own at
 `env.production.queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE` bound
 to `two-web-next-production-sync-event`) because bindings are not inherited, so
-check the environment that served the request. On staging, if reconcile is not
-recovering events, also compare the jobs Worker's bindings with
-`wrangler.jobs.jsonc` (which has no production env).
+check the environment that served the request. If reconcile is not recovering
+events, also compare the jobs Worker's bindings with `wrangler.jobs.jsonc`
+(top level for staging, `env.production` for production).
 Source stays unchanged: route any binding fix to the authorized Operator under
 the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
