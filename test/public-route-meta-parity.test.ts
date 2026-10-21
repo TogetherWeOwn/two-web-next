@@ -226,6 +226,8 @@ function expectHead(
     expect(html.match(/<meta name="robots"[^>]*>/g)).toEqual([
       `<meta name="robots" content="${robots}"/>`,
     ]);
+  // The share image is part of the head contract now: exactly one og:image.
+  expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
 }
 
 beforeEach(() => {

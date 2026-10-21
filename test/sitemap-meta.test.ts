@@ -276,6 +276,7 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
   it("tags the homepage for sharing", async () => {
     const html = await (await harness([]).request("/")).text();
     tags(html, `${APP_URL}/`, HOME_TITLE, HOME_DESCRIPTION);
+    expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
   });
 
   it("tags the join page with its own canonical and the funnel intro", async () => {

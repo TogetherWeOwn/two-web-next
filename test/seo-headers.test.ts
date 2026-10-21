@@ -139,6 +139,7 @@ describe("share meta (TOG-5624)", () => {
       "Together We Own — the lobby is open",
       "We spent most of our life private. Now you can just turn up.",
     );
+    expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
   });
 
   it("tags the join page with its own canonical (funnel lives on shared links)", async () => {
