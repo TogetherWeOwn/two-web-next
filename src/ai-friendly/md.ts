@@ -341,7 +341,7 @@ export function llmsTxt(appUrl: string): string {
     "",
     `- Read-only remote tools over MCP at ${canonicalUrl(appUrl, "/mcp")}: \`list_events\`, \`get_event\`, \`get_community\`, \`get_join\`. Typed results, published content only, at most 20 rows and 32 KiB per response.`,
     `- REST discovery: ${canonicalUrl(appUrl, "/openapi.json")} (OpenAPI 3.1 for the same four reads).`,
-    "- Agent guide: docs/machine-interface.md in the repo — error codes, limits, next actions and the offline contract check.",
+    "- Agent guide: [docs/machine-interface.md](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/machine-interface.md) — error codes, limits, next actions and the offline contract check.",
     "",
     "## Notes",
     "",

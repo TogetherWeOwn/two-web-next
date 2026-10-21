@@ -101,7 +101,7 @@ const LOWER_BOUNDS = ["minimum", "minLength", "minItems", "minProperties", "minC
 const UPPER_BOUNDS = ["maximum", "maxLength", "maxItems", "maxProperties", "maxContains"];
 const EXCLUSIVE_LOWER = ["exclusiveMinimum"];
 const EXCLUSIVE_UPPER = ["exclusiveMaximum"];
-const EXACT_CONSTRAINTS = ["multipleOf", "pattern", "format", "uniqueItems"];
+const EXACT_CONSTRAINTS = ["multipleOf", "pattern", "format", "uniqueItems", "enum", "const"];
 const CONSTRAINT_KEYS = [
   ...LOWER_BOUNDS,
   ...UPPER_BOUNDS,
@@ -126,12 +126,15 @@ const isNullBranch = (branch) => {
 
 // Non-null constraint carriers: zod spells a constrained nullable as
 // anyOf:[{...constraints},{type:"null"}] but a plain nullable as a type
-// array, so collect the wrapper plus every non-null union branch.
+// array, so collect the wrapper plus every non-null union branch. Stacked
+// checks of the same kind (e.g. regex) live in allOf and apply together.
 const constraintCarriers = (schema) => {
   if (!schema || typeof schema !== "object") return [];
-  const branches = [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].filter(
-    (branch) => !isNullBranch(branch),
-  );
+  const branches = [
+    ...(schema.anyOf ?? []),
+    ...(schema.oneOf ?? []),
+    ...(schema.allOf ?? []),
+  ].filter((branch) => !isNullBranch(branch));
   if (branches.length === 0) return [pickConstraints(schema)];
   const out = [];
   const top = pickConstraints(schema);
@@ -192,6 +195,7 @@ const pinProperties = (label, advertisedProps, openapiProps, fields) => {
     const advertised = advertisedProps?.[field];
     const openapi = openapiProps?.[field];
     check(`${label}.${field} is advertised`, advertised !== undefined);
+    check(`${label}.${field} exists in OpenAPI`, openapi !== undefined);
     if (!advertised || !openapi) continue;
     check(
       `${label}.${field} type matches OpenAPI (advertised ${typeShapeText(advertised)} vs openapi ${typeShapeText(openapi)})`,
@@ -305,6 +309,12 @@ check(
 );
 for (const mention of mentions) {
   check(`${mention} resolves to a repo file`, existsSync(`${repoRoot}${mention}`));
+  check(
+    `${mention} has a public repository link`,
+    body.includes(
+      `[${mention}](https://github.com/TogetherWeOwn/two-web-next/blob/main/${mention})`,
+    ),
+  );
 }
 
 const rpc = async () => {
