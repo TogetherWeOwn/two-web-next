@@ -6,6 +6,7 @@ import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
 import { isDatabaseUnavailable } from "../db/errors";
 import { nonSensitiveRead } from "../member-reads";
+import { safeRequestId } from "../request-log";
 
 export const MAX_QUERY_LENGTH = 255;
 
@@ -39,19 +40,23 @@ export const LOG_WRITE_DEADLINE_MS = 500;
 /** DB-side cap, shorter than the response deadline, so a blocked INSERT is cancelled server-side rather than left queued. */
 export const LOG_DB_TIMEOUT_MS = 400;
 
-/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN). */
+/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN), plus the validated request_id so the line joins to `http.request`. */
 export async function recordSearch(
   db: Db,
   raw: string | null | undefined,
   resultCount: number,
   deadlineMs = LOG_WRITE_DEADLINE_MS,
+  requestId?: string | null,
 ): Promise<void> {
   const normalized = normalizeQuery(raw);
   if (normalized === null) return;
-  const warn = (exception: string) =>
+  const warn = (exception: string) => {
+    const validated = safeRequestId(requestId);
     console.warn("Event search unavailable for logging; serving results without recording.", {
       exception,
+      ...(validated !== undefined ? { request_id: validated } : {}),
     });
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const write = (async () => {
     try {

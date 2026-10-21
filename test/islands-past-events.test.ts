@@ -117,8 +117,14 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
     expect(html).toContain('href="/events/past?page=2"');
     expect(html).not.toMatch(
-      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-)|<button|<form/,
+      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b|<form\b/,
     );
+    // Only the native, non-submitting feed-copy action is allowed in the archive.
+    expect(html.match(/<button\b[^>]*>/g)).toEqual([
+      expect.stringMatching(
+        /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
+      ),
+    ]);
   });
 
   it("renders page two, bare page-one navigation and page-N canonical/share URL", async () => {
@@ -234,7 +240,7 @@ describe("PastEvents contract and SSR drift", () => {
     expect(named!.params.at(-1)).toBe("");
     expect(occupancy!.sql).not.toContain('inner join "users"');
     expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
-    expect(source.queries.filter((q) => /join/i.test(q.sql))).toEqual([named]);
+    expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([named]);
   });
 });
 

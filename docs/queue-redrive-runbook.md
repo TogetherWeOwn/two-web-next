@@ -178,6 +178,68 @@ candidate/dispatch doubles (no source database), and
 `test/queue-redispatch-postgres.test.ts` uses disposable SQL only — never
 staging or production data for a test.
 
+## Auth-wall drill (staging only)
+
+`bin/queue-authwall-probe.mjs` drills the three operator legs without an
+operator session and without writing anything: preview admission, redispatch
+admission and the source-evidence bearer wall, each across guest, member and
+(non-operator) moderator legs. It follows the `bin/admin-authwall-probe.mjs`
+conventions: staging-only target, `QA_AUTH_TOKEN` from env only, redacted
+JSON result (statuses and fixed redirect classes — never raw locations,
+tokens, cookies or bodies), nonzero exit claims nothing.
+
+QA identities can never satisfy the operator boundary, so the probe never
+expects 200: each route reports its own admission state from the guest leg
+(disabled 404 or walled), and the member/moderator legs must agree with it.
+Preview and redispatch share one flag and one operator ID, so their states
+must agree; source-evidence is independently flagged. The probe asserts
+statuses only: a moderator 403 is the operator boundary and a member 403 is
+the panel gate — that attribution is pinned by
+`test/queue-preview-route.test.ts` and `test/queue-redispatch-route.test.ts`,
+not by this drill.
+
+Run it with `QA_AUTH_TOKEN` from an approved secret binding:
+
+```sh
+QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/queue-authwall-probe.mjs
+```
+
+Run it after any staging deploy that touches the queue operator routes, the
+admin guard or the throttle order; before and after operator-boundary
+activation or revocation; and whenever a wall failure is suspected. Live runs
+belong to the authorized operator procedure, not CI.
+
+A green result names each route's admission state (`enabled`, `disabled`,
+`unexpected`) plus the hit counts. A red result names the failing checks:
+
+- A `guest` status failure with a 200/500-class actual means the wall is open
+  or the route is down: treat it as an operator-boundary incident, not a drill
+  failure. Disabled routes answer 404 on every leg; that is the default-off
+  pass, not red.
+- A `member`/`moderator` failure means a non-operator leg reached past its
+  guard: do not activate or dispatch until it is explained.
+- A `preview/redispatch admission agreement` failure means the two routes
+  disagree despite sharing one flag: suspect deploy skew or diverged
+  admission, and re-run after the deploy settles.
+- A `guest POST without trusted origin status` (cross-origin control) or
+  `guest POST source-evidence status` (method control) failure means the outer
+  guard or method contract moved: check `src/same-origin.ts` and the route
+  registrations before re-running.
+- `Usage: node bin/queue-authwall-probe.mjs` on stderr means extra arguments
+  were supplied: remove them; the token belongs only in the environment. No
+  request was sent.
+- The generic `Queue auth-wall probe failed` stderr line means missing input,
+  a refused QA login or a transport failure; the probe claims no outcome and
+  deliberately hides exception text. Check the approved QA binding and staging
+  health. If the shared login budget was exhausted, wait out the 60-second
+  window before re-running. Never substitute another credential.
+
+Budget: 13 hits per run — 2 `qa-login` (10/min shared per runner IP, shared
+with every other QA login) and 0 `admin-write` (every redispatch POST and
+both controls refuse before the shared throttle; preview and source-evidence
+spend no throttle). Do not loop the probe inside one minute: back-to-back runs
+share the 10-login window with the admin probe and the staging suites.
+
 ## The loop
 
 1. **Inspect** — `GET /up` `queue.failed` is the backlog-independent failure
