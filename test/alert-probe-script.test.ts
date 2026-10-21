@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone probe tooling has no declaration file.
 // biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
-import { ALERT_PROBE_HEADER, PROBE_FINGERPRINT, STAGING_URL, probeReceipts, runProbe, tailObjects } from "../bin/alert-probe.mjs";
+import { ALERT_PROBE_HEADER, PROBE_FINGERPRINT, STAGING_URL, main, probeReceipts, runProbe, tailObjects } from "../bin/alert-probe.mjs";
 
 const at = Date.parse("2026-10-01T00:00:00Z");
 const probeId = "11111111-1111-4111-8111-111111111111";
@@ -230,5 +230,132 @@ describe("operator alert probe tool (local fixtures)", () => {
         ...clock(),
       }),
     ).rejects.toThrow("BOTH");
+  });
+});
+
+describe("alert-probe CLI exit codes (offline main)", () => {
+  const TOKEN = "fixture-main-token";
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let prevExitCode: typeof process.exitCode;
+
+  beforeEach(() => {
+    prevExitCode = process.exitCode;
+    process.exitCode = undefined;
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = prevExitCode;
+  });
+
+  const logged = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls.map((callArgs: unknown[]) => String(callArgs[0])).join("\n");
+
+  it("delivery failure exits 1 with the failure line and code=delivery_failed, never the token", async () => {
+    const probe = vi.fn(async () => {
+      throw new Error("delivery down");
+    });
+    await main({
+      args: ["--receipt-file", "dummy.json"],
+      env: { QA_AUTH_TOKEN: TOKEN },
+      probe,
+      readImpl: async () => "{}",
+    });
+    expect(probe).toHaveBeenCalledWith({ token: TOKEN, receiptFile: "dummy.json" });
+    expect(process.exitCode).toBe(1);
+    const stderr = logged(errorSpy);
+    expect(stderr).toContain("no delivery claimed");
+    expect(stderr).toContain("code=delivery_failed");
+    expect(stderr).not.toContain(TOKEN);
+    expect(logged(logSpy)).not.toContain(TOKEN);
+  });
+
+  it("pins exact stable codes for usage, missing inputs, and dry-run success", async () => {
+    // usage
+    await main({ args: ["--unknown"], env: { QA_AUTH_TOKEN: TOKEN } });
+    expect(process.exitCode).toBe(2);
+    expect(logged(errorSpy)).toContain("code=usage");
+    expect(logged(errorSpy)).toMatch(/Usage:/);
+
+    // real missing token
+    errorSpy.mockClear();
+    process.exitCode = undefined;
+    await main({
+      args: ["--receipt-file", "dummy.json"],
+      env: {},
+      readImpl: async () => "{}",
+    });
+    expect(process.exitCode).toBe(2);
+    expect(logged(errorSpy)).toContain("code=missing_token");
+
+    // real unreadable receipt
+    errorSpy.mockClear();
+    process.exitCode = undefined;
+    await main({
+      args: ["--receipt-file", "absent.json"],
+      env: { QA_AUTH_TOKEN: TOKEN },
+      readImpl: async () => {
+        throw new Error("missing");
+      },
+    });
+    expect(process.exitCode).toBe(2);
+    expect(logged(errorSpy)).toContain("code=unreadable_receipt");
+
+    // dry-run missing token
+    errorSpy.mockClear();
+    process.exitCode = undefined;
+    await main({
+      args: ["--receipt-file", "dummy.json", "--dry-run"],
+      env: {},
+      readImpl: async () => "{}",
+    });
+    expect(process.exitCode).toBe(2);
+    expect(logged(errorSpy)).toContain("code=missing_token");
+
+    // dry-run unreadable receipt
+    errorSpy.mockClear();
+    process.exitCode = undefined;
+    await main({
+      args: ["--receipt-file", "absent.json", "--dry-run"],
+      env: { QA_AUTH_TOKEN: TOKEN },
+      readImpl: async () => {
+        throw new Error("missing");
+      },
+    });
+    expect(process.exitCode).toBe(2);
+    expect(logged(errorSpy)).toContain("code=unreadable_receipt");
+
+    // dry-run success pins exact JSON shape
+    errorSpy.mockClear();
+    logSpy.mockClear();
+    process.exitCode = undefined;
+    await main({
+      args: ["--receipt-file", "receipt.json", "--dry-run"],
+      env: { QA_AUTH_TOKEN: TOKEN },
+      readImpl: async () => "{}",
+    });
+    expect(process.exitCode).toBeUndefined();
+    expect(logged(errorSpy)).toBe("");
+    const verdict = JSON.parse(logged(logSpy));
+    expect(verdict.code).toBe("dry_run.ok");
+    expect(verdict.mode).toBe("dry-run");
+    expect(verdict.dry_run).toBe(true);
+    expect(logged(logSpy)).not.toContain(TOKEN);
+  });
+
+  it("forwards a successful delivery result to stdout without setting an exit code", async () => {
+    const result = { target: STAGING_URL, probeId, receipts: [] };
+    const probe = vi.fn(async () => result);
+    await main({
+      args: ["--receipt-file", "dummy.json"],
+      env: { QA_AUTH_TOKEN: TOKEN },
+      probe,
+      readImpl: async () => "{}",
+    });
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(logged(logSpy))).toEqual(result);
   });
 });

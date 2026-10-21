@@ -483,8 +483,9 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-`npm run check:worker-moderators` parses the top-level
-`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`npm run check:moderators -- --help` prints usage to stdout and reads nothing;
+`--json` emits the findings verdict. `npm run check:worker-moderators` parses
+the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
 `web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
 `env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
 Owner+Moderator pair (staging guild `1545644954272137297`:
