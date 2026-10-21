@@ -9,10 +9,10 @@ import {
   parseRetryAfterSeconds,
   qaLoginRetryBudgetMs,
   qaLoginThrottleError,
-  retryQaLoginOn429,
   QA_LOGIN_MAX_ATTEMPTS,
   QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
 } from "./qa-login-retry.mjs";
+import { postParityQaLogin } from "./kit-parity/parity-qa-login.mjs";
 
 test("a numeric Retry-After is honored verbatim", () => {
   assert.equal(parseRetryAfterSeconds({ "retry-after": "17" }), 17);
@@ -109,122 +109,182 @@ test("every staging spec login raises its block timeout by the retry budget firs
   assert.ok(logins > 0, "no staging spec logins found — the guard would pass vacuously");
 });
 
-// Fake Playwright login responses for retryQaLoginOn429: the helper only
-// reads status() and headers(), so no browser is needed.
-const loginOk = (status) => ({ status: () => status, headers: () => ({}) });
-const loginThrottled = (retryAfter) => ({
+// Kit parity QA-login retry: parity's shared (beforeAll) and
+// isolated (renewal) logins share the job-wide qa-login window with the e2e
+// suite's 10 logins, so a 429 there names the budget, not the verdict. The
+// POST retries 429s only, honoring Retry-After, bounded by
+// QA_LOGIN_MAX_ATTEMPTS; any other status passes through to the caller's own
+// assertion. Stubbed transport below: no browser, no token.
+
+const parityOk = () => ({
+  status: () => 204,
+  headers: () => ({}),
+});
+
+const parityThrottled = (retryAfter = "3") => ({
   status: () => 429,
   headers: () => ({ "retry-after": retryAfter }),
 });
 
-test("the 429 retry returns the first success without waiting", async () => {
+test("parity QA login honors one 429 then succeeds on the retry", async () => {
+  let attempts = 0;
   const waits = [];
-  const response = await retryQaLoginOn429("qa-member", async () => loginOk(204), {
-    scope: "local",
-    wait: async (ms) => void waits.push(ms),
-  });
-  assert.equal(response.status(), 204);
-  assert.deepEqual(waits, []);
-});
-
-test("the 429 retry honors each Retry-After before the success", async () => {
-  const waits = [];
-  let calls = 0;
-  const response = await retryQaLoginOn429(
-    "qa-member",
+  const response = await postParityQaLogin(
     async () => {
-      calls += 1;
-      return calls < 3 ? loginThrottled("9") : loginOk(204);
+      attempts++;
+      return attempts === 1 ? parityThrottled("7") : parityOk();
     },
-    { scope: "local", wait: async (ms) => void waits.push(ms) },
+    { identity: "qa-member", wait: async (ms) => waits.push(ms) },
   );
   assert.equal(response.status(), 204);
-  assert.equal(calls, 3);
-  assert.deepEqual(waits, [9000, 9000]);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [7_000]);
 });
 
-test("the 429 retry throws the budget error once attempts exhaust", async () => {
+test("parity QA login falls back to the window when Retry-After is missing", async () => {
+  let attempts = 0;
   const waits = [];
-  let calls = 0;
+  const response = await postParityQaLogin(
+    async () => {
+      attempts++;
+      return attempts === 1 ? { status: () => 429, headers: () => ({}) } : parityOk();
+    },
+    { identity: "qa-member", wait: async (ms) => waits.push(ms) },
+  );
+  assert.equal(response.status(), 204);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [60_000]);
+});
+
+test("parity QA login exhausts after the bounded throttled attempts", async () => {
+  let attempts = 0;
+  let waits = 0;
   await assert.rejects(
-    () =>
-      retryQaLoginOn429(
-        "qa-moderator",
-        async () => {
-          calls += 1;
-          return loginThrottled("4");
-        },
-        { scope: "local", wait: async (ms) => void waits.push(ms) },
-      ),
-    /local QA login as qa-moderator refused with 429 after 3 attempt\(s\)/,
-  );
-  assert.equal(calls, QA_LOGIN_MAX_ATTEMPTS);
-  assert.equal(waits.length, QA_LOGIN_MAX_ATTEMPTS - 1);
-  assert.deepEqual(waits, [4000, 4000]);
-});
-
-test("the 429 retry never retries a non-429 failure", async () => {
-  const waits = [];
-  let calls = 0;
-  const response = await retryQaLoginOn429(
-    "qa-member",
-    async () => {
-      calls += 1;
-      return loginOk(500);
+    postParityQaLogin(
+      async () => {
+        attempts++;
+        return parityThrottled("1");
+      },
+      { identity: "qa-moderator", wait: async () => waits++ },
+    ),
+    (error) => {
+      assert.match(error.message, /parity QA login as qa-moderator/);
+      assert.match(error.message, /429/);
+      assert.match(error.message, /10\/min/);
+      assert.ok(!error.message.includes("X-TWO-QA-Auth"), "header name leaked");
+      return true;
     },
-    { wait: async (ms) => void waits.push(ms) },
   );
-  assert.equal(response.status(), 500);
-  assert.equal(calls, 1);
-  assert.deepEqual(waits, []);
+  assert.equal(attempts, QA_LOGIN_MAX_ATTEMPTS);
+  assert.equal(waits, QA_LOGIN_MAX_ATTEMPTS - 1);
 });
 
-test("the 429 retry rejects a non-count instead of a bogus attempt run", async () => {
-  for (const bad of [0, -1, 1.5, Number.NaN]) {
-    await assert.rejects(
-      () => retryQaLoginOn429("qa-member", async () => loginOk(204), { maxAttempts: bad }),
-      RangeError,
-      `maxAttempts=${bad}`,
+test("parity QA login never retries a non-429 verdict", async () => {
+  for (const status of [204, 302, 401, 403, 404, 500]) {
+    let attempts = 0;
+    let waits = 0;
+    const response = await postParityQaLogin(
+      async () => {
+        attempts++;
+        return { status: () => status, headers: () => ({}) };
+      },
+      { identity: "qa-member", wait: async () => waits++ },
     );
+    assert.equal(response.status(), status, `status ${status} must pass through`);
+    assert.equal(attempts, 1, `status ${status} must not retry`);
+    assert.equal(waits, 0, `status ${status} must not wait`);
   }
 });
 
-// Static guard, staging-guard style: parity's two QA logins run after the
-// browser suite in the same browser-smoke job, so their bounded 429 retries
-// can outlast the bare 30 s hook/test budget. The shared login fires once,
-// memoized, on the beforeAll RSVP (later memberGoingRsvp calls replay the
-// same promise and never log in), and the isolated renewal login fires in
-// its own test — one login per block. Both blocks must raise their timeout
-// by their own retry budget first, or a hot window dies as a hook/test
-// timeout instead of completing the retry (or failing with
-// qaLoginThrottleError).
-test("every kit-parity login block raises its timeout by the retry budget first", () => {
-  const source = readFileSync(new URL("./kit-parity/parity.spec.ts", import.meta.url), "utf8");
-  const blockStarts = [...source.matchAll(/(^|\n)\s*test(?:\.beforeAll)?\s*\(/g)].map(
-    (match) => match.index,
-  );
-  const triggers = [
-    { name: "beforeAll memberGoingRsvp", index: source.indexOf("await memberGoingRsvp()") },
-    {
-      name: "isolatedRenewalCookie",
-      index: source.indexOf("await isolatedRenewalCookie("),
-    },
-  ];
+// Static guards, staging-guard style: the parity spec routes both logins
+// through the bounded retry, keeps exactly-one logical counts and two logins,
+// and raises the beforeAll hook timeout by the one-login retry budget.
+
+const paritySpecUrl = new URL("./kit-parity/parity.spec.ts", import.meta.url);
+
+test("parity routes both QA logins through the bounded 429 retry", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
   assert.ok(
-    triggers.every((trigger) => trigger.index >= 0),
-    "a parity login trigger is gone — the guard would pass vacuously",
+    source.includes('from "./parity-qa-login.mjs"'),
+    "parity.spec.ts must import the parity QA-login retry helper",
   );
-  for (const trigger of triggers) {
-    const blockStart = blockStarts.filter((start) => start < trigger.index).at(-1) ?? -1;
-    const raised =
-      source.lastIndexOf("qaLoginRetryBudgetMs(1)", trigger.index) > blockStart &&
-      source.lastIndexOf("test.setTimeout(", trigger.index) > blockStart;
-    assert.ok(
-      raised,
-      `parity.spec.ts: ${trigger.name} is not preceded in its block by ` +
-        `test.setTimeout(<base> + qaLoginRetryBudgetMs(1)). Without that raise a 429 + ` +
-        `Retry-After dies on the bare 30s timeout instead of completing the ` +
-        `bounded retry.`,
-    );
-  }
+  const sharedFn = source.indexOf("function honoMemberCookie");
+  const isolatedFn = source.indexOf("async function isolatedRenewalCookie");
+  assert.ok(sharedFn >= 0 && isolatedFn > sharedFn, "both parity login helpers must exist");
+  assert.ok(
+    source.slice(sharedFn, isolatedFn).includes("postParityQaLogin"),
+    "honoMemberCookie must POST through postParityQaLogin",
+  );
+  assert.ok(
+    source.slice(isolatedFn).includes("postParityQaLogin"),
+    "isolatedRenewalCookie must POST through postParityQaLogin",
+  );
+});
+
+test("parity keeps exactly one logical login per helper and two logins total", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.equal(
+    source.match(/qaLoginCount \+= 1/g)?.length ?? 0,
+    1,
+    "qaLoginCount must increment once per shared-helper execution (outside the retry loop)",
+  );
+  assert.equal(
+    source.match(/renewalLoginCount \+= 1/g)?.length ?? 0,
+    1,
+    "renewalLoginCount must increment once per isolated-helper execution (outside the retry loop)",
+  );
+  assert.equal(
+    source.match(/\.post\("\/auth\/qa\//g)?.length ?? 0,
+    2,
+    "parity must keep exactly its two QA login POSTs (no new logins)",
+  );
+  assert.ok(
+    source.includes('"exactly one shared QA login"'),
+    "shared exactly-one assert must stay",
+  );
+  assert.ok(
+    source.includes('"exactly one isolated renewal login"'),
+    "isolated exactly-one assert must stay",
+  );
+});
+
+test("parity beforeAll raises its hook timeout by the one-login retry budget", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "../qa-login-retry.mjs"'),
+    "parity.spec.ts must import the retry budget helper",
+  );
+  const hook = source.indexOf("test.beforeAll(");
+  const login = source.indexOf("await memberGoingRsvp()");
+  assert.ok(hook >= 0 && login > hook, "beforeAll must spend the shared login via memberGoingRsvp");
+  assert.ok(
+    source.lastIndexOf("qaLoginRetryBudgetMs(1)", login) > hook &&
+      source.lastIndexOf("test.setTimeout(", login) > hook,
+    "beforeAll must raise its own timeout first with " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
+      "on the bare 30s hook timeout instead of completing the bounded retry.",
+  );
+});
+
+test("parity isolated-login test raises its timeout by the one-login retry budget", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "../qa-login-retry.mjs"'),
+    "parity.spec.ts must import the retry budget helper",
+  );
+  const testStart = source.indexOf(
+    'test("member renders the no-JS RSVP form posting to the Hono controller"',
+  );
+  const callSite = source.indexOf("await isolatedRenewalCookie(", testStart);
+  assert.ok(
+    testStart >= 0 && callSite > testStart,
+    "isolated-login test must spend its login via isolatedRenewalCookie",
+  );
+  assert.ok(
+    source.lastIndexOf("qaLoginRetryBudgetMs(1)", callSite) > testStart &&
+      source.lastIndexOf("test.setTimeout(", callSite) > testStart,
+    "isolated-login test must raise its own timeout first with " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
+      "on the bare 30s test timeout instead of completing the bounded retry.",
+  );
 });

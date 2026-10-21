@@ -3,7 +3,6 @@ import { expect, test, type APIRequestContext, type APIResponse } from "@playwri
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
-import { qaLoginRetryBudgetMs, retryQaLoginOn429 } from "../qa-login-retry.mjs";
 import {
   expectedKitMarker,
   kitFixtureOwnsEventDetail,
@@ -18,6 +17,8 @@ import {
   scrubSecrets,
   type ParityTarget,
 } from "../kit-parity";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
 // against BOTH the Hono worker and the built Kit Worker in one run, and
@@ -37,9 +38,9 @@ const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
 test.beforeAll(async ({ playwright }) => {
-  // The shared member login below inherits the browser suite's hot qa-login
-  // window (same browser-smoke job), so its bounded 429 retry can outlast the
-  // bare 30 s hook budget: raise this hook's own timeout first.
+  // Hook timeout: the config's 30s covers the setup itself; the shared QA
+  // login's bounded 429 waits get their own budget (qa-login-retry.mjs), one
+  // login — a capped 65s wait dies on the bare hook timeout without this raise.
   test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   for (const target of targets) {
     contexts.set(
@@ -123,14 +124,15 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await retryQaLoginOn429(
-      "qa-member",
+    // The e2e suite's 10 logins share this window: a 429 honors Retry-After
+    // into a fresh window instead of failing the file (parity-qa-login.mjs).
+    const response = await postParityQaLogin(
       () =>
         api(hono).post("/auth/qa/qa-member", {
           headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
           maxRedirects: 0,
         }),
-      { scope: "local" },
+      { identity: "qa-member" },
     );
     expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
@@ -186,14 +188,15 @@ async function isolatedRenewalCookie(
     if (!token) throw new Error("Missing ephemeral CI QA token");
     // Use a separate QA account: issuing a fresh session revokes other live
     // sessions for the same user and would invalidate the shared member jar.
-    const response = await retryQaLoginOn429(
-      "qa-moderator",
+    // Same bounded 429 retry as the shared login: a throttled window honors
+    // Retry-After instead of failing the journey.
+    const response = await postParityQaLogin(
       () =>
         login.post("/auth/qa/qa-moderator", {
           headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
           maxRedirects: 0,
         }),
-      { scope: "local" },
+      { identity: "qa-moderator" },
     );
     expect(response.status(), "isolated QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
@@ -770,9 +773,10 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
-      // The isolated renewal login below can catch the hot qa-login window
-      // the shared login just left, so its bounded 429 retry can outlast the
-      // bare 30 s test budget: raise this test's own timeout first.
+      // Test timeout: the config's 30s also bounds this test; the Kit path's
+      // isolated QA login spends one bounded 429 budget (qa-login-retry.mjs) —
+      // a capped 65s wait dies on the bare timeout without this raise. The
+      // Hono path replays the memoized login, so the budget is idle there.
       test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
