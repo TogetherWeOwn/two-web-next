@@ -714,7 +714,7 @@ describe("controls: guard, root boundary, load pairing and Hono output stay unch
     const cookie = await cookieFor(sessions, MODERATOR);
     vi.mocked(getEvent).mockResolvedValue(null);
     const res = await adminApp({ sessionStore: sessions, db }).request(
-      "/events/no-such-key",
+      "/events/01J0000000000000000000000A",
       { headers: { cookie } },
       { ...env, ADMIN_DB: db },
     );
