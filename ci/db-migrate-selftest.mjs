@@ -14,6 +14,8 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  captureDriverRaceCrashes,
+  isDriverConnectionRaceCrash,
   migrationClient,
   migrationConfig,
   runMigration,
@@ -577,8 +579,151 @@ test("gapped/newer history and concurrent migration lock are refused", async () 
   });
 });
 
-test("connection loss after the PITR receipt fails closed while another session owns the lock", async () => {
+// The exact postgres-js 3.4.9 write-after-close signature: a rollback write
+// scheduled after `closed()` nulled the socket throws from a queued
+// `nextWrite` immediate instead of rejecting the query. Every guard pin
+// below feeds this synthetic crash, so the suite goes red if the matcher,
+// the capture window, or the fatal-by-default path regresses.
+function driverRaceCrash() {
+  const error = new TypeError("Cannot read properties of null (reading 'write')");
+  error.stack = [
+    "TypeError: Cannot read properties of null (reading 'write')",
+    "    at Immediate.nextWrite (node_modules/postgres/src/connection.js:255:22)",
+    "    at process.processImmediate (node:internal/timers:574:21)",
+  ].join("\n");
+  return error;
+}
+
+test("driver race guard matches only the exact postgres write-after-close signature", () => {
+  assert.equal(isDriverConnectionRaceCrash(driverRaceCrash()), true);
+  // V8 spells the slot as `properties` on current Node and `property` on
+  // older ones; the guard tolerates both spellings.
+  const singular = driverRaceCrash();
+  singular.message = "Cannot read property of null (reading 'write')";
+  assert.equal(isDriverConnectionRaceCrash(singular), true);
+  // Anything else must stay fatal: a guard that matches too broadly would
+  // swallow real crashes. Each negative below pins one matcher clause.
+  const wrongSlot = driverRaceCrash();
+  wrongSlot.message = "Cannot read properties of null (reading 'read')";
+  const plainError = new Error("Cannot read properties of null (reading 'write')");
+  plainError.stack = driverRaceCrash().stack;
+  const missingFrame = driverRaceCrash();
+  missingFrame.stack = missingFrame.stack.replace("nextWrite", "nextTick");
+  const missingModule = driverRaceCrash();
+  missingModule.stack = missingModule.stack.replace(
+    "postgres/src/connection.js",
+    "postgres/src/index.js",
+  );
+  const missingStack = driverRaceCrash();
+  missingStack.stack = undefined;
+  for (const value of [
+    wrongSlot,
+    plainError,
+    missingFrame,
+    missingModule,
+    missingStack,
+    new TypeError("other"),
+    null,
+    undefined,
+    "Cannot read properties of null (reading 'write')",
+    { message: "Cannot read properties of null (reading 'write')" },
+  ]) {
+    assert.equal(isDriverConnectionRaceCrash(value), false);
+  }
+});
+
+test("driver race capture swallows the exact crash and restores listeners", async () => {
+  const before = process.listeners("uncaughtException").slice();
+  const race = captureDriverRaceCrashes();
+  try {
+    // The capture replaces the listener set (node --test attributes every
+    // emitted crash to the running test through its own listener), so only
+    // the capture handler is installed inside the window.
+    assert.equal(process.listeners("uncaughtException").length, 1);
+    setImmediate(() => {
+      throw driverRaceCrash();
+    });
+    setImmediate(() => {
+      throw driverRaceCrash();
+    });
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(race.crashes.length, 2);
+    for (const crash of race.crashes) assert.equal(isDriverConnectionRaceCrash(crash), true);
+  } finally {
+    race.release();
+  }
+  assert.deepEqual(process.listeners("uncaughtException"), before);
+  race.release();
+  assert.deepEqual(process.listeners("uncaughtException"), before);
+});
+
+test("uncaught errors outside the driver race signature still fail the run", () => {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "driver-race-negative-"),
+  );
+  try {
+    // A non-matching crash inside the window must stay fatal. This runs in a
+    // child process because a fatal crash cannot be asserted in-process.
+    const fatal = join(dir, "fatal.mjs");
+    writeFileSync(
+      fatal,
+      [
+        `import { captureDriverRaceCrashes } from ${JSON.stringify(script)};`,
+        "const race = captureDriverRaceCrashes();",
+        'setImmediate(() => { throw new Error("not-the-driver-race"); });',
+        "for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));",
+        "race.release();",
+        'console.log("wrongly swallowed");',
+        "",
+      ].join("\n"),
+    );
+    const failure = spawnSync(process.execPath, [fatal], { encoding: "utf8" });
+    assert.notEqual(failure.status, 0);
+    assert.match(failure.stderr, /not-the-driver-race/);
+    assert.doesNotMatch(failure.stdout, /wrongly swallowed/);
+    // The exact signature is still swallowed in a bare process with no test
+    // runner listeners, proving the save/restore path with an empty set.
+    const swallowed = join(dir, "swallowed.mjs");
+    writeFileSync(
+      swallowed,
+      [
+        `import { captureDriverRaceCrashes, isDriverConnectionRaceCrash } from ${JSON.stringify(script)};`,
+        "const race = captureDriverRaceCrashes();",
+        "setImmediate(() => {",
+        "  const error = new TypeError(\"Cannot read properties of null (reading 'write')\");",
+        "  error.stack = [",
+        "    \"TypeError: Cannot read properties of null (reading 'write')\",",
+        '    "    at Immediate.nextWrite (node_modules/postgres/src/connection.js:255:22)",',
+        '    "    at process.processImmediate (node:internal/timers:574:21)",',
+        '  ].join("\\n");',
+        "  throw error;",
+        "});",
+        "for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));",
+        "if (race.crashes.length !== 1 || !isDriverConnectionRaceCrash(race.crashes[0])) {",
+        '  console.error("capture missed the exact signature");',
+        "  process.exit(2);",
+        "}",
+        "race.release();",
+        'console.log("captured 1");',
+        "",
+      ].join("\n"),
+    );
+    const success = spawnSync(process.execPath, [swallowed], { encoding: "utf8" });
+    assert.equal(success.status, 0);
+    assert.match(success.stdout, /captured 1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("connection loss after the PITR receipt fails closed while another session owns the lock", async (t) => {
   await fixture(async ({ client, env, output }) => {
+    // Killing the lock holder can surface the driver race crash (a rollback
+    // write scheduled after the socket closed) instead of only the clean
+    // connection error. Capture that exact signature so the stray crash
+    // cannot kill the selftest process; the fail-closed rejection below is
+    // still required in both paths.
+    const race = captureDriverRaceCrashes();
     let interrupted;
     try {
       const operation = runMigration("apply", env, {
@@ -616,7 +761,16 @@ test("connection loss after the PITR receipt fails closed while another session 
     } finally {
       try {
         if (interrupted) await interrupted;
+        // Drain pending immediates while the capture is still attached: the
+        // race crash fires from a queued immediate that can land after the
+        // fail-closed rejection already resolved.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+        if (race.crashes.length > 0)
+          t.diagnostic(
+            `driver race crash captured ${race.crashes.length}x; fail-closed rejection still held`,
+          );
       } finally {
+        race.release();
         await client`select pg_advisory_unlock(11161001)`;
       }
     }

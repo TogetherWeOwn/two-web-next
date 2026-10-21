@@ -64,6 +64,12 @@ export const HOME_JOIN_RESULT_COPY = {
   reinvite: "Rejoin with the Discord invite",
 } as const;
 
+// The /join intro sentence (lead paragraph plus share description), moved here
+// from src/screens/join.tsx so the Kit join route can render the same bytes:
+// the .tsx screen would bundle the JSX runtime into the Kit worker, while this
+// plain-TS module stays import-safe. Both renderers read this one literal.
+export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
+
 // The ladder names its ranks even when the bot views are dark: ranks stack,
 // so an unnumbered stack still reads as the trust ladder, never as zeros.
 // Plain literal, not a mapped construction: the same five rows, with no call
