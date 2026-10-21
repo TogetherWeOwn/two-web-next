@@ -43,7 +43,7 @@ dl.facts > div { display: block; }
 
 /* Admin forms and tables share the external stylesheet with the page shells. */
 .admin-table { width: 100%; border-collapse: collapse; }
-.admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
+.admin-table :is(th, td) { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
 .field { margin: 1rem 0; }
 .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
 .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
@@ -56,8 +56,8 @@ legend { font-weight: 700; padding: 0 .5rem; }
 .featured-form { overflow-wrap: anywhere; }
 .featured-table-scroll, .admin-table-scroll { max-width: 100%; overflow-x: auto; }
 .featured-table { min-width: 64rem; }
-.featured-table th, .featured-table td { overflow-wrap: normal; word-break: normal; }
-.featured-table th, .featured-table time { white-space: nowrap; }
+.featured-table :is(th, td) { overflow-wrap: normal; word-break: normal; }
+.featured-table :is(th, time) { white-space: nowrap; }
 .featured-table th:first-child { min-width: 12rem; }
 .featured-window-bound { display: block; white-space: nowrap; }
 .featured-status { display: inline-block; padding: .1rem .5rem; border: 1px solid currentColor; border-radius: .25rem; font-size: .85rem; font-weight: 700; }
