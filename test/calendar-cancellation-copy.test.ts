@@ -25,6 +25,7 @@ describe("cancelled schedule copy", () => {
   it("describes retained answers as existing responses, never attendance", () => {
     expect(existingResponsesText(73)).toBe("73 existing responses");
     expect(existingResponsesText(0)).toBe("0 existing responses");
+    expect(existingResponsesText(1)).toBe("1 existing response");
     for (const text of [existingResponsesText(73), existingResponsesText(1)]) {
       expect(text).not.toMatch(/going|attend|available|places|spots|remaining/i);
     }
