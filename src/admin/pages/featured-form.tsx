@@ -1,6 +1,7 @@
 // Admin featured-form screen: new and edit (split from pages.tsx; zero behavior change).
 
 import type { FC } from "hono/jsx";
+import { safeStoredLink } from "../../featured";
 import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import type { FeaturedRow } from "../store";
@@ -39,7 +40,11 @@ export const FeaturedFormPage: FC<{
               Status: <FeaturedStatusBadge row={row} now={now} />
             </p>
             {currentlyVisible(row, now) ? (
-              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
+              <FeaturedContentItem
+                row={safeStoredLink(row)}
+                appUrl={appUrl}
+                imageHosts={imageHosts}
+              />
             ) : (
               <p data-testid="featured-preview-hidden">
                 This slot is not currently visible on the homepage.

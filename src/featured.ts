@@ -11,11 +11,12 @@ export type VisibleFeatured = Pick<
 
 /**
  * The one place a stored link is judged before it can become a public href
- * (Hono and Kit homepages both read through the two readers below). A row
- * saved before the save-time policy, or written around the form, keeps its
- * title and body but loses its link.
+ * (Hono and Kit homepages both read through the two readers below; the admin
+ * Homepage previews judge their preview copy with it too). A row saved before
+ * the save-time policy, or written around the form, keeps its title and body
+ * but loses its link.
  */
-function safeStoredLink<T extends { url: string | null }>(row: T): T {
+export function safeStoredLink<T extends { url: string | null }>(row: T): T {
   const url = row.url;
   if (url === null || isSafeFeaturedLink(url) || isSameSitePath(url)) return row;
   return { ...row, url: null };
