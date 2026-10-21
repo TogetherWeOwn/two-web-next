@@ -169,24 +169,31 @@ grant option. The object-by-object allowlists and static SQL parser are in
 cover regular and partition tables, views (including recursive ones), explicit
 sequences, and serial or identity-generated sequences under quoted and
 catalog-qualified spellings alike; unlisted objects and unsupported SQL fail
-closed. The lexer mirrors PostgreSQL on `E'...'` escapes and dollar quotes
-(including `$` inside identifiers), and rejects unterminated strings, quotes,
-and comments rather than silently merging statements.
+closed. The lexer mirrors PostgreSQL on `E'...'` escapes (only at token starts)
+and dollar quotes (including `$` after digits or non-ASCII identifier
+characters), accepts non-ASCII identifier characters and dollar-quote tags,
+and rejects unterminated strings, quotes, and comments rather than silently
+merging statements.
 The check applies only to added/changed migration SQL and does not rewrite or
-bless historical migrations. Role switching (including quoted `set_config`
-calls), role and ownership changes, `ALTER DEFAULT PRIVILEGES`, `REVOKE`,
-dynamic SQL, `SELECT INTO`, temporary objects, unlogged sequences, inherited or
-LIKE-copied tables, `CREATE SCHEMA` schema elements, sequence references,
-`ALTER FUNCTION ... SECURITY DEFINER`, trigger, rule, policy, extension or
-server DDL, and table RLS enable/disable/force changes are rejected outside a
-separately reviewed policy change.
+bless historical migrations. Session configuration (`SET`, `RESET`, and
+`DISCARD` in any spelling, which could change object resolution, ownership, or
+string lexing) and persisted configuration defaults (`ALTER DATABASE ...
+SET/RESET`, `ALTER SYSTEM`) are rejected with no allowlist, as are role
+switching (including quoted `set_config` calls), role and ownership changes,
+`ALTER DEFAULT PRIVILEGES`, `REVOKE`, dynamic SQL, `SELECT INTO`, temporary
+objects, unlogged sequences, inherited or LIKE-copied tables, `CREATE SCHEMA`
+schema elements, sequence references, `ALTER FUNCTION ... SECURITY DEFINER`,
+trigger, rule, policy, extension or server DDL, and table RLS
+enable/disable/force changes outside a separately reviewed policy change.
 
 The custom migration runner also performs a read-only catalog preflight against
 the active migration role's table/sequence defaults before planning or applying.
 It refuses to run as the runtime role, refuses table defaults, and refuses any
 sequence default outside the reviewed `two_web_app` `USAGE`/`SELECT` set; the
-refusal names the offending reason while other database errors stay masked. It
-does not change ACLs or role membership. The ledger keeps the canonical Drizzle
+refusal names the offending reason while other database errors stay masked. The
+runner also pins `standard_conforming_strings=on` per connection and
+transaction, matching the guard's string lexing even under a hostile database
+default. It does not change ACLs or role membership. The ledger keeps the canonical Drizzle
 serial format both this runner and `drizzle-kit migrate` insert through, so the
 two writers stay interchangeable. The runtime-rights guard and its selftests run
 in the existing `check` job, which feeds the required `ci-ok` status. CI and

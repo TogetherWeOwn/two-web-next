@@ -83,7 +83,7 @@ test("rejects role switching, default-ACL changes, and dynamic SQL", () => {
       migration(
         `CREATE TABLE public.events (id integer primary key);${tableGrants}${forbidden}`,
       ).join("\n"),
-      /role switching|role changes|ownership changes|default privileges|dynamic sql/i,
+      /role switching|SET is forbidden|RESET is forbidden|role changes|ownership changes|default privileges|dynamic sql/i,
       forbidden,
     );
   }
@@ -92,7 +92,7 @@ test("rejects role switching, default-ACL changes, and dynamic SQL", () => {
 test("treats nested SQL comments as token separators", () => {
   assert.match(
     migration("SET/* outer /* nested */ comment */ROLE two_web_migrate;").join("\\n"),
-    /role switching/i,
+    /SET is forbidden/i,
   );
   assert.match(
     migration(
@@ -288,6 +288,45 @@ test("does not open a dollar quote inside a dollar-bearing identifier", () => {
   );
 });
 
+test("does not open a dollar quote after digits or non-ASCII identifier characters", () => {
+  // PostgreSQL lexes t1$x$ and e-caron$x$ as single identifiers (probed
+  // column names); a scanner that opens $x$ after a digit or a non-ASCII
+  // letter swallows the GRANT instead of reporting it.
+  for (const sandwich of [
+    "SELECT 1 AS t1$x$; GRANT DELETE ON TABLE public.events TO two_web_app; SELECT $x$done$x$;",
+    "SELECT 1 AS \u011b$x$; GRANT DELETE ON TABLE public.events TO two_web_app; SELECT 1 AS \u011b$x$;",
+  ]) {
+    assert.match(
+      migration(
+        `CREATE TABLE public.events (id integer primary key);${tableGrants}${sandwich}`,
+      ).join("\n"),
+      /unreviewed runtime privilege/i,
+      sandwich,
+    );
+  }
+  // Non-ASCII dollar-quote tags still lex: the semicolon inside the
+  // e-caron tag below must not split.
+  assert.deepEqual(
+    migration(
+      `CREATE TABLE public.events (id integer primary key);${tableGrants}SELECT $\u011b$a;b$\u011b$;`,
+    ),
+    [],
+  );
+});
+
+test("treats an identifier-extended E as a plain-string prefix", () => {
+  // x1e is one identifier to PostgreSQL, so x1e'\' is a plain string and the
+  // DELETE grant executes; an E-string reading would swallow it. (A bare
+  // digit directly before E, 1E'...', is a PostgreSQL "trailing junk" error,
+  // so the plain-string reading fails closed there too.)
+  assert.match(
+    migration(
+      `CREATE TABLE public.events (id integer primary key);${tableGrants}CREATE DOMAIN x1e AS text; SELECT x1e'\\'; GRANT DELETE ON TABLE public.events TO two_web_app; -- '`,
+    ).join("\n"),
+    /unreviewed runtime privilege/i,
+  );
+});
+
 test("fails closed on unterminated strings, quotes, and comments", () => {
   for (const sql of [
     "SELECT 'abc;",
@@ -361,6 +400,86 @@ test("rejects quoted set_config role switching", () => {
       `CREATE TABLE public.events (id integer primary key);${tableGrants}SELECT "set_config"('role', 'two_web_migrate', true);`,
     ).join("\n"),
     /role switching/i,
+  );
+});
+
+test("rejects session configuration statements without an allowlist", () => {
+  for (const forbidden of [
+    "SET ROLE two_web_migrate;",
+    "SET \"role\" = 'two_web_migrate';",
+    "SET SESSION \"role\" = 'two_web_migrate';",
+    "SET LOCAL \"Role\" = 'two_web_migrate';",
+    "SET SESSION AUTHORIZATION two_web_migrate;",
+    "SET session_authorization = 'two_web_migrate';",
+    "SET \"session_authorization\" = 'two_web_migrate';",
+    "SET standard_conforming_strings = off;",
+    "SET search_path = public;",
+    "SET statement_timeout = 1000;",
+    "RESET ROLE;",
+    "RESET SESSION AUTHORIZATION;",
+    "RESET standard_conforming_strings;",
+    "RESET ALL;",
+    "DISCARD ALL;",
+    "DISCARD PLANS;",
+  ]) {
+    assert.match(
+      migration(
+        `CREATE TABLE public.events (id integer primary key);${tableGrants}${forbidden}`,
+      ).join("\n"),
+      /SET is forbidden|RESET is forbidden|DISCARD is forbidden/i,
+      forbidden,
+    );
+  }
+  // Read-only SHOW and UPDATE ... SET are not session configuration.
+  assert.deepEqual(
+    migration(
+      `CREATE TABLE public.events (id integer primary key);${tableGrants}SHOW standard_conforming_strings; UPDATE public.events SET title = 'x' WHERE id = 1;`,
+    ),
+    [],
+  );
+});
+
+test("rejects the standard_conforming_strings escape sandwich, including the breakpoint form", () => {
+  const sandwich = (separator) =>
+    `SET standard_conforming_strings = off;${separator}SELECT 'abc\\'';${separator}GRANT DELETE ON TABLE public.events TO two_web_app;${separator}SELECT 'x';${separator}-- '`;
+  for (const sql of [sandwich(" "), sandwich("\n--> statement-breakpoint\n")]) {
+    assert.match(
+      migration(`CREATE TABLE public.events (id integer primary key);${tableGrants}${sql}`).join(
+        "\n",
+      ),
+      /SET is forbidden/i,
+    );
+  }
+});
+
+test("rejects persisted configuration changes", () => {
+  for (const forbidden of [
+    "ALTER DATABASE mydb SET standard_conforming_strings = off;",
+    "ALTER DATABASE mydb RESET search_path;",
+    "ALTER SYSTEM SET standard_conforming_strings = off;",
+  ]) {
+    assert.match(
+      migration(
+        `CREATE TABLE public.events (id integer primary key);${tableGrants}${forbidden}`,
+      ).join("\n"),
+      /ALTER DATABASE configuration defaults|ALTER SYSTEM/i,
+      forbidden,
+    );
+  }
+});
+
+test("censuses non-ASCII identifiers instead of passing them silently", () => {
+  assert.match(
+    migration("CREATE TABLE public.\u011bt (id integer primary key);").join("\n"),
+    /no reviewed runtime-rights entry for created table/i,
+  );
+  // A non-ASCII letter after a type name keeps it one identifier: serial +
+  // e-caron is not a serial column, so no sequence grants are required.
+  assert.deepEqual(
+    migration(
+      `CREATE TABLE public.events (id2 serial\u011b, id integer primary key);${tableGrants}`,
+    ),
+    [],
   );
 });
 

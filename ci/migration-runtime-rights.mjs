@@ -89,10 +89,15 @@ export function validateDefaultAclRows(rows) {
   return errors;
 }
 
+// Intentional preflight refusals. The runner surfaces only this class to the
+// operator; every other error from the guard queries is a driver failure and
+// must stay masked behind safeMigrationError.
+export class DefaultAclRefusal extends Error {}
+
 export async function assertRuntimeDefaultAcl(client) {
   const [identity] = await client`select current_user as current_user`;
   if (identity.current_user === runtimeRole) {
-    throw new Error(
+    throw new DefaultAclRefusal(
       "Migration default-ACL guard refused: migrations must not run as the runtime role.",
     );
   }
@@ -100,24 +105,35 @@ export async function assertRuntimeDefaultAcl(client) {
   const errors = validateDefaultAclRows(
     rows.map((row) => ({ ...row, current_user: identity.current_user })),
   );
-  if (errors.length) throw new Error(`Migration default-ACL guard refused: ${errors.join("; ")}`);
+  if (errors.length)
+    throw new DefaultAclRefusal(`Migration default-ACL guard refused: ${errors.join("; ")}`);
 }
 
-const identifier = '(?:"(?:[^"]|"")*"|[a-zA-Z_][a-zA-Z0-9_$]*)';
+// PostgreSQL identifier characters include non-ASCII letters (PG lexes
+// high-bit bytes as identifier characters), so the census and the lexer below
+// accept U+0080-U+FFFF as identifier start/continuation.
+const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_\\u0080-\\uFFFF][A-Za-z0-9_$\\u0080-\\uFFFF]*)';
 const relation = `(${identifier}(?:\\s*\\.\\s*${identifier})?)`;
 
 // PostgreSQL lexing rules the guard must mirror, otherwise statements hidden
-// from the census still execute at apply time:
+// from the census still execute at apply time (each rule below was probed
+// against PostgreSQL; identifier-vs-quote decisions match or fail closed):
 // - E'...' strings treat backslash as an escape, so \' does not terminate.
-//   The E prefix applies unless it extends an identifier ([A-Za-z_$]; a digit
-//   cannot absorb it because 1E'...' lexes as number 1 plus an E-string).
-// - A $ tag extends an identifier ([A-Za-z0-9_$] continuation), so $tag$ after
-//   [A-Za-z_$] is an identifier, not a dollar-quote. After a digit the $ starts
-//   a fresh token, so dollar quotes still open there.
-// - Dollar-quote tags follow identifier-start rules ($$ or $tag$); $1$ is a
-//   parameter followed by $, never a quote.
-const DOLLAR_TAG = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/;
-const QUOTE_ABSORBING_CHAR = /[A-Za-z_$]/;
+//   The E prefix applies only at a token start: any identifier-continue
+//   character before the E (letters including non-ASCII, digits, _, $) means
+//   the E extends an identifier (x1e'..' is identifier x1e plus a plain
+//   string). A bare digit directly before E (1E'...') makes PostgreSQL raise
+//   "trailing junk after numeric literal", so treating it as a plain string
+//   fails closed: the migration cannot apply.
+// - A $ tag extends an identifier, so $tag$ after an identifier-continue
+//   character (t1$x$, ě$x$ — both lex as one identifier in PostgreSQL) is an
+//   identifier, not a dollar-quote. After a bare digit with no identifier
+//   before it (SELECT 1$x$a$x$) PostgreSQL raises a syntax error, so refusing
+//   to open there fails closed as well.
+// - Dollar-quote tags follow identifier-start rules ($$ or $tag$), including
+//   non-ASCII letters; $1$ is a parameter followed by $, never a quote.
+const DOLLAR_TAG = /^\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/;
+const QUOTE_ABSORBING_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 
 class UnterminatedSqlError extends Error {}
 
@@ -342,7 +358,7 @@ function createdObjects(sql, errors) {
           '"(?:smallserial|serial2|serial4|serial|bigserial|serial8)"|smallserial|serial2|serial4|serial|bigserial|serial8';
         const integerType =
           '"(?:smallint|int2|integer|int4|int|bigint|int8)"|smallint|int2|integer|int4|int|bigint|int8';
-        const typeBoundary = "(?![A-Za-z0-9_$])";
+        const typeBoundary = "(?![A-Za-z0-9_$\\u0080-\\uFFFF])";
         const serialColumns = [
           ...tableBody.matchAll(
             new RegExp(
@@ -442,12 +458,29 @@ export function validateMigrationSql(fileName, source) {
     ];
   }
   for (const statement of statements) {
-    if (
-      /^\s*(?:SET\s+(?:(?:LOCAL|SESSION)\s+)?ROLE|SET\s+SESSION\s+AUTHORIZATION|RESET\s+(?:ROLE|SESSION\s+AUTHORIZATION))\b/i.test(
-        statement,
-      ) ||
-      /(?:"set_config"|\bset_config)\s*\(/i.test(statement)
-    ) {
+    // No allowlist: SET search_path reroutes the unqualified identifiers the
+    // census resolves to public, SET ROLE/session_authorization (quoted, LOCAL,
+    // SESSION, or generic-GUC spellings alike) changes object ownership and
+    // default ACLs, and SET standard_conforming_strings=off reopens backslash
+    // escapes in plain strings, which the lexer does not model. The runner's
+    // own pins are issued by the runner rather than by migration SQL, and any
+    // timeout SET would only weaken those pins, so migrations cannot need SET.
+    if (/^\s*SET\b/i.test(statement)) {
+      errors.push(
+        "SET is forbidden in runtime-rights migrations: session settings change object resolution, ownership, or string lexing outside the census",
+      );
+    }
+    if (/^\s*RESET\b/i.test(statement)) {
+      errors.push(
+        "RESET is forbidden in runtime-rights migrations: it restores unreviewed session defaults outside the census",
+      );
+    }
+    if (/^\s*DISCARD\b/i.test(statement)) {
+      errors.push(
+        "DISCARD is forbidden in runtime-rights migrations: it resets role and session configuration",
+      );
+    }
+    if (/(?:"set_config"|\bset_config)\s*\(/i.test(statement)) {
       errors.push("role switching is forbidden in runtime-rights migrations");
     }
     if (/^\s*(?:CREATE|ALTER|DROP)\s+(?:ROLE|USER)\b/i.test(statement)) {
@@ -507,7 +540,7 @@ export function validateMigrationSql(fileName, source) {
     }
     if (
       /^\s*ALTER\s+TABLE\b/i.test(statement) &&
-      /(?:(?<![A-Za-z0-9_$])(?:smallserial|serial2|serial4|serial|bigserial|serial8|"(?:smallserial|serial2|serial4|serial|bigserial|serial8)")(?![A-Za-z0-9_$])|(?<![A-Za-z0-9_$])GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY(?![A-Za-z0-9_$]))/i.test(
+      /(?:(?<![A-Za-z0-9_$\u0080-\uFFFF])(?:smallserial|serial2|serial4|serial|bigserial|serial8|"(?:smallserial|serial2|serial4|serial|bigserial|serial8)")(?![A-Za-z0-9_$\u0080-\uFFFF])|(?<![A-Za-z0-9_$\u0080-\uFFFF])GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY(?![A-Za-z0-9_$\u0080-\uFFFF]))/i.test(
         statement,
       )
     ) {
@@ -531,6 +564,18 @@ export function validateMigrationSql(fileName, source) {
     }
     if (/^\s*REVOKE\b/i.test(statement)) {
       errors.push("REVOKE is outside the reviewed per-migration rights contract");
+    }
+    // Persisted configuration outlives the migration: ALTER DATABASE ... SET
+    // standard_conforming_strings=off would poison every later session the
+    // lexer assumes escapes-free, and ALTER SYSTEM rewrites the cluster
+    // configuration file. Both are outside the per-migration contract.
+    if (/^\s*ALTER\s+DATABASE\b[\s\S]*\b(?:SET|RESET)\b/i.test(statement)) {
+      errors.push(
+        "ALTER DATABASE configuration defaults are forbidden in runtime-rights migrations",
+      );
+    }
+    if (/^\s*ALTER\s+SYSTEM\b/i.test(statement)) {
+      errors.push("ALTER SYSTEM is forbidden in runtime-rights migrations");
     }
   }
 

@@ -19,7 +19,7 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
-import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
+import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
@@ -513,7 +513,11 @@ test("runtime-role connection is refused while the reviewed sequence default pas
       );
       await client.unsafe("SET ROLE two_web_app");
       try {
-        await assert.rejects(assertRuntimeDefaultAcl(client), /must not run as the runtime role/);
+        await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+          assert.ok(error instanceof DefaultAclRefusal);
+          assert.match(error.message, /must not run as the runtime role/);
+          return true;
+        });
       } finally {
         await client.unsafe("RESET ROLE");
       }
@@ -524,6 +528,32 @@ test("runtime-role connection is refused while the reviewed sequence default pas
         )
         .catch(() => {});
       await client.unsafe("DROP ROLE two_web_app");
+    }
+  });
+});
+
+test("preflight driver failures propagate for masking instead of surfacing driver text", async () => {
+  await fixture(async ({ client, run }) => {
+    const [db] = await client`select current_database() as name`;
+    // PostgreSQL refuses to disallow connections from inside the database
+    // itself, so flip the switch from the admin database instead.
+    const admin = postgres(testAdminUrl().href, { max: 1, onnotice: () => {} });
+    try {
+      await admin.unsafe(`alter database "${db.name}" with allow_connections false`);
+      try {
+        // A catch-all that wraps preflight errors as MigrationError would echo
+        // the driver message to the operator; only intentional refusals may
+        // surface, so the raw failure must reach the masked branch instead.
+        await assert.rejects(run("plan"), (error) => {
+          assert.match(safeMigrationError(error), /database details withheld/);
+          assert.doesNotMatch(error.message, /database details withheld/);
+          return true;
+        });
+      } finally {
+        await admin.unsafe(`alter database "${db.name}" with allow_connections true`);
+      }
+    } finally {
+      await admin.end();
     }
   });
 });
@@ -637,6 +667,24 @@ test("hostile database DateStyle cannot skew the PITR receipt", async () => {
       Math.abs(reported / 1000 - Number(now.epoch)) < 300,
       "PITR receipt must match the server clock within five minutes",
     );
+    assert.equal((await run("verify")).length, 0);
+  });
+});
+
+test("hostile database standard_conforming_strings cannot change migration string lexing", async () => {
+  await fixture(async ({ client, run, env }) => {
+    const [db] = await client`select current_database() as name`;
+    // The runtime-rights guard lexes plain strings without backslash escapes;
+    // a hostile database default must not reopen escapes for applied SQL.
+    await client.unsafe(`alter database "${db.name}" set standard_conforming_strings = off`);
+    const pinned = migrationClient(migrationConfig(env, { testDatabase: true }));
+    try {
+      const [row] = await pinned`show standard_conforming_strings`;
+      assert.equal(row.standard_conforming_strings, "on");
+    } finally {
+      await pinned.end();
+    }
+    await run("apply");
     assert.equal((await run("verify")).length, 0);
   });
 });
