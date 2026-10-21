@@ -523,6 +523,13 @@ export interface HookDispatchDeps {
   // retry. Absent by default: without it the dispatch behaves exactly as
   // before.
   eventDetailRotationFor?: (event: HookEventLike) => Promise<string | null>;
+  // Optional sliding-session renewal for Kit-served admin reads. Runs
+  // only after the member-read boundary releases a successful GET document
+  // (see releasedAdminRenewsSession): a refused, failed, bounced or
+  // redirected read never reaches it, so the bearer stays live for the
+  // retry. Absent by default: without it the dispatch behaves exactly as
+  // before.
+  adminRenewalFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -748,6 +755,30 @@ function releasedEventDetailRenewsSession(
   return locals?.status === "authenticated";
 }
 
+// Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
+// admin-guard slide (src/admin/guard.ts renews the 120-minute window on a
+// current bearer only). Only a released successful-or-missing HTML GET document
+// with an authenticated moderator bridge decision renews: the manifest owns the
+// route choice (any enabled admin family entry), so a future admin path renews with
+// zero renewal-code changes. 404s renew like Hono (the guard attaches on 404s
+// when the bearer survives rendering); guest bounces, 403s (unlike the
+// event-detail draft 403 — Hono never renews a refused viewer), 503s,
+// redirects and non-HTML responses never renew. Not in the loader: that would
+// renew before the audit can refuse, spending the window on a response the
+// boundary throws away.
+function releasedAdminRenewsSession(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/admin" && !route.path.startsWith("/admin/")) return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200 && response.status !== 404) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  return locals?.status === "authenticated" && locals.session?.moderator === true;
+}
+
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
 // renderer runs, decided before resolve and before any auth/body read. A
 // resolve() failure propagates and is never replayed through Hono. The
@@ -926,6 +957,30 @@ export async function dispatchHookRequest(
       }
     } catch (err) {
       console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
+  // Sliding renewal for released Kit admin documents, at the same post-response
+  // position as the event-detail renewal above. A renewal that loses its race
+  // resolves to no cookie (the next read retries with a live bearer); a renewal
+  // store failure warns and likewise renews nothing — the already-rendered
+  // admin page still stands, and the old row stays live because renew only
+  // extends a live row.
+  if (deps.adminRenewalFor && releasedAdminRenewsSession(route, event, response)) {
+    try {
+      const cookie = await deps.adminRenewalFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit admin renewal unavailable; rendering without renewal.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }

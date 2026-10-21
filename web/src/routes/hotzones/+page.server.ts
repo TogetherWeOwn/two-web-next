@@ -33,11 +33,11 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
       eventCount: data.joins.eventCount,
       voiceHtml: await renderHotzoneGrid(
         data.voice.cells,
-        `Estimated voice activity for season ${data.season}`,
+        "Season-independent seeded estimate of voice activity",
       ),
       gamesHtml: await renderHotzoneGrid(
         data.games.cells,
-        `Estimated games activity for season ${data.season}`,
+        "Season-independent seeded estimate of games activity",
       ),
       retentionNote: data.retentionNote,
       appUrl: data.appUrl,
