@@ -499,3 +499,63 @@ describe("public session failure boundaries", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 });
+
+describe("buffered member-read outage legs negotiate the JSON envelope", () => {
+  // The branded-member-refusal acceptance pins its JSON legs loosely by design
+  // (status/headers/audit only; the header says the representation is not
+  // dictated). These owned pins guard the exact negotiated body the buffered
+  // legs ship: deleting the JSON branch in databaseUnavailableBuffered must
+  // fail here while the acceptance suite stays green. The acceptance file is
+  // deliberately untouched (Test Author owned).
+  it("profile-store outage JSON returns the exact db_unavailable body without request_id", async () => {
+    const sessions = createMemorySessionStore();
+    const cookie = await cookieFor(sessions, MEMBER);
+    const sinkCalls: unknown[] = [];
+    const profile = profilesApp({
+      sessionStore: sessions,
+      accessLog: async (entry) => {
+        sinkCalls.push(entry);
+        return true;
+      },
+    });
+    const res = await profile.request(
+      `/members/${MEMBER.userId}`,
+      { headers: { cookie, accept: "application/json" } },
+      env,
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("cache-control")).toContain("private");
+    expect(res.headers.get("vary")).toContain("Accept");
+    // Exact body: no request_id without requestLog (the slice harness runs
+    // no requestLog middleware, so none is fabricated).
+    expect(await res.json()).toEqual({
+      error: "db_unavailable",
+      message: "The service is temporarily unavailable. Try again shortly.",
+    });
+    expect(sinkCalls).toHaveLength(0);
+  });
+
+  it("event-detail no-DB JSON returns the exact db_unavailable body with request_id", async () => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store, MEMBER);
+    const res = await app.request(
+      `/e/${EVENT_KEY}`,
+      { headers: { cookie, accept: "application/json" } },
+      { ...env, SESSION_STORE: store },
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("cache-control")).toContain("private");
+    expect(res.headers.get("vary")).toContain("Accept");
+    const requestId = res.headers.get("x-request-id");
+    expect(requestId).toBeTruthy();
+    expect(await res.json()).toEqual({
+      error: "db_unavailable",
+      message: "The service is temporarily unavailable. Try again shortly.",
+      request_id: requestId,
+    });
+  });
+});
