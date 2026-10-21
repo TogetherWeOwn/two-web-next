@@ -368,6 +368,7 @@ describe("savable games: Kit member-board load (seam)", () => {
       expect(queueBoardViewFn).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ boardKey: "members", resultCount: 3 }),
+        undefined,
       );
       expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
     },
@@ -391,6 +392,7 @@ describe("savable games: Kit member-board load (seam)", () => {
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ boardKey: "members", resultCount: 0 }),
+      undefined,
     );
   });
 
