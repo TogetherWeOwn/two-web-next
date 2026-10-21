@@ -16,4 +16,12 @@
 
 The independently authored `test/kit-admin-create-content-fields-acceptance.test.ts` compiles the real component, serializes its emitted controls into the real Hono 422 path, and pins optionality, hostile text, Unicode boundaries, error associations, progressive limits, draft behavior, recurrence, timezone and refusal-before-effects. It is consumed unchanged.
 
-Capture and open fresh, populated and field-error states at both viewport widths before and after implementation, with application JavaScript disabled. A fixture component capture is not an authenticated deployed-route journey. The Kit GET remains disabled. Existing Hono a11y, Lighthouse and public visual gates do not exercise this Kit page; report their results separately and do not relax thresholds or accept unrelated baseline changes.
+Captured and opened fresh, populated and field-error states at both viewport widths before and after implementation, with application JavaScript disabled. These are actual component SSR captures with the existing stylesheet and synthetic content, in the fixture's light theme. They are not an authenticated Worker or deployed-route journey. The Kit GET remains disabled. Existing Hono a11y, Lighthouse and public visual gates do not exercise this Kit page; report their results separately and do not relax thresholds or accept unrelated baseline changes.
+
+| State | Before desktop / mobile | After desktop / mobile |
+| --- | --- | --- |
+| Fresh | [1280](evidence/kit-admin-create/before-fresh-desktop.png) / [390](evidence/kit-admin-create/before-fresh-mobile.png) | [1280](evidence/kit-admin-create/after-fresh-desktop.png) / [390](evidence/kit-admin-create/after-fresh-mobile.png) |
+| Populated | [1280](evidence/kit-admin-create/before-populated-desktop.png) / [390](evidence/kit-admin-create/before-populated-mobile.png) | [1280](evidence/kit-admin-create/after-populated-desktop.png) / [390](evidence/kit-admin-create/after-populated-mobile.png) |
+| Field errors | [1280](evidence/kit-admin-create/before-field-error-desktop.png) / [390](evidence/kit-admin-create/before-field-error-mobile.png) | [1280](evidence/kit-admin-create/after-field-error-desktop.png) / [390](evidence/kit-admin-create/after-field-error-mobile.png) |
+
+All six after states retain native form values and have associated labels, working summary targets, keyboard order and no horizontal overflow. A separate axe run on each rendered state found no WCAG A/AA violations. No visual regression baseline was changed. The create-only rendering reuses aria/error plumbing and one static island insertion, omits redundant native text-input defaults, and avoids single-use derived values to fit the unchanged Kit bundle budget.
