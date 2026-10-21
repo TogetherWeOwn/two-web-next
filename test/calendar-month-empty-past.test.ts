@@ -120,7 +120,9 @@ function calendarFixture(args: {
           .map((r) => [r.discordEventId]),
       };
     }
-    if (sql.includes('"starts_at" >=')) return { rows: monthRows.map(encode) };
+    // The month-grid read is the only one with a bound starts_at upper bound
+    // (`starts_at < $n`): rank counts compare against a subquery instead.
+    if (sql.includes('"starts_at" < $')) return { rows: monthRows.map(encode) };
     let rows = /"ends_at" </.test(sql) ? past : upcoming;
     // Simulate the PostgreSQL isfinite() guard: when the query carries it,
     // true infinity rows never occupy SQL limit slots. Filter before the
