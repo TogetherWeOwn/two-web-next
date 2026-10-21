@@ -239,7 +239,7 @@ describe("recovery outcomes through the injected renderer", () => {
     expect(set).toMatch(/SameSite=Lax/i);
   });
 
-  it("GET /auth/recover keeps status, journey cookies, copy and shell through the refactor", async () => {
+  it("GET /auth/recover keeps status, the intended cookie, copy and shell through the refactor", async () => {
     const probe = new Hono();
     probe.get("/auth/recover", (c) => recoveryLanding(c));
     const res = await probe.request("/auth/recover?next=%2Fprofile%3Fedit%3D1", {}, env);
@@ -251,7 +251,9 @@ describe("recovery outcomes through the injected renderer", () => {
     expectRecoveryShell(html);
     const set = res.headers.getSetCookie();
     expect(set.some((c) => c.startsWith("__Host-two_login_intended="))).toBe(true);
-    expect(set.some((c) => c.startsWith("__Host-two_expired_write="))).toBe(true);
+    // The landing never mints the pending notice: only a genuine
+    // expired-write bounce arms it.
+    expect(set.some((c) => c.startsWith("__Host-two_expired_write="))).toBe(false);
   });
 
   it("join denial renders the shared shell at 200 with no echo, no exchange and cleared journey cookies", async () => {

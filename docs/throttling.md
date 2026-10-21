@@ -111,7 +111,7 @@ RSVP writes use
 
 | Budget | Value | Constant | Buckets and routes |
 | --- | --- | --- | --- |
-| Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/index.tsx`](../src/index.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
+| Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `login-recover` (`GET /auth/recover`, oversized `?next=` skips spend), `qa-login` (`POST /auth/qa/:identity`) in [`src/index.tsx`](../src/index.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
 | Join | 10 / 60 s | `JOIN_THROTTLE_PER_MINUTE` with `JOIN_THROTTLE_BUCKET = "join"` in [`src/join/service.ts`](../src/join/service.ts) | `join:<clientKey>` shared by `GET /join/discord` and `GET /join/callback` in [`src/join/route-shared.ts`](../src/join/route-shared.ts) (`GET /join` lives in [`src/join/route-page.ts`](../src/join/route-page.ts)) |
 | Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/index.tsx`](../src/index.tsx), `event-write` on the moderator event writes in [`src/events/routes.tsx`](../src/events/routes.tsx) |
 | Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on profile writes |
