@@ -61,7 +61,11 @@ export const Join: FC<{
                   aria-labelledby="discord-presence-heading"
                   data-testid="join-widget-presence"
                 >
-                  <h2 id="discord-presence-heading">In {widgetSnapshot.name} now</h2>
+                  <h2 id="discord-presence-heading">
+                    {widgetSnapshot.stale
+                      ? `In ${widgetSnapshot.name} as of the last update`
+                      : `In ${widgetSnapshot.name} now`}
+                  </h2>
                   <p data-testid="join-widget-online">
                     <strong>{widgetSnapshot.presenceCount}</strong>{" "}
                     {widgetSnapshot.presenceCount === 1 ? "member online" : "members online"}
@@ -84,7 +88,11 @@ export const Join: FC<{
                       </ul>
                     </>
                   ) : (
-                    <p>No voice channels open right now.</p>
+                    <p>
+                      {widgetSnapshot.stale
+                        ? "No voice channels open as of the last update."
+                        : "No voice channels open right now."}
+                    </p>
                   )}
                   {/* Public page: aggregate presence only (count + channels). Member
                     names stay off this logged-out, indexed page per privacy

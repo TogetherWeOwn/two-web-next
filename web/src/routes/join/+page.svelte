@@ -57,7 +57,9 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
     <div class="join-preview">
       {#if widgetSnapshot}
         <section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">
-          <h2 id="discord-presence-heading">In {widgetSnapshot.name} now</h2>
+          <h2 id="discord-presence-heading">
+            {#if widgetSnapshot.stale}In {widgetSnapshot.name} as of the last update{:else}In {widgetSnapshot.name} now{/if}
+          </h2>
           <p data-testid="join-widget-online">
             <strong>{widgetSnapshot.presenceCount}</strong>{" "}
             {widgetSnapshot.presenceCount === 1 ? "member online" : "members online"}
@@ -73,7 +75,9 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
               {#each widgetSnapshot.channels as channel (channel.id)}<li>{channel.name}</li>{/each}
             </ul>
           {:else}
-            <p>No voice channels open right now.</p>
+            <p>
+              {#if widgetSnapshot.stale}No voice channels open as of the last update.{:else}No voice channels open right now.{/if}
+            </p>
           {/if}
           <!-- Public page: aggregate presence only (count + channels). Member
             names stay off this logged-out, indexed page per privacy policy v2;
