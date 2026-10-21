@@ -49,3 +49,26 @@ describe("wrong-type event timezone", () => {
     );
   });
 });
+
+describe("wrong-type accessibility notes", () => {
+  it.each([5, {}, ["Step-free entrance"], true])(
+    "refuses accessibility_notes %j with the field-specific 422 shape",
+    (accessibility_notes) => {
+      expect(errors(() => parseEventForm({ ...base, accessibility_notes }))).toEqual({
+        accessibility_notes: "The accessibility_notes must be text.",
+      });
+    },
+  );
+
+  it("keeps omitted, null and blank notes nullable", () => {
+    expect(parseEventForm({ ...base }).accessibilityNotes).toBeNull();
+    expect(parseEventForm({ ...base, accessibility_notes: null }).accessibilityNotes).toBeNull();
+    expect(parseEventForm({ ...base, accessibility_notes: "   " }).accessibilityNotes).toBeNull();
+  });
+
+  it("keeps storing valid accessibility notes", () => {
+    expect(
+      parseEventForm({ ...base, accessibility_notes: "Step-free entrance" }).accessibilityNotes,
+    ).toBe("Step-free entrance");
+  });
+});
