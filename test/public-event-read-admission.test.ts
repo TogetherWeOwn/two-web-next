@@ -209,12 +209,15 @@ describe("public event read admission", () => {
     expect((await f.request("/events")).status).toBe(503);
   });
 
-  it("does not change guest refusals on the session-only JSON endpoints", async () => {
+  it("keeps guest refusals on the session-only JSON endpoints under exhaustion", async () => {
     const f = fixture();
     await f.exhaust();
-    for (const path of ["/events.json", "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA"]) {
-      expect((await f.request(path)).status).toBe(401);
-    }
+    // /events.json joined the shared budget, so exhausted callers get the
+    // shared 429 before any session work (session-adjacent-read-budget-acceptance
+    // pins the envelope); the detail route keeps its pre-guard guest 401.
+    // Refused requests record no hit on either path.
+    expect((await f.request("/events.json")).status).toBe(429);
+    expect((await f.request("/events/01ARZ3NDEKTSV4RRFFQ69G5FAA")).status).toBe(401);
     expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
   });
 

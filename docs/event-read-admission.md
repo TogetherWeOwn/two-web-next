@@ -18,8 +18,12 @@ machine-shaped error payload.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
-change the session requirement or guest 401 responses on `/events.json` or
-`/events/:key`, the existing write/auth budgets, or `/up` readiness.
+change the session requirement or guest 401 responses on `/events/:key`, the
+existing write/auth budgets, or `/up` readiness. The session-adjacent reads
+`GET /auth/status`, `GET /auth/recover` and `GET /events.json` share the same
+bucket: the guard runs before their session, cookie and event-store work, so
+exhausted callers get the shared 429 while admitted responses (including guest
+401s on `/events.json`) are unchanged.
 The sitemap is admitted before database setup and its event scan; its static-only
 200 fallback on a database outage is unchanged. The database-free `/robots.txt`
 and `/openapi.json` routes remain unguarded.
