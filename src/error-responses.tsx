@@ -9,6 +9,7 @@ import {
   InternalErrorPage,
   MaintenancePage,
   NotFoundPage,
+  OwnProfileOnlyPage,
   PayloadTooLargePage,
   RateLimitedPage,
 } from "./error-pages";
@@ -21,6 +22,7 @@ import {
   memberReadActive,
 } from "./member-reads";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
+import { acceptsJson } from "./media-type";
 import { requestRoute, safeRequestId } from "./request-log";
 
 function supportReference(c: Context): string | undefined {
@@ -272,18 +274,44 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
   varyAccept(c);
   c.status(503);
   if (jsonOnly || jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
-    const requestId = supportReference(c);
-    return c.json({
-      error: "db_unavailable",
-      message: "The service is temporarily unavailable. Try again shortly.",
-      ...(requestId === undefined ? {} : { request_id: requestId }),
-    });
+    return c.json(outageJsonBody(c));
   }
   return c.html(
     <MaintenancePage
       inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
       supportReference={supportReference(c)}
     />,
+  );
+}
+
+function outageJsonBody(c: Context) {
+  const requestId = supportReference(c);
+  return {
+    error: "db_unavailable",
+    message: "The service is temporarily unavailable. Try again shortly.",
+    ...(requestId === undefined ? {} : { request_id: requestId }),
+  };
+}
+
+// Buffered twin of databaseUnavailable for responses built INSIDE a
+// memberReadBoundary (profile reads, event detail): the same negotiated
+// outage envelope, released through the capture instead of beside it. A
+// direct databaseUnavailable call here would fail the capture.response
+// identity check and refuse the page it just built.
+export function databaseUnavailableBuffered(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(503);
+  if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
+    return bufferedMemberJson(c, outageJsonBody(c), 503);
+  }
+  return bufferedMemberHtml(
+    c,
+    <MaintenancePage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />,
+    503,
   );
 }
 
@@ -379,6 +407,23 @@ export function forbidden(c: Context): Response | Promise<Response> {
     />
   );
   return memberReadActive() ? bufferedMemberHtml(c, page, 403) : c.html(page);
+}
+
+// 403 for a signed-in member writing another member's profile (profile write
+// admission; UserPolicy::updateProfile is owner-only). Only the member's own
+// profile can be edited, so the recovery links back to the viewer's profile —
+// never the join-to-unlock path and never the refused target. JSON callers get
+// the machine envelope (the write-path 422 pattern: any exact JSON range
+// selects JSON); browsers get the branded page. Always private no-store +
+// Vary: Accept. No session, store or target reads.
+export function nonOwnerProfileWrite(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(403);
+  if (acceptsJson(c.req.header("accept"))) {
+    return c.json({ error: "forbidden", message: "You can only edit your own profile." });
+  }
+  return c.html(<OwnProfileOnlyPage />);
 }
 
 // Branded 410 for explicitly retired documents. Unknown and
