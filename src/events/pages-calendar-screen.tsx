@@ -10,6 +10,11 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_READ_CLEAR_COPY,
+  EVENTS_READ_CLEAR_TESTID,
+  EVENTS_READ_RETRY_COPY,
+  EVENTS_READ_RETRY_TESTID,
+  EVENTS_READ_STATUS_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
   calendarSearching,
@@ -160,6 +165,20 @@ export const EventsCalendarPage: FC<{
 
         {/* Beside the search box, so the over-limit notice shows where the query is typed. */}
         <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
+
+        {/* Failed-read recovery host: hidden and inert until the binder observes
+            a failed read, then names the missed destination beside the kept
+            last-good zones with an explicit retry and a safe return. Outside
+            the swapped zones so fragment turns never re-create it. */}
+        <div>
+          <p role="status" data-testid={EVENTS_READ_STATUS_TESTID} />
+          <button type="button" class="link" data-testid={EVENTS_READ_RETRY_TESTID} hidden>
+            {EVENTS_READ_RETRY_COPY}
+          </button>{" "}
+          <button type="button" class="link" data-testid={EVENTS_READ_CLEAR_TESTID} hidden>
+            {EVENTS_READ_CLEAR_COPY}
+          </button>
+        </div>
 
         <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
 
