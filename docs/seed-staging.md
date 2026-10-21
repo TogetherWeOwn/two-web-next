@@ -22,7 +22,8 @@ SEED_CONFIRM=staging npm run seed:staging -- --apply
 ```
 
 `--dry-run` is optional; unknown flags, positional URLs, and mixed modes fail.
-`DATABASE_URL` is read **only from env**. The script never loads `.env` or prints
+`--help` prints usage to stdout and validates nothing. `DATABASE_URL` is read
+**only from env**. The script never loads `.env` or prints
 credentials/connection strings. Do not paste a real connection URL into shell
 history, a card, or a log; use the authorized environment/secret injection.
 

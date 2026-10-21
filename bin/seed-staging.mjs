@@ -37,12 +37,14 @@ const list = (value = "") =>
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 
+const USAGE =
+  "Usage: node bin/seed-staging.mjs [--dry-run | --apply] [--help]. Connection settings come from env only.";
+
 export function parseMode(args) {
+  if (args.includes("--help")) return "help";
   if (args.length === 0 || (args.length === 1 && args[0] === "--dry-run")) return "dry-run";
   if (args.length === 1 && args[0] === "--apply") return "apply";
-  throw new Error(
-    "Usage: node bin/seed-staging.mjs [--dry-run | --apply]. Connection settings come from env only.",
-  );
+  throw new Error(USAGE);
 }
 
 export function validateEnvironment(env) {
@@ -297,6 +299,10 @@ export function createSeedClient(postgres, raw) {
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   const mode = parseMode(args);
+  if (mode === "help") {
+    console.log(USAGE);
+    return;
+  }
   const target = validateEnvironment(env);
   const seed = buildSeed();
   if (mode === "dry-run") {
