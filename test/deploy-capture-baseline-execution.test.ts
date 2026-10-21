@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 // behavior. No network here: only the fakes are on PATH, and the fake node
 // executes the block's real `node -e` fetch/validate program with fetch
 // stubbed to canned /up JSON, so validation mutants (a `> 0` comparison, a
-// mistyped field, a dropped type check) fail loudly instead of surviving.
+// dropped `>= 0` lower bound, a mistyped field, a dropped type check) fail
+// loudly instead of surviving.
 interface CaptureTarget {
   workflow: string;
   stepName: string;
@@ -88,10 +89,11 @@ const succeedOn = Number(process.env.CAPTURE_SUCCEED_ON_ATTEMPT);
 const failed = Number(process.env.CAPTURE_FAILED_COUNT);
 // Canned /up answers per attempt. The success attempt returns a healthy
 // payload; earlier attempts fail the way a real outage does, except attempts
-// 2 and 4, which return malformed payloads the validation must reject: a
-// string count and a float count (the float kills a dropped
-// Number.isInteger check; dropping the typeof check alone is unobservable
-// because isInteger already implies it).
+// 2, 4 and 5, which return malformed payloads the validation must reject: a
+// string count, a float count and a negative count (the float kills a dropped
+// Number.isInteger check, the negative kills a dropped f >= 0 lower bound;
+// dropping the typeof check alone is unobservable because isInteger already
+// implies it).
 globalThis.fetch = async () => {
   if (count === succeedOn) {
     return { json: async () => ({ queue: { failed } }) };
@@ -101,6 +103,9 @@ globalThis.fetch = async () => {
   }
   if (count === 4) {
     return { json: async () => ({ queue: { failed: 2.5 } }) };
+  }
+  if (count === 5) {
+    return { json: async () => ({ queue: { failed: -1 } }) };
   }
   throw new Error("fetch failed");
 };
