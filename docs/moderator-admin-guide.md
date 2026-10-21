@@ -296,6 +296,9 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
+   | Organizer name | Optional, at most 500 characters. Shown on the event page as Hosted by; name only a host who has agreed to be listed. |
+   | Public joining link | Optional, at most 2048 characters. Must be a public http(s) URL without sign-in credentials; shown on published pages as the joining link. |
+   | Joining instructions | Optional, at most 5000 characters. Verified public steps shown under How to join. |
    | Capacity | Empty = unlimited; otherwise a whole number from 1 to 2147483647. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
    | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
 
@@ -304,8 +307,9 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description, accessibility notes and location reject control/invisible
-   characters; ordinary emoji sequences are allowed.
+   description, accessibility notes, location, organizer name, joining link
+   and joining instructions reject control/invisible characters; ordinary
+   emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement

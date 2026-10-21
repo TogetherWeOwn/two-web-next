@@ -499,6 +499,7 @@ describe("staging smoke workflow safety", () => {
           `--discord-id=${values[0]}`,
           `--role-key=${values[1]}`,
           `--channel-key=${values[2]}`,
+          "--apply",
         ]);
       }
       // announcement_only drops the user and role arguments entirely.
@@ -511,6 +512,7 @@ describe("staging smoke workflow safety", () => {
         "--",
         "--announcement-only",
         `--channel-key=${values[2]}`,
+        "--apply",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -552,6 +554,24 @@ describe("production deployment preserves configured triggers", () => {
     expect(action).not.toContain("wrangler deploy --env production");
   });
 
+  it("never attaches production jobs from the automatic promotion lane", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    // The production consumers/crons move exactly once, by the authorized
+    // Operator transfer in docs/production-jobs-handoff.md (pause, detach
+    // the web Worker, attach two-web-jobs-production, resume). An automatic
+    // jobs deploy before that transfer completes would attach a second
+    // consumer beside the still-live web one, so the promotion lane must not
+    // reference the jobs config until the transfer's follow-up wires the
+    // steady-state jobs deploy deliberately.
+    expect(workflow).not.toContain("wrangler.jobs.jsonc");
+    expect(workflow).not.toContain("two-web-jobs-production");
+    // The drift probe stays unwired from the promotion lane until the
+    // post-transfer follow-up wires it deliberately: wiring it now would fail
+    // every production promotion while triggers are still web-owned. That
+    // follow-up removes this assertion when it adds the probe step.
+    expect(workflow).not.toContain("check-production-triggers");
+  });
+
   it("pins production crons and queue consumers to the reviewed config", () => {
     type Consumer = {
       queue?: unknown;
@@ -573,6 +593,12 @@ describe("production deployment preserves configured triggers", () => {
     const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
       triggers?: unknown;
       queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
     };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
@@ -581,19 +607,25 @@ describe("production deployment preserves configured triggers", () => {
     // blocks at once — fails CI until this test is updated in the same
     // release PR, and the runbook's "Production trigger reconciliation"
     // applies it without touching the apex custom domain.
-    expect(config.env?.production?.triggers).toEqual({
-      crons: ["*/10 * * * *", "0 0 * * *"],
-    });
-    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
-    // queue keeps exactly one consumer and a cron exactly one owner. Both
-    // schedules and both staging consumers live on two-web-jobs
-    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
-    // that split. env.production keeps its own cutover template below.
+    //
+    // Production handoff: the web production env only produces, so a queue
+    // keeps exactly one consumer and a cron exactly one owner. Both
+    // production schedules and both production consumers live on
+    // two-web-jobs-production (wrangler.jobs.jsonc env.production);
+    // test/jobs-worker-config.test.ts pins that split.
+    expect(config.env?.production?.triggers).toEqual({ crons: [] });
+    expect(config.env?.production?.queues?.consumers ?? []).toEqual([]);
+    // Staging handoff: the web Worker owns no cron and consumes no queue.
+    // Both schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level).
     expect(config.triggers).toEqual({ crons: [] });
     expect(config.queues?.consumers ?? []).toEqual([]);
     expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    expect(jobsConfig.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
     const stagingConsumers = jobsConfig.queues?.consumers ?? [];
-    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    const prodConsumers = jobsConfig.env?.production?.queues?.consumers ?? [];
     expect(
       [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
     ).toEqual([
