@@ -265,7 +265,7 @@ describe.each(archiveTwins)("%s past-archive edge links", (twin) => {
 
     expect(response.status).toBe(200);
     expect(eventKeys(body)).toEqual([]);
-    expect(body).toContain("No past events match your search.");
+    expect(body).toContain(`No past events match “${"x".repeat(255)}”.`);
   });
 
   it("keeps zero-match failed search distinct from out-of-range", async () => {
@@ -274,7 +274,7 @@ describe.each(archiveTwins)("%s past-archive edge links", (twin) => {
     const body = await (await requestArchive(twin, path, source.env, kit)).text();
 
     expect(eventKeys(body)).toEqual([]);
-    expect(body).toContain("No past events match your search.");
+    expect(body).toContain("No past events match “no such meeting”.");
     expect(body).not.toContain(PAST_EVENTS_OUT_OF_RANGE_TESTID);
     expect(linksIn(body).some((link) => link.label === "Clear search")).toBe(true);
     expect(body).toContain(`data-load-error="${PAST_EVENTS_COPY.failed}"`);
