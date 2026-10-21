@@ -63,6 +63,19 @@ test("default Playwright project ignores staging specs and wires a local-only te
   assert.match(teardown, /baseURL:\s*LOCAL_FIXTURE_ORIGIN/);
   assert.match(teardown, /ignoreHTTPSErrors:\s*true/);
   assert.doesNotMatch(teardown, /stagingOrigin|playwright\.staging\.config/);
+  // DB gate before the QA login (QA-LOGIN BUDGET FIX): the teardown must run
+  // the gate query and return early on an empty result BEFORE the login post,
+  // so clean runs spend 0 QA logins. No suite executes globalTeardown's
+  // branches, so deleting or inverting this branch must fail here.
+  assert.match(teardown, /liveLocalFixtureGateQuery\(\)/);
+  assert.match(teardown, /probe\.unsafe\(gate\.text,\s*gate\.values\)/);
+  assert.match(teardown, /if\s*\(live\.length\s*===\s*0\)\s*return;/);
+  const gateReturn = teardown.indexOf("live.length === 0");
+  const loginPost = teardown.indexOf('api.post("/auth/qa/qa-moderator"');
+  assert.ok(
+    gateReturn !== -1 && loginPost !== -1 && gateReturn < loginPost,
+    "teardown must return on an empty gate result before the QA-login POST",
+  );
 });
 
 test("database guard permits only the disposable CI target", () => {

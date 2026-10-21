@@ -14,6 +14,8 @@
 .event-theme .event-meta dt { font: 700 .9rem/1.4 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; color: var(--muted); letter-spacing: .06em; margin-bottom: .5rem; }
 .event-theme .event-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .event-theme .event-meta dd p { color: inherit; margin: 0; }
+.event-theme .event-device-timezone button { min-height: 44px; margin-top: .5rem; padding: 0; border: 0; background: transparent; color: var(--brand); font: inherit; text-decoration: underline; cursor: pointer; }
+.event-theme .event-device-timezone p:not(:empty) { margin-top: .5rem; font-size: .9rem; }
 .event-theme .event-rsvp { display: flex; justify-content: center; margin: 0 0 2rem; }
 .event-theme .event-rsvp > section { display: flex; flex-direction: column; align-items: center; gap: .75rem; border: 0; padding: 0; text-align: center; }
 .event-theme .event-rsvp form { display: flex; flex-direction: column; align-items: center; gap: .75rem; margin: 0; }
