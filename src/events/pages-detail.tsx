@@ -79,6 +79,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -182,6 +183,12 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
             </section>
           ) : null}
           {(e.status === "published" || e.status === "draft") &&

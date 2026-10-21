@@ -1,5 +1,5 @@
 {
-  "id": "5b12d2a2-9a0e-431c-802c-3bdfada2d8d4",
+  "id": "3d36f517-bcb4-4bec-ad74-6617aeb8a5dc",
   "prevId": "0bd696e5-5ada-4581-bb22-58f423f48f22",
   "version": "7",
   "dialect": "postgresql",
@@ -1651,6 +1651,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "accessibility_notes": {
+          "name": "accessibility_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "starts_at": {
           "name": "starts_at",
           "type": "timestamp with time zone",
@@ -1672,24 +1678,6 @@
         },
         "location": {
           "name": "location",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "organizer_name": {
-          "name": "organizer_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "join_url": {
-          "name": "join_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "join_instructions": {
-          "name": "join_instructions",
           "type": "text",
           "primaryKey": false,
           "notNull": false

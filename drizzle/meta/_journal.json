@@ -222,8 +222,15 @@
     {
       "idx": 31,
       "version": "7",
-      "when": 1792536929347,
-      "tag": "1031_event-public-join-details",
+      "when": 1792513834153,
+      "tag": "1031_event-accessibility-notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792547478687,
+      "tag": "1032_event-public-join-details",
       "breakpoints": true
     }
   ]

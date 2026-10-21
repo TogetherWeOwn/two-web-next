@@ -140,6 +140,21 @@ is not confirmation that your changes saved. Validation errors still use their
 normal field errors. If the outage continues, use the response's support reference
 when contacting the maintainers.
 
+## Busy inventory reads and retrying
+
+The event, featured-content and activity-log inventory lists each run inside
+one transaction with transaction-local `lock_timeout` and `statement_timeout`
+database bounds of two seconds each, covering the event list's second
+Going-count statement as well. These are per-statement bounds, not a
+whole-request deadline: each inventory statement gets its own budget, and the
+bounds expire with the transaction without changing pooled connection defaults.
+
+If an inventory statement times out, the read transaction rolls back before
+the existing private, no-store 503 outage response is returned. A refused
+inventory never renders as an empty list: wait briefly, then reload the page.
+If the outage continues, use the response's support reference when contacting
+the maintainers.
+
 ## Correct a rejected draft
 
 Event and featured-content create/edit forms show the actual validation errors
@@ -274,9 +289,13 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Title | Required, at most 100 characters. |
    | Game | Optional, at most 100 characters. |
    | Description | Optional, at most 1000 characters. |
+   | Accessibility notes | Optional, at most 1000 characters. Confirmed access details only; shown on the event page under Accessibility. |
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
+   | Organizer name | Optional, at most 500 characters. Shown on the event page as Hosted by; name only a host who has agreed to be listed. |
+   | Public joining link | Optional, at most 2048 characters. Must be a public http(s) URL without sign-in credentials; shown on published pages as the joining link. |
+   | Joining instructions | Optional, at most 5000 characters. Verified public steps shown under How to join. |
    | Capacity | Empty = unlimited; otherwise a whole number from 1 to 2147483647. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
    | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
 
@@ -285,8 +304,9 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description and location reject control/invisible characters; ordinary emoji
-   sequences are allowed.
+   description, accessibility notes, location, organizer name, joining link
+   and joining instructions reject control/invisible characters; ordinary
+   emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement
