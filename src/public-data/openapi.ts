@@ -130,7 +130,14 @@ export function getOpenApiDocument(appUrl: string) {
         "32 KiB; errors use { error: { code, message, request_id, next } } with code internal, " +
         "invalid_request, not_found, rate_limited or unavailable. request_id matches the " +
         "x-request-id response header for correlation; next names one safe action. " +
-        "On internal, retry the read; the envelope never carries exception text.",
+        "On internal, retry the read; the envelope never carries exception text. Freshness: a cache " +
+        "hit carries only the remaining freshness of the original 60s window — a hit " +
+        "just before expiry answers max-age=1, never a fresh full window — and a " +
+        "fresh miss re-arms the full 60s bound. Committed moderator or agent " +
+        "create, update, publish and cancel operations retire collection and " +
+        "detail entries in the mutating isolate at once (pause/reopen and RSVP " +
+        "writes stay TTL-bounded); same-isolate retirement is not a global " +
+        "edge purge, so every other isolate converges on TTL expiry.",
     },
     servers: [{ url: appUrl }],
     paths: {

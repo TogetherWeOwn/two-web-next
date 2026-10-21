@@ -7,6 +7,14 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import app from "./app";
+import { updateEvent } from "../src/admin/store-event-writes";
+import { parseEventForm } from "../src/admin/validation";
+import {
+  DEFAULT_CONFIG as AGENT_DEFAULT_CONFIG,
+  handleAgentEvent,
+  type IngressConfig,
+} from "../src/agent-events/service";
+import { sha256Hex } from "../src/bot/signer";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
@@ -20,6 +28,7 @@ import {
   API_PUBLIC_CACHE_TTL_MS,
   __resetApiPublicCacheForTests,
   readApiPublicCache,
+  retireApiPublicEventCache,
   writeApiPublicCache,
 } from "../src/public-data/cache";
 import {
@@ -33,6 +42,30 @@ import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { validatePublicSchema } from "./helpers/public-api-schema";
 
+// Deferred-reader gate for the overtaken-read pin below: the mocked
+// collection read resolves its rows first (so the in-flight request has
+// already seen pre-retirement bytes), then pauses on the test's promise
+// before returning to the route. Null unless a test arms it.
+const gates = vi.hoisted(() => ({
+  collection: null as null | { used: boolean; arrived: () => void; gate: Promise<void> },
+}));
+vi.mock("../src/events/reads", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/events/reads")>();
+  return {
+    ...original,
+    listPublicApiEvents: async (...args: Parameters<typeof original.listPublicApiEvents>) => {
+      const result = await original.listPublicApiEvents(...args);
+      const gate = gates.collection;
+      if (gate && !gate.used) {
+        gate.used = true;
+        gate.arrived();
+        await gate.gate;
+      }
+      return result;
+    },
+  };
+});
+
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
@@ -41,6 +74,12 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const key = (n: number) => String(n).padStart(26, "0");
 
 const MAX_BYTES = 32 * 1024;
+
+const maxAgeOf = (res: Response): number | null => {
+  const header = res.headers.get("cache-control");
+  const match = header ? header.match(/max-age=(\d+)/) : null;
+  return match ? Number(match[1]) : null;
+};
 
 describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
   let fixture: MemberDataFixture;
@@ -103,10 +142,15 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
         return eventStore();
       },
     } as unknown as Env & EnvWithThrottle;
+    await fixture.client.unsafe(
+      `INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash) VALUES ($1,'co',$2,$3)`,
+      [CALLER, agentCfg.stagingGuildId, await sha256Hex(agentToken)],
+    );
   });
   beforeEach(async () => {
     await fixture.reset();
     __resetApiPublicCacheForTests();
+    gates.collection = null;
     hits = [];
     eventStore.mockClear();
   });
@@ -147,6 +191,37 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
       })
     ).split(";")[0]!;
   };
+
+  // Agent ingress identity for the denials-retire-nothing pin (one grant per
+  // suite; events reset per test, grants persist because the fixture reset
+  // keeps grant tables).
+  const CALLER = "public-cache-agent-under-test";
+  const agentCfg: IngressConfig = {
+    ...AGENT_DEFAULT_CONFIG,
+    enabled: true,
+    callerAgentId: CALLER,
+    lockWaitMs: 1500,
+  };
+  const agentToken = `tok-public-cache-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  let idemCounter = 0;
+  const idemKey = () => `public-cache-${Date.now()}-${++idemCounter}`;
+
+  const agentCall = (body: unknown, token: string | null = agentToken) =>
+    handleAgentEvent(fixture.client, agentCfg, body, token);
+
+  const AGENT_FIELDS = {
+    title: "Agent public-cache proof",
+    game: "Helldivers 2",
+    description: "Uniquely labelled public-cache proof.",
+    starts_at: "2099-10-01 20:00",
+    ends_at: "2099-10-01 22:00",
+    timezone: "Europe/London",
+    location: "Voice: General",
+    capacity: 4,
+  };
+
+  const smuggleTitle = (eventKey: string, title: string) =>
+    fixture.client`update events set title = ${title} where event_key = ${eventKey}`;
 
   it("lists published events soonest-first with the shared 16-key projection", async () => {
     const [ev] = await db
@@ -401,7 +476,11 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     eventStore.mockClear();
     const cached = await get("/api/public/events", { headers: { "if-none-match": etag! } });
     expect(cached.status).toBe(304);
-    expect(cached.headers.get("cache-control")).toBe("public, max-age=60");
+    // Remaining TTL, rounded down, on a real clock: any elapsed millisecond
+    // makes a back-to-back hit answer 59, a same-instant hit answers 60. Same
+    // tolerance as the anonymous-card retire pins; exact values stay pinned
+    // under a fake clock.
+    expect(cached.headers.get("cache-control")).toMatch(/^public, max-age=(59|60)$/);
     expect(eventStore).not.toHaveBeenCalled();
   });
 
@@ -510,5 +589,158 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("rounds remaining max-age down at fractional offsets, never past expiry", async () => {
+    // A hit half a second before expiry must answer max-age=0: rounding up
+    // would keep the body fresh past the original deadline. Whole-second
+    // offsets still answer 1 (pinned by the acceptance suite).
+    await seed(203);
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      const first = await get("/api/public/events");
+      expect(first.status).toBe(200);
+      expect(maxAgeOf(first)).toBe(60);
+      await first.text();
+      nowSpy.mockReturnValue(t0 + 59_500);
+      const hit = await get("/api/public/events");
+      expect(hit.status).toBe(200);
+      expect(maxAgeOf(hit)).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("answers an overtaken pre-retirement read with a non-reusable cache-control", async () => {
+    // The generation fence refuses the deferred settle, but the overtaken
+    // response still answers its own pre-retire bytes: those bytes must not
+    // carry a reusable max-age downstream, or a cancelled event stays fresh
+    // in browsers and CDNs past the retire.
+    await seed(204, { title: "Old title" });
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let arrived!: () => void;
+    const arrivedAtGate = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    gates.collection = { used: false, arrived, gate };
+    try {
+      const inflight = get("/api/public/events");
+      await arrivedAtGate;
+      await smuggleTitle(key(204), "Smuggled title");
+      retireApiPublicEventCache();
+      releaseGate();
+      const overtaken = await inflight;
+      expect(overtaken.status).toBe(200);
+      expect(await overtaken.text()).toContain("Old title");
+      expect(overtaken.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+      // The refused settle left nothing shared: the next fetch re-reads.
+      expect(await (await get("/api/public/events")).text()).toContain("Smuggled title");
+    } finally {
+      releaseGate();
+      gates.collection = null;
+    }
+  });
+
+  it("retires collection and detail on a committed full-form updateEvent", async () => {
+    // The acceptance moderator-update test drives the JSON PATCH route
+    // (patchEvent); this pins the same retire on the live admin full-form
+    // edit path (updateEvent), which carries its own retire line.
+    await seed(205, { title: "Old title", location: "Voice" });
+    expect(await (await get("/api/public/events")).text()).toContain("Old title");
+    expect((await get(`/api/public/events/${key(205)}`)).status).toBe(200);
+    await smuggleTitle(key(205), "Smuggled title");
+    expect(await (await get("/api/public/events")).text()).toContain("Old title");
+
+    const actor = { id: "pin-moderator", username: "Pin Moderator" };
+    const { row } = await updateEvent(
+      fixture.db,
+      actor,
+      key(205),
+      parseEventForm({
+        title: "Full-form renamed night",
+        game: "Chess",
+        starts_at: "2099-11-04 20:00",
+        ends_at: "2099-11-04 22:00",
+        timezone: "Europe/London",
+        location: "Voice",
+        capacity: 8,
+      }),
+    );
+    expect(row.title).toBe("Full-form renamed night");
+
+    const after = await get("/api/public/events");
+    const html = await after.text();
+    expect(html).toContain("Full-form renamed night");
+    expect(html).not.toContain("Smuggled title");
+    expect(maxAgeOf(after)).toBe(60);
+    const detailAfter = await get(`/api/public/events/${key(205)}`);
+    expect(detailAfter.status).toBe(200);
+    expect(await detailAfter.text()).toContain("Full-form renamed night");
+  });
+
+  it("keeps entries on agent denials after re-warming past the committed create", async () => {
+    // Distinguishing shape: the committed create retires (cache empty), so
+    // the test re-warms with the smuggled bytes and smuggles again before
+    // the denials. A denial that retired would serve the second smuggle
+    // below; denials that retire nothing keep serving the first.
+    await seed(206, { title: "Old title", location: "Voice" });
+    expect(await (await get("/api/public/events")).text()).toContain("Old title");
+    await smuggleTitle(key(206), "Smuggled one");
+    expect(await (await get("/api/public/events")).text()).toContain("Old title");
+
+    const created = await agentCall({
+      op: "create",
+      idempotency_key: idemKey(),
+      fields: { ...AGENT_FIELDS, title: "Agent denial-cache fixture" },
+    });
+    expect(created.status).toBe(201);
+    const eventKey = (created.body as { event_key: string }).event_key;
+
+    expect(await (await get("/api/public/events")).text()).toContain("Smuggled one");
+    await smuggleTitle(key(206), "Smuggled two");
+
+    const read = await agentCall({
+      op: "read",
+      idempotency_key: idemKey(),
+      event_key: eventKey,
+    });
+    expect(read.status).toBe(200);
+    const stale = await agentCall({
+      op: "update",
+      idempotency_key: idemKey(),
+      event_key: eventKey,
+      version: 999001,
+      fields: AGENT_FIELDS,
+    });
+    expect(stale.status).toBe(409);
+
+    const invalid = await agentCall({
+      op: "update",
+      idempotency_key: idemKey(),
+      event_key: eventKey,
+      version: (read.body as { event: { agent_version: number } }).event.agent_version,
+      fields: { ...AGENT_FIELDS, title: "" },
+    });
+    expect(invalid.status).toBe(422);
+
+    const quota = await agentCall({
+      op: "create",
+      idempotency_key: idemKey(),
+      fields: AGENT_FIELDS,
+    });
+    expect(quota.status).toBe(409);
+
+    const wrongCaller = await agentCall(
+      { op: "read", idempotency_key: idemKey(), event_key: eventKey },
+      "tok-unknown-public-cache",
+    );
+    expect(wrongCaller.status).toBe(401);
+
+    // None of the denials retired: the re-warmed bytes stay served.
+    expect(await (await get("/api/public/events")).text()).toContain("Smuggled one");
   });
 });

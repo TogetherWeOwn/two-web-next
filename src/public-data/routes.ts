@@ -35,6 +35,7 @@ import {
   type PublicEventId,
 } from "./contracts";
 import {
+  apiPublicCacheGeneration,
   apiPublicCacheKey,
   readApiPublicCache,
   writeApiPublicCache,
@@ -250,17 +251,38 @@ export function fitByteBudget(
   }
 }
 
+/**
+ * Remaining TTL, rounded down: a hit served 59 s after the write tells the
+ * downstream cache `max-age=1`, never a fresh full window, so downstream
+ * freshness can never extend past the original expiry. A sub-second
+ * remainder — or a hit that crosses expiry between the cache read and this
+ * second clock sample — answers `max-age=0`: immediately stale, revalidate.
+ */
+function remainingMaxAge(expiresAt: number, now: number): number {
+  return Math.max(0, Math.floor((expiresAt - now) / 1000));
+}
+
 function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
+  const cacheControl = entry.headers["cache-control"]!.replace(
+    /max-age=\d+/,
+    `max-age=${remainingMaxAge(entry.expiresAt, Date.now())}`,
+  );
   if (matchesIfNoneMatch(c.req.header("if-none-match"), entry.headers.etag!)) {
     return c.body(null, 304, {
       etag: entry.headers.etag!,
-      "cache-control": entry.headers["cache-control"]!,
+      "cache-control": cacheControl,
     });
   }
-  return c.body(entry.body, 200, entry.headers);
+  // Fresh object: the stored headers stay untouched for the next hit.
+  return c.body(entry.body, 200, { ...entry.headers, "cache-control": cacheControl });
 }
 
-async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promise<Response> {
+async function servePublicJson(
+  c: Ctx,
+  cacheKey: string,
+  value: unknown,
+  expectedGeneration?: number,
+): Promise<Response> {
   const body = typeof value === "string" ? value : JSON.stringify(value);
   const etag = await etagFor(body);
   const headers = {
@@ -268,9 +290,17 @@ async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promis
     "cache-control": PUBLIC_MAX_AGE,
     etag,
   };
-  writeApiPublicCache(cacheKey, { status: 200, headers, body });
+  const settled = writeApiPublicCache(
+    cacheKey,
+    { status: 200, headers, body },
+    Date.now(),
+    expectedGeneration,
+  );
+  // Overtaken by a retire: answer our own bytes, but never as reusable —
+  // a full max-age here would keep pre-mutation bytes fresh downstream.
+  if (!settled) headers["cache-control"] = "public, max-age=0, must-revalidate";
   if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
-    return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"] });
   }
   return c.body(body, 200, headers);
 }
@@ -290,6 +320,9 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Fence: a retire that lands while this read is in flight refuses the
+    // settle below, so pre-retire bytes never refill the retired entry.
+    const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     // A refused socket reads as the 503 envelope; query, serializer and
@@ -321,7 +354,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body);
+    return servePublicJson(c, key, body, generation);
   });
 
   app.get("/api/public/events/:key", async (c) => {
@@ -334,6 +367,9 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const key = apiPublicCacheKey("GET", c.req.path, "");
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Fence: same as the collection route — a retire that lands mid-read
+    // refuses the settle, so a deferred 200 never resurrects a retired entry.
+    const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     // A refused socket reads as the 503 envelope; query, serializer and
@@ -358,7 +394,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body);
+    return servePublicJson(c, key, body, generation);
   });
 
   app.get("/api/public/community", async (c) => {
