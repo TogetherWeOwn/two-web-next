@@ -5,11 +5,14 @@
 // CustomEvent broadcast by the rsvp-button island after every successful
 // write, then re-reads the event page HTML (GET /e/<key>, text/html, with
 // the x-two-island fragment header so the server answers without rotating
-// the single-use session bearer) and swaps the
-// `[data-testid="event-attendees"]` section in place (no full reload). The
-// SSR section and its full-page Refresh link stay as the
-// no-JS fallback; this binder only patches nodes in place, never invents
-// markup beyond the bounded stale/retry signal.
+// the single-use session bearer) and swaps the roster section in place
+// (no full reload) across both member-visible identities: the populated
+// `[data-testid="event-attendees"]` list and the empty-roster
+// `[data-testid="event-roster-empty"]` placeholder. A first RSVP swaps
+// the placeholder for the list; a last withdrawal swaps back. The SSR
+// section and its full-page Refresh link stay as the no-JS fallback;
+// this binder only patches nodes in place, never invents markup beyond
+// the bounded stale/retry signal.
 //
 // Budget: one GET per answered event for this page's own key; non-matching
 // keys fire nothing. No polling. One automatic retry, then a visible
@@ -20,7 +23,12 @@
 // snaps back to page one.
 
 (function () {
+  // Both member-visible roster identities: the populated list and the
+  // empty-roster placeholder. Non-member placeholders (guest nudge,
+  // members-only) never match: those viewers hold no RSVP control, so no
+  // broadcast ever swaps them, and the island never invents them.
   var SECTION = '[data-testid="event-attendees"]';
+  var SECTION_EMPTY = '[data-testid="event-roster-empty"]';
   var STALE_TESTID = "event-attendees-stale";
   var RETRY_TESTID = "event-attendees-retry";
   var UPDATED = "going-count-updated";
@@ -91,7 +99,11 @@
   function findSection(doc) {
     var scope = doc || (typeof document !== "undefined" ? document : null);
     if (!scope || typeof scope.querySelector !== "function") return null;
-    return scope.querySelector(SECTION);
+    // Two single-selector queries, never a selector list: the minimal
+    // fake-DOM harnesses match exact selectors only, so a list would find
+    // nothing there while working in a real browser. At most one identity
+    // renders at a time, so list-first fallback is order-exact.
+    return scope.querySelector(SECTION) || scope.querySelector(SECTION_EMPTY);
   }
 
   function clearStale() {
@@ -219,7 +231,9 @@
   function restoreFocusAfterSwap(section) {
     var heading = null;
     try {
-      heading = section.querySelector("#event-attendees-heading");
+      heading =
+        section.querySelector("#event-attendees-heading") ||
+        section.querySelector("#event-roster-heading");
     } catch (_headingLookupIgnored) {
       heading = null;
     }
@@ -339,7 +353,11 @@
       }
     }
     if (!fresh && old) {
-      // The server renders no section for an empty roster.
+      // The fresh document carries no swappable roster section: a
+      // non-member placeholder (guest nudge / members-only) or none at
+      // all. An empty member roster renders event-roster-empty, which
+      // findSection matches via SECTION_EMPTY and swaps through the
+      // replace branch above.
       var refocusAfterPrune = focusedInside(old);
       try {
         if (old.parentNode) old.parentNode.removeChild(old);

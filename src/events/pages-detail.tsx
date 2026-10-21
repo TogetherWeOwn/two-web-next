@@ -79,6 +79,22 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  // One render instant for the RSVP verdict below and the RSVP block, so the
+  // roster invitations and the closed/paused notice can never disagree.
+  const now = new Date();
+  // Closed/paused verdict for the roster invitations: the same verdict
+  // RsvpButton renders (src/events/rsvp-button.tsx). Past, paused and draft
+  // events keep a plain honest empty line with no impossible RSVP
+  // invitation on the same page as the closed/paused notice.
+  const rsvpClosed =
+    e.status === "cancelled"
+      ? "cancelled"
+      : e.status === "draft"
+        ? "draft"
+        : e.status !== "published" || e.endsAt <= now
+          ? "past"
+          : null;
+  const rsvpUnavailable = rsvpClosed !== null || !e.rsvpOpen;
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -183,6 +199,7 @@ export const EventPage: FC<{
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
           attendeePage={attendeePage}
+          now={now}
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
@@ -314,6 +331,8 @@ export const EventPage: FC<{
                 </a>
                 .
               </>
+            ) : rsvpUnavailable ? (
+              <>No RSVPs.</>
             ) : (
               <>
                 No RSVPs yet —{" "}
@@ -336,11 +355,13 @@ export const EventPage: FC<{
         </section>
       ) : (
         // Member on an empty page-1 roster: honest empty state. Page>1 keeps
-        // the existing stale-page copy above. None of these states carries
-        // the attendees-live mount: the island only manages the member list.
+        // the existing stale-page copy above. Closed/paused events keep a
+        // plain line: the RSVP block on the same page already says no seat
+        // can be taken. None of these states carries the attendees-live
+        // mount: the island finds the member list by section identity.
         <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
           <h2 id="event-roster-heading">Who's going (0)</h2>
-          <p>No RSVPs yet — RSVP to start the list.</p>
+          {rsvpUnavailable ? <p>No RSVPs.</p> : <p>No RSVPs yet — RSVP to start the list.</p>}
         </section>
       )}
       <script src="/islands/copy-link.js" defer />

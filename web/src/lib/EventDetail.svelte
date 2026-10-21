@@ -53,6 +53,10 @@ const detailIslands = [
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
 const closed = $derived(model.rsvpClosed);
+// Roster invitations follow the same closed/paused verdict the RSVP block
+// renders: past, paused and draft events keep a plain honest empty line
+// with no impossible RSVP invitation.
+const rsvpUnavailable = $derived(closed !== null || !model.rsvpOpen);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
@@ -326,6 +330,8 @@ const lineup = $derived(
         {#if model.goingCount > 0}
           {model.goingCount} going —
           <a href={loginUrl(model.path)}>sign in to see who's in</a>.
+        {:else if rsvpUnavailable}
+          No RSVPs.
         {:else}
           No RSVPs yet —
           <a href={loginUrl(model.path)}>sign in to be the first</a>.
@@ -344,10 +350,16 @@ const lineup = $derived(
     </section>
   {:else}
     <!-- Member on an empty page-1 roster: honest empty state. Page>1 keeps the existing
-         stale-page copy above. None of these states carries the attendees-live mount. -->
+         stale-page copy above. Closed/paused events keep a plain line: the RSVP
+         block on the same page already says no seat can be taken. None of these
+         states carries the attendees-live mount. -->
     <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
       <h2 id="event-roster-heading">Who's going (0)</h2>
-      <p>No RSVPs yet — RSVP to start the list.</p>
+      {#if rsvpUnavailable}
+        <p>No RSVPs.</p>
+      {:else}
+        <p>No RSVPs yet — RSVP to start the list.</p>
+      {/if}
     </section>
   {/if}
   {@html detailIslands}

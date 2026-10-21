@@ -832,6 +832,90 @@ describe("Kit detail presentation", () => {
     expect(html).not.toContain("0 going —");
   });
 
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone", false],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+      false,
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
+    ["draft", { status: "draft" }, "Not published yet", true],
+  ])(
+    "renders a plain member empty line on %s, never an RSVP invitation",
+    async (_label, over, verdict, moderator) => {
+      // Hono parity: past, paused and draft events keep a plain honest empty
+      // line because the RSVP block on the same page already says no seat
+      // can be taken.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: null,
+        }),
+        moderator ? memberSession(MOD_ID, true) : memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(verdict);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No RSVPs.");
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone"],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
+  ])(
+    "renders a plain guest zero-RSVP line on %s, never a be-the-first nudge",
+    async (_label, over, rsvpCopy) => {
+      // Drafts 403 for non-moderators, so the draft guest has no roster
+      // surface to pin.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+        }),
+        GUEST,
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(rsvpCopy);
+      expect(html).toContain('data-testid="event-roster-guest-nudge"');
+      expect(html).toContain("No RSVPs.");
+      expect(html).not.toContain("sign in to be the first");
+    },
+  );
+
+  it("keeps the guest sign-in nudge on a past event with RSVPs they can still see", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "past" }), goingCount: 2 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("This one has been and gone");
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("2 going");
+    expect(html).toContain("sign in to see who's in");
+  });
+
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
