@@ -28,6 +28,7 @@
 // accepted here: it proves liveness only and is not a login token.
 import { generateSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
+import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
@@ -111,10 +112,12 @@ export async function resolveRequestSession(
   let row;
   try {
     row = await deps.store.get(await hashToken(raw));
-  } catch {
+  } catch (err) {
     // Fail closed to "unknown", never to a false logout: callers render the
     // session state as indeterminate (like Hono's sessionUnavailable guest
     // fallback) instead of telling a member they are logged out.
+    // One class-only warn (no Hono context here); callers must not re-warn it.
+    console.warn("kit session store unavailable", { exception: exceptionClass(err) });
     return UNKNOWN;
   }
   if (!row) return GUEST;
@@ -223,7 +226,11 @@ export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
       return decision.status === "authenticated" && decision.session
         ? { member: decision.session.member, moderator: decision.session.moderator }
         : null;
-    } catch {
+    } catch (err) {
+      // The store never materialized, so no read ran: one class-only warn.
+      // A store.get failure warns inside resolveRequestSession and resolves
+      // to UNKNOWN (null here), so this catch never double-warns it.
+      console.warn("kit events session store unavailable", { exception: exceptionClass(err) });
       return null;
     }
   };
@@ -249,7 +256,14 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
             sessionSecret: env.SESSION_SECRET,
             store: await storeForEnv(env),
           });
-        } catch {
+        } catch (err) {
+          // The store never materialized, so no read ran: one class-only
+          // warn, UNKNOWN with the journey kept. A store.get failure warns
+          // inside resolveRequestSession and resolves to UNKNOWN, so this
+          // catch never double-warns it.
+          console.warn("kit session bridge store unavailable", {
+            exception: exceptionClass(err),
+          });
           return UNKNOWN;
         }
       })(),

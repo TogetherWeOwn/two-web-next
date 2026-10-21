@@ -2,6 +2,7 @@
 // Normalized query + result count only: no user id, session, IP or raw input.
 // Fail-open: a down table degrades to an unrecorded search, never a broken page.
 import { count, desc, eq, max, asc, sql } from "drizzle-orm";
+import { exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -142,7 +143,7 @@ export async function topZeroResultSearches(
       // dashboard's shared 503 boundary, and the deadline below omits silently.
       // Class-only: a driver message can carry the DSN.
       console.warn("Event search unavailable for content-gap read; omitting the widget.", {
-        exception: err instanceof Error ? err.constructor.name : typeof err,
+        exception: exceptionClass(err),
       });
       return undefined;
     }

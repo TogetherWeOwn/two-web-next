@@ -451,6 +451,7 @@ describe("Tail delivery", () => {
   it("accepts only the staging, production and jobs app scripts, never a prefix of them", async () => {
     expect([...APP_SCRIPT_NAMES].sort()).toEqual([
       "two-web-jobs",
+      "two-web-jobs-production",
       "two-web-next",
       "two-web-next-production",
     ]);
