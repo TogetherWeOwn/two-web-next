@@ -50,7 +50,9 @@ describe("expected production topology", () => {
   it("derives the owner split from the reviewed configs", () => {
     const topology = expected();
     expect(topology.scripts[triggersProbe.WEB_SCRIPT]).toEqual({ crons: [] });
-    expect(topology.scripts[triggersProbe.JOBS_SCRIPT]).toEqual({ crons: [RECONCILE_CRON, PRUNE_CRON].sort() });
+    expect(topology.scripts[triggersProbe.JOBS_SCRIPT]).toEqual({
+      crons: [RECONCILE_CRON, PRUNE_CRON].sort(),
+    });
     expect(Object.keys(topology.queues).sort()).toEqual([INTERNAL, SYNC]);
     // max_batch_timeout 5 (seconds) maps to max_wait_time_ms 5000: copying
     // the raw 5 would set a 5 ms wait.
@@ -61,7 +63,9 @@ describe("expected production topology", () => {
   });
 
   it("fails closed on an unexpected config shape", () => {
-    const webConfig = { env: { production: { name: triggersProbe.WEB_SCRIPT, triggers: { crons: [] } } } };
+    const webConfig = {
+      env: { production: { name: triggersProbe.WEB_SCRIPT, triggers: { crons: [] } } },
+    };
     const jobsConfig = {
       env: {
         production: {
@@ -121,8 +125,14 @@ describe("partial-success fixtures", () => {
 
   it("fails the pre-transfer state: consumers and crons still on the web Worker", () => {
     const live = {
-      schedules: { [triggersProbe.WEB_SCRIPT]: [RECONCILE_CRON, PRUNE_CRON], [triggersProbe.JOBS_SCRIPT]: null },
-      consumers: { [SYNC]: [consumer(triggersProbe.WEB_SCRIPT)], [INTERNAL]: [consumer(triggersProbe.WEB_SCRIPT)] },
+      schedules: {
+        [triggersProbe.WEB_SCRIPT]: [RECONCILE_CRON, PRUNE_CRON],
+        [triggersProbe.JOBS_SCRIPT]: null,
+      },
+      consumers: {
+        [SYNC]: [consumer(triggersProbe.WEB_SCRIPT)],
+        [INTERNAL]: [consumer(triggersProbe.WEB_SCRIPT)],
+      },
     };
     const drift = triggersProbe.detectTriggerDrift(expected(), live);
     // The transfer's step-0 record asserts exactly this transitional diff:
@@ -135,7 +145,10 @@ describe("partial-success fixtures", () => {
 
   it("fails attach-before-detach: both Workers consume the same queue", () => {
     const live = cleanLive();
-    live.consumers[SYNC] = [consumer(triggersProbe.WEB_SCRIPT), consumer(triggersProbe.JOBS_SCRIPT)];
+    live.consumers[SYNC] = [
+      consumer(triggersProbe.WEB_SCRIPT),
+      consumer(triggersProbe.JOBS_SCRIPT),
+    ];
     const drift = triggersProbe.detectTriggerDrift(expected(), live);
     expect(drift).toHaveLength(1);
     expect(drift[0]).toContain("exactly one consumer");
@@ -174,7 +187,10 @@ describe("partial-success fixtures", () => {
   it("ignores extra live settings outside the three pinned fields", () => {
     const live = cleanLive();
     live.consumers[SYNC] = [
-      { script: triggersProbe.JOBS_SCRIPT, settings: { ...consumer(triggersProbe.JOBS_SCRIPT).settings, max_concurrency: 4 } },
+      {
+        script: triggersProbe.JOBS_SCRIPT,
+        settings: { ...consumer(triggersProbe.JOBS_SCRIPT).settings, max_concurrency: 4 },
+      },
     ];
     expect(triggersProbe.detectTriggerDrift(expected(), live)).toEqual([]);
   });
@@ -199,8 +215,11 @@ describe("live state reads", () => {
 
   const healthyRoutes = () => ({
     [`/workers/scripts/${triggersProbe.WEB_SCRIPT}/schedules`]: schedulesResponse([]),
-    [`/workers/scripts/${triggersProbe.JOBS_SCRIPT}/schedules`]: schedulesResponse([RECONCILE_CRON, PRUNE_CRON]),
-    "/queues": ok([
+    [`/workers/scripts/${triggersProbe.JOBS_SCRIPT}/schedules`]: schedulesResponse([
+      RECONCILE_CRON,
+      PRUNE_CRON,
+    ]),
+    "/queues?per_page=100": ok([
       { queue_id: "q-sync", queue_name: SYNC },
       { queue_id: "q-internal", queue_name: INTERNAL },
       { queue_id: "q-staging", queue_name: "two-sync-event" },
@@ -257,25 +276,38 @@ describe("live state reads", () => {
       triggersProbe.fetchLiveState({ ...base, accountId: "", fetchImpl: stubFetch({}) }),
     ).rejects.toThrow("CF_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required");
     const failing = healthyRoutes();
-    failing["/queues"] = {
+    failing["/queues?per_page=100"] = {
       status: 403,
       text: async () => JSON.stringify({ success: false, errors: [{ code: 10000 }] }),
     };
-    await expect(triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(failing) })).rejects.toThrow(
-      "queue list unreadable",
-    );
+    await expect(
+      triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(failing) }),
+    ).rejects.toThrow("queue list unreadable");
     const malformed = healthyRoutes();
     malformed[`/queues/q-sync/consumers`] = { status: 200, text: async () => "not json" };
-    await expect(triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(malformed) })).rejects.toThrow(
-      "unreadable response",
-    );
+    await expect(
+      triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(malformed) }),
+    ).rejects.toThrow("unreadable response");
     const cronless = healthyRoutes();
     cronless[`/workers/scripts/${triggersProbe.JOBS_SCRIPT}/schedules`] = ok({
       schedules: [{ created_on: "2026-10-21T00:00:00Z" }],
     });
-    await expect(triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(cronless) })).rejects.toThrow(
-      "unreadable schedules",
-    );
+    await expect(
+      triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(cronless) }),
+    ).rejects.toThrow("unreadable schedules");
+    const truncated = healthyRoutes();
+    truncated["/queues?per_page=100"] = {
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          success: true,
+          result: [{ queue_id: "q-sync", queue_name: SYNC }],
+          result_info: { total_count: 101, page: 1, per_page: 100 },
+        }),
+    };
+    await expect(
+      triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(truncated) }),
+    ).rejects.toThrow("queue list truncated");
   });
 
   it("triggersProbe.main() returns the drift lines without exiting", async () => {

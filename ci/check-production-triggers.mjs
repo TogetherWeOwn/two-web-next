@@ -14,7 +14,11 @@
 // Live state comes from read-only Cloudflare REST GETs (schedules per script,
 // queue list, consumers per queue). No mutation, no secret values, no DNS:
 // the token travels in the environment into fetch headers, never argv, and
-// only names, crons and setting numbers are printed.
+// only names, crons and setting numbers are printed. Producers are Worker
+// bindings compiled into the promoted version, so versions-promote deploys
+// them atomically — only schedules and consumers have a partial-success
+// mode, and only those are probed (the producer pins live in the config
+// tests).
 //
 // Exit codes: 0 no drift, 1 drift found (partial success), 2 unreadable input
 // or live state (fail closed). Before the one-time production jobs transfer
@@ -132,9 +136,20 @@ export async function fetchLiveState({ accountId, token, expected, fetchImpl = f
       );
     }
   }
-  const { data: queueData } = await getJson({ accountId, token, path: "/queues", fetchImpl });
+  const { data: queueData } = await getJson({
+    accountId,
+    token,
+    path: "/queues?per_page=100",
+    fetchImpl,
+  });
   if (queueData?.success !== true || !Array.isArray(queueData.result)) {
     throw new Error(`queue list unreadable: ${JSON.stringify(queueData?.errors ?? queueData)}`);
+  }
+  // One bounded page must cover the account: a truncated list could miss a
+  // production queue and misreport it as missing live.
+  const total = queueData.result_info?.total_count;
+  if (Number.isInteger(total) && queueData.result.length < total) {
+    throw new Error(`queue list truncated: ${queueData.result.length} of ${total} read`);
   }
   const ids = {};
   for (const queue of queueData.result) {
