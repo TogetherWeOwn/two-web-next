@@ -8,6 +8,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { getEventNeighbors, listRelatedEvents, type EventLink } from "../src/events/reads";
+import { fmt } from "../src/events/pages-shared";
 import {
   createMemorySessionStore,
   hashToken,
@@ -136,6 +137,14 @@ async function cookie(
 
 const relatedKeys = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="event-related-link"/g)].map((m) => m[1]);
+
+const cancelledAlternativesSection = (html: string): string => {
+  const match = html.match(
+    /<ul[^>]*data-testid="event-cancelled-alternatives"[^>]*>[\s\S]*?<\/ul>/,
+  );
+  if (!match) throw new Error("expected the cancelled alternatives list in the 410 HTML");
+  return match[0];
+};
 
 describe("event navigation SQL and SSR (local fixtures)", () => {
   it("uses three bounded, published, not-ended reads, with id tiebreaks and no RSVP aggregates", async () => {
@@ -367,6 +376,35 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(goneHtml).toContain('data-testid="event-cancelled-alternatives"');
     expect(goneHtml).toContain("Game night 3");
     expect(goneHtml).toContain('data-testid="event-cancelled-ics"');
+  });
+
+  it("renders each cancelled alternative's own time and zone, never a null location", async () => {
+    const cancelledEvent = row(2, { status: "cancelled" });
+    // Distinct instants and zones from the cancelled event, so a card that
+    // rendered the cancelled event's own fmt(e.startsAt, e.timezone) fails
+    // here; one venue sibling and one location-less sibling pin both sides
+    // of the location conditional.
+    const venueSibling = row(3, {
+      startsAt: new Date("2030-02-01T19:00:00Z"),
+      timezone: "America/New_York",
+      location: "The lobby",
+    });
+    const rovingSibling = row(5, {
+      startsAt: new Date("2030-03-01T19:00:00Z"),
+      timezone: "Europe/London",
+      location: null,
+    });
+    const html = await (
+      await pageFixture(cancelledEvent, null, null, [venueSibling, rovingSibling]).request()
+    ).text();
+    const section = cancelledAlternativesSection(html);
+    expect(section).toContain(fmt(venueSibling.startsAt, venueSibling.timezone));
+    expect(section).toContain(fmt(rovingSibling.startsAt, rovingSibling.timezone));
+    expect(section).toContain(" · The lobby");
+    // Neither card may repeat the cancelled event's own instant, and the
+    // location-less card must omit the venue, not print a literal null.
+    expect(section).not.toContain(fmt(cancelledEvent.startsAt, cancelledEvent.timezone));
+    expect(section).not.toContain("null");
   });
 
   it("escapes titles and locations without turning related cards into markup", async () => {
