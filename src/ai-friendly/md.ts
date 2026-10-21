@@ -327,7 +327,7 @@ export function llmsTxt(appUrl: string): string {
     "",
     "- There is no public listing of members: profiles are members-only and never appear here.",
     "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser, there are no remote tools.",
-    "- Event times render in each event's own timezone next to the UTC instant on each event page.",
+    "- Event pages show Starts and Ends in the event timezone with the UTC offset; invalid stored timezones fall back to ISO UTC.",
     "",
   );
   return out.join("\n");
