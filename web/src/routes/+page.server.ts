@@ -58,7 +58,15 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
       // cf-ray (safeRequestId inside the reader drops anything else).
       request.headers.get("cf-ray") ?? undefined,
     ),
-    cachedFeatured(env, () => dbFor({ env }), new Date()),
+    cachedFeatured(
+      env,
+      () => dbFor({ env }),
+      new Date(),
+      undefined,
+      // Same validated cf-ray correlation as the upcoming leg (safeRequestId
+      // inside the reader drops anything else), mirroring Hono's requestId.
+      request.headers.get("cf-ray") ?? undefined,
+    ),
   ]);
   return {
     session,
