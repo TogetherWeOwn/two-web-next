@@ -768,7 +768,9 @@ describe("kit event detail: join and RSVP entry points keep the join flow", () =
     const expected = loginUrl(joinReturnTo);
     expect(expected).toContain("/join/discord?next=");
     expect(html).toContain(`data-login-url="${expected}"`);
-    expect(html).toContain(`<a href="${expected}">Log in with Discord</a>`);
+    expect(html).toContain(
+      `<a href="${expected}" data-testid="rsvp-guest-signin">Log in with Discord</a>`,
+    );
     expect(html).not.toContain(`data-login-url="${ordinaryUrl(joinReturnTo)}"`);
   });
 
