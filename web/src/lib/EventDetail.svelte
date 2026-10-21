@@ -37,17 +37,23 @@ let { model }: { model: KitEventDetailModel } = $props();
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
-const rsvpIsland = '<script src="/islands/rsvp-button.js" defer></' + "script>";
-const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
-const goingCountIsland = '<script src="/islands/going-count.js" defer></' + "script>";
-const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' + "script>";
+// This route is csr=false. Share one native-island block in execution order;
+// every deferred script runs after parsing, with all of its mount nodes present.
+const detailIslands = [
+  "event-device-timezone",
+  "rsvp-button",
+  "copy-link",
+  "going-count",
+  "attendees-live",
+]
+  .map((name) => `<script src="/islands/${name}.js" defer></` + "script>")
+  .join("");
 
 // Server-decided RSVP closure: the resolver settles the verdict from the
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
 const closed = $derived(model.rsvpClosed);
-const occupancy = $derived(model.goingOccupancy);
-const full = $derived(model.capacity !== null && occupancy >= model.capacity);
+const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
@@ -121,9 +127,19 @@ const lineup = $derived(
   {/if}
   <dl class="event-meta" aria-label="Event details">
     <div>
-      <dt>When</dt>
+      <dt>Starts</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+      </dd>
+      <dd class="event-device-timezone" data-event-device-timezone>
+        <button type="button" hidden>Show in my device timezone</button>
+        <p role="status" aria-live="polite"></p>
+      </dd>
+    </div>
+    <div>
+      <dt>Ends</dt>
+      <dd>
+        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
     </div>
     {#if model.location}
@@ -193,7 +209,6 @@ const lineup = $derived(
         </form>
       {/if}
     </section>
-    {@html rsvpIsland}
   </div>
   <div class="event-detail-grid">
     <div>
@@ -225,10 +240,12 @@ const lineup = $derived(
       <h2 id="event-share-heading">Save the date</h2>
       <p>
         <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {" · "}
-        <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-          Google Calendar
-        </a>
+        {#if model.googleCalendarUrl}
+          {" · "}
+          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+            Google Calendar
+          </a>
+        {/if}
         {" · "}
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
@@ -289,9 +306,7 @@ const lineup = $derived(
       </p>
     </section>
   {/if}
-  {@html copyLinkIsland}
-  {@html goingCountIsland}
-  {@html attendeesLiveIsland}
+  {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">

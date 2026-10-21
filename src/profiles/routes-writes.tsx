@@ -5,7 +5,15 @@
 import { requestBodyLimit } from "../body-limit";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
+import {
+  BadRequestPage,
+  InternalErrorPage,
+  badRequest,
+  databaseUnavailable,
+  prefersHtmlError,
+  varyAccept,
+} from "../errors";
+import { inviteDestination } from "../invite";
 import {
   PROFILE_COPY,
   PROFILE_HONEY_FIELD,
@@ -71,13 +79,14 @@ export function registerWriteRoutes(
         input = { ...(await c.req.parseBody({ all: true })) };
       } else {
         c.header("cache-control", "private, no-store");
+        varyAccept(c);
+        if (prefersHtmlError(c)) return c.html(<BadRequestPage code="415" />, 415);
         return c.text("Unsupported Media Type", 415);
       }
     } catch {
-      return c.text("Bad request", 400);
+      return badRequest(c);
     }
-    if (typeof input !== "object" || input === null || Array.isArray(input))
-      return c.text("Bad request", 400);
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return badRequest(c);
     // `games` must be present (legacy `present|array`). Only a plain form
     // submission treats absence as a blank list; JSON must say so with `games: []`,
     // otherwise an omitted key would silently wipe the stored list.
@@ -105,6 +114,7 @@ export function registerWriteRoutes(
           isOwner
           isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
+          statsDraftWarning
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",
@@ -142,6 +152,17 @@ export function registerWriteRoutes(
         request_id: safeRequestId(c.get("requestId")),
       });
       if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
+      c.header("cache-control", "no-store, private");
+      varyAccept(c);
+      if (prefersHtmlError(c)) {
+        return c.html(
+          <InternalErrorPage
+            inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
+            supportReference={safeRequestId(c.get("requestId"))}
+          />,
+          500,
+        );
+      }
       return c.text("Could not save your profile.", 500);
     }
     if (acceptsJson(c.req.header("accept"))) {

@@ -69,7 +69,7 @@ const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_D
 // One auth-check weakening each. `find` must occur exactly once in `file`;
 // when the source drifts the mutant reports STALE instead of silently
 // mutating the wrong line.
-const MUTANTS = [
+export const MUTANTS = [
   {
     id: "S1-live-expiry-blind",
     file: "src/sessions.ts",
@@ -95,7 +95,7 @@ const MUTANTS = [
     id: "S4-revoke-noop",
     file: "src/sessions.ts",
     note: "revocation deletes the row: revoked tokens stay readable",
-    find: "async revoke(hash) {\n      rows.delete(hash);\n    },",
+    find: "async revoke(hash) {\n      rows.delete(hash);\n      dropGraceForToken(hash);\n    },",
     replace: "async revoke(hash) {\n    },",
   },
   {
@@ -227,9 +227,9 @@ const MUTANTS = [
     id: "R5-fetch-failure-admits",
     file: "src/roles.ts",
     note: "failed role lookup fails closed: the failure fabricates full membership",
-    find: "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);",
+    find: "        guild_id: opts.guildId,\n      });\n      return null;",
     replace:
-      "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => ({ roles: opts.moderatorRoleIds, joinedAt: null }));",
+      "        guild_id: opts.guildId,\n      });\n      return { roles: opts.moderatorRoleIds, joinedAt: null };",
   },
   {
     id: "R6-lookup-failure-admits",
@@ -382,7 +382,7 @@ function defaultKill(suite) {
   return { verdict: verdictFor(child), output };
 }
 
-export function runMutant(root, mutant, kill = defaultKill) {
+export function runMutant(root, mutant, kill = defaultKill, suite = KILL_SUITE) {
   const path = join(root, mutant.file);
   const before = readFileSync(path, "utf8");
   const beforeHash = sha(before);
@@ -413,7 +413,7 @@ export function runMutant(root, mutant, kill = defaultKill) {
   };
   let outcome;
   try {
-    const { verdict, output } = kill(KILL_SUITE);
+    const { verdict, output } = kill(suite);
     const { status, detail } = OUTCOME[verdict] ?? OUTCOME.error;
     outcome = { id: mutant.id, status, detail, output, ms: Date.now() - started };
   } finally {

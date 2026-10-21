@@ -337,7 +337,14 @@ describe("EventsCalendar review regressions", () => {
       const page = await src.request("/events", { headers: { cookie: auth.cookie } });
       expect(page.headers.get("cache-control")).toBe("private, no-store");
       expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-      expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+      // Rotation retires the active row but leaves its bounded predecessor grace.
+      expect(await auth.store.get(auth.hash)).toMatchObject({ member: true, moderator });
+      expect(await auth.store.statusHash(auth.hash)).toBeNull();
+      const replay = await src.request("/events", {
+        headers: { cookie: auth.cookie, ...fragmentHeaders },
+      });
+      expect(replay.headers.get("cache-control")).toBe("private, no-store");
+      expect(replay.headers.get("set-cookie")).toBeNull();
     },
   );
 
@@ -378,15 +385,16 @@ describe("EventsCalendar review regressions", () => {
       const html = await (await src.request("/events?q=" + encodeURIComponent(query))).text();
       expect(cardKeys(html)).toEqual(["discord-title", "discord-description"]);
       expect(html).not.toContain("Unrelated night");
-      expect(JSON.parse(String(spy.mock.calls.find((c) => c[0] === "event_search")![1]))).toEqual({
+      expect(spy.mock.calls.find((c) => c[0] === "event_search")![1]).toEqual({
         event: "event_search",
         query: normalizeEventSearch(query),
         results: 2,
+        request_id: expect.any(String),
       });
       const miss = await (await src.request("/events?q=no-match")).text();
       expect(miss).toContain(EVENTS_EMPTY_SEARCH_TESTID);
       expect(cardKeys(miss)).toEqual([]);
-      expect(JSON.parse(String(spy.mock.calls.at(-1)![1])).results).toBe(0);
+      expect(spy.mock.calls.at(-1)![1].results).toBe(0);
     },
   );
 
@@ -487,9 +495,9 @@ describe("EventsCalendar second-review regressions", () => {
       expect(cardKeys(html)).not.toContain("canonical");
       expect(cardKeys(html)).toHaveLength(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
       if (variant !== "past-limit") expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
-      expect(
-        JSON.parse(String(log.mock.calls.find((c) => c[0] === "event_search")![1])).results,
-      ).toBe(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+      expect(log.mock.calls.find((c) => c[0] === "event_search")![1].results).toBe(
+        variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0,
+      );
       const probe = src.queries.find((q) =>
         q.sql.startsWith('select "discord_event_id" from "events"'),
       )!;
@@ -978,12 +986,13 @@ describe("EventsCalendar SSR drift", () => {
     await calendar(up, [pastRow], okSource()).request("/events?q=%20%20JAM%20%20");
     const line = spy.mock.calls.find((c) => c[0] === "event_search");
     expect(line).toBeTruthy();
-    expect(JSON.parse(String(line![1]))).toEqual({
+    expect(line![1]).toEqual({
       event: "event_search",
       query: "jam",
       results: 2,
+      request_id: expect.any(String),
     });
-    expect(String(line![1])).not.toMatch(/user|session|ip/i);
+    expect(JSON.stringify(line![1])).not.toMatch(/user|session|ip/i);
     // No search, no line.
     spy.mockClear();
     await calendar(up, [], okSource()).request("/events");

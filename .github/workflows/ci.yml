@@ -118,6 +118,11 @@ jobs:
         with:
           node-version: 24
       - run: npm run docs:links
+      # Parse the Vitest sources on every change, including ledger-only edits.
+      # No install hooks or browser/database fixtures are needed by this gate.
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Timeout ledger ratchet (HARD)
+        run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
   a11y:
     name: a11y
@@ -227,6 +232,9 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
+      - name: Install Kit workspace dependencies (profile, error shell and device timezone render)
+        # Every browser fixture below SSR-compiles Svelte from the Kit workspace.
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Profile native 422 baseline regressions (memory fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -251,14 +259,30 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
-      - name: Install Kit workspace dependencies (Kit error shell render)
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Event start device timezone (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone.json "event device timezone browser acceptance" 30
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+      - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
+        run: |
+          npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json
+          for surface in hono-calendar hono-archive kit-calendar kit-archive; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
+          done
+      - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
+        env:
+          PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-device-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-device-timezone.json "profile device timezone in Chromium" 49
       - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
         env:
           ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
@@ -481,6 +505,9 @@ jobs:
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+      - name: Kit staging Worker config dry run (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
       - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-worker-e2e.mjs
@@ -551,6 +578,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
+      - name: Backup branch-target selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-branch-target-selftest.sh
       - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: bash ci/db-backup-argv-selftest.sh
@@ -560,6 +590,9 @@ jobs:
       - name: Backup restore-proof selftest (no network, no database)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-restore-proof/selftest.py
+      - name: Backup retention-plan selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-retention-plan-selftest.sh
       - name: Scrub QA token selftest (offline fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/scrub-qa-token-selftest
@@ -633,6 +666,9 @@ jobs:
       - name: Jobs secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-jobs-secrets.test.mjs
+      - name: Production trigger probe selftest (stubbed fetch, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-production-triggers.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lighthouse:origin:selftest
@@ -744,9 +780,16 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Node 22 progress diagnostics selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/node22-progress.test.mjs
       - name: Lint + typecheck + unit tests on Node 22.23.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm test
+        run: |
+          node ci/node22-progress.mjs "$$" &
+          diagnostics_pid=$!
+          trap 'kill "$diagnostics_pid" 2>/dev/null || :; wait "$diagnostics_pid" 2>/dev/null || :' EXIT
+          npm run lint && npm run typecheck && npm test
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres

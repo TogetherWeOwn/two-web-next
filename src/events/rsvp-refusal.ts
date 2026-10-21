@@ -12,6 +12,7 @@
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { RSVP_COPY, throttleWaitCopy } from "../islands/contracts-rsvp-button";
 import type { HtmlOutcome, HtmlOutcomeRenderer } from "../html-outcome";
+import { rsvpPageReturnPath } from "./attendee-paths";
 
 export interface RsvpRefusalModel {
   title: string;
@@ -52,10 +53,7 @@ export function rsvpRefusalModelFor(input: RsvpRefusalInput): RsvpRefusalModel {
   return {
     title: RSVP_COPY.failedTitle,
     message,
-    returnPath:
-      Number.isSafeInteger(page) && page > 1
-        ? `/e/${encodeURIComponent(input.eventKey)}?attendees=${page}`
-        : `/e/${encodeURIComponent(input.eventKey)}`,
+    returnPath: rsvpPageReturnPath(input.eventKey, page),
   };
 }
 

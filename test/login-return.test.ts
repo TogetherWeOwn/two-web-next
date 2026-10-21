@@ -675,7 +675,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
+    // Spread a fresh, empty memory store first so any member added to the
+    // SessionStore contract exists here too; the explicit overrides below
+    // still throw exactly as before.
     const failing: SessionStore = {
+      ...createMemorySessionStore(),
       create: async () => {
         throw new Error("store down");
       },

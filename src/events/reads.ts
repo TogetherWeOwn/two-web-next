@@ -34,7 +34,9 @@ import {
 import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
-export type PublicEvent = typeof events.$inferSelect & {
+export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
   goingCount: number;
   /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
    * `full` verdict, spots-left text and Going/waitlist CTA so the page never
@@ -613,7 +615,14 @@ export async function getEventNeighbors(
     .select({ startsAt: events.startsAt })
     .from(events)
     .where(eq(events.id, event.id));
-  const [previous, next] = await Promise.all([
+  // Both sub-reads must settle before this call settles: Promise.all
+  // rejects on the first failure while the sibling still holds the capture
+  // pending, and the member-read boundary refuses while pending !== 0 — a
+  // fast previous-rejection with a slow next query 503s the whole page even
+  // though the caller fails decorative reads open. allSettled drains both
+  // permits first; a failure still rejects so the caller's empty-shape belt
+  // (routes-detail, kit-detail) applies after the capture is quiet.
+  const [previousSettled, nextSettled] = await Promise.allSettled([
     nonSensitiveRead("events", () =>
       db
         .select(eventLinkColumns)
@@ -653,6 +662,10 @@ export async function getEventNeighbors(
         .limit(1),
     ),
   ]);
+  if (previousSettled.status === "rejected") throw previousSettled.reason;
+  if (nextSettled.status === "rejected") throw nextSettled.reason;
+  const previous = previousSettled.value;
+  const next = nextSettled.value;
   return { previous: previous[0] ?? null, next: next[0] ?? null };
 }
 
@@ -740,19 +753,13 @@ export function parseAttendeePageParam(raw: string | null | undefined): number {
   return normalizeAttendeePage(Number(raw));
 }
 
-/** Native attendee page URL: page 1 stays bare so first-page links reset the
- * section, like the roster's page-one convention. */
-export function attendeePageHref(eventKey: string, page: number): string {
-  return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
-}
-
-/** Encoded variant for POST destinations built from the routed :key param:
- * the key is encoded (route input) while the page stays a validated integer,
- * so malformed/unsafe page values can never escape the local destination. */
-export function rsvpPageReturnPath(eventKey: string, page: number): string {
-  const base = `/e/${encodeURIComponent(eventKey)}`;
-  return page > 1 ? `${base}?attendees=${page}` : base;
-}
+/** Native attendee page URLs (canonical builders in ./attendee-paths, shared
+ * with the renderers and the framework-free refusal core): page 1 stays bare
+ * so first-page links reset the section, like the roster's page-one
+ * convention. The return-path variant encodes the routed key while the page
+ * stays a validated integer, so malformed/unsafe page values can never escape
+ * the local destination. */
+export { attendeePageHref, rsvpPageReturnPath } from "./attendee-paths";
 
 /** Strict native-RSVP page resolution across the submitted carriers (action
  * query values plus the body attendees value). Missing carriers are absent;
@@ -909,7 +916,11 @@ export async function sitemapEvents(
 }
 
 /** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
-export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
+export async function listFeed(
+  db: Db,
+  statuses: ("published" | "cancelled")[],
+  now = new Date(),
+): Promise<Array<typeof events.$inferSelect>> {
   const rows = await db
     .select()
     .from(events)
@@ -927,7 +938,7 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
   return renderable;
 }
 
-export async function getEventRow(db: Db, key: string) {
+export async function getEventRow(db: Db, key: string): Promise<typeof events.$inferSelect | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   // Same refusal as the collection/single reads: a per-event export of an
   // unrenderable window would serve corrupt `NaN` instants, so it 404s.

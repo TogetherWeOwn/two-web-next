@@ -1,5 +1,17 @@
 # Legacy events and RSVPs import
 
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../README.md#database-and-migrations) and
+> [current database topology](db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
 `bin/import/events-rsvps.mjs` copies the frozen Laravel events and RSVPs into the
 migrated Next database. It does not call Discord, enqueue sync jobs, import users,
 copy sessions, or create agent grants. Import users first: member and creator
@@ -7,6 +19,10 @@ references are resolved from legacy `users.discord_id` to Next `users.id`
 (the Discord snowflake), never by legacy numeric IDs.
 
 ## Operator use
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+The invocation and cutover requirements below are retained CLI reference, not
+instructions to provision access, stop live writers or run a real import.
 
 Supply `LEGACY_DATABASE_URL` and `DATABASE_URL` through the operator's approved
 environment/secret injection. Do not put connection strings on the command line,

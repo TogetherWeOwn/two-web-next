@@ -75,6 +75,7 @@ const mergeCookies = (...headers: string[]) => {
 
 const JOIN_LOG = "discord token exchange failed on the join journey";
 const LOGIN_LOG = "discord sign-in failed";
+const THROTTLE_NULL_LOG = "Throttle store unavailable; allowing the request.";
 
 const JOIN_ROUTE = "/join/callback";
 const LOGIN_ROUTE = "/auth/discord/callback";
@@ -507,7 +508,13 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
       expect(recordsFor(logs, LOGIN_LOG).map((r) => r.args)).toEqual([
         [LOGIN_LOG, { ...rejectedUserMeta, request_id: res.headers.get("x-request-id") }],
       ]);
-      expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 1, error: 0 });
+      // DB-free env: both login throttles fail open with a null-store line
+      // before the sign-in failure line.
+      expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+        [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+        [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+      ]);
+      expect(channelCounts(logs)).toEqual({ log: 2, info: 0, debug: 0, warn: 3, error: 0 });
       expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
       expect(
         res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
@@ -933,6 +940,7 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
 
 describe("join callback: post-bot-success downstream failures stay redacted", () => {
   const MODERATOR_LOOKUP_LOG = "moderator recompute lookup failed";
+  const MODERATOR_TRANSPORT_LOG = "moderator recompute lookup transport failed";
   const MEMBER_PATH = "/api/v10/guilds/326474832151838730/members/42";
 
   type RecordedCall = { url: string; method: string };
@@ -998,7 +1006,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     return { logs, calls, res };
   }
 
-  it("moderator transport throw after a successful bot add: 302, non-moderator session, bounded stream", async () => {
+  it("moderator transport throw after a successful bot add: 302, non-moderator session, class-only transport warn, clean stream", async () => {
     const { fake, env: e } = isolatedJoin();
     const created = captureIssuedSessions(e);
     const { logs, calls, res } = await postBotRoundTrip(e, () => {
@@ -1021,8 +1029,13 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
     const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
     expect(await safeText(home)).toContain("Rick");
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
-    streamClean(logs, JOIN_ROUTE);
+    // The transport degrade warns once, class-only: the canary-bearing
+    // message and cause stay out of the line (streamClean pins that).
+    expect(recordsFor(logs, MODERATOR_TRANSPORT_LOG).map((r) => r.args)).toEqual([
+      [MODERATOR_TRANSPORT_LOG, { exception: "TypeError", guild_id: "326474832151838730" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
+    streamClean(logs, JOIN_ROUTE, [MODERATOR_TRANSPORT_LOG]);
     leakFree(
       await safeText(res),
       res.headers.get("location"),
@@ -1386,7 +1399,12 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(html).not.toContain("did not answer");
     expect(calls).toHaveLength(0); // no exchange is attempted for a consent refusal
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
+    // DB-free env: both login throttles fail open with a null-store line.
+    expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+      [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+      [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 2, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
     leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
@@ -1403,7 +1421,12 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
     const home = await app.request("/?n=signin_failed", {}, e);
     const html = await safeText(home);
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 0, error: 0 });
+    // DB-free env: both login throttles fail open with a null-store line.
+    expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+      [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+      [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 2, error: 0 });
     streamClean(logs, LOGIN_ROUTE);
     leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
@@ -1424,7 +1447,12 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       request_id: res.headers.get("x-request-id"),
     });
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
+    // DB-free env: both login throttles fail open with a null-store line.
+    expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+      [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+      [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 3, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
     leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
@@ -1450,7 +1478,12 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       ],
     ]);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
+    // DB-free env: both login throttles fail open with a null-store line.
+    expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+      [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+      [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 3, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
     leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });
@@ -1476,7 +1509,12 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       ],
     ]);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
-    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 1, error: 0 });
+    // DB-free env: both login throttles fail open with a null-store line.
+    expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
+      [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+      [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
+    ]);
+    expect(channelCounts(logs)).toEqual({ log: 3, info: 0, debug: 0, warn: 3, error: 0 });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
     leakFree(html, responseSurface(res), responseSurface(home), fake.attempts);
   });

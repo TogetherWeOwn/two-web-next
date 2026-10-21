@@ -1,21 +1,25 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { PRUNE_CRON, RECONCILE_CRON } from "../src/jobs/constants";
 import { STAGING_APP_URL, qaEnabled } from "../src/qa";
 
-// TOG-12247: the SvelteKit spike splits the runtime in two Workers that share
-// src/db and the domain modules. A queue has exactly one consumer and a cron
-// exactly one owner, so this pins the split: staging consumes in two-web-jobs
-// (wrangler.jobs.jsonc top level) after the handoff; the web Worker
-// (wrangler.jsonc top level) only produces, and both preview Workers stay off
-// the staging queues, routes and secrets. An accidental deploy must not steal
-// staging's consumers, double-run its crons, or page from an alert probe.
+// The SvelteKit Worker shares src/db and the domain modules with Hono. A queue
+// has exactly one consumer and a cron exactly one owner, so staging consumes in
+// two-web-jobs (wrangler.jobs.jsonc top level) and production consumes in
+// two-web-jobs-production (wrangler.jobs.jsonc env.production); the Hono
+// rollback config, the deployed Kit config and the web production env only
+// produce. Preview Workers stay off staging queues, routes and secrets. An
+// accidental deploy must not steal consumers, double-run crons, or page from
+// an alert probe.
+
+const PRODUCTION_APP_URL = "https://togetherweown.com";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
 const kit = readWranglerConfig(read("web/wrangler.jsonc"));
+const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 const main = readWranglerConfig(read("wrangler.jsonc"));
 const jobsEntry = read("src/jobs-worker.ts");
 
@@ -47,8 +51,11 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
     // Exactly one consumer per staging queue, on the jobs Worker only.
     expect(queueNames(jobs, "consumers")).toEqual(["two-sync-event", "two-internal-action"]);
     expect(queueNames(main, "consumers")).toEqual([]);
-    // Exactly one cron owner: the web Worker runs none.
+    expect(queueNames(stagingKit, "producers")).toEqual(queueNames(main, "producers"));
+    expect(queueNames(stagingKit, "consumers")).toEqual([]);
+    // Exactly one cron owner: both web configs run none after the handoff.
     expect(main.triggers?.crons).toEqual([]);
+    expect(stagingKit.triggers?.crons).toEqual([]);
   });
 
   it("keeps staging placement, tail paging and consumer backstops on the jobs Worker", () => {
@@ -95,6 +102,109 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
     expect(String(preview?.vars?.APP_URL)).toMatch(/\.invalid$/);
     expect(qaEnabled(String(preview?.vars?.APP_URL), "any-token")).toBe(false);
     expect(preview?.vars?.APP_URL).not.toBe(STAGING_APP_URL);
+  });
+});
+
+describe("production jobs split (wrangler.jobs.jsonc env.production)", () => {
+  const production = jobs.env?.production;
+  const webProduction = main.env?.production;
+
+  it("is a routeless production Worker that owns both production crons", () => {
+    expect(production?.name).toBe("two-web-jobs-production");
+    expect(production?.workers_dev).toBe(false);
+    expect(production?.preview_urls).toBe(false);
+    expect(production?.routes).toBeUndefined();
+    // Same schedules as staging: no renames, no extra crons.
+    expect(production?.triggers?.crons).toEqual([RECONCILE_CRON, PRUNE_CRON]);
+    // The web production env only produces after the transfer.
+    expect(webProduction?.triggers?.crons).toEqual([]);
+  });
+
+  it("consumes exactly the production queues with the staging backstops", () => {
+    const produced = queueNames(production ?? {}, "producers");
+    expect(produced).toEqual(queueNames(production ?? {}, "consumers"));
+    expect([...produced].sort()).toEqual([
+      "two-web-next-production-internal-action",
+      "two-web-next-production-sync-event",
+    ]);
+    expect(bindings(production ?? {})).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
+    // Same consumer backstops as staging: terminal outcomes are acked by the
+    // consumer; max_retries is only a backstop above the largest `tries`.
+    expect(production?.queues?.consumers).toEqual([
+      {
+        queue: "two-web-next-production-sync-event",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+      {
+        queue: "two-web-next-production-internal-action",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+    ]);
+    // Exactly one consumer per production queue, on the jobs Worker only.
+    expect(queueNames(webProduction ?? {}, "consumers")).toEqual([]);
+    // Producers keep the same bindings so the promoted web code talks to the
+    // production queues, never the staging ones.
+    expect(queueNames(webProduction ?? {}, "producers").sort()).toEqual([...produced].sort());
+  });
+
+  it("keeps production queues, database and paging disjoint from staging", () => {
+    const produced = queueNames(production ?? {}, "consumers");
+    // Production queues are disjoint from staging's and the preview's: no
+    // consumer theft across environments, ever.
+    for (const queue of produced) {
+      expect(queueNames(jobs, "consumers")).not.toContain(queue);
+      expect(queueNames(jobs.env?.preview ?? {}, "consumers")).not.toContain(queue);
+    }
+    // The production database: the same production Hyperdrive the web
+    // production Worker reads, never the staging one. No BOT_DB: the jobs
+    // Worker never reads bot views.
+    expect(production?.hyperdrive).toHaveLength(1);
+    expect(hyperdriveId(production ?? {})).toBe(hyperdriveId(webProduction ?? {}));
+    expect(hyperdriveId(production ?? {})).not.toBe(hyperdriveId(main));
+    // Jobs traces page through the production Tail pager, like the web
+    // production Worker.
+    expect(production?.tail_consumers).toEqual([{ service: "two-web-next-alerts-production" }]);
+    expect(production?.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
+  });
+
+  it("carries only the production APP_URL, so QA stays off and secrets stay out", () => {
+    expect(webProduction?.vars?.APP_URL).toBe(PRODUCTION_APP_URL);
+    expect(production?.vars?.APP_URL).toBe(PRODUCTION_APP_URL);
+    // qaEnabled() requires the staging APP_URL: it stays false here even
+    // with a token, and QA_AUTH_TOKEN stays unprovisioned on production.
+    expect(qaEnabled(String(production?.vars?.APP_URL), "any-token")).toBe(false);
+    expect(production?.vars).not.toHaveProperty("DISCORD_GUILD_ID");
+    expect(production?.vars).not.toHaveProperty("DISCORD_MODERATOR_ROLE_IDS");
+    expect(production?.vars).not.toHaveProperty("BOT_ENDPOINT_URL");
+    expect(production?.vars).not.toHaveProperty("BOT_KEY_ID");
+    expect(production?.vars).not.toHaveProperty("BOT_SHARED_SECRET");
+    expect(production?.vars).not.toHaveProperty("QA_AUTH_TOKEN");
+  });
+
+  it("leaves every web-family config produce-only, including future Kit production", () => {
+    // The transfer moves ownership off the web Worker for good: any present
+    // or future web/wrangler.*.jsonc (a Kit production config lands with the
+    // Kit promotion) must produce without consuming or owning crons, or its
+    // first deploy steals production consumers.
+    const files = readdirSync("web").filter((name) => /^wrangler.*\.jsonc$/.test(name));
+    expect(files.length).toBeGreaterThan(0);
+    for (const name of files) {
+      const config = readWranglerConfig(read(`web/${name}`));
+      expect(queueNames(config, "consumers"), name).toEqual([]);
+      expect(config.triggers?.crons ?? [], name).toEqual([]);
+      const envs: Record<
+        string,
+        { queues?: { consumers?: { queue: string }[] }; triggers?: { crons?: string[] } }
+      > = config.env ?? {};
+      for (const [envName, environment] of Object.entries(envs)) {
+        expect(queueNames(environment, "consumers"), `${name} env.${envName}`).toEqual([]);
+        expect(environment.triggers?.crons ?? [], `${name} env.${envName}`).toEqual([]);
+      }
+    }
   });
 });
 

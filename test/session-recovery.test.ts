@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { AUTH_STATUS_COOKIE, authStatusScript } from "../src/auth-status";
-import { EXPIRED_WRITE_COOKIE, expiredWriteBanner } from "../src/write-recovery";
+import {
+  EXPIRED_WRITE_COOKIE,
+  expiredWriteBanner,
+  expiredWriteBounce,
+} from "../src/write-recovery";
 import {
   fixtureDiscord,
   MEMBER,
@@ -37,38 +41,50 @@ describe("read-only bool-only auth status", () => {
     expect(await f.sessions.get(login.tokenHash)).not.toBeNull();
   });
 
-  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; old login is dead", async () => {
-    const f = recoveryFixture();
-    const login = await f.login();
-    const profile = await f.request("/profile", { headers: { cookie: login.cookie } });
-    const oldJar = mergeCookies(login.cookie, profile);
-    const rotating = await f.request("/", { headers: { cookie: oldJar } });
-    // Deliberately do not deliver rotating.headers to this cookie jar yet.
-    expect(await f.sessions.get(login.tokenHash)).toBeNull();
-    const probe = await f.request("/auth/status", { headers: { cookie: oldJar } });
-    expect(await probe.json()).toEqual({ authenticated: true });
-    expect(probe.headers.getSetCookie()).toEqual([]);
-    const replay = await f.request("/profile", { headers: { cookie: oldJar } });
-    expect(replay.status).toBe(302);
-    const probeOnly = await f.request("/profile", {
-      headers: { cookie: only(oldJar, AUTH_STATUS_COOKIE) },
-    });
-    expect(probeOnly.status).toBe(302);
-    const newJar = mergeCookies(oldJar, rotating);
-    expect((await f.request("/profile", { headers: { cookie: newJar } })).status).toBe(200);
-    const logout = await f.request("/logout", {
-      method: "POST",
-      headers: { cookie: newJar, origin: f.env.APP_URL },
-    });
-    expect(logout.status).toBe(303);
-    expect(
-      logout.headers
-        .getSetCookie()
-        .some((c) => c.startsWith(AUTH_STATUS_COOKIE + "=") && c.includes("Max-Age=0")),
-    ).toBe(true);
-    expect(await (await f.request("/auth/status", { headers: { cookie: oldJar } })).json()).toEqual(
-      { authenticated: false },
-    );
+  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; old login grace then dead", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2030-01-01T12:00:00Z"));
+      const f = recoveryFixture();
+      const login = await f.login();
+      const profile = await f.request("/profile", { headers: { cookie: login.cookie } });
+      const oldJar = mergeCookies(login.cookie, profile);
+      const rotating = await f.request("/", { headers: { cookie: oldJar } });
+      // Deliberately do not deliver rotating.headers to this cookie jar yet.
+      // Inside 10s the predecessor keeps grace with its successor live.
+      expect(await f.sessions.get(login.tokenHash)).toMatchObject({ userId: MEMBER });
+      const probe = await f.request("/auth/status", { headers: { cookie: oldJar } });
+      expect(await probe.json()).toEqual({ authenticated: true });
+      expect(probe.headers.getSetCookie()).toEqual([]);
+      const replay = await f.request("/profile", { headers: { cookie: oldJar } });
+      expect(replay.status).toBe(200);
+      const probeOnly = await f.request("/profile", {
+        headers: { cookie: only(oldJar, AUTH_STATUS_COOKIE) },
+      });
+      expect(probeOnly.status).toBe(302);
+      // Past grace the predecessor is a guest while its successor stays live.
+      vi.setSystemTime(Date.parse("2030-01-01T12:01:00Z"));
+      expect(await f.sessions.get(login.tokenHash)).toBeNull();
+      const replayAfter = await f.request("/profile", { headers: { cookie: oldJar } });
+      expect(replayAfter.status).toBe(302);
+      const newJar = mergeCookies(oldJar, rotating);
+      expect((await f.request("/profile", { headers: { cookie: newJar } })).status).toBe(200);
+      const logout = await f.request("/logout", {
+        method: "POST",
+        headers: { cookie: newJar, origin: f.env.APP_URL },
+      });
+      expect(logout.status).toBe(303);
+      expect(
+        logout.headers
+          .getSetCookie()
+          .some((c) => c.startsWith(AUTH_STATUS_COOKIE + "=") && c.includes("Max-Age=0")),
+      ).toBe(true);
+      expect(
+        await (await f.request("/auth/status", { headers: { cookie: oldJar } })).json(),
+      ).toEqual({ authenticated: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("expiry/revocation return false; a store outage is 503 rather than an authoritative logout", async () => {
@@ -117,6 +133,34 @@ describe("read-only bool-only auth status", () => {
 });
 
 describe("explicit expired-write recovery, never replay", () => {
+  it.each<{ headers: Record<string, string>; jsonOnly: boolean; status: number }>([
+    { headers: {}, jsonOnly: false, status: 303 },
+    { headers: { accept: "application/json" }, jsonOnly: false, status: 401 },
+    { headers: { "content-type": "application/json" }, jsonOnly: false, status: 401 },
+    { headers: {}, jsonOnly: true, status: 401 },
+  ])("the bounce itself forbids caching ($status, $headers, $jsonOnly)", async (test) => {
+    const app = new Hono();
+    app.post("/members/:user", (c) => expiredWriteBounce(c, test.jsonOnly));
+    const response = await app.request(
+      `https://next.example.test/members/${MEMBER}`,
+      { method: "POST", headers: test.headers },
+      { APP_URL: "https://next.example.test" },
+    );
+    expect(response.status).toBe(test.status);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.getSetCookie()).toEqual([]);
+    if (test.status === 303) {
+      expect(response.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
+    } else {
+      expect(response.headers.get("location")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: "Unauthorized",
+        recovery: "/auth/recover?next=%2Fprofile",
+      });
+    }
+  });
+
   it("an expired JSON PATCH remains 401 and native POST reaches durable recovery without any write", async () => {
     const f = recoveryFixture();
     const dead = await f.login(new Date(0));
@@ -132,6 +176,8 @@ describe("explicit expired-write recovery, never replay", () => {
       body: JSON.stringify({ bio: "Unsaved secret draft", games_text: "Go", timezone: "UTC" }),
     });
     expect(patch.status).toBe(401);
+    expect(patch.headers.get("cache-control")).toBe("no-store, private");
+    expect(patch.headers.get("vary")).toBe("Cookie");
     expect(await patch.json()).toEqual({
       error: "Unauthorized",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
@@ -148,8 +194,14 @@ describe("explicit expired-write recovery, never replay", () => {
       body: "_method=PATCH&bio=Unsaved+secret+draft",
     });
     expect(native.status).toBe(303);
+    expect(native.headers.get("cache-control")).toBe("no-store, private");
+    expect(native.headers.get("vary")).toBe("Cookie");
+    expect(native.headers.getSetCookie()).toEqual([]);
     expect(native.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
     const landing = await f.request(native.headers.get("location")!);
+    expect(landing.status).toBe(200);
+    expect(landing.headers.get("cache-control")).toBe("no-store, private");
+    expect(landing.headers.get("vary")).toBe("Cookie");
     expect(await landing.text()).toContain("Your earlier changes were not saved");
     const jar = mergeCookies("", landing);
     expect(jar).not.toContain("Unsaved");
@@ -169,6 +221,7 @@ describe("explicit expired-write recovery, never replay", () => {
     const response = await f.request("/auth/recover?next=" + encodeURIComponent(next));
     expect(await response.text()).toContain('href="/auth/discord?next=%2Fprofile"');
     expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(response.headers.get("vary")).toBe("Cookie");
   });
 
   it("OAuth returns to the safe original page, banner is consumed once, HEAD and audit failures leave it pending", async () => {

@@ -94,6 +94,66 @@
       "vars": {
         "APP_URL": "https://two-web-jobs-preview.invalid"
       }
+    },
+    // Production jobs owner: consumes the production queues and owns both
+    // production crons, mirroring the staging split (one consumer per queue,
+    // one cron owner). The web env.production only produces after the
+    // one-time transfer (docs/production-jobs-handoff.md); test/jobs-worker-config.test.ts
+    // pins the split. Queues, Hyperdrive and secrets are production-only:
+    // never a staging queue, the staging database, or a staging secret.
+    "production": {
+      "name": "two-web-jobs-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      // No routes: without routes or custom domains a jobs deploy never
+      // touches domain provisioning, so attaching consumers/crons here is
+      // domain-safe (the web production apex stays untouched).
+      "placement": { "mode": "off" },
+      // Page production jobs traces through the production Tail pager, like
+      // the web production Worker. Never inherited from the top level.
+      "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
+      // Not inherited from the top level: without this copy the jobs
+      // production log lines carry no build SHA.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      // Same schedules as staging (src/jobs/constants.ts): reconcile every
+      // ten minutes, prune daily at midnight.
+      "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
+      "queues": {
+        "producers": [
+          { "queue": "two-web-next-production-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "binding": "INTERNAL_ACTION_QUEUE"
+          }
+        ],
+        // Same backstops as staging and the pre-transfer web production
+        // consumer: terminal outcomes are acked by the consumer.
+        "consumers": [
+          {
+            "queue": "two-web-next-production-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
+        ]
+      },
+      // Production database: the same production Hyperdrive the web
+      // production Worker reads, never the staging one. No BOT_DB: the jobs
+      // Worker never reads bot views.
+      "hyperdrive": [{ "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" }],
+      // Least-required vars: production APP_URL only. qaEnabled() requires
+      // the staging APP_URL, so it stays false here. BOT_* and QA_AUTH_TOKEN
+      // are Operator-provisioned secrets, never in this file; QA_AUTH_TOKEN
+      // stays unprovisioned on production (staging probe only).
+      "vars": {
+        "APP_URL": "https://togetherweown.com"
+      }
     }
   }
 }

@@ -12,7 +12,7 @@ bot rewrite, framework ADR pending).
 |---|---|
 | Staging provider / plan | PlanetScale Postgres, AWS `us-east-1` (N. Virginia), staging branch |
 | Production provider / plan | PlanetScale Postgres HA, PS-10 arm, AWS `us-east-1` (N. Virginia), PG17 — per CEO region decision 2026-10-03 on [TOG-12212](/TOG/issues/TOG-12212) (supersedes [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 Frankfurt) |
-| Staging region and Worker placement | PlanetScale staging database is `us-east-1` (N. Virginia). The staging Workers are placed `aws:us-east-1` in `wrangler.jsonc` and `wrangler.jobs.jsonc`, beside the PlanetScale staging database: under the pre-repoint `aws:eu-central-1` pin (beside the retired Neon branch) each statement was a transatlantic Hyperdrive round trip (DB-bound requests against Neon: median 0.5-1.8 s, p95 3-4.6 s from US colos, 125-195 ms from CDG/AMS; live `/up` 1.32 s from the measuring host on 2026-10-15). Re-measure after the first deploy on the new placement. `env.production` sets `placement.mode = "off"`; pick its placement (likely `aws:us-east-1`) at cutover |
+| Staging region and Worker placement | PlanetScale staging database is `us-east-1` (N. Virginia). The staging Workers are placed `aws:us-east-1` in `web/wrangler.staging.jsonc` (Kit web) and `wrangler.jobs.jsonc` (jobs), beside the PlanetScale staging database: under the pre-repoint `aws:eu-central-1` pin (beside the retired Neon branch) each statement was a transatlantic Hyperdrive round trip (DB-bound requests against Neon: median 0.5-1.8 s, p95 3-4.6 s from US colos, 125-195 ms from CDG/AMS; live `/up` 1.32 s from the measuring host on 2026-10-15). Re-measure after the first deploy on the new placement. `env.production` sets `placement.mode = "off"`; pick its placement (likely `aws:us-east-1`) at cutover |
 | Branches | PlanetScale staging branch (username suffix `4vmu64sp52p4`) + PlanetScale production branch (username suffix `mmzi498bs6m5`) |
 | Web path | Workers → Hyperdrive (`DB` binding) → PlanetScale staging branch / production PlanetScale |
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → PlanetScale staging / production PlanetScale `5432` direct URL |
@@ -221,6 +221,12 @@ with `target: production`, behind the `production` Environment:
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
   Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+- Branch/target correspondence: `branch` must be empty (defaults to `target`),
+  equal to `target`, or `test-*`; staging↔production swaps and other overrides
+  refuse before provisioning or I/O. Local operators must declare
+  `BACKUP_TARGET=staging|production` matching `DATABASE_URL` for the same check
+  on all four script commands. Without that declaration, legacy local branch
+  behavior remains unchanged; the guard does not inspect or attest the URL.
 - Layout: `neon/<branch>-<branch>-<UTC>.dump` dailies — the `neon` R2 key
   prefix is retained deliberately so pre-rename manifests and archives stay
   addressable only until rotation prunes them (retention, below in this

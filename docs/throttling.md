@@ -126,12 +126,23 @@ runner IP, and each `qaLogin` in
 `qa-login:<clientKey>` bucket, so the 11th login inside one 60-second window
 is refused with the shared 429. The count lives in the `e2e/qa-login-budget`
 static guard (`e2e/qa-login-budget.test.mjs`, shipped with the local-smoke
-budget fix #665): it totals `qaLogin` call sites across the specs and fails when a
-run would exceed the budget — merge journeys onto fewer logins instead of
-retrying across the window. Bounded retry handling for an
+budget fix #665): it totals `qaLogin` call sites across the journey specs and
+pins every login outside them — the DB-direct teardown sweep, which holds no
+login call site at all, plus the parity step's one (pinned exactly; the
+renewal session is DB-minted) and the auth-perf step's pair. A 70 s workflow
+pacing sleep stands between the browser suite, the parity step, and the
+auth-perf step, so each 60 s window holds only its own step's logins. It fails
+when a run would exceed the budget — merge journeys onto fewer logins instead
+of retrying across the window. Bounded retry handling for an
 already-throttled staging login lives in
 [`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
-fails hard on the first 429.
+fails hard on the first 429. The public-reads budget has the same CI-sharing
+shape — every suite in the `browser-smoke` job lands in `events-read:anon` —
+but reads have no static call-site count, so the loopback workers raise the
+budget instead: `e2e/wrangler.jsonc` and the generated Kit fixture
+(`ci/kit-worker-dev.mjs`) set `E2E_PUBLIC_READ_BUDGET` to `600` while
+production keeps 60 (see
+[`event-read-admission.md`](event-read-admission.md)).
 
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb

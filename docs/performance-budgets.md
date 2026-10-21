@@ -201,17 +201,16 @@ critical journeys on the same seeded disposable Postgres:
 
 | Journey | Request | Session | Budget (server response) |
 |---|---|---|---|
-| member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 1500 ms, slowest sample 3000 ms |
-| moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 1500 ms, slowest sample 3000 ms |
+| member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 500 ms, slowest sample 1000 ms |
+| moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 500 ms, slowest sample 1000 ms |
 
-`ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, 3 samples
-each) mints exactly one QA session per identity, replays the
+`ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, at least five
+samples each; the parser rejects smaller sample counts) mints exactly one QA session per identity, replays the
 `__Host-two_session` cookie with rotation like the browser journeys, and
 asserts status 200 **plus** authenticated content (signed-in account chrome on
 the detail page, administration nav on the admin list — a published event
 answers 200 to guests too, so status alone is not session proof) before it
-measures. Ceilings are initial fail-closed budgets for the local worker;
-tightening is follow-up work. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
+measures. Ceilings are calibrated (see below) fail-closed budgets for the local worker. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
 `--selftest`: good fixtures pass, slow samples and cookie-stripped guest
 bodies fail, malformed budgets fail closed) runs in the `check` job; the
 live gate runs in browser-smoke and fails `e2e-ok` with it. Cookie stripped (`--mutant no-cookie`) goes red:
@@ -222,6 +221,30 @@ Local verification (hermetic only):
 npm run auth-perf:selftest
 node --test ci/check-auth-perf.test.mjs
 ```
+
+### Calibration evidence
+
+The first ceilings (median 1500 ms, slowest 3000 ms) were tightened to the
+values above after two independent runs of the `browser-smoke` job on the pinned
+`ubuntu-24.04` runner, against the workflow's disposable Postgres fixture, both on
+head `71866d4` (five status-200 samples per journey per run, server response ms):
+
+| Journey | Run | Samples | Median |
+|---|---|---|---|
+| member-rsvp | [39410396685](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39410396685) | 87, 93, 38, 37, 37 | 38 |
+| member-rsvp | [39414247798](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39414247798) | 100, 44, 46, 42, 40 | 44 |
+| moderator-admin | 39410396685 | 28, 20, 21, 19, 20 | 20 |
+| moderator-admin | 39414247798 | 24, 23, 23, 21, 22 | 23 |
+
+The slowest sample was 100 ms (member-rsvp, a cold first read) and 28 ms
+(moderator-admin). The 500 ms median ceiling is over 11x the highest measured
+member-rsvp run median (44 ms) and over 21x the highest moderator-admin run median
+(23 ms). The 1000 ms single-sample ceiling is 10x the slowest member-rsvp sample
+(100 ms) and over 35x the slowest moderator-admin sample (28 ms). This headroom
+absorbs runner variance while sustained median regressions above 500 ms fail. The
+anti-relaxation guard in `ci/check-auth-perf.test.mjs` now pins the new values as
+the upper bound. Limitation: two runs on one runner type; further tightening
+needs more runs, including cold-start samples.
 
 Never relax these ceilings to turn a build green; threshold changes need
 their own reviewed PR, like the Lighthouse thresholds above.
@@ -263,13 +286,21 @@ routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
 is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
 The retry also fires on the truncation signature of exit 0 with tail routes
 unmeasured, which the old single-shot runner failed closed on with no
-diagnosis. A full-evidence assert failure never retries. Every run writes
+diagnosis, and on a marginal `/` LCP breach: complete evidence where the only
+error-level assertion is the homepage `largest-contentful-paint` strictly
+inside (budget, budget * 1.1) with every other route pass or warn-only. The
+retry gates; the first attempt's table (`watch-summary.attempt1.md`) and
+per-run files (`marginal-attempt1/`) stay in the artifact next to the gating
+table, so both attempts are evidence. Any other full-evidence assert failure
+never retries, and a second breach stays red as systematic. Every run writes
 `.lighthouseci/origin-collect.log` (full lhci output) and, on failure,
 `.lighthouseci/origin-collect-diagnosis.md`, which says COLLECT FAILURE
 (short evidence, naming the routes short of runs: re-run the step, budgets
 untouched), BUDGET BREACH (full evidence plus an evaluated assertion miss:
 see `watch-summary.md`), or an unclassified step failure (full evidence, no
 assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
+The `watch-summary.md` medians table is followed by a per-sample table with
+every run's values for every route, including passes.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
@@ -323,12 +354,14 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 | `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |
 | `public/islands/avatar.js` | 287 / 213 | 512 / 512 |
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
-| `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
+| `public/islands/events-calendar.js` | 7180 / 2639 | 7680 / 2816 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
 | `public/islands/member-profile.js` | 9471 / 3500 | 12288 / 4608 |
 | `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
 | `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |
+
+2026-10-21: the `events-calendar.js` row now records the calendar month-jump merge (7180/2639 B); ceilings 7680/2816 B are the minimal steps covering it.
 
 The auth-status gzip ceiling uses the repository's ×1.25 rule on its recorded
 2026-10-10 baseline (1213 B → 1536 B). This approved headroom covers two

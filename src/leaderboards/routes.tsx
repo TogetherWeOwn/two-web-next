@@ -14,7 +14,13 @@ import { bufferedMemberHtml, memberReadBoundary } from "../member-reads";
 import { memberGate } from "../profiles/routes-gate";
 import type { Ctx, ProfileApp, ProfileDeps } from "../profiles/routes-shared";
 import type { ProfileStores } from "../profiles/routes-stores";
-import { boardRows, loadMemberRanking, parseActivityParam, parseScopeParam } from "./members";
+import {
+  boardRows,
+  loadMemberRanking,
+  parseActivityParam,
+  parseScopeParam,
+  type BoardRow,
+} from "./members";
 import { MemberBoardFilterErrorPage, MemberLeaderboardPage } from "./pages";
 
 export const MEMBER_BOARD_PATH = "/leaderboards/members";
@@ -43,8 +49,13 @@ export function registerMemberLeaderboardRoutes(
     const activity = parseActivityParam(c.req.query("activity") ?? null);
     if (!activity.ok) return refused(activity.message);
     const db = await dbFor(c);
-    const ranked = await loadMemberRanking(db, window, activity.game, scope.scope);
-    const rows = boardRows(ranked, scope.scope, viewer.id);
+    const ranked = await loadMemberRanking(db, window, activity.game, scope.scope, viewer.id);
+    // The relative read already returns its SQL-numbered window (BoardRow):
+    // only the overall ranking still needs numbering from the full list.
+    const rows =
+      scope.scope === "relative"
+        ? (ranked as BoardRow[])
+        : boardRows(ranked, scope.scope, viewer.id);
     const season = window.label;
     c.set("boardView", {
       db,
@@ -89,7 +100,7 @@ export function registerMemberLeaderboardRoutes(
     const view = c.get("boardView");
     if (!view || c.res.status !== 200) return;
     const { db, ...entry } = view;
-    await recordBoardView(db, entry).catch(() => {});
+    await recordBoardView(db, entry, undefined, c.get("requestId")).catch(() => {});
   });
   app.get(MEMBER_BOARD_PATH, render);
 }

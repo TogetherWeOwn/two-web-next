@@ -394,23 +394,25 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     // env.production declares the production approved Owner+Moderator pair;
     // Wrangler does not inherit top-level vars, so this entry is the one
-    // production boots with. The top level is the staging deploy: it carries
-    // the staging-guild pair, never the production one (role IDs are
-    // guild-scoped).
+    // production boots with. The deployed Kit staging config carries the
+    // staging-guild pair, never the production one (role IDs are guild-scoped).
     const parsed = readWranglerConfig(read("wrangler.jsonc"));
+    const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
     expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
     expect(parsed.env?.production?.vars?.DISCORD_GUILD_ID).toBe(PRODUCTION_GUILD_ID);
     expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
     expect(parsed.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
+    expect(stagingKit.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
+    expect(stagingKit.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
   });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
     const scripts = JSON.parse(read("package.json")).scripts;
     expect(scripts["check:worker-moderators"]).toContain(
-      "--config=wrangler.jsonc --require-configured",
+      "--config=web/wrangler.staging.jsonc --require-configured",
     );
     expect(deploy).toContain(
-      'run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"\n',
+      'run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}"',
     );
     const gate = deploy.indexOf("run: npm run check:worker-moderators");
     expect(gate).toBeGreaterThan(-1);
@@ -497,6 +499,7 @@ describe("staging smoke workflow safety", () => {
           `--discord-id=${values[0]}`,
           `--role-key=${values[1]}`,
           `--channel-key=${values[2]}`,
+          "--apply",
         ]);
       }
       // announcement_only drops the user and role arguments entirely.
@@ -509,6 +512,7 @@ describe("staging smoke workflow safety", () => {
         "--",
         "--announcement-only",
         `--channel-key=${values[2]}`,
+        "--apply",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -550,6 +554,24 @@ describe("production deployment preserves configured triggers", () => {
     expect(action).not.toContain("wrangler deploy --env production");
   });
 
+  it("never attaches production jobs from the automatic promotion lane", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    // The production consumers/crons move exactly once, by the authorized
+    // Operator transfer in docs/production-jobs-handoff.md (pause, detach
+    // the web Worker, attach two-web-jobs-production, resume). An automatic
+    // jobs deploy before that transfer completes would attach a second
+    // consumer beside the still-live web one, so the promotion lane must not
+    // reference the jobs config until the transfer's follow-up wires the
+    // steady-state jobs deploy deliberately.
+    expect(workflow).not.toContain("wrangler.jobs.jsonc");
+    expect(workflow).not.toContain("two-web-jobs-production");
+    // The drift probe stays unwired from the promotion lane until the
+    // post-transfer follow-up wires it deliberately: wiring it now would fail
+    // every production promotion while triggers are still web-owned. That
+    // follow-up removes this assertion when it adds the probe step.
+    expect(workflow).not.toContain("check-production-triggers");
+  });
+
   it("pins production crons and queue consumers to the reviewed config", () => {
     type Consumer = {
       queue?: unknown;
@@ -571,6 +593,12 @@ describe("production deployment preserves configured triggers", () => {
     const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
       triggers?: unknown;
       queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
     };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
@@ -579,19 +607,25 @@ describe("production deployment preserves configured triggers", () => {
     // blocks at once — fails CI until this test is updated in the same
     // release PR, and the runbook's "Production trigger reconciliation"
     // applies it without touching the apex custom domain.
-    expect(config.env?.production?.triggers).toEqual({
-      crons: ["*/10 * * * *", "0 0 * * *"],
-    });
-    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
-    // queue keeps exactly one consumer and a cron exactly one owner. Both
-    // schedules and both staging consumers live on two-web-jobs
-    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
-    // that split. env.production keeps its own cutover template below.
+    //
+    // Production handoff: the web production env only produces, so a queue
+    // keeps exactly one consumer and a cron exactly one owner. Both
+    // production schedules and both production consumers live on
+    // two-web-jobs-production (wrangler.jobs.jsonc env.production);
+    // test/jobs-worker-config.test.ts pins that split.
+    expect(config.env?.production?.triggers).toEqual({ crons: [] });
+    expect(config.env?.production?.queues?.consumers ?? []).toEqual([]);
+    // Staging handoff: the web Worker owns no cron and consumes no queue.
+    // Both schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level).
     expect(config.triggers).toEqual({ crons: [] });
     expect(config.queues?.consumers ?? []).toEqual([]);
     expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    expect(jobsConfig.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
     const stagingConsumers = jobsConfig.queues?.consumers ?? [];
-    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    const prodConsumers = jobsConfig.env?.production?.queues?.consumers ?? [];
     expect(
       [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
     ).toEqual([
@@ -631,9 +665,10 @@ describe("production deployment preserves configured triggers", () => {
 
 describe("deployed revision marker is bound per environment", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
+  const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 
-  it("binds version_metadata on staging, env.production and the jobs Worker", () => {
-    expect(config.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
+  it("binds version_metadata on staging Kit, env.production and the jobs Worker", () => {
+    expect(stagingKit.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     // Bindings are not inherited, so production declares its own copy: its
     // /up revision marker and release-tagged log lines depend on it.
     expect(config.env?.production?.version_metadata).toEqual({
@@ -653,7 +688,7 @@ describe("deployed revision marker is bound per environment", () => {
     expect(record).toBeGreaterThan(-1);
     expect(record).toBeLessThan(deploy.indexOf("npx wrangler queues create"));
     expect(verify).toBeGreaterThan(
-      deploy.indexOf("run: npx wrangler deploy --config wrangler.jsonc"),
+      deploy.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc"),
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.

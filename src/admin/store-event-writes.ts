@@ -26,9 +26,12 @@ import {
 } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
-import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
 
-export type EventRow = typeof events.$inferSelect;
+export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
+};
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
@@ -58,6 +61,7 @@ export async function createEvent(
   // no key field and parseEventForm refuses forged event_key/eventKey
   // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [parent] = await tx
       .insert(events)
       .values({
@@ -65,10 +69,14 @@ export async function createEvent(
         title: input.title,
         game: input.game,
         description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
         location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
         capacity: input.capacity,
         status: "draft",
         createdBy: actor.id,
@@ -151,10 +159,14 @@ export async function materializeMissingInstances(
         title: parent.title,
         game: parent.game,
         description: parent.description,
+        accessibilityNotes: parent.accessibilityNotes,
         startsAt: when.startsAt,
         endsAt: when.endsAt,
         timezone: parent.timezone,
         location: parent.location,
+        organizer_name: parent.organizer_name,
+        join_url: parent.join_url,
+        join_instructions: parent.join_instructions,
         capacity: parent.capacity,
         status: "draft",
         createdBy: parent.createdBy,
@@ -201,6 +213,7 @@ export async function updateEvent(
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
       // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
       // child shift below always sees the committed old times (no double-shift).
       const [locked] = await tx
@@ -219,7 +232,18 @@ export async function updateEvent(
 
 export type PatchBase = Pick<
   EventRow,
-  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+  | "title"
+  | "game"
+  | "description"
+  | "accessibilityNotes"
+  | "timezone"
+  | "location"
+  | "organizer_name"
+  | "join_url"
+  | "join_instructions"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
 >;
 
 /**
@@ -235,8 +259,12 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
     title: base.title,
     game: base.game,
     description: base.description,
+    accessibility_notes: base.accessibilityNotes,
     timezone: base.timezone,
     location: base.location,
+    organizer_name: base.organizer_name,
+    join_url: base.join_url,
+    join_instructions: base.join_instructions,
     capacity: base.capacity,
     ...patch,
   } as Record<string, unknown>;
@@ -268,6 +296,7 @@ export async function patchEvent(
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
       const [locked] = await tx
         .select()
         .from(events)
@@ -311,10 +340,14 @@ async function commitLockedUpdate(
       title: input.title,
       game: input.game,
       description: input.description,
+      accessibilityNotes: input.accessibilityNotes,
       startsAt: input.startsAtUtc,
       endsAt: input.endsAtUtc,
       timezone: input.timezone,
       location: input.location,
+      organizer_name: input.organizer_name ?? null,
+      join_url: input.join_url ?? null,
+      join_instructions: input.join_instructions ?? null,
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
@@ -365,11 +398,15 @@ async function shiftFutureChildren(
   const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
   const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
   if (startDelta === 0 && endDelta === 0) return [];
-  const children = await tx
+  const lockedChildren = await tx
     .select()
     .from(events)
     .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())))
     .for("update");
+  // The query's cutoff predates any lock wait. Judge eligibility once after
+  // all child locks are held, for both validation and every reschedule effect.
+  const now = Date.now();
+  const children = lockedChildren.filter((child) => child.startsAt.getTime() > now);
   // A parent delta must never invert (or zero) a future occurrence the
   // moderator shortened individually: refuse the whole edit with the existing
   // ends_at response before any child write, so the surrounding transaction
@@ -427,6 +464,7 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
@@ -487,6 +525,7 @@ export async function setRsvpOpen(
   clock: () => Date = () => new Date(),
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx

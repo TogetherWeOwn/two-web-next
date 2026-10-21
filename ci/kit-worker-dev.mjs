@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -25,10 +26,7 @@ try {
     "kit-worker-dev: KIT_WORKER_TEST_DATABASE_URL/DATABASE_URL must be a valid Postgres URL",
   );
 }
-if (
-  !["postgres:", "postgresql:"].includes(db.protocol) ||
-  !["localhost", "127.0.0.1", "::1"].includes(db.hostname)
-) {
+if (!["postgres:", "postgresql:"].includes(db.protocol) || !isLoopbackHostname(db.hostname)) {
   throw new Error("kit-worker-dev: Kit Worker fixture accepts only a disposable loopback Postgres");
 }
 try {
@@ -76,7 +74,23 @@ writeFileSync(
     "  }",
     '  throw new Error("E2E blocked unmocked Discord fetch: " + request.method + " " + url.pathname);',
     "};",
-    "export default worker;",
+    "// Healthy-empty Discord seam, shared with the Hono e2e entry (e2e/worker.ts):",
+    "// both loopback targets simulate the same Discord state, so cross-target",
+    "// renders agree and no run ever attempts a live Discord read.",
+    "//",
+    "// This MUST mutate the incoming env object in place. The Kit routes read",
+    "// the ambient `env` from `cloudflare:workers` (web/src/hooks.server.ts,",
+    "// web/src/routes/events/+server.ts), which is the entrypoint's original",
+    "// env object: a spread copy passed to worker.fetch is invisible to it,",
+    "// and Kit would fall back to a live Discord read that the fixture fetch",
+    "// stub refuses. Hono threads the fetch param explicitly, so either shape",
+    "// works there; in-place assignment covers both readers.",
+    "const entry = { ...worker };",
+    "entry.fetch = (request, env, ctx) => {",
+    "  env.DISCORD_EVENTS = { upcoming: async () => [], lastReadFailed: () => false };",
+    "  return worker.fetch(request, env, ctx);",
+    "};",
+    "export default entry;",
   ].join("\n"),
 );
 writeFileSync(
@@ -109,6 +123,10 @@ writeFileSync(
       // fixture alone enables it for the RSVP companion journey.
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
       KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+      // Same shared `events-read:anon` bucket as the Hono loopback worker
+      // (same disposable Postgres, no forwarded client headers), so the Kit
+      // legs need the same raised budget (docs/event-read-admission.md).
+      E2E_PUBLIC_READ_BUDGET: "600",
     },
   }),
 );

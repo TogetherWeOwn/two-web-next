@@ -5,7 +5,8 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl } from "./feeds";
+import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { attendeePageHref } from "./attendee-paths";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
@@ -78,6 +79,11 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
+  // Finite but non-wire years stay a readable page: only the Google Calendar
+  // deep link (an ICS instant pair) is omitted, never the whole render.
+  const gcalUrl =
+    isWireInstant(e.startsAt) && isWireInstant(e.endsAt) ? googleCalendarUrl(e) : null;
   return (
     <EventDetailShell
       title={e.title}
@@ -111,11 +117,25 @@ export const EventPage: FC<{
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
-          <dt>When</dt>
+          <dt>Starts</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
+          </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden>
+              Show in my device timezone
+            </button>
+            <p role="status" aria-live="polite"></p>
+          </dd>
+        </div>
+        <div>
+          <dt>Ends</dt>
+          <dd>
+            <time datetime={e.endsAt.toISOString()}>
+              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
         </div>
@@ -124,6 +144,14 @@ export const EventPage: FC<{
             <dt>Where</dt>
             <dd>
               <p data-testid="event-venue">{e.location}</p>
+            </dd>
+          </div>
+        ) : null}
+        {e.organizer_name ? (
+          <div>
+            <dt>Hosted by</dt>
+            <dd>
+              <p data-testid="event-organizer">{e.organizer_name}</p>
             </dd>
           </div>
         ) : null}
@@ -154,6 +182,7 @@ export const EventPage: FC<{
           attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
+        <script src="/islands/event-device-timezone.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -161,6 +190,36 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
+            </section>
+          ) : null}
+          {(e.status === "published" || e.status === "draft") &&
+          (e.join_url || e.join_instructions) ? (
+            <section
+              class="event-description event-join-details"
+              aria-labelledby="event-join-details-heading"
+              data-testid="event-join-details"
+            >
+              <h2 id="event-join-details-heading">How to join</h2>
+              {e.join_url ? (
+                e.status === "published" ? (
+                  <p>
+                    <a href={e.join_url} data-testid="event-public-join-link">
+                      Open the public joining link
+                    </a>
+                  </p>
+                ) : (
+                  <p>Public joining link: {e.join_url}</p>
+                )
+              ) : null}
+              {e.join_instructions ? (
+                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+              ) : null}
             </section>
           ) : null}
           {!session ? (
@@ -191,10 +250,14 @@ export const EventPage: FC<{
             <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
               Add to calendar (.ics)
             </a>
-            {" · "}
-            <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">
-              Google Calendar
-            </a>
+            {gcalUrl ? (
+              <>
+                {" · "}
+                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
+                  Google Calendar
+                </a>
+              </>
+            ) : null}
             {" · "}
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
@@ -248,7 +311,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeesPaging.page <= 1 ? path : `${path}?attendees=${attendeesPaging.page}`}
+              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees
