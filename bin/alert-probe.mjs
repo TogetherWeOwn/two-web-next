@@ -147,6 +147,16 @@ export async function runProbe({
     const receipts = probeReceipts(text, probeId, baseline.length);
     if (receipts.size === 2)
       return {
+        version: 1,
+        tool: "alert-probe",
+        mode: "report",
+        ok: true,
+        code: "ALERT_PROBE_OK",
+        next: "No action: both probe alerts confirmed delivered; rerun after the next staging deploy.",
+        checks: [
+          { id: "error-alert-delivered", label: "error.alert delivered", ok: true },
+          { id: "queue-failing-delivered", label: "queue.failing delivered", ok: true },
+        ],
         target: baseUrl,
         probeId,
         since: new Date(since).toISOString(),
@@ -159,10 +169,44 @@ export async function runProbe({
   );
 }
 
+const USAGE = "Usage: node bin/alert-probe.mjs --receipt-file <connected-tail-json-file>";
+
+const HELP = `Usage: node bin/alert-probe.mjs --receipt-file <connected-tail-json-file> [--help]
+
+Staging-only operator probe: confirmed delivery of both synthetic alert
+receipts (error.alert and queue.failing) for one probe ID.
+
+Environment:
+  QA_AUTH_TOKEN  staging QA login token (required; never pass it as a CLI argument)
+
+Arguments:
+  --receipt-file <path>  connected wrangler tail JSON file (required)
+
+The probe target is pinned to ${STAGING_URL}. Output is one JSON verdict
+on stdout: version, tool, mode, ok, code, next and checks (stable kebab
+ids). Failures print one generic line to stderr and claim nothing.
+
+Exit codes:
+  exit 0  both probe alerts confirmed delivered (or --help printed)
+  exit 1  the probe was refused, timed out, or errored; no delivery claimed
+  exit 2  wrong arguments; static usage on stderr
+
+See docs/probe-cli-contract.md for the shared probe CLI contract.`;
+
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length !== 2 || args[0] !== "--receipt-file")
-    throw new Error("Usage: node bin/alert-probe.mjs --receipt-file <connected-tail-json-file>");
+  if (args.includes("--help")) {
+    // Discovery only: usage to stdout, exit 0, zero side effects — no token
+    // read, no receipt-file read, no probe. Checked before the argv refusal
+    // so --help is never parsed as a positional.
+    console.log(HELP);
+    return;
+  }
+  if (args.length !== 2 || args[0] !== "--receipt-file") {
+    console.error(USAGE);
+    process.exitCode = 2;
+    return;
+  }
   const result = await runProbe({ token: process.env.QA_AUTH_TOKEN, receiptFile: args[1] });
   console.log(JSON.stringify(result, null, 2));
 }
