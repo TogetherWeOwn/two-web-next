@@ -25,7 +25,13 @@ import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
 
 const db = {} as Db;
 
-const baseRow: KitEventEditRow = {
+const hostJoin = {
+  organizer_name: "Riley",
+  join_url: "https://meet.example.test/room-9",
+  join_instructions: "Use the public lobby.",
+};
+const baseRow: KitEventEditRow & typeof hostJoin = {
+  ...hostJoin,
   eventKey: "EVTPAST01",
   title: "Game night",
   game: "Chess",
@@ -76,6 +82,9 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
       game: "Chess",
       description: "Casual play",
       accessibility_notes: "Step-free access confirmed.",
+      organizer_name: "Riley",
+      join_url: "https://meet.example.test/room-9",
+      join_instructions: "Use the public lobby.",
       starts_at: "2026-07-01 20:00",
       ends_at: "2026-07-01 22:00",
       timezone: "Europe/London",
@@ -101,6 +110,9 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
           game: null,
           description: null,
           accessibilityNotes: null,
+          organizer_name: null,
+          join_url: null,
+          join_instructions: null,
           location: null,
           capacity: null,
         }),
@@ -110,6 +122,11 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
     expect(outcome.view.values.game).toBe("");
     expect(outcome.view.values.description).toBe("");
     expect(outcome.view.values.accessibility_notes).toBe("");
+    expect(outcome.view.values).toMatchObject({
+      organizer_name: "",
+      join_url: "",
+      join_instructions: "",
+    });
     expect(outcome.view.values.location).toBe("");
     expect(outcome.view.values.capacity).toBe("");
   });
