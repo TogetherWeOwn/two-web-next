@@ -933,7 +933,32 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     "Usage: QA_AUTH_TOKEN=<staging QA token> node bin/json-smoke.mjs [--ledger <path>] <staging-base-url> | " +
     "node bin/json-smoke.mjs --skip-ledger <reason> [--ledger <path>] | " +
     "node bin/json-smoke.mjs --report-ledger <path> <heading> <warn-context>";
-  if (ledgerFlag >= 0 && !ledgerPath) {
+  const HELP = `${usage}
+
+Staging JSON deploy-smoke probe. The token comes from env only, never argv.
+
+Environment:
+  QA_AUTH_TOKEN  staging QA login token (required for probing only)
+
+Options:
+  --ledger <path>  append JSONL evidence (also written when guards fail)
+  --skip-ledger <reason>  replay every guard as skipped with one reason;
+                   no token, no network
+  --report-ledger <path> <heading> <warn-context>
+                   format a ledger the probe wrote; never probes, never
+                   needs a token
+  --help  print this usage to stdout and exit 0; never probes, never writes
+
+Exit codes:
+  exit 0  every guard passed (or was skipped via --skip-ledger)
+  exit 1  at least one guard failed
+  exit 2  usage error: missing token, invalid base URL, or bad ledger arguments`;
+  if (args.includes("--help")) {
+    // Discovery only: usage to stdout, exit 0, zero side effects — no token
+    // read, no probe, no ledger write. Checked before every other branch so
+    // --help is never parsed as a base URL, a positional, or a flag value.
+    console.log(HELP);
+  } else if (ledgerFlag >= 0 && !ledgerPath) {
     console.error(usage);
     process.exitCode = 2;
   } else if (rest[0] === "--skip-ledger") {
