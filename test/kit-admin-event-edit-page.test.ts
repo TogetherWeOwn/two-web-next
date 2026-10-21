@@ -49,6 +49,7 @@ describe("Kit event-edit page contract", () => {
       "title",
       "game",
       "description",
+      "accessibility_notes",
       "starts_at",
       "ends_at",
       "timezone",
@@ -61,6 +62,7 @@ describe("Kit event-edit page contract", () => {
       "f-title",
       "f-game",
       "f-description",
+      "f-accessibility-notes",
       "f-starts-at",
       "f-ends-at",
       "f-timezone",
@@ -69,6 +71,10 @@ describe("Kit event-edit page contract", () => {
     ]) {
       expect(source).toContain(id);
     }
+    expect(source).toContain("Accessibility notes");
+    expect(source).toContain(
+      "Optional; include only confirmed details, not personal contact information.",
+    );
     expect(source).toContain("Starts (local wall time, YYYY-MM-DD HH:mm)");
     expect(source).toContain("Ends (local wall time, YYYY-MM-DD HH:mm)");
     expect(source).toContain("The IANA zone the wall time above is typed in. Storage is UTC.");
@@ -89,6 +95,7 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('data-testid="form-errors"');
     expect(source).toContain("Check the highlighted fields and try again.");
     expect(source).toContain("error-title");
+    expect(source).toContain("error-accessibility_notes");
     expect(source).toContain("error-starts_at");
     expect(source).toContain("error-timezone");
     expect(source).toContain("error-location");

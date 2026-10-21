@@ -8,6 +8,10 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import type { EnvWithAdminDb } from "../src/admin/db";
+import { EVENT_BASELINE_FIELD } from "../src/admin/event-baseline";
+import { resolveKitEventEdit } from "../src/admin/kit-event-edit";
+import { listRoster } from "../src/admin/reads";
+import { getEvent } from "../src/admin/store-event-reads";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -113,6 +117,35 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(fresh.fields.accessibility_notes).toBe("Step-free access confirmed.");
       expect(fresh.hidden).not.toEqual(b.hidden);
       expect((await save({ ...fresh.fields, title: "Reviewed title" })).status).toBe(303);
+    });
+
+    it("saves a Kit-minted baseline through the Hono POST with the notes kept", async () => {
+      await fixture.db
+        .update(events)
+        .set({ accessibilityNotes: "Step-free access confirmed." })
+        .where(eq(events.eventKey, KEY));
+      const outcome = await resolveKitEventEdit(
+        KEY,
+        {},
+        { db: fixture.db, get: getEvent, list: listRoster },
+      );
+      if (outcome.kind !== "ok") throw new Error(`expected ok, got ${outcome.kind}`);
+      // The Kit form displays the stored notes and mints the same baseline the
+      // Hono edit GET carries for this row: a notes-narrowing Kit mint would
+      // mismatch here and 409 below.
+      expect(outcome.view.values.accessibility_notes).toBe("Step-free access confirmed.");
+      expect(outcome.view.baseline).toBe(
+        savedForm((await read()).html).hidden[EVENT_BASELINE_FIELD],
+      );
+      const response = await save({
+        ...outcome.view.values,
+        [EVENT_BASELINE_FIELD]: outcome.view.baseline,
+        title: "Kit title edit",
+      });
+      expect(response.status).toBe(303);
+      const [row] = await fixture.db.select().from(events).where(eq(events.eventKey, KEY));
+      expect(row!.title).toBe("Kit title edit");
+      expect(row!.accessibilityNotes).toBe("Step-free access confirmed.");
     });
 
     it("refuses a baseline-free save with exactly 400, draft kept, nothing written", async () => {

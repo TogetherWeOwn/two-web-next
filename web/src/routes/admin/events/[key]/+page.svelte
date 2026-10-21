@@ -109,6 +109,32 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </div>
     <div class="field">
+      <label for="f-accessibility-notes">Accessibility notes</label>
+      <textarea
+        id="f-accessibility-notes"
+        name="accessibility_notes"
+        rows={4}
+        data-event-text-limit={1000}
+        aria-invalid={errors.accessibility_notes ? "true" : undefined}
+        aria-describedby={errors.accessibility_notes
+          ? "f-accessibility-notes-hint f-accessibility-notes-error"
+          : "f-accessibility-notes-hint"}
+      >{val("accessibility_notes")}</textarea>
+      <p id="f-accessibility-notes-hint" class="hint">
+        Optional; include only confirmed details, not personal contact information.
+      </p>
+      {#if errors.accessibility_notes}
+        <p
+          id="f-accessibility-notes-error"
+          class="error"
+          role="alert"
+          data-testid="error-accessibility_notes"
+        >
+          {errors.accessibility_notes}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
         id="f-starts-at"

@@ -46,6 +46,7 @@ export type KitEventEditValues = {
   title: string;
   game: string;
   description: string;
+  accessibility_notes: string;
   starts_at: string;
   ends_at: string;
   timezone: string;
@@ -123,7 +124,8 @@ export type KitEventEditRow = {
   title: string;
   game: string | null;
   description: string | null;
-  /** Read by the baseline mint: narrowing the Kit projection breaks saves. */
+  /** Displayed by the Kit form and read by the baseline mint: narrowing the
+   * Kit projection breaks saves. */
   accessibilityNotes?: string | null;
   startsAt: Date;
   endsAt: Date;
@@ -221,6 +223,9 @@ export async function resolveKitEventEdit(
         title: row.title,
         game: row.game ?? "",
         description: row.description ?? "",
+        // The Hono POST overwrites notes from this field: omitting it would
+        // silently clear notes the form never displayed.
+        accessibility_notes: row.accessibilityNotes ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
         starts_at: utcToWall(row.startsAt, row.timezone),

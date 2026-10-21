@@ -30,6 +30,9 @@ const baseRow: KitEventEditRow = {
   title: "Game night",
   game: "Chess",
   description: "Casual play",
+  // Non-null so the baseline-mint test pins notes: a mint that narrowed the
+  // Kit projection to null would fail to match here.
+  accessibilityNotes: "Step-free access confirmed.",
   startsAt: new Date("2026-07-01T19:00:00.000Z"),
   endsAt: new Date("2026-07-01T21:00:00.000Z"),
   timezone: "Europe/London",
@@ -72,6 +75,7 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
       title: "Game night",
       game: "Chess",
       description: "Casual play",
+      accessibility_notes: "Step-free access confirmed.",
       starts_at: "2026-07-01 20:00",
       ends_at: "2026-07-01 22:00",
       timezone: "Europe/London",
@@ -96,6 +100,7 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
           ...baseRow,
           game: null,
           description: null,
+          accessibilityNotes: null,
           location: null,
           capacity: null,
         }),
@@ -104,6 +109,7 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.values.game).toBe("");
     expect(outcome.view.values.description).toBe("");
+    expect(outcome.view.values.accessibility_notes).toBe("");
     expect(outcome.view.values.location).toBe("");
     expect(outcome.view.values.capacity).toBe("");
   });
