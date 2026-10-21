@@ -3,7 +3,11 @@
 // accessible name must stay inside the native review for both kinds and both
 // presentations. This file reuses the acceptance fixtures read-only; it does
 // not edit, disable, or rebaseline the independent acceptance suite.
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { jsx } from "hono/jsx/jsx-runtime";
+import { Shell } from "../src/admin/pages/shell";
 import type { TerminalReviewKind } from "../src/admin/terminal-review";
 import {
   OTHER_KEY,
@@ -115,3 +119,33 @@ for (const presentation of ["hono", "kit"] as const) {
     });
   });
 }
+
+describe("terminal review stylesheet links", () => {
+  // The review rules live in their own admin-only sheet (assets/
+  // admin-terminal-review.css), outside the inlined leaf bundle. Both shells
+  // must link it after the base sheet: order matters because the later sheet
+  // wins at equal specificity (the .card p cascade), and TerminalReview has
+  // no scoped styles to backstop a missing link on either presentation.
+  const BASE_SHEET = 'href="/styles.css"';
+  const REVIEW_SHEET = 'href="/admin-terminal-review.css"';
+
+  it("Hono admin shell links the review sheet after the base sheet", () => {
+    const html = String(jsx(Shell, { title: "Review links" }));
+    const base = html.indexOf(BASE_SHEET);
+    const review = html.indexOf(REVIEW_SHEET);
+    expect(base).toBeGreaterThanOrEqual(0);
+    expect(review).toBeGreaterThan(base);
+  });
+
+  it("Kit admin shell links the review sheet after the base sheet", () => {
+    const head =
+      readFileSync(new NodeURL("../web/src/lib/AdminShell.svelte", import.meta.url), "utf8").match(
+        /<svelte:head>[\s\S]*?<\/svelte:head>/,
+      )?.[0] ?? "";
+    expect(head.length).toBeGreaterThan(0);
+    const base = head.indexOf(BASE_SHEET);
+    const review = head.indexOf(REVIEW_SHEET);
+    expect(base).toBeGreaterThanOrEqual(0);
+    expect(review).toBeGreaterThan(base);
+  });
+});
