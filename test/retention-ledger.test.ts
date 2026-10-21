@@ -348,9 +348,15 @@ describe("retention ledger doc rows", () => {
 
   it("pins the board-view writer and scheduled prune paths without duplicating prune proofs", () => {
     for (const [path, call] of [
-      ["src/hotzones/routes.tsx", "await recordBoardView(db, {"],
-      ["src/leaderboards/routes.tsx", "await recordBoardView(db, entry).catch(() => {});"],
-      ["src/kit-hotzones.ts", "await (args.recordBoardViewFn ?? recordBoardView)(db, opts)"],
+      ["src/hotzones/routes.tsx", "await recordBoardView("],
+      [
+        "src/leaderboards/routes.tsx",
+        'await recordBoardView(db, entry, undefined, c.get("requestId")).catch(() => {});',
+      ],
+      [
+        "src/kit-hotzones.ts",
+        "await (args.recordBoardViewFn ?? recordBoardView)(db, opts, undefined, args.requestId)",
+      ],
       [
         "web/src/hooks.server.ts",
         "recordQueuedBoardView(event.locals, response.status, recordBoardView)",

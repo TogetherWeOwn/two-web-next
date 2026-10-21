@@ -368,7 +368,7 @@ for (const config of [
   });
 }
 
-function assertIsolatedBindings(config) {
+function assertIsolatedBindings(config, jobsConfig) {
   const production = config.env.production;
   assert.notEqual(production.name, config.name);
   assert.equal(production.workers_dev, false);
@@ -377,26 +377,34 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
-  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
-  // on the web Worker until its own handoff, so assert each side explicitly.
-  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  // Production handoff: the web production env only produces (no crons, no
+  // consumers); both schedules and both consumers live on
+  // two-web-jobs-production (wrangler.jobs.jsonc env.production), mirroring
+  // the staging split. Values must match RECONCILE_CRON/PRUNE_CRON in
+  // src/jobs/constants.ts.
+  const jobsProduction = jobsConfig.env.production;
   assert.deepEqual(config.triggers, { crons: [] });
-  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
+  assert.deepEqual(production.triggers, { crons: [] });
+  assert.deepEqual(production.queues.consumers ?? [], []);
+  assert.deepEqual(jobsProduction.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
-    assert.ok(production.queues.consumers.some((consumer) => consumer.queue === producer.queue));
+    assert.ok(
+      jobsProduction.queues.consumers.some((consumer) => consumer.queue === producer.queue),
+    );
   }
 }
 
 test("actual production config retains isolated bindings before and after sentinel replacement", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = readWranglerConfig(text);
-  assertIsolatedBindings(config);
+  const jobsText = readFileSync(new URL("../wrangler.jobs.jsonc", import.meta.url), "utf8");
+  const jobsConfig = readWranglerConfig(jobsText);
+  assertIsolatedBindings(config, jobsConfig);
   const provisioned = structuredClone(config);
   provisioned.env.production.hyperdrive[0].id = "11111111111111111111111111111111";
-  assertIsolatedBindings(provisioned);
+  assertIsolatedBindings(provisioned, jobsConfig);
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
 });
 

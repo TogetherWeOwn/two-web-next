@@ -19,6 +19,7 @@ export {
   wallTimeHm,
 } from "../events/date-format";
 import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
+import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
  * One rowset rendered twice — list + month grid — in a single SSR pass.
@@ -80,15 +81,29 @@ export function escapeLikeTerm(raw: string): string {
 
 /** One structured line per rendered search: normalized query + visible count.
  * No user id, no session, no IP, no raw input. Fail-open — logging never
- * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape. */
+ * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape.
+ * The optional `request_id` joins the line to `http.request`: it travels only
+ * when it validates, and is omitted — never raw — otherwise. */
 export interface EventSearchLogEntry {
   event: "event_search";
   query: string;
   results: number;
+  request_id?: string;
 }
-export function eventSearchLogEntry(raw: string, results: number): EventSearchLogEntry | null {
+export function eventSearchLogEntry(
+  raw: string,
+  results: number,
+  requestId?: string | null,
+): EventSearchLogEntry | null {
   const query = normalizeEventSearch(raw);
-  return query === null ? null : { event: "event_search", query, results: Math.max(0, results) };
+  if (query === null) return null;
+  const validated = safeRequestId(requestId);
+  return {
+    event: "event_search",
+    query,
+    results: Math.max(0, results),
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  };
 }
 
 /* Past drawer (legacy showPast): opens one way, stays open; searching reveals
@@ -173,6 +188,19 @@ export const EVENTS_EMPTY_COPY = {
   subscribe: "Subscribe",
   discordRsvp: "RSVP in Discord",
   signIn: "Sign in with Discord",
+} as const;
+
+/* Partial source: healthy local rows stay visible while the Discord source
+ * reports failure, with an accessible notice that the schedule may be
+ * incomplete. Renders inside the swapped content zone beside the list/grid,
+ * never with an empty state (a failed read with nothing anywhere keeps the
+ * full error instead). The copy claims no rows: it also covers an empty
+ * month of a non-empty schedule and an out-of-range page. Retry re-issues
+ * the same URL; the join link is the human fallback. No source URLs, tokens
+ * or error details in the copy. */
+export const EVENTS_PARTIAL_TESTID = "events-partial-source";
+export const EVENTS_PARTIAL_COPY = {
+  notice: "Some Discord events may be missing from this schedule right now.",
 } as const;
 
 /* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;

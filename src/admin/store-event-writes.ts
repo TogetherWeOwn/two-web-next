@@ -28,7 +28,10 @@ import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
 
-export type EventRow = typeof events.$inferSelect;
+export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
+};
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
@@ -66,10 +69,14 @@ export async function createEvent(
         title: input.title,
         game: input.game,
         description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
         location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
         capacity: input.capacity,
         status: "draft",
         createdBy: actor.id,
@@ -152,10 +159,14 @@ export async function materializeMissingInstances(
         title: parent.title,
         game: parent.game,
         description: parent.description,
+        accessibilityNotes: parent.accessibilityNotes,
         startsAt: when.startsAt,
         endsAt: when.endsAt,
         timezone: parent.timezone,
         location: parent.location,
+        organizer_name: parent.organizer_name,
+        join_url: parent.join_url,
+        join_instructions: parent.join_instructions,
         capacity: parent.capacity,
         status: "draft",
         createdBy: parent.createdBy,
@@ -221,7 +232,18 @@ export async function updateEvent(
 
 export type PatchBase = Pick<
   EventRow,
-  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+  | "title"
+  | "game"
+  | "description"
+  | "accessibilityNotes"
+  | "timezone"
+  | "location"
+  | "organizer_name"
+  | "join_url"
+  | "join_instructions"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
 >;
 
 /**
@@ -237,8 +259,12 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
     title: base.title,
     game: base.game,
     description: base.description,
+    accessibility_notes: base.accessibilityNotes,
     timezone: base.timezone,
     location: base.location,
+    organizer_name: base.organizer_name,
+    join_url: base.join_url,
+    join_instructions: base.join_instructions,
     capacity: base.capacity,
     ...patch,
   } as Record<string, unknown>;
@@ -314,10 +340,14 @@ async function commitLockedUpdate(
       title: input.title,
       game: input.game,
       description: input.description,
+      accessibilityNotes: input.accessibilityNotes,
       startsAt: input.startsAtUtc,
       endsAt: input.endsAtUtc,
       timezone: input.timezone,
       location: input.location,
+      organizer_name: input.organizer_name ?? null,
+      join_url: input.join_url ?? null,
+      join_instructions: input.join_instructions ?? null,
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,

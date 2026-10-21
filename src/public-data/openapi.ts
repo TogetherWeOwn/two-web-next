@@ -127,8 +127,9 @@ export function getOpenApiDocument(appUrl: string) {
         "Session-free, published-only reads for search and AI assistants: events, one event, " +
         "the community snapshot and the Discord join handoff. No member directory, no " +
         "attendee identities, no model-training permission. Collections cap at 20 rows and " +
-        "32 KiB; errors use { error: { code, message } } with code invalid_request, " +
-        "not_found, rate_limited or unavailable.",
+        "32 KiB; errors use { error: { code, message } } with code internal, " +
+        "invalid_request, not_found, rate_limited or unavailable. On internal, " +
+        "retry the read; the envelope never carries exception text.",
     },
     servers: [{ url: appUrl }],
     paths: {
@@ -139,6 +140,7 @@ export function getOpenApiDocument(appUrl: string) {
           responses: {
             "200": jsonRef("PublicApiEventCollection", "At most 20 published events."),
             "429": error(429, "Shared public-read budget exhausted."),
+            "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
           },
         },
@@ -160,6 +162,7 @@ export function getOpenApiDocument(appUrl: string) {
             "404": error(404, "No published event with that key (drafts and cancelled rows 404)."),
             "422": error(422, "That event key is not valid."),
             "429": error(429, "Shared public-read budget exhausted."),
+            "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
           },
         },
@@ -236,7 +239,7 @@ export function getOpenApiDocument(appUrl: string) {
               properties: {
                 code: {
                   type: "string",
-                  enum: ["invalid_request", "not_found", "rate_limited", "unavailable"],
+                  enum: ["internal", "invalid_request", "not_found", "rate_limited", "unavailable"],
                 },
                 message: { type: "string" },
               },
