@@ -20,6 +20,10 @@ export const PAST_EVENTS_TESTID = "past-events";
 export const PAST_EVENTS_LIST_TESTID = "past-events-list";
 export const PAST_EVENTS_EMPTY_TESTID = "past-events-empty";
 export const PAST_EVENTS_OUT_OF_RANGE_TESTID = "past-events-out-of-range";
+export const PAST_EVENTS_PAGER_TESTID = "past-events-pager";
+export const PAST_EVENTS_PAGER_NEWER_TESTID = "past-events-pager-newer";
+export const PAST_EVENTS_PAGER_OLDER_TESTID = "past-events-pager-older";
+export const PAST_EVENTS_BACK_TESTID = "past-events-back";
 export const PAST_EVENTS_COPY = {
   empty: "No past events yet.",
   join: "Join the community and help make the next one happen.",
