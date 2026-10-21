@@ -29,6 +29,7 @@ const { appUrl, rules, lastUpdated, leafCss } = $derived(data);
   theme="content"
   {leafCss}
   accountChrome={accountJoin}
+  restoredWrite={data.restoredWrite}
 >
   <ContentLeaf navCurrent="rules" headingId="rules-heading" heading="House rules">
     <p class="lead">Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.</p>

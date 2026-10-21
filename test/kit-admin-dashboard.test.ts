@@ -37,6 +37,7 @@ const authenticated = (session: typeof MOD): KitLocals => ({
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 const guest = (): KitLocals => ({
   status: "guest",
@@ -44,6 +45,7 @@ const guest = (): KitLocals => ({
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 const unknown = (): KitLocals => ({
   status: "unknown",
@@ -51,6 +53,7 @@ const unknown = (): KitLocals => ({
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 
 describe("Kit admin guard: one contract, no rotation, no audit of its own", () => {

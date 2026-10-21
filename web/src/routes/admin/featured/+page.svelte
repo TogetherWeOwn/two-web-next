@@ -20,7 +20,7 @@ let { data }: PageProps = $props();
   </th>
 {/snippet}
 
-<AdminShell title="Featured content">
+<AdminShell title="Featured content" restoredWrite={data.restoredWrite}>
 <section>
   <h1>Featured content</h1>
   <p>

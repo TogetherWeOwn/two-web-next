@@ -22,7 +22,7 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
   <title>Join attempts — TWO admin</title>
 </svelte:head>
 
-<AdminShell title="Join attempts">
+<AdminShell title="Join attempts" restoredWrite={data.restoredWrite}>
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
   <p class="hint">

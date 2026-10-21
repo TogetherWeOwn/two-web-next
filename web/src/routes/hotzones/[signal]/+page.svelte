@@ -21,6 +21,7 @@ const destination = $derived(
   activeNav="events"
   mainClass="events-page"
   loginReturnTo={destination}
+  restoredWrite={data.restoredWrite}
 >
   {#snippet accountChrome()}
     <a class="btn" href="/discord">Open Discord</a>

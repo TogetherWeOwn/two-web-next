@@ -18,11 +18,13 @@ import type { AccessSink } from "./access-log";
 import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
 import { STAGING_APP_URL } from "./qa";
 import { transformContentLeafChunk } from "./kit-content-chunk";
+import { isRestoredBannerEligible } from "./kit-session";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
 import { isTrustedHost } from "./trust-hosts";
+import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -693,6 +695,45 @@ function releasedProfileConsumesJoinFlash(
   return flash === "added" || flash === "already_member";
 }
 
+// Restored-write banner consumption: the uniform twin of Hono's
+// expiredWriteBanner middleware. Every Kit route expires the one-shot notice
+// after the released response that renders it — GET-only, 200-only,
+// HTML-only — while HEAD/POST/error/JSON responses leave it pending for the
+// next visible GET. Truthiness (not a null check) reads both notice sources:
+// session bridges predating the restoredWrite field resolve undefined, and
+// an absent field must never delete a cookie. Not in any loader: that would
+// expire the notice before the audit can refuse on member routes.
+async function releasedResponseConsumesRestoredWrite(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+  deps: HookDispatchDeps,
+): Promise<boolean> {
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  if (!isRestoredBannerEligible(event.request)) return false;
+  if ((event.locals as Partial<KitLocals> | undefined)?.restoredWrite) return true;
+  // Public reads never merge locals, so the bridged notice is absent even
+  // when the cookie is present. Peek the journey through the same read-only
+  // bridge the member branch uses — gated on the cookie name so requests
+  // outside the recovery journey pay nothing, and never on member reads:
+  // there the render already saw these locals, so a fresh peek could only
+  // consume a banner the render did not show.
+  if (
+    route.reads === "public" &&
+    deps.sessionFor &&
+    (event.request.headers.get("cookie") ?? "").includes(EXPIRED_WRITE_COOKIE)
+  ) {
+    try {
+      return !!(await deps.sessionFor(event)).restoredWrite;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 // Sliding renewal for the native Kit event detail: the post-release twin of
 // Hono's readSession rotation (src/index.tsx re-stamps the 120-minute window
 // on every authenticated page view). Only a released successful HTML GET with
@@ -893,6 +934,18 @@ export async function dispatchHookRequest(
     c.res = response;
     deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
     response = c.res;
+  }
+  // After the released response exists, on every Kit route that renders the
+  // restored-write banner. The banner view keeps Hono's copy with no link,
+  // and the banner response stays uncacheable, exactly as Hono's middleware
+  // sets it on its render.
+  if (await releasedResponseConsumesRestoredWrite(route, event, response, deps)) {
+    const c = new Context(event.request);
+    c.res = response;
+    deleteCookie(c, EXPIRED_WRITE_COOKIE, deleteOpts);
+    response = c.res;
+    response.headers.set("cache-control", "no-store, private");
+    response.headers.set("vary", "Cookie");
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;

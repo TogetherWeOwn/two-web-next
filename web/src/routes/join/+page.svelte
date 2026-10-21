@@ -33,6 +33,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   description="Approve once with Discord and we will add you to the server."
   theme="join"
   {accountChrome}
+  restoredWrite={data.restoredWrite}
 >
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">

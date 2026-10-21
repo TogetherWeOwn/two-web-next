@@ -12,7 +12,7 @@ const { actor, funnel, zeroSearches, retentionDays } = $derived(data);
 const outcomes = $derived(funnel ? Object.entries(funnel) : []);
 </script>
 
-<AdminShell title="Dashboard">
+<AdminShell title="Dashboard" restoredWrite={data.restoredWrite}>
 <section aria-labelledby="admin-heading">
   <h1 id="admin-heading">Moderation</h1>
   <p class="lead">
