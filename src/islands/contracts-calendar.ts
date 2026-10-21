@@ -324,9 +324,15 @@ export function gridAccessibleName(title: string, startsAt: Date, zone: string):
 }
 
 /** Continuation link name starts with the visible "Continues title" (WCAG
- * 2.5.3), then the displayed day — never the original start. */
+ * 2.5.3), then the displayed day — never the original start. Long titles keep
+ * the truncated visible form first so axe label-content-name-mismatch passes,
+ * then the full title; short titles are not duplicated. */
 export function gridContinuationAccessibleName(title: string, dayIso: string): string {
-  return `Continues ${title}, ${calendarDayLongLabel(dayIso)}`;
+  const truncated = gridTitle(title);
+  const day = calendarDayLongLabel(dayIso);
+  return truncated === title
+    ? `Continues ${title}, ${day}`
+    : `Continues ${truncated} ${title}, ${day}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the
