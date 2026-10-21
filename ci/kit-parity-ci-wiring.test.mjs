@@ -172,19 +172,11 @@ test("Kit visual baselines run on the clean seed before mutating browser journey
   const kitVisual = step("Kit visual regression");
   const honoVisual = step("Visual regression");
   const browserJourneys = step("Critical browser journeys");
-  const resetThrottle = step("Reset throttle counters for parity");
   const parityJourneys = step("Kit journey parity (Hono vs built Kit Worker)");
   assert(kitVisual >= 0, "the dedicated Kit events-index visual step must exist");
   assert(kitVisual < honoVisual, "Kit visual must run before Hono visual fixture setup");
   assert(honoVisual < browserJourneys, "Hono visual must run before mutating journeys");
-  assert(resetThrottle >= 0, "the throttle reset must exist between journeys and parity");
-  assert(browserJourneys < resetThrottle, "throttle reset must run after browser mutations");
-  assert(resetThrottle < parityJourneys, "parity journeys must run after the throttle reset");
   assert(browserJourneys < parityJourneys, "parity journeys remain after browser mutations");
-  assert.match(
-    e2eWorkflow,
-    /name: Reset throttle counters for parity\n\s+if: \$\{\{ !cancelled\(\) \}\}\n\s+run: node e2e\/reset-throttle\.mjs/,
-  );
   assert.match(
     e2eWorkflow,
     /name: Kit visual regression\n\s+run: npx playwright test --config playwright\.kit-visual\.config\.ts/,

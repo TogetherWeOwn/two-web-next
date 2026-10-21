@@ -60,22 +60,11 @@ test("default Playwright project ignores staging specs and wires a local-only te
 
   const teardown = readFileSync(new URL("./local-global-teardown.ts", import.meta.url), "utf8");
   assert.match(teardown, /requireGithubRunner\(\)/);
-  assert.match(teardown, /baseURL:\s*LOCAL_FIXTURE_ORIGIN/);
-  assert.match(teardown, /ignoreHTTPSErrors:\s*true/);
+  // DB-direct backstop: disposable CI Postgres only, zero QA logins, no HTTP.
+  assert.match(teardown, /requireTestDatabase\(process\.env\.DATABASE_URL\)/);
+  assert.match(teardown, /sweepLocalFixturesDb\(sql\)/);
+  assert.doesNotMatch(teardown, /\/auth\/qa|E2E_QA_TOKEN|request\.newContext/);
   assert.doesNotMatch(teardown, /stagingOrigin|playwright\.staging\.config/);
-  // DB gate before the QA login (QA-LOGIN BUDGET FIX): the teardown must run
-  // the gate query and return early on an empty result BEFORE the login post,
-  // so clean runs spend 0 QA logins. No suite executes globalTeardown's
-  // branches, so deleting or inverting this branch must fail here.
-  assert.match(teardown, /liveLocalFixtureGateQuery\(\)/);
-  assert.match(teardown, /probe\.unsafe\(gate\.text,\s*gate\.values\)/);
-  assert.match(teardown, /if\s*\(live\.length\s*===\s*0\)\s*return;/);
-  const gateReturn = teardown.indexOf("live.length === 0");
-  const loginPost = teardown.indexOf('api.post("/auth/qa/qa-moderator"');
-  assert.ok(
-    gateReturn !== -1 && loginPost !== -1 && gateReturn < loginPost,
-    "teardown must return on an empty gate result before the QA-login POST",
-  );
 });
 
 test("database guard permits only the disposable CI target", () => {
@@ -93,10 +82,4 @@ test("database guard permits only the disposable CI target", () => {
   ]) {
     assert.throws(() => requireTestDatabase(url));
   }
-});
-
-test("throttle reset script requires the CI runner and disposable database", () => {
-  const reset = readFileSync(new URL("./reset-throttle.mjs", import.meta.url), "utf8");
-  assert.match(reset, /requireGithubRunner\(\)/);
-  assert.match(reset, /requireTestDatabase\(process\.env\.DATABASE_URL\)/);
 });
