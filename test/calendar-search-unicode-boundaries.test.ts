@@ -379,6 +379,8 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
               swaps.push(url.pathname + url.search);
             else documents.push(url.pathname + url.search);
             const data = cancellationData(member);
+            // Serve the ephemeral origin so the rendered canonical stays same-origin.
+            data.appUrl = base;
             data.state.view = url.searchParams.get("view") === "calendar" ? "calendar" : "list";
             data.loginReturnTo = url.pathname + url.search;
             const html = await renderEventsHtml(data, {});
