@@ -79,6 +79,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -123,6 +124,12 @@ export const EventPage: FC<{
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden>
+              Show in my device timezone
+            </button>
+            <p role="status" aria-live="polite"></p>
+          </dd>
         </div>
         <div>
           <dt>Ends</dt>
@@ -137,6 +144,14 @@ export const EventPage: FC<{
             <dt>Where</dt>
             <dd>
               <p data-testid="event-venue">{e.location}</p>
+            </dd>
+          </div>
+        ) : null}
+        {e.organizer_name ? (
+          <div>
+            <dt>Hosted by</dt>
+            <dd>
+              <p data-testid="event-organizer">{e.organizer_name}</p>
             </dd>
           </div>
         ) : null}
@@ -167,6 +182,7 @@ export const EventPage: FC<{
           attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
+        <script src="/islands/event-device-timezone.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -174,6 +190,36 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
+            </section>
+          ) : null}
+          {(e.status === "published" || e.status === "draft") &&
+          (e.join_url || e.join_instructions) ? (
+            <section
+              class="event-description event-join-details"
+              aria-labelledby="event-join-details-heading"
+              data-testid="event-join-details"
+            >
+              <h2 id="event-join-details-heading">How to join</h2>
+              {e.join_url ? (
+                e.status === "published" ? (
+                  <p>
+                    <a href={e.join_url} data-testid="event-public-join-link">
+                      Open the public joining link
+                    </a>
+                  </p>
+                ) : (
+                  <p>Public joining link: {e.join_url}</p>
+                )
+              ) : null}
+              {e.join_instructions ? (
+                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+              ) : null}
             </section>
           ) : null}
           {!session ? (

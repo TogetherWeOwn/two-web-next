@@ -136,6 +136,14 @@ export const PUBLIC_DATA_ERROR_CODES = [
 ] as const;
 export type PublicDataErrorCode = (typeof PUBLIC_DATA_ERROR_CODES)[number];
 
+/**
+ * Static `internal` message for unexpected public-read faults: never
+ * err.message (drizzle echoes the failed SQL, column names and bound params).
+ * Shared by the REST 500 envelope and the MCP tool error so the two machine
+ * surfaces cannot drift; the real error goes to error.alert only.
+ */
+export const PUBLIC_DATA_INTERNAL_MESSAGE = "Event data could not be read.";
+
 /** New routes use this envelope; existing event routes retain legacy errors for compatibility. */
 export interface PublicDataErrorDto {
   error: {

@@ -23,7 +23,7 @@ export function parseJsonLines(calls: unknown[][]): {
   const parsed: ParsedJsonLine[] = [];
   const skipped: SkippedJsonLine[] = [];
   for (const args of calls) {
-    // Multi-arg calls (e.g. console.error("agent-events failed", name)) are
+    // Multi-arg calls (e.g. console.error("agent-events failed", { exception })) are
     // plain-text implementation logs, not JSON-line candidates: ignore them
     // here. Only a single-string call must parse, so a stray non-JSON line in
     // that shape lands in `skipped` and the caller's `expect(skipped).toEqual`

@@ -82,7 +82,14 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
       { testid: "error-all-events", name: "Browse all events", href: "/events" },
     ],
   },
-  { code: 403, links: [INVITE_LINK, HOME] },
+  {
+    code: 403,
+    links: [
+      { testid: "error-join-unlock", name: "Join to unlock member pages", href: "/join" },
+      INVITE_LINK,
+      HOME,
+    ],
+  },
   {
     code: 410,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
