@@ -192,7 +192,7 @@ function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
   }) as unknown as NegotiatedErrorSelection;
 }
 
-function outageRepresentation(c: Context): string {
+export function outageRepresentation(c: Context): string {
   return negotiatedErrorSelection(c).type;
 }
 
@@ -314,13 +314,21 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     return c.json({
       reason: "payload_too_large",
       message: PAYLOAD_TOO_LARGE_MESSAGE,
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
   const back = payloadTooLargeReturn(c.req.path);
-  return c.html(<PayloadTooLargePage returnHref={back.href} returnLabel={back.label} />);
+  return c.html(
+    <PayloadTooLargePage
+      returnHref={back.href}
+      returnLabel={back.label}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Feed contracts stay non-HTML: a calendar/RSS/Markdown caller never receives
@@ -346,13 +354,20 @@ export function forbidden(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       error: "forbidden",
       message: "You do not have access to this.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 403) : c.json(body);
   }
-  const page = <ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />;
+  const page = (
+    <ForbiddenPage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />
+  );
   return memberReadActive() ? bufferedMemberHtml(c, page, 403) : c.html(page);
 }
 
@@ -373,13 +388,15 @@ export function gone(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       reason: "gone",
       message: "This page is gone.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 410) : c.json(body);
   }
-  const page = <GonePage />;
+  const page = <GonePage supportReference={supportReference(c)} />;
   return memberReadActive() ? bufferedMemberHtml(c, page, 410) : c.html(page);
 }
 
