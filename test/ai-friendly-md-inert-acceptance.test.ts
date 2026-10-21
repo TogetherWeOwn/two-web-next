@@ -146,6 +146,8 @@ const destOf = (nodeText: string): string => {
   return at === -1 ? "" : nodeText.slice(at + 2, -1);
 };
 
+const isServerOwned = (dest: string): boolean => dest === APP_URL || dest.startsWith(`${APP_URL}/`);
+
 /**
  * Nodes attributable to event-authored input. Server event templates emit no
  * raw tags, no autolinks and no images (pinned by the healthy-input premise
@@ -160,7 +162,7 @@ function authorControlledNodes(doc: string): InertNode[] {
       bad.push(n);
       continue;
     }
-    if (!destOf(n.text).startsWith(APP_URL)) bad.push(n);
+    if (!isServerOwned(destOf(n.text))) bad.push(n);
   }
   return bad;
 }
@@ -419,7 +421,7 @@ describe("server template premise on healthy input (guards)", () => {
     for (const body of [healthyList(), healthyDetail(), healthyGone()]) {
       for (const n of scanLinkNodes(stripCodeSpans(body))) {
         expect(n.kind).toBe("link");
-        expect(destOf(n.text).startsWith(APP_URL)).toBe(true);
+        expect(isServerOwned(destOf(n.text))).toBe(true);
       }
     }
   });
