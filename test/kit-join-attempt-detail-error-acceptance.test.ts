@@ -411,8 +411,10 @@ describe("controls: guard, root boundary, load pairing and Hono output stay unch
     expect(page).toContain(
       "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
     );
+    // The throttled-admin-write way back and the served support reference
+    // both survive the merge; non-admin paths keep the public recovery links.
     expect(page).toContain(
-      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} />",
+      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} adminBack={adminBack} />",
     );
     expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
     expect(page).not.toContain("AdminShell");

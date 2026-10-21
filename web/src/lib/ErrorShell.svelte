@@ -6,12 +6,14 @@ let {
   code,
   inviteUrl,
   supportReference,
+  adminBack,
 }: {
   code: KitErrorStatus;
   inviteUrl: string;
   // Validated request id from page data. Optional: without one the shell
   // omits the reference block blank-safe, exactly as before.
   supportReference?: string;
+  adminBack?: { href: string; label: string } | null;
 } = $props();
 
 const copy = $derived(kitErrorCopy(code));
@@ -55,8 +57,15 @@ const copy = $derived(kitErrorCopy(code));
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
     {:else if code === 429 || code === 500}
-      <!-- These statuses share invite recovery, not their headings or lead copy. -->
+      <!-- These statuses share invite recovery, not their headings or lead copy.
+           A throttled admin write additionally names the refused form. -->
+      {#if adminBack}
+        <p class="admin-back-note">Your submission was not saved. Reopen the form and try again.</p>
+      {/if}
       <p class="recovery-actions">
+        {#if adminBack}
+          <a href={adminBack.href} data-testid="error-admin-back">{adminBack.label}</a>
+        {/if}
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
           Use the Discord invite instead
         </a>

@@ -264,6 +264,8 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain(
       "Kit-served hotzones and members-board lines carry the validated dispatch id",
     );
+    expect(section).toContain("Kit-served event searches omit `request_id`");
+    expect(section).toContain("correlate those by time window and route");
   });
 
   it("gives a read-only aggregate check on the analytics tables", () => {

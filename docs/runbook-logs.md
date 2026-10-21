@@ -601,12 +601,13 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-Both lines carry the serving request's validated `request_id`, so join a
+When either line carries the serving request's validated `request_id`, join the
 warning to its `http.request` by ID, not by time window. The ID travels only
 when it validates: Hono-served searches and board views always carry one, and
 Kit-served hotzones and members-board lines carry the validated dispatch id
-their bindings forward. A line without `request_id` failed validation or
-predates the plumbing — correlate those by time window and route. Keep raw
+their bindings forward. Kit-served event searches omit `request_id` because the
+calendar model call does not forward it to the search logger; correlate those by time window and route.
+Other lines without an ID failed validation or predate the plumbing. Keep raw
 `normalized_query` and `normalized_board_key` values, member identity,
 cookies, tokens, connection strings, and invented request IDs out of
 diagnostic output: the aggregates above are sufficient, and the warning's
