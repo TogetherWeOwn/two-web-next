@@ -548,8 +548,12 @@ The stale-tab probe and Kit session legs have their own outage lines (see
 Two `console.warn` lines mark best-effort analytics writes that rejected or
 outran the 500 ms response deadline (`recordSearch` in
 `src/events/search-log.ts`, `recordBoardView` in
-`src/hotzones/board-log.ts`). None pages: neither outcome fails the request,
-so a missing analytics row is a dashboard gap, never a member-facing failure.
+`src/hotzones/board-log.ts`). A third line marks the dashboard's best-effort
+content-gap read from the same `event_search_logs` table
+(`topZeroResultSearches` in `src/events/search-log.ts`): an ordinary read
+rejection warns once and the widget is omitted. None pages: no outcome here
+fails the request by itself, so a missing analytics row is a dashboard gap,
+never a member-facing failure.
 Promoting these warnings to `error.alert` was considered and rejected for the
 same reason the join attempt-write failure above stays a warning: the request
 itself succeeded.
@@ -563,6 +567,7 @@ continues, depending on whether the write wins the deadline race. A
 | --- | --- | --- | --- | --- |
 | `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN), `request_id` (only when the caller's ID validates) |
 | `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text), `request_id` (only when the caller's ID validates) |
+| `Event search unavailable for content-gap read; omitting the widget.` | The dashboard's zero-result-query `SELECT` rejected ordinarily (`topZeroResultSearches` in `src/events/search-log.ts`); the widget is omitted and the page still renders. A read that outruns its deadline omits silently, and a classified database outage propagates silently to the dashboard's shared 503 boundary instead of warning. | None on this request beyond the missing widget. The dashboard still serves 200. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. A 503 dashboard with no such warning is the classified-outage path, not a silent ordinary failure. | `exception` (the rejection class name, with a `typeof` fallback for a non-`Error` throw; never the raw error text, which can carry the DSN). No `request_id`: correlate by incident window. |
 
 The `exception` field tells a rejection apart from a deadline expiry: a
 rejected write carries the error's class name (with a `typeof` fallback for a
@@ -574,7 +579,7 @@ rejects, the same request logs a second warning with the rejection class.
 Never equate warning count with lost requests, and never assume one warning
 per affected request.
 
-These two lines are fail-open anonymous analytics. Do not confuse them with
+These three lines are fail-open anonymous analytics. Do not confuse them with
 the fail-closed mandatory auditing row in the table above (`Member read audit
 failed; refusing contents.`): a member-data read is refused when its
 `member_data_access_logs` row cannot be written, while a search or board view
@@ -589,7 +594,7 @@ and outage-time refusal policy are decided in the [retention
 ledger](retention-ledger.md) and the [database-outage
 contract](db-outage-matrix.md); this section changes none of them.
 
-Shared first check for either line (read-only; run no `INSERT`, `DELETE`,
+Shared first check for any of these lines (read-only; run no `INSERT`, `DELETE`,
 replay, lock clear, or credential change to investigate):
 
 ```sql
@@ -601,16 +606,18 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-When either line carries the serving request's validated `request_id`, join the
+When a write line carries the serving request's validated `request_id`, join the
 warning to its `http.request` by ID, not by time window. The ID travels only
 when it validates: Hono-served searches and board views always carry one, and
 Kit-served hotzones and members-board lines carry the validated dispatch id
 their bindings forward. Kit-served event searches omit `request_id` because the
 calendar model call does not forward it to the search logger; correlate those by time window and route.
-Other lines without an ID failed validation or predate the plumbing. Keep raw
+Other lines without an ID failed validation or predate the plumbing. The
+content-gap read line carries no `request_id` either: correlate it by incident
+window. Keep raw
 `normalized_query` and `normalized_board_key` values, member identity,
 cookies, tokens, connection strings, and invented request IDs out of
-diagnostic output: the aggregates above are sufficient, and the warning's
+diagnostic output: the aggregates above are sufficient, and each warning's
 `exception` is a class name, never the message.
 
 ### Missing sync-queue binding warning
@@ -788,24 +795,25 @@ its bounded pages.
 
 ### Optional-content degradation warnings
 
-Five `console.warn` lines mark degraded optional content. The page still
+Six `console.warn` lines mark degraded optional content. The page still
 returns 200 with a hidden block, fallback ranks, or a static fallback; none
 of these reads fails the request. Do not triage them as page outages: join
-the home-events and home-featured warns by their validated `request_id` to
-the `http.request` line and confirm the status is 200, and read the other
-three by incident window (counts carries only a view key, stats carries
-nothing, and the widget carries a guild, never a request ID). Absent
-warnings do not prove healthy counts, stats or widgets: each family has
-silent paths that hide content without logging (see the rows). None of the
-five pages; the paging side lives in the [alert runbook](runbook-alerts.md).
+the home-events, home-featured, and Hono-served stats warns by their
+validated `request_id` to the `http.request` line and confirm the status is
+200, and read counts and the widget by incident window (counts carries a view
+key plus the exception class, the widget carries a guild, and neither carries
+a request ID; Kit-served stats lines likewise omit it). Absent warnings do
+not prove healthy counts, stats or widgets: each family has silent paths that
+hide content without logging (see the rows). None of the six pages; the
+paging side lives in the [alert runbook](runbook-alerts.md).
 
 | Message | Trigger | User impact | Severity | First read-only check | Fields carried | Escalation boundary |
 | --- | --- | --- | --- | --- | --- | --- |
-| `Counts read unavailable` | One bot-owned `web_v1` view read threw or passed the 2 s deadline (`cachedRead` catch in `src/counts.ts`). Live counts and ranks degrade independently. | Hidden numerals on home (`src/screens/home.tsx`): no `member-count` block while `memberCount` is null, and static fallback rank labels while `ranks` is empty. The page is still 200. | No page. | Search logs for the line and its `key`; then check the configured bot source (explicit `BOT_DATABASE_URL`, else the `BOT_DB` Hyperdrive binding serving read-only `web_v1` views, `src/db/connection.ts`; see [config](config.md)). Never the web `DB` (it holds no `web_v1` views), never web migrations, never alternate credentials. | `key` only (`counts.live` or `counts.ranks`) | One window that recovers on retry needs nothing. Counts hidden across windows point at bot-source health: route to the authorized operator. A quiet window with hidden counts is cached degradation (unavailable results cached 60 s), no bot source (fallback with no warning), or a stale snapshot: a readable `web_v1.live_counts` row whose `counts_updated_at` is 10 min old or more (or future-dated past the same absolute bound) hides numerals with no warning and caches that outcome. With a readable bot source, check `counts_updated_at` freshness first (collector stall) before treating it as bot-source ill health. |
+| `Counts read unavailable` | One bot-owned `web_v1` view read threw or passed the 2 s deadline (`cachedRead` catch in `src/counts.ts`). Live counts and ranks degrade independently. | Hidden numerals on home (`src/screens/home.tsx`): no `member-count` block while `memberCount` is null, and static fallback rank labels while `ranks` is empty. The page is still 200. | No page. | Search logs for the line and its `key` plus `exception`; then check the configured bot source (explicit `BOT_DATABASE_URL`, else the `BOT_DB` Hyperdrive binding serving read-only `web_v1` views, `src/db/connection.ts`; see [config](config.md)). Never the web `DB` (it holds no `web_v1` views), never web migrations, never alternate credentials. | `key` (`counts.live` or `counts.ranks`) plus `exception` (the rejection class name; never the driver message or URL, which can carry credentials) | One window that recovers on retry needs nothing. Counts hidden across windows point at bot-source health: route to the authorized operator. A quiet window with hidden counts is cached degradation (unavailable results cached 60 s), no bot source (fallback with no warning), or a stale snapshot: a readable `web_v1.live_counts` row whose `counts_updated_at` is 10 min old or more (or future-dated past the same absolute bound) hides numerals with no warning and caches that outcome. With a readable bot source, check `counts_updated_at` freshness first (collector stall) before treating it as bot-source ill health. |
 | `Home events unavailable; serving the fallback.` | The homepage merged read threw or passed the 1 s deadline (`warnHomeFallback` in `src/events/reads.ts`). | The teaser reads "Game nights are unavailable right now." (`data-state="unavailable"`, `src/screens/home.tsx`) instead of "Nothing scheduled yet." The page is still 200. | No page. | Join by the warning's validated `request_id` to the matching `http.request` line ([Find a request](#find-a-request)): 200 with `unavailable` is degradation, not an outage. Only join on the actual ID: malformed caller input is dropped to `undefined`. | Validated `request_id` plus `exception` (`HomeEventsDeadline` on deadline, otherwise `ReadFailure`); never driver text, SQL or identities | `HomeEventsDeadline` points at the canonical/database side of the merged read (canonical rows, past zones, persisted IDs, connection setup): the Discord read is bounded separately at 700 ms (`HOME_DISCORD_TIMEOUT_MS`) and degrades to silent `discordFailed`, so Discord slowness alone cannot trip the 1 s deadline (background: [Discord calendar snapshots](discord-snapshots.md)). Sustained `ReadFailure` with canonical errors points at database health: route to the authorized operator. An `unavailable` teaser with no warning has two silent paths: a null database handle returns unavailable without logging, and an empty canonical list plus a failed or timed-out Discord read (`discordFailed`) returns unavailable without calling `warnHomeFallback`. |
 | `Home featured unavailable; serving the fallback.` | The homepage featured read threw or passed the 500 ms deadline (`withPublishedFeaturedRead` in `src/featured.ts`, warned in `cachedFeatured` in `src/home-cache.ts`, which threads the caller's validated `request_id`). The legacy visible path (`listVisibleFeatured`) keeps its swallowing deadline and never warns. | No featured block on home (`src/screens/home.tsx`): a failed read serves the same empty list as a genuinely empty table. The page is still 200. | No page. | Join by the warning's validated `request_id` to the matching `http.request` line ([Find a request](#find-a-request)): 200 with no featured block is degradation, not an outage. Only join on the actual ID: malformed caller input is dropped to `undefined`. | Validated `request_id` plus `exception` (constant `ReadFailure`, covering both throws and the deadline); never driver text, SQL or identities | Sustained `ReadFailure` with database errors points at database health: route to the authorized operator. A missing featured block with no warning is a null database handle, a genuinely empty table (both silent by design), or a legacy-path read. |
 | `discord widget unavailable; rendering the join fallback` | The `/join` widget probe got a non-2xx (other than 429) or threw, while the previous posture was available (`wasAvailable` gate in `src/discord-widget.ts`). Cold isolates start optimistic, so the first failing probe warns; a sustained outage warns once. | The static fallback ("Live server preview is unavailable — the join button above still works.", `src/screens/join.tsx`): no presence snapshot, no preview loader. Join still works. | No page. | Search logs by `guild_id` over the incident window; confirm the probe target in `src/discord-widget.ts` (public `widget.json` for that guild: no member data, no cookies). | `guild_id` plus `status` (non-2xx site) or `exception` (class name, throw site); never a URL, body, token or member field | One transition during a Discord incident needs nothing. A fallback that persists across windows points at the widget switch or guild config (`DISCORD_GUILD_ID`, see [config](config.md)): route to the authorized operator. A 429 never warns: it carries no new information, so the probe keeps the previous verdict and snapshot (see below). |
-| `Member stats unavailable; showing the unavailable state.` / `Member milestones unavailable; keeping membership facts.` | A profile stats read threw or passed the 500 ms budget: the wrapper (`memberStatsWithBudget`) aborts and the `web_v1` view read (`readMemberStats`) in `src/profiles/stats.ts` settles its timeout outcome. A membership failure warns the stats line; a milestones-only failure warns the milestones line and keeps the membership facts. | The profile page renders an explicit unavailable state with a retry link (`src/profiles/pages.tsx` and the Kit twin), never a silent hide and never invented facts. Only a genuinely absent member row or an unconfigured source hides the block (`stats` null). The page is still 200. | No page. | Search logs by incident window only (message-only, no join key); then check the same configured bot `web_v1` source as counts ([config](config.md)). Never web migrations or alternate credentials. | None (message only) | Occasional warnings under load are budget trips, not proof of a broken view: when the 500 ms budget expires the wrapper aborts the in-flight `web_v1` query, and the aborted read warns as it settles its partial or unavailable outcome. Unavailable stats across windows point at bot-source health: route to the authorized operator. Only a missing database/source (no bot URL, null handle) or an absent member row resolves to null silently, so a quiet window with hidden stats proves nothing only in those cases. |
+| `Member stats unavailable; showing the unavailable state.` / `Member milestones unavailable; keeping membership facts.` | A profile stats read threw or passed the 500 ms budget: the wrapper (`memberStatsWithBudget`) aborts and the `web_v1` view read (`readMemberStats`) in `src/profiles/stats.ts` settles its timeout outcome. A membership failure warns the stats line; a milestones-only failure warns the milestones line and keeps the membership facts. | The profile page renders an explicit unavailable state with a retry link (`src/profiles/pages.tsx` and the Kit twin), never a silent hide and never invented facts. Only a genuinely absent member row or an unconfigured source hides the block (`stats` null). The page is still 200. | No page. | Join Hono-served lines by the warning's validated `request_id` to the matching `http.request` line ([Find a request](#find-a-request)); read Kit-served lines by incident window. Then check the same configured bot `web_v1` source as counts ([config](config.md)). Never web migrations or alternate credentials. | Both lines carry `exception` (the rejection class name; never the driver message, which can carry a connection string or member data) and `aborted` (`true` when the 500 ms budget had already fired, `false` for a live failure); Hono-served lines also carry `request_id` when the caller's ID validates (Kit-served lines omit it) | Occasional `aborted:true` warnings under load are budget trips, not proof of a broken view: when the 500 ms budget expires the wrapper aborts the in-flight `web_v1` query, and the aborted read warns as it settles its partial or unavailable outcome. An `aborted:false` warning with a driver class points at the view or connection instead. Unavailable stats across windows point at bot-source health: route to the authorized operator. Only a missing database/source (no bot URL, null handle) or an absent member row resolves to null silently, so a quiet window with hidden stats proves nothing only in those cases. |
 
 A 429 from the widget probe is not a verdict change: the probe keeps the
 previous availability and snapshot and logs nothing, because a rate limit

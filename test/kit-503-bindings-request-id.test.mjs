@@ -62,6 +62,10 @@ const virtualModules = new Map([
     "alerts",
     `export function alertRequestError(err, fields) {
       globalThis.__kit503Bindings.alerts.push({ err, fields });
+    }
+    export function exceptionClass(err) {
+      if (err instanceof Error) return err.constructor?.name || err.name || "Error";
+      return typeof err;
     }`,
   ],
   [
