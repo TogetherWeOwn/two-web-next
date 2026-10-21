@@ -92,17 +92,24 @@ type KitJoinLoad = (args: KitJoinLoadArgs) => Promise<KitJoinLoadData>;
 let load: KitJoinLoad;
 let scratch = "";
 
-function shared(): { env: Env; pending: Promise<unknown>[] } {
-  return (globalThis as Record<string, unknown>)[ENV_KEY] as {
-    env: Env;
-    pending: Promise<unknown>[];
-  };
+type SharedStub = {
+  env: Env;
+  pending: Promise<unknown>[];
+  waitUntil: (work: Promise<unknown>) => void;
+};
+
+function shared(): SharedStub {
+  return (globalThis as Record<string, unknown>)[ENV_KEY] as SharedStub;
 }
 
 beforeAll(async () => {
   // Same bundle harness as the home featured-DTO suite: the real route load
   // with only the Worker env stubbed. The bundled discord-widget singleton
   // starts cold, so the first load schedules its probe through waitUntil.
+  // The waitUntil implementation lives here in plain TS, not in the
+  // generated stub: the stub only re-exports the shared members, so no
+  // function syntax is ever built out of template strings.
+  const pending: Promise<unknown>[] = [];
   (globalThis as Record<string, unknown>)[ENV_KEY] = {
     env: {
       APP_URL: "https://next.example.test",
@@ -113,8 +120,11 @@ beforeAll(async () => {
       DISCORD_BOT_TOKEN: "bot-token",
       SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     } satisfies Env,
-    pending: [] as Promise<unknown>[],
-  };
+    pending,
+    waitUntil: (work: Promise<unknown>) => {
+      pending.push(work);
+    },
+  } satisfies SharedStub;
   scratch = mkdtempSync(join(tmpdir(), "kit-join-public-snapshot-"));
   const outfile = join(scratch, "kit-join-load-bundle.mjs");
   await build({
@@ -141,7 +151,7 @@ beforeAll(async () => {
           plugin.onLoad({ filter: /.*/, namespace: "kit-join-public-snapshot" }, () => ({
             contents: [
               `export const env = globalThis[${JSON.stringify(ENV_KEY)}].env;`,
-              `export const waitUntil = (work) => { globalThis[${JSON.stringify(ENV_KEY)}].pending.push(work); };`,
+              `export const waitUntil = globalThis[${JSON.stringify(ENV_KEY)}].waitUntil;`,
               ``,
             ].join("\n"),
             loader: "js",
