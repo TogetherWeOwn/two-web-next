@@ -345,7 +345,13 @@ describe.skipIf(!url)("sign-in roster SQL lifecycle (isolated test DB)", () => {
         avatar: expected.avatar,
         member: true,
       });
-      expect(warn).not.toHaveBeenCalled();
+      // The null throttle store intentionally warns once per guarded request
+      // (fail-open allow); this lifecycle test only owns roster silence, so it
+      // filters that contracted line before asserting nothing else warned.
+      const unexpected = warn.mock.calls.filter(
+        ([msg]) => msg !== "Throttle store unavailable; allowing the request.",
+      );
+      expect(unexpected).toEqual([]);
       expect(closeShared).not.toHaveBeenCalled();
       expect(await settings()).toEqual(before);
     },

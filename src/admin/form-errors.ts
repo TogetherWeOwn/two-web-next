@@ -9,6 +9,9 @@ const eventFields = {
   ends_at: "Ends",
   timezone: "Timezone",
   location: "Location",
+  organizer_name: "Organizer display name",
+  join_url: "Public joining link",
+  join_instructions: "Public joining instructions",
   capacity: "Capacity",
 };
 const recurrenceFields = {

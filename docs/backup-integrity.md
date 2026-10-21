@@ -80,12 +80,17 @@ happen to be retrieved. The weekly receipt names the weekly key, and the archive
 and receipt pass the same read-back gate as a new backup before both keys are
 added to the manifest.
 
-`rotate` still selects archives using the existing daily/weekly ordering and
-limits. For each expired archive it deletes the archive and its manifest-listed
+`rotate` computes one deterministic retention plan from the existing
+daily/weekly ordering and limits, then previews or applies that exact plan.
+Supported policy bounds are `BACKUP_KEEP_DAILY` 1..365 and `BACKUP_KEEP_WEEKLY`
+1..52 (defaults 7/4); other values are rejected before any storage call. For
+each expired archive the plan deletes the archive and its manifest-listed
 receipt; retained archives keep their receipt lines. Legacy entries without
-receipt lines retain their previous lifecycle. `--dry-run` still prints one
-delete line per archive and mutates neither object. Unlisted objects are out of
-scope, as before.
+receipt lines retain their previous lifecycle. Bare `rotate` and `--dry-run`
+are identical nonmutating previews printing exact disjoint keep/delete archive
+lines; only `--apply` deletes, and only the planned targets. `--json` emits a
+byte-stable version-1 plan with mode, policy, keep/delete, actions and a safe
+nextAction. Unlisted objects are out of scope, as before.
 
 R2 does not provide an atomic archive/receipt/manifest transaction here. A paired
 delete failure exits nonzero and leaves the old manifest unchanged; one object
@@ -101,6 +106,7 @@ python3 ci/backup-target-selftest
 bash ci/db-backup-argv-selftest.sh
 python3 ci/backup-manifest-admission-selftest
 python3 ci/backup-restore-proof/selftest.py
+bash ci/db-backup-retention-plan-selftest.sh
 bash ci/db-backup-selftest.sh
 bash -n bin/db-backup.sh ci/backup-integrity-selftest
 ```
@@ -113,13 +119,13 @@ receipt transport failures, exact pairing and retention failures.
 
 ## Required CI
 
-The `check` job in `.github/workflows/ci.yml` runs all six suites above, each as
+The `check` job in `.github/workflows/ci.yml` runs all seven suites above, each as
 its own step, so a red one fails the `check` job and therefore the required
 `ci-ok`. No
-step is `continue-on-error`. The five new suites run when the change scope
+step is `continue-on-error`. The six gated suites run when the change scope
 selects `app` or `full` (any path under `bin/` or `ci/`, including
 `bin/db-backup.sh`, `bin/backup/**`, `ci/backup-*` and
-`ci/db-backup-argv-selftest.sh`), and on every push to `main`, nightly run and
+`ci/db-backup-*.sh`), and on every push to `main`, nightly run and
 dispatch. Docs-only and draft runs skip them like every other heavy step.
 `test/change-scope.test.ts` fails if a step is removed, loses its gate, swallows
 its exit code, or if a backup input stops selecting the `app` scope.

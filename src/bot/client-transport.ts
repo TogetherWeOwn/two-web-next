@@ -160,6 +160,7 @@ export type ResolvedBotConfig = {
   keyId: string;
   timeoutSeconds: number;
   fetchFn: typeof fetch;
+  stderrDiagnostics: boolean;
 };
 
 export async function send(
@@ -227,7 +228,10 @@ export async function send(
   // with a fixed `unknown` fallback, as do queue failure diagnostics.
   const correlation = idempotencyKey !== null ? { idempotency_key: idempotencyKey } : {};
   if (parsed.ok) {
-    console.info("bot internal action succeeded", {
+    // Success is a diagnostic, not data: machine callers keep stdout for the
+    // document and read this on stderr instead. Refusals already warn there.
+    const log = o.stderrDiagnostics ? console.warn : console.info;
+    log("bot internal action succeeded", {
       ...correlation,
       action: actionName,
       status: res.status,
