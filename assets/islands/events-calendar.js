@@ -111,7 +111,9 @@
     var q = params.get("q") || "";
     var view = params.get("view") || "list";
     var place =
-      view === "calendar" ? monthLabel(params.get("month") || "") || "the calendar" : "the events list";
+      view === "calendar"
+        ? monthLabel(params.get("month") || "") || "the calendar"
+        : "the events list";
     if (q === "") return place;
     return view === "calendar" ? "results for “" + q + "” in " + place : "results for “" + q + "”";
   }
@@ -582,8 +584,7 @@
     });
     clearRead.addEventListener("click", function () {
       if (!failedIntent) return;
-      input.value =
-        new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
+      input.value = new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
       hideRecovery();
     });
   }
