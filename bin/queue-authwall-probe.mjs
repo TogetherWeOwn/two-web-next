@@ -55,9 +55,18 @@ function discard(res) {
   }
 }
 
+function checkId(label) {
+  // Stable kebab IDs derived from the pinned labels: the same 18 IDs in the
+  // same order on every run, whatever the admission state or token.
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function check(label, actual, expected) {
   const pass = actual === expected;
-  return { label, actual, expected, pass };
+  return { id: checkId(label), label, actual, expected, pass, ok: pass };
 }
 
 function locationShape(location) {
@@ -132,10 +141,14 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   );
   if (redispatchWalled) {
     checks.push({
+      // Shared stable ID with the disabled branch below: the same 18 IDs in
+      // the same order whatever the admission state. Labels stay distinct.
+      id: "guest-post-redispatch-location",
       label: "guest POST redispatch recovery target",
       actual: guestRecovery ? "recovery" : locationShape(guestRedispatchLocation),
       expected: "recovery",
       pass: guestRecovery,
+      ok: guestRecovery,
     });
   } else {
     checks.push(checkLocation("guest POST redispatch location", guestRedispatchLocation, null));
@@ -239,14 +252,26 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   // Preview and redispatch share one flag and one operator ID: their guest
   // legs must agree. Source-evidence is independently flagged.
   checks.push({
+    id: checkId("preview/redispatch admission agreement"),
     label: "preview/redispatch admission agreement",
     actual: `${previewState}/${redispatchState}`,
     expected: "matching states",
     pass: previewState === redispatchState,
+    ok: previewState === redispatchState,
   });
 
   const failures = checks.filter((c) => !c.pass);
+  const ok = failures.length === 0;
   return {
+    version: 1,
+    tool: "queue-authwall-probe",
+    mode: "report",
+    ok,
+    code: ok ? "QUEUE_AUTHWALL_OK" : "QUEUE_AUTHWALL_FAILED",
+    next: ok
+      ? "No action: the queue auth wall holds; rerun after the next staging deploy."
+      : "Check the staging QA gate, throttle budget and deployment; no outcome claimed.",
+    checks,
     target: baseUrl,
     admission: {
       preview: previewState,
@@ -265,10 +290,38 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   };
 }
 
+const HELP = `Usage: node bin/queue-authwall-probe.mjs [--help]
+
+Staging-only operator probe: queue auth-wall parity across the three
+operator legs — preview admission, redispatch admission and the
+source-evidence bearer wall.
+
+Environment:
+  QA_AUTH_TOKEN  staging QA login token (required; never pass it as a CLI argument)
+
+The probe target is pinned to ${STAGING_URL}; there are no other options.
+Output is one JSON verdict on stdout: version, tool, mode, ok, code,
+next and checks (stable kebab ids). Failures print one generic line to
+stderr and claim nothing.
+
+Exit codes:
+  exit 0  every auth-wall check passed (or --help printed)
+  exit 1  any check failed, a QA login was refused, or the probe errored
+  exit 2  wrong arguments; static usage on stderr
+
+See docs/probe-cli-contract.md for the shared probe CLI contract.`;
+
 async function main() {
+  if (process.argv.slice(2).includes("--help")) {
+    // Discovery only: usage to stdout, exit 0, zero side effects — no token
+    // read, no login, no probe. Checked before the argv refusal so --help is
+    // never parsed as a positional.
+    console.log(HELP);
+    return;
+  }
   if (process.argv.length !== 2) {
     console.error("Usage: node bin/queue-authwall-probe.mjs");
-    process.exitCode = 1;
+    process.exitCode = 2;
     return;
   }
   const result = await runProbe({ token: process.env.QA_AUTH_TOKEN });

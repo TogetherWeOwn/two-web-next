@@ -435,7 +435,7 @@ describe("queue auth-wall probe CLI (offline subprocess)", () => {
   it("prints static usage for extra arguments without fetching or echoing them", () => {
     const child = runCli("forbidden", "fixture-qa-token", ["private-argument"]);
     expect(child.error).toBeUndefined();
-    expect(child.status).toBe(1);
+    expect(child.status).toBe(2);
     expect(child.stdout).toBe("");
     expect(child.stderr).toBe("Usage: node bin/queue-authwall-probe.mjs\n");
   });
