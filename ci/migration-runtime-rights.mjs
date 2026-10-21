@@ -106,10 +106,26 @@ export async function assertRuntimeDefaultAcl(client) {
 const identifier = '(?:"(?:[^"]|"")*"|[a-zA-Z_][a-zA-Z0-9_$]*)';
 const relation = `(${identifier}(?:\\s*\\.\\s*${identifier})?)`;
 
+// PostgreSQL lexing rules the guard must mirror, otherwise statements hidden
+// from the census still execute at apply time:
+// - E'...' strings treat backslash as an escape, so \' does not terminate.
+//   The E prefix applies unless it extends an identifier ([A-Za-z_$]; a digit
+//   cannot absorb it because 1E'...' lexes as number 1 plus an E-string).
+// - A $ tag extends an identifier ([A-Za-z0-9_$] continuation), so $tag$ after
+//   [A-Za-z_$] is an identifier, not a dollar-quote. After a digit the $ starts
+//   a fresh token, so dollar quotes still open there.
+// - Dollar-quote tags follow identifier-start rules ($$ or $tag$); $1$ is a
+//   parameter followed by $, never a quote.
+const DOLLAR_TAG = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/;
+const QUOTE_ABSORBING_CHAR = /[A-Za-z_$]/;
+
+class UnterminatedSqlError extends Error {}
+
 function stripComments(sql) {
   let output = "";
   let index = 0;
   let state = "normal";
+  let quoteIsEscapeString = false;
   let dollarTag = "";
   let blockDepth = 0;
   while (index < sql.length) {
@@ -141,6 +157,11 @@ function stripComments(sql) {
       continue;
     }
     if (state === "single-quote") {
+      if (quoteIsEscapeString && char === "\\" && index + 1 < sql.length) {
+        output += char + sql[index + 1];
+        index += 2;
+        continue;
+      }
       output += char;
       if (char === "'" && sql[index + 1] === "'") {
         output += "'";
@@ -182,6 +203,10 @@ function stripComments(sql) {
       index += 2;
     } else if (char === "'") {
       state = "single-quote";
+      quoteIsEscapeString =
+        index > 0 &&
+        (sql[index - 1] === "e" || sql[index - 1] === "E") &&
+        (index < 2 || !QUOTE_ABSORBING_CHAR.test(sql[index - 2]));
       output += char;
       index += 1;
     } else if (char === '"') {
@@ -189,8 +214,8 @@ function stripComments(sql) {
       output += char;
       index += 1;
     } else {
-      const dollar = rest.match(/^\$[a-zA-Z_0-9]*\$/)?.[0];
-      if (dollar) {
+      const dollar = rest.match(DOLLAR_TAG)?.[0];
+      if (dollar && (index === 0 || !QUOTE_ABSORBING_CHAR.test(sql[index - 1]))) {
         state = "dollar-quote";
         dollarTag = dollar;
         output += dollar;
@@ -201,6 +226,9 @@ function stripComments(sql) {
       }
     }
   }
+  if (state !== "normal" && state !== "line-comment") {
+    throw new UnterminatedSqlError("migration contains an unterminated string, quote, or comment");
+  }
   return output;
 }
 
@@ -208,11 +236,17 @@ function splitStatements(sql) {
   const statements = [];
   let current = "";
   let state = "normal";
+  let quoteIsEscapeString = false;
   let dollarTag = "";
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index];
     const rest = sql.slice(index);
     if (state === "single-quote") {
+      if (quoteIsEscapeString && char === "\\" && index + 1 < sql.length) {
+        current += char + sql[index + 1];
+        index += 1;
+        continue;
+      }
       current += char;
       if (char === "'" && sql[index + 1] === "'") {
         current += "'";
@@ -238,13 +272,17 @@ function splitStatements(sql) {
     }
     if (char === "'") {
       state = "single-quote";
+      quoteIsEscapeString =
+        index > 0 &&
+        (sql[index - 1] === "e" || sql[index - 1] === "E") &&
+        (index < 2 || !QUOTE_ABSORBING_CHAR.test(sql[index - 2]));
       current += char;
     } else if (char === '"') {
       state = "double-quote";
       current += char;
     } else {
-      const dollar = rest.match(/^\$[a-zA-Z_0-9]*\$/)?.[0];
-      if (dollar) {
+      const dollar = rest.match(DOLLAR_TAG)?.[0];
+      if (dollar && (index === 0 || !QUOTE_ABSORBING_CHAR.test(sql[index - 1]))) {
         state = "dollar-quote";
         dollarTag = dollar;
         current += dollar;
@@ -254,6 +292,9 @@ function splitStatements(sql) {
         current = "";
       } else current += char;
     }
+  }
+  if (state !== "normal") {
+    throw new UnterminatedSqlError("migration contains an unterminated string or quote");
   }
   if (current.trim()) statements.push(current.trim());
   return statements;
@@ -291,11 +332,21 @@ function createdObjects(sql, errors) {
         objects.push({ name, kind: "table" });
         const leaf = name.slice("public.".length);
         const tableBody = statement.slice(table[0].length);
-        const catalogPrefix = "(?:pg_catalog\\s*\\.\\s*)?";
+        // Quoted spellings ("serial", "pg_catalog"."int8") create the same
+        // backing sequences as unquoted ones, so the census accepts both. The
+        // type boundary is a negative lookahead rather than \b because \b
+        // matches between a word char and $ (serial$x is one identifier) and
+        // never matches after a closing quote.
+        const catalogPrefix = '(?:(?:pg_catalog|"pg_catalog")\\s*\\.\\s*)?';
+        const serialType =
+          '"(?:smallserial|serial2|serial4|serial|bigserial|serial8)"|smallserial|serial2|serial4|serial|bigserial|serial8';
+        const integerType =
+          '"(?:smallint|int2|integer|int4|int|bigint|int8)"|smallint|int2|integer|int4|int|bigint|int8';
+        const typeBoundary = "(?![A-Za-z0-9_$])";
         const serialColumns = [
           ...tableBody.matchAll(
             new RegExp(
-              `(?:^|[, (\\n])\\s*(${identifier})\\s+${catalogPrefix}(?:smallserial|serial2|serial4|serial|bigserial|serial8)\\b`,
+              `(?:^|[, (\\n])\\s*(${identifier})\\s+${catalogPrefix}(?:${serialType})${typeBoundary}`,
               "ig",
             ),
           ),
@@ -303,7 +354,7 @@ function createdObjects(sql, errors) {
         const identityColumns = [
           ...tableBody.matchAll(
             new RegExp(
-              `(?:^|[, (\\n])\\s*(${identifier})\\s+${catalogPrefix}(?:smallint|int2|integer|int4|int|bigint|int8)\\s+GENERATED\\s+(?:ALWAYS|BY\\s+DEFAULT)\\s+AS\\s+IDENTITY\\b`,
+              `(?:^|[, (\\n])\\s*(${identifier})\\s+${catalogPrefix}(?:${integerType})\\s+GENERATED\\s+(?:ALWAYS|BY\\s+DEFAULT)\\s+AS\\s+IDENTITY${typeBoundary}`,
               "ig",
             ),
           ),
@@ -326,7 +377,7 @@ function createdObjects(sql, errors) {
     }
     const view = statement.match(
       new RegExp(
-        `^CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:MATERIALIZED\\s+)?VIEW\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${relation}`,
+        `^CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:RECURSIVE\\s+)?(?:MATERIALIZED\\s+)?VIEW\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${relation}`,
         "i",
       ),
     );
@@ -380,14 +431,22 @@ function grantStatements(sql, errors) {
 
 export function validateMigrationSql(fileName, source) {
   const errors = [];
-  const sql = stripComments(source);
-  const statements = splitStatements(sql);
+  let sql;
+  let statements;
+  try {
+    sql = stripComments(source);
+    statements = splitStatements(sql);
+  } catch (error) {
+    return [
+      `${fileName}: ${error instanceof UnterminatedSqlError ? error.message : "unparseable migration SQL"}`,
+    ];
+  }
   for (const statement of statements) {
     if (
       /^\s*(?:SET\s+(?:(?:LOCAL|SESSION)\s+)?ROLE|SET\s+SESSION\s+AUTHORIZATION|RESET\s+(?:ROLE|SESSION\s+AUTHORIZATION))\b/i.test(
         statement,
       ) ||
-      /\bset_config\s*\(/i.test(statement)
+      /(?:"set_config"|\bset_config)\s*\(/i.test(statement)
     ) {
       errors.push("role switching is forbidden in runtime-rights migrations");
     }
@@ -432,6 +491,11 @@ export function validateMigrationSql(fileName, source) {
     if (/^\s*(?:CREATE\s+FOREIGN\s+TABLE|IMPORT\s+FOREIGN\s+SCHEMA)\b/i.test(statement)) {
       errors.push("foreign-table creation is outside the reviewed runtime-rights object census");
     }
+    if (/^\s*CREATE\s+SCHEMA\b/i.test(statement)) {
+      errors.push(
+        "CREATE SCHEMA schema elements are outside the reviewed runtime-rights object census",
+      );
+    }
     if (
       /^\s*ALTER\b[\s\S]*\bOWNER\s+TO\b/i.test(statement) ||
       /^\s*REASSIGN\s+OWNED\b/i.test(statement)
@@ -443,7 +507,7 @@ export function validateMigrationSql(fileName, source) {
     }
     if (
       /^\s*ALTER\s+TABLE\b/i.test(statement) &&
-      /\b(?:smallserial|serial2|serial4|serial|bigserial|serial8|GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY)\b/i.test(
+      /(?:(?<![A-Za-z0-9_$])(?:smallserial|serial2|serial4|serial|bigserial|serial8|"(?:smallserial|serial2|serial4|serial|bigserial|serial8)")(?![A-Za-z0-9_$])|(?<![A-Za-z0-9_$])GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY(?![A-Za-z0-9_$]))/i.test(
         statement,
       )
     ) {
@@ -518,7 +582,7 @@ export function validateMigrationSql(fileName, source) {
   return errors.map((error) => `${fileName}: ${error}`);
 }
 
-export function changedMigrationFiles(baseRef = "origin/main") {
+export function changedMigrationFiles(baseRef = "origin/main", cwd = repoRoot) {
   const names = execFileSync(
     "git",
     [
@@ -530,7 +594,7 @@ export function changedMigrationFiles(baseRef = "origin/main") {
       "--",
       "drizzle/*.sql",
     ],
-    { cwd: repoRoot, encoding: "utf8" },
+    { cwd, encoding: "utf8" },
   );
   return names
     .split("\n")
@@ -538,12 +602,10 @@ export function changedMigrationFiles(baseRef = "origin/main") {
     .filter(Boolean);
 }
 
-export function checkChangedMigrations(baseRef = "origin/main") {
+export function checkChangedMigrations(baseRef = "origin/main", cwd = repoRoot) {
   const failures = [];
-  for (const fileName of changedMigrationFiles(baseRef)) {
-    failures.push(
-      ...validateMigrationSql(fileName, readFileSync(resolve(repoRoot, fileName), "utf8")),
-    );
+  for (const fileName of changedMigrationFiles(baseRef, cwd)) {
+    failures.push(...validateMigrationSql(fileName, readFileSync(resolve(cwd, fileName), "utf8")));
   }
   return failures;
 }
