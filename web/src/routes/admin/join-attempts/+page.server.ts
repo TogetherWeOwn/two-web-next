@@ -8,6 +8,7 @@ import {
   parseJoinAttemptsQuery,
 } from "../../../../../src/admin/table-list";
 import { isDatabaseUnavailable } from "../../../../../src/db/errors";
+import { alertRequestError } from "../../../../../src/alerts";
 import { JOIN_OUTCOMES } from "../../../../../src/join/service";
 import type { PageServerLoad } from "./$types";
 
@@ -21,8 +22,9 @@ import type { PageServerLoad } from "./$types";
 // Discord/request-id search, newest first, plus a one-row next-page
 // lookahead. No DB answers the shared 503; a classified database outage maps
 // to the same 503 instead of SvelteKit's 500 error page. Any other rejection
-// propagates: the hook's member-read boundary refuses it without releasing
-// trace identifiers, exactly like the Hono guard's boundary.
+// emits the leak-free error.alert diagnostic first (mirroring the detail
+// resolver), then renders that branded 500 shell, which the hook's
+// member-read boundary releases only after its audit decision.
 // Authorization stays in the layout guard; the member-read boundary around
 // resolve() owns classification and the audit. No new queries: the list and
 // its lookahead are the one shared keyed read, outcomes only plus the
@@ -43,6 +45,7 @@ export const load: PageServerLoad = async ({ url, setHeaders, parent }) => {
     fetched = await listJoinAttempts(db, query);
   } catch (err) {
     if (isDatabaseUnavailable(err)) error(503, "Admin temporarily unavailable");
+    alertRequestError(err, { method: "GET", route: "/admin/join-attempts" });
     throw err;
   }
   setHeaders({ "cache-control": "private, no-store" });

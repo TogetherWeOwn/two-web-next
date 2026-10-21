@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -28,7 +29,7 @@ function requireDisposableDatabase(value) {
   if (!["postgres:", "postgresql:"].includes(url.protocol)) {
     throw new Error("Kit Worker fixture accepts only a Postgres URL");
   }
-  if (!["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+  if (!isLoopbackHostname(url.hostname)) {
     throw new Error("Kit Worker fixture accepts only loopback Postgres hosts");
   }
 }
