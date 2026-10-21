@@ -348,22 +348,22 @@ function requestRouteOf(record: DiagnosticRecord): string | undefined {
   return event === "http.request" && typeof route === "string" ? route : undefined;
 }
 
-/** Routes of the request lines the middleware wrote; a hand-written line does not count. */
+/** Routes on JSON console records with the middleware request event and route fields. */
 export function requestRoutes(records: DiagnosticRecord[]): string[] {
   return records.flatMap((record) => requestRouteOf(record) ?? []);
 }
 
 /**
- * Fails unless the request line for `request` was written, each expected record was written
- * exactly once, and every value was inspected to the end with no marker found. Assertions carry
- * counts and labels only, so a failure never prints marker bytes.
+ * Fails unless a request record for `request` is present, each expected record appears exactly
+ * once, and every value was inspected to the end with no marker found. Assertions carry counts and
+ * labels only, so a failure never prints marker bytes.
  */
 export function expectDiagnosticStreamClean(
   records: DiagnosticRecord[],
   markers: readonly string[],
   { request, messages = [] }: { request: string; messages?: readonly string[] },
 ): void {
-  expect(requestRoutes(records), `request line written for ${request}`).toContain(request);
+  expect(requestRoutes(records), `request record present for ${request}`).toContain(request);
   for (const message of messages) {
     expect(
       records.filter((record) => record.args[0] === message).length,

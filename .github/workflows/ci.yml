@@ -391,6 +391,9 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Migration runtime-rights guard
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run migration:rights && npm run migration:rights:selftest
       - name: Seeded admin properties (10s budget, local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Skip npm's extra process startup; keep the same suite and hard budget.
