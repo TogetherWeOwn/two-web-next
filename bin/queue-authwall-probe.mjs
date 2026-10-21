@@ -266,7 +266,11 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
 }
 
 async function main() {
-  if (process.argv.length !== 2) throw new Error("Usage: node bin/queue-authwall-probe.mjs");
+  if (process.argv.length !== 2) {
+    console.error("Usage: node bin/queue-authwall-probe.mjs");
+    process.exitCode = 1;
+    return;
+  }
   const result = await runProbe({ token: process.env.QA_AUTH_TOKEN });
   console.log(JSON.stringify(result, null, 2));
   if (result.failed > 0) process.exitCode = 1;

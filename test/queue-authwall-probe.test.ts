@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone probe tooling has no declaration file.
 import * as probe from "../bin/queue-authwall-probe.mjs";
@@ -85,6 +87,11 @@ const EXPECTED_SENDS = 13;
 const EXPECTED_CHECKS = 18;
 
 describe("queue auth-wall probe tool (local fixtures)", () => {
+  it("pins the staging target and QA header to the deployed QA seam literals", () => {
+    expect(STAGING_URL).toBe("https://next.togetherweown.com");
+    expect(QA_HEADER).toBe("X-TWO-QA-Auth");
+  });
+
   it("covers one canonical selector per operator route", () => {
     expect(PREVIEW_PATH).toBe("/admin/queue/failed/7/preview");
     expect(REDISPATCH_PATH).toBe("/admin/queue/failed/7/redispatch");
@@ -348,5 +355,171 @@ describe("queue auth-wall probe tool (local fixtures)", () => {
     await expect(runProbe({ token: "fixture-qa-token", fetch: send })).rejects.toThrow(
       "QA login as qa-member refused (HTTP 404)",
     );
+  });
+});
+
+const CLI_PATH = fileURLToPath(new URL("../bin/queue-authwall-probe.mjs", import.meta.url).href);
+const GENERIC_ERROR =
+  "Queue auth-wall probe failed. Check the staging QA gate, throttle budget and deployment; no outcome claimed.\n";
+
+function runCli(
+  mode: "green" | "broken" | "throws" | "forbidden",
+  token = "fixture-qa-token",
+  args: string[] = [],
+) {
+  // Preload replaces fetch before the real CLI entry runs. Child environment
+  // contains only a synthetic token; every request is offline, even on failure.
+  const preload = `
+    const mode = ${JSON.stringify(mode)};
+    let sends = 0;
+    const specs = [
+      [302, "/auth/discord"], [303, "/auth/recover?next=/admin"], [403],
+      [204, null, "member"], [mode === "broken" ? 200 : 403], [403], [403],
+      [204, null, "moderator"], [403], [403], [403], [403], [405]
+    ];
+    globalThis.fetch = async (url, init) => {
+      sends += 1;
+      if (mode === "throws" || mode === "forbidden")
+        throw new Error("fetch failed with fixture-qa-token provider-private-text");
+      if (new URL(url).origin !== "https://next.togetherweown.com") throw new Error("wrong target");
+      if (new URL(url).pathname.startsWith("/auth/qa/") && init.headers["X-TWO-QA-Auth"] !== "fixture-qa-token")
+        throw new Error("wrong QA header");
+      const [status, location, identity] = specs[sends - 1];
+      const headers = new Headers();
+      if (location) headers.set("location", location);
+      if (identity) headers.append("set-cookie", "__Host-two_session=fixture-" + identity + "; Path=/; Secure");
+      return new Response(null, { status, headers });
+    };
+    process.on("exit", () => {
+      const expected = mode === "forbidden" ? 0 : mode === "throws" ? 1 : 13;
+      if (sends !== expected) process.exitCode = 90;
+    });
+  `;
+  return spawnSync(
+    process.execPath,
+    ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, CLI_PATH, ...args],
+    { env: { QA_AUTH_TOKEN: token }, encoding: "utf8", timeout: 5_000 },
+  );
+}
+
+describe("queue auth-wall probe CLI (offline subprocess)", () => {
+  it.each(["green", "broken"] as const)("exits with the %s wall verdict", (mode) => {
+    const child = runCli(mode);
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status).toBe(mode === "green" ? 0 : 1);
+    expect(child.stderr).toBe("");
+    const report = JSON.parse(child.stdout);
+    expect(report.failed).toBe(mode === "green" ? 0 : 1);
+    expect(report.passed + report.failed).toBe(EXPECTED_CHECKS);
+    if (mode === "broken")
+      expect(report.failures).toContainEqual(
+        expect.objectContaining({ label: "member GET preview status" }),
+      );
+    expect(child.stdout).not.toContain("fixture-qa-token");
+    expect(child.stdout).not.toContain("fixture-member");
+    expect(child.stdout).not.toContain("fixture-moderator");
+  });
+
+  it.each(["missing token", "transport exception"])(
+    "fails closed on %s without leaking exception text",
+    (mode) => {
+      const child = mode === "missing token" ? runCli("forbidden", "") : runCli("throws");
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(1);
+      expect(child.stdout).toBe("");
+      expect(child.stderr).toBe(GENERIC_ERROR);
+    },
+  );
+
+  it("prints static usage for extra arguments without fetching or echoing them", () => {
+    const child = runCli("forbidden", "fixture-qa-token", ["private-argument"]);
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(1);
+    expect(child.stdout).toBe("");
+    expect(child.stderr).toBe("Usage: node bin/queue-authwall-probe.mjs\n");
+  });
+});
+
+const DISPOSAL_MODES = [
+  "resolves",
+  "sync-throw",
+  "rejects",
+  "late-rejects",
+  "never-settles",
+  "null-body",
+] as const;
+
+describe.each([false, true])("queue disposal is inert (wall broken: %s)", (broken) => {
+  it.each(DISPOSAL_MODES)("preserves the exact verdict when cancellation %s", async (mode) => {
+    const send = greenFetch();
+    const inner = send.getMockImplementation()!;
+    send.mockImplementation(async (url, init) => {
+      if (
+        broken &&
+        new URL(url).pathname === PREVIEW_PATH &&
+        init?.headers?.Cookie?.includes("member")
+      )
+        return response(200);
+      return inner(url, init);
+    });
+    const expected = await runProbe({ token: "fixture-qa-token", fetch: send });
+    expect(expected.failed).toBe(broken ? 1 : 0);
+    send.mockClear();
+    let cancellations = 0;
+    // Plain function, not vi.fn: mock promise tracking would hide a missing
+    // rejection handler by attaching its own handler to the cancel promise.
+    const cancel = () => {
+      cancellations += 1;
+      const error = new Error("dispose failed fixture-qa-token provider-private-text");
+      if (mode === "sync-throw") throw error;
+      if (mode === "rejects") return Promise.reject(error);
+      if (mode === "late-rejects")
+        return new Promise<never>((_resolve, reject) => setImmediate(() => reject(error)));
+      if (mode === "never-settles") return new Promise<never>(() => {});
+      return Promise.resolve();
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const logs: unknown[][] = [];
+    const spies = (["log", "warn", "error"] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logs.push(args);
+      }),
+    );
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        runProbe({
+          token: "fixture-qa-token",
+          fetch: async (url: string, init: Parameters<typeof inner>[1]) => {
+            const res = await send(url, init);
+            return {
+              status: res.status,
+              headers: res.headers,
+              body: mode === "null-body" ? null : { cancel },
+            };
+          },
+        }),
+        new Promise<never>((_resolve, reject) => {
+          deadline = setTimeout(() => reject(new Error("probe waited for disposal")), 750);
+        }),
+      ]);
+      expect(result).toEqual(expected);
+      expect(send).toHaveBeenCalledTimes(EXPECTED_SENDS);
+      expect(cancellations).toBe(mode === "null-body" ? 0 : EXPECTED_SENDS);
+      // Flush late rejects as well as immediate rejects before removing the listener.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(logs).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain("fixture-qa-token");
+      expect(JSON.stringify(result)).not.toContain("provider-private-text");
+    } finally {
+      clearTimeout(deadline);
+      process.off("unhandledRejection", onUnhandled);
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 });

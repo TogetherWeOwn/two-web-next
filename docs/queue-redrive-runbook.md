@@ -221,12 +221,18 @@ A green result names each route's admission state (`enabled`, `disabled`,
 - A `preview/redispatch admission agreement` failure means the two routes
   disagree despite sharing one flag: suspect deploy skew or diverged
   admission, and re-run after the deploy settles.
-- A `cross-origin` or `method` control failure means the outer guard or the
-  method contract moved: check `src/same-origin.ts` and the route
+- A `guest POST without trusted origin status` (cross-origin control) or
+  `guest POST source-evidence status` (method control) failure means the outer
+  guard or method contract moved: check `src/same-origin.ts` and the route
   registrations before re-running.
-- A `QA login ... refused` throw means the staging QA gate or the shared login
-  budget refused: wait out the 60-second window and re-run; the probe claims
-  no outcome.
+- `Usage: node bin/queue-authwall-probe.mjs` on stderr means extra arguments
+  were supplied: remove them; the token belongs only in the environment. No
+  request was sent.
+- The generic `Queue auth-wall probe failed` stderr line means missing input,
+  a refused QA login or a transport failure; the probe claims no outcome and
+  deliberately hides exception text. Check the approved QA binding and staging
+  health. If the shared login budget was exhausted, wait out the 60-second
+  window before re-running. Never substitute another credential.
 
 Budget: 13 hits per run — 2 `qa-login` (10/min shared per runner IP, shared
 with every other QA login) and 0 `admin-write` (every redispatch POST and
