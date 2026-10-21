@@ -54,6 +54,8 @@ const denied: [string, Record<string, string>, string][] = [
   ],
   ["apex over http", { APP_URL: "http://togetherweown.com" }, "production APP_URL"],
   ["unknown app", { APP_URL: "https://next.togetherweown.com.evil.test" }, "not the staging"],
+  ["test-database host as app", { APP_URL: "http://agent-testdb:8787" }, "not the staging"],
+  ["test-database host as https app", { APP_URL: "https://agent-testdb" }, "not the staging"],
   ["missing app", { APP_URL: "" }, "APP_URL"],
   ["missing database", { DATABASE_URL: "" }, "DATABASE_URL"],
   ["malformed database", { DATABASE_URL: "postgres://[synthetic-password" }, "DATABASE_URL"],
@@ -324,6 +326,30 @@ describe("staging seed: fail-closed offline CLI", () => {
       application_name: SEED_OWNER,
     });
     expect(createSeedClient(factory, remoteEnv.DATABASE_URL).password()).toBe("synthetic-password");
+  });
+
+  it("never hands the driver a query string that would become server startup parameters", () => {
+    let first: unknown;
+    let options: Record<string, unknown> = {};
+    const capture = (url: string, opts: Record<string, unknown>) => {
+      first = url;
+      options = opts;
+      return opts;
+    };
+    for (const raw of [
+      "postgres://fixture@db.example.test/neondb?sslrootcert=system",
+      "postgres://fixture@db.example.test/neondb?sslmode=verify-full&sslrootcert=system",
+      "postgres://fixture@db.example.test/neondb?sslmode=verify-full",
+      "postgres://agent_test@agent-testdb/two_web_next?sslrootcert=system",
+    ]) {
+      createSeedClient(capture, raw);
+      expect(String(first)).not.toContain("?");
+      expect(String(first)).not.toContain("sslrootcert");
+      expect(String(first)).not.toContain("sslmode");
+      expect(JSON.stringify(options)).not.toContain("sslrootcert");
+      expect(options.connection).not.toHaveProperty("sslrootcert");
+      expect(options.ssl).toBe("verify-full");
+    }
   });
 });
 

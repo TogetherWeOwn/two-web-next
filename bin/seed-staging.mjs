@@ -310,7 +310,12 @@ export function createSeedClient(postgres, raw) {
   // Local/test clients keep their existing behavior (no TLS by default).
   if (!local && effective !== "verify-full")
     throw new Error("Refusing seed: remote client requires verify-full TLS.");
-  return postgres(raw, {
+  // Query parameters (sslrootcert, sslmode) are already folded into `ssl`; a
+  // raw query would reach the server as startup parameters (Postgres 42704).
+  const bare = new URL(url);
+  bare.search = "";
+  bare.hash = "";
+  return postgres(bare.href, {
     max: 1,
     connect_timeout: 10,
     debug: false,
