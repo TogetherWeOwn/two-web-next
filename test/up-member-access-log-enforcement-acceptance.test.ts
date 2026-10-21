@@ -1,10 +1,10 @@
 // route-inventory: GET /up
-// Acceptance: /up reports member-access-log enforcement so a deploy that
-// serves member reads with audit persistence degraded to log-only is visible
-// to readiness consumers and dashboards. The signal is informational, like
-// the revision marker: degraded enforcement is a supported configuration, so
-// it must be distinguishable without flipping readiness to failing on its
-// own, and it must not change enforcement, refusal or logging behaviour.
+// Acceptance: /up reports the legacy member-access-log enforcement label for
+// readiness consumers and dashboards. The signal is informational, like
+// the revision marker: it never flips readiness on its own, and it moves no
+// enforcement boundary — the keyed read boundary refuses unaudited reads
+// whatever the flag says — so it must not change enforcement, refusal or
+// logging behaviour.
 //
 // Pinned public shape (the only surface this suite binds):
 //   member_access_log_enforcement: "enforcing" | "log_only"

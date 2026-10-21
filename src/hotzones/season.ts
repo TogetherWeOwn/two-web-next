@@ -13,6 +13,15 @@ const YEAR_RE = /^(\d{4})$/;
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const QUARTER_RE = /^(\d{4})-Q([1-4])$/;
 
+// Date.UTC maps years 0..99 to 1900..1999; setUTCFullYear restores the
+// literal year. All call sites build month boundaries (day 1), so the
+// Feb-29 overflow hazard of setUTCFullYear cannot trigger here.
+function utcMonthStart(year: number, monthIndex: number): Date {
+  const d = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0));
+  d.setUTCFullYear(year);
+  return d;
+}
+
 // Parse the raw `?season=` query value. `null`/`undefined` = absent = `all`.
 // Returns `null` when the value is present but invalid (caller answers 400,
 // never a silent fallback window). Empty string is invalid, not absent.
@@ -24,8 +33,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const year = Number(m[1]);
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0)),
-      end: new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0)),
+      start: utcMonthStart(year, 0),
+      end: utcMonthStart(year + 1, 0),
       label: raw,
     };
   }
@@ -35,10 +44,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const month = Number(m[2]);
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0)),
-      end: new Date(
-        Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 1, 0, 0, 0, 0),
-      ),
+      start: utcMonthStart(year, month - 1),
+      end: utcMonthStart(month === 12 ? year + 1 : year, month === 12 ? 0 : month),
       label: raw,
     };
   }
@@ -49,8 +56,8 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
     const startMonth = (quarter - 1) * 3;
     return {
       kind: "window",
-      start: new Date(Date.UTC(year, startMonth, 1, 0, 0, 0, 0)),
-      end: new Date(Date.UTC(year, startMonth + 3, 1, 0, 0, 0, 0)),
+      start: utcMonthStart(year, startMonth),
+      end: startMonth + 3 === 12 ? utcMonthStart(year + 1, 0) : utcMonthStart(year, startMonth + 3),
       label: raw,
     };
   }
@@ -61,6 +68,22 @@ export function parseSeasonParam(raw: string | null | undefined): SeasonWindow |
 export function seasonLabel(raw: string | null | undefined): string {
   if (raw === null || raw === undefined) return "all";
   return raw;
+}
+
+/**
+ * Clamp a season-window bound to something Postgres can bind. Postgres has
+ * no year 0, so a literal `0000-..` ISO bound fails with 22008 — and
+ * postgres-js rewrites every string bound to a timestamptz param through
+ * `new Date(x).toISOString()`, so BC text cannot travel as a bound param
+ * either, while inline literals would change the statement shapes pinned by
+ * the member-read classifier. Every grammar window with a year-0 bound ends
+ * on or before 0001-01-01, so clamping there yields the empty range exactly
+ * where the true window holds no app-reachable rows (join attempts are
+ * default-now plus retention-pruned; events carry modern scheduled dates),
+ * and returns every other bound untouched (same object, same wire bytes).
+ */
+export function pgSeasonBound(bound: Date): Date {
+  return bound.getUTCFullYear() < 1 ? new Date("0001-01-01T00:00:00.000Z") : bound;
 }
 
 /** True when `d` lies inside the window (all = unbounded). */

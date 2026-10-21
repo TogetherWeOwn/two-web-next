@@ -10,11 +10,12 @@
 // keys, same cap, always-204) with two deliberate tightenings documented
 // below: unparseable sample rates fall back to 1.0 instead of blinding the
 // sink, non-scalar values collapse to null in the log line, and a
-// `{"csp-report": [...]}` list payload stays silent instead of logging an
-// all-null row.
+// `{"csp-report": [...]}` list payload counts as malformed instead of logging
+// an all-null violation row.
 //
 // Log flood control uses one in-memory token bucket per isolate, shared by
-// violation and oversize warnings. Sampling alone cannot bound log volume.
+// violation, oversize, malformed and sink-failure warnings. Sampling alone
+// cannot bound log volume.
 // This is not a global request limit: isolates refill/reset independently.
 // The route stays DB-free and always-204, even after its log budget is spent.
 
@@ -170,13 +171,38 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
       return c.body(null, 204);
     }
     const report = extractCspReport(body.text);
-    if (report === null) return c.body(null, 204);
+    if (report === null) {
+      // Empty is the quiet-sink heartbeat: no bytes, no accounting, still 204.
+      // Non-empty malformed input gets sampled bucket accounting like a
+      // violation, so a junk flood cannot hide behind silence — and the shared
+      // bucket plus shed signal bound it like any other warning. Bytes only:
+      // never the body, a URI, or member identity.
+      if (body.text !== "") {
+        if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+          if (takeCspLogToken()) console.warn("csp.report.malformed", { bytes: body.bytes });
+          else warnCspShed();
+        }
+      }
+      return c.body(null, 204);
+    }
     if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
       if (takeCspLogToken()) console.warn("csp.report.violation", cspReportLogFields(report));
       else warnCspShed();
     }
     return c.body(null, 204);
-  } catch {
+  } catch (err) {
+    // Body-read failure: exception class only, bucket-bounded like oversize.
+    // Never the message (it can carry body bytes), a URI, or member identity.
+    // Guarded so the sink stays always-204 even if the logger itself throws.
+    try {
+      if (takeCspLogToken())
+        console.warn("csp.report.sink_failed", {
+          exception: err instanceof Error ? err.name : typeof err,
+        });
+      else warnCspShed();
+    } catch {
+      // Logger down: the 204 below still stands; nothing else can record this.
+    }
     return c.body(null, 204);
   }
 }
