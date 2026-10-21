@@ -69,14 +69,6 @@ export function memoryStoreForTests(): SessionStore {
   return createMemorySessionStore();
 }
 
-export function enforceEnabled(env: Env): boolean {
-  const raw = env.MEMBER_ACCESS_LOG_ENFORCE?.trim().toLowerCase();
-  // Legacy default: enforced in every environment, including local. An
-  // enforcement switch off by default is off in the one place it mattered.
-  if (raw === undefined || raw === "") return true;
-  return raw !== "false" && raw !== "0" && raw !== "no";
-}
-
 /**
  * Panel authorization: guest redirect → moderator 403 → handler →
  * access-log flush → no-store. The outer app enforces same-origin writes.
