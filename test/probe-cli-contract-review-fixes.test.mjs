@@ -324,5 +324,5 @@ globalThis.setTimeout = (fn, ms, ...args) => orig(fn, 0, ...args);
         rmSync(directory, { recursive: true, force: true });
       }
     });
-  }, 15000);
+  });
 });
