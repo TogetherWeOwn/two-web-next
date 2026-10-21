@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext, type APIResponse } from "@playwri
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
+import { qaLoginRetryBudgetMs, retryQaLoginOn429 } from "../qa-login-retry.mjs";
 import {
   expectedKitMarker,
   kitFixtureOwnsEventDetail,
@@ -36,6 +37,10 @@ const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
 test.beforeAll(async ({ playwright }) => {
+  // The shared member login below inherits the browser suite's hot qa-login
+  // window (same browser-smoke job), so its bounded 429 retry can outlast the
+  // bare 30 s hook budget: raise this hook's own timeout first.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   for (const target of targets) {
     contexts.set(
       target.name,
@@ -118,10 +123,15 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    const response = await retryQaLoginOn429(
+      "qa-member",
+      () =>
+        api(hono).post("/auth/qa/qa-member", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      { scope: "local" },
+    );
     expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -176,10 +186,15 @@ async function isolatedRenewalCookie(
     if (!token) throw new Error("Missing ephemeral CI QA token");
     // Use a separate QA account: issuing a fresh session revokes other live
     // sessions for the same user and would invalidate the shared member jar.
-    const response = await login.post("/auth/qa/qa-moderator", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    const response = await retryQaLoginOn429(
+      "qa-moderator",
+      () =>
+        login.post("/auth/qa/qa-moderator", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      { scope: "local" },
+    );
     expect(response.status(), "isolated QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -755,6 +770,10 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
+      // The isolated renewal login below can catch the hot qa-login window
+      // the shared login just left, so its bounded 429 retry can outlast the
+      // bare 30 s test budget: raise this test's own timeout first.
+      test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
