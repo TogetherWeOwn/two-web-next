@@ -15,10 +15,9 @@ import type { PageServerLoad } from "./$types";
 // record lookup, the shared getJoinAttempt retention-window lookup answers
 // the row, and a missing row answers the same 404. No DB answers the shared
 // 503; a classified database outage maps to the same 503 instead of
-// SvelteKit's 500 error page. Any other rejection propagates: the hook's
-// member-read boundary refuses it without releasing trace identifiers,
-// exactly like the Hono guard's boundary, so an audit failure releases no
-// trace data.
+// SvelteKit's 500 error page. Any other rejection renders that branded 500
+// shell, which the hook's member-read boundary releases only after its audit
+// decision, so an audit failure still releases no trace data.
 // Authorization stays in the layout guard; the member-read boundary around
 // resolve() owns classification and the audit. No new queries, no raw
 // provider/token payload: the shared projection carries only the six safe
