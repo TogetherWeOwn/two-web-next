@@ -159,6 +159,32 @@ policy-change PR with a rationale and independent Code Reviewer approval under
 the same exact-head green-CI merge gate; lock regeneration alone is never an
 exception. Normal migration PRs review the append-only SQL and lock diff together.
 
+## Migration runtime rights and default ACLs
+
+New or changed SQL migrations that create runtime-visible tables, views, or
+sequences must state the reviewed runtime privileges explicitly: one privilege
+per `GRANT`, directly from the creating object owner, to `two_web_app`, with no
+grant option. The object-by-object allowlists and static SQL parser are in
+[`ci/migration-runtime-rights.mjs`](../ci/migration-runtime-rights.mjs). They
+cover regular and partition tables, views, explicit sequences, and serial or
+identity-generated sequences; unlisted objects and unsupported SQL fail closed.
+The check applies only to added/changed migration SQL and does not rewrite or
+bless historical migrations. Role switching (including `set_config` calls),
+role and ownership changes, `ALTER DEFAULT PRIVILEGES`, `REVOKE`, dynamic SQL,
+`SELECT INTO`, temporary objects, unlogged sequences, inherited or LIKE-copied
+tables, sequence references, `ALTER FUNCTION ... SECURITY DEFINER`, trigger,
+rule, policy, extension or server DDL, and table RLS enable/disable/force changes
+are rejected outside a separately reviewed policy change.
+
+The custom migration runner also performs a read-only catalog preflight against
+the active migration role's table/sequence defaults before planning or applying.
+It refuses table defaults or any sequence default outside the reviewed
+`two_web_app` `USAGE`/`SELECT` set; it does not change ACLs or role membership.
+The runtime-rights guard and its selftests run in the existing `check` job, which
+feeds the required `ci-ok` status. CI and runner selftests use disposable
+Postgres only; this check does not authorize a staging or production connection
+or any live grant, revoke, role, or default-ACL change.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,

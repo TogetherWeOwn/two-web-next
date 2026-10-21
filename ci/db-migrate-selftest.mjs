@@ -365,6 +365,12 @@ test("fresh database: plan is read-only, apply includes bootstraps, zero-pending
     await assert.rejects(run("verify"), /remain pending/);
     await run("apply");
     assert.equal((await run("verify")).length, 0);
+    assert.equal(
+      (await client`select to_regclass('drizzle.__drizzle_migrations_id_seq') as sequence`)[0]
+        .sequence,
+      null,
+      "fresh runner ledger must not create an unreviewed sequence",
+    );
     await run("apply");
     // The canonical Drizzle migrator must recognize this runner's exact ledger.
     await migrate(drizzle(client), { migrationsFolder: source });
@@ -415,7 +421,9 @@ test("gapped/newer history and concurrent migration lock are refused", async () 
   });
   await fixture(async ({ client, run }) => {
     await run("apply");
-    await client`insert into drizzle.__drizzle_migrations (hash, created_at) values ('unknown', 9999999999999)`;
+    await client`insert into drizzle.__drizzle_migrations (id, hash, created_at)
+      select coalesce(max(id), 0) + 1, 'unknown', 9999999999999
+      from drizzle.__drizzle_migrations`;
     await assert.rejects(run("verify"), /exact prefix/);
   });
 });

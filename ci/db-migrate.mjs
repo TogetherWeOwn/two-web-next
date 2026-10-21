@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
+import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -209,6 +210,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
   };
   const client = migrationClient(config);
   const plan = async (connection) => {
+    await assertRuntimeDefaultAcl(connection);
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
     await summary(
@@ -247,17 +249,17 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await summary(
         `Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`,
       );
-      // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
-      // include ledger setup and history validation in the same locked transaction.
-      // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
+      // The migration runner owns only the exact ledger objects it needs. In
+      // particular, never create an unreviewed serial sequence for the ledger.
       await transaction`create schema if not exists drizzle`;
       await transaction`create table if not exists drizzle.__drizzle_migrations (
-        id serial primary key, hash text not null, created_at bigint
+        id integer primary key, hash text not null, created_at bigint
       )`;
       for (const migration of pending) {
         for (const statement of migration.sql) await transaction.unsafe(statement);
-        await transaction`insert into drizzle.__drizzle_migrations (hash, created_at)
-          values (${migration.hash}, ${migration.folderMillis})`;
+        await transaction`insert into drizzle.__drizzle_migrations (id, hash, created_at)
+          select coalesce(max(id), 0) + 1, ${migration.hash}, ${migration.folderMillis}
+          from drizzle.__drizzle_migrations`;
       }
       const remaining = await pendingMigrations(transaction, migrations);
       if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
