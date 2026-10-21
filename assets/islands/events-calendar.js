@@ -58,9 +58,9 @@
   var activeIsSearch = false;
   var debounceTimer = null;
   var inputRevision = 0;
-  // The last failed GET intent (page address), retried explicitly and dropped
-  // by any newer action. A 429 Retry-After cools the retry down, at most 60
-  // seconds (mirrors EVENTS_READ_RETRY_AFTER_CAP_MS).
+  // The last failed GET intent (page address plus any card hash), retried
+  // explicitly and dropped by any newer action. A 429 Retry-After cools the
+  // retry down, at most 60 seconds (mirrors EVENTS_READ_RETRY_AFTER_CAP_MS).
   var RETRY_AFTER_CAP_MS = 60000;
   var failedIntent = null;
   var cooldownTimer = null;
@@ -105,7 +105,9 @@
   }
 
   // One line the kept last-good zones can stand beside: what the address
-  // would have shown, never the generic failure copy.
+  // would have shown, never the generic failure copy. The past drawer and the
+  // upcoming-list page are part of the destination: without them a failed
+  // pager turn or past toggle would read as "Couldn't load X. Showing X."
   function describeDestination(address) {
     var params = new URL(address, window.location.origin).searchParams;
     var q = params.get("q") || "";
@@ -114,8 +116,20 @@
       view === "calendar"
         ? monthLabel(params.get("month") || "") || "the calendar"
         : "the events list";
-    if (q === "") return place;
-    return view === "calendar" ? "results for “" + q + "” in " + place : "results for “" + q + "”";
+    var base =
+      q === ""
+        ? place
+        : view === "calendar"
+          ? "results for “" + q + "” in " + place
+          : "results for “" + q + "”";
+    if (params.get("past") === "1") base += " with past events";
+    // Page 1 is the bare address (calendarUrl omits it), so only later list
+    // pages need naming; the grid is month-scoped and never carries a page.
+    var page = params.get("page");
+    if (view !== "calendar" && page !== null && /^\d+$/.test(page) && Number(page) > 1) {
+      base = "page " + Number(page) + " of " + base;
+    }
+    return base;
   }
 
   // Strict delay-seconds only: a missing, dated, signed, zero, exponential
@@ -154,7 +168,10 @@
 
   function showRecovery(url, cooldownMs) {
     if (!hasRecovery) return;
-    failedIntent = pageAddress(url);
+    // Keep the full intent including any card hash: a failed grid day-jump
+    // retries onto the picked card instead of only its list page. The fetch
+    // still sends path+query only; history and jump focus reuse the hash.
+    failedIntent = pageAddress(url) + (url.hash || "");
     var copy =
       "Couldn't load " +
       describeDestination(pageAddress(url)) +
@@ -575,16 +592,32 @@
   // restores the committed box without fetching. Plain buttons, so without
   // this file they stay hidden and inert.
   if (hasRecovery) {
+    // Hiding the activated recovery button would drop keyboard focus to body
+    // (a hidden element cannot keep it). Park it on the stable heading first;
+    // pointer activation never focuses the button and stays where it was.
+    function parkFocus(control) {
+      if (document.activeElement !== control) return;
+      var target = root.querySelector("#events-heading") || input;
+      if (target) target.focus();
+    }
     retry.addEventListener("click", function () {
       if (!failedIntent || retry.disabled) return;
-      load(new URL(failedIntent, window.location.origin), true, {
+      parkFocus(retry);
+      var intent = new URL(failedIntent, window.location.origin);
+      load(intent, true, {
         skeleton: true,
         syncInput: true,
+        focus: intent.hash || null,
       });
     });
     clearRead.addEventListener("click", function () {
       if (!failedIntent) return;
       input.value = new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
+      // The safe return reaches the same steady state as a successful load:
+      // the generic failure line clears instead of prompting a retry of an
+      // intent the member just abandoned.
+      feedback.textContent = overLimit() ? searchTooLong : "";
+      parkFocus(clearRead);
       hideRecovery();
     });
   }
