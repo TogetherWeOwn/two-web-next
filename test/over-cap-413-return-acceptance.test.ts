@@ -1,4 +1,6 @@
-// route-inventory: PATCH /members/:user, POST /members/:user, POST /e/:key/rsvp
+// route-inventory: PATCH /members/:user
+// route-inventory: POST /members/:user
+// route-inventory: POST /e/:key/rsvp
 // Acceptance: over-cap 413 refusals give the member a way back to the form.
 //
 // Break this catches: `PayloadTooLargePage` offers only "Back to the homepage"
