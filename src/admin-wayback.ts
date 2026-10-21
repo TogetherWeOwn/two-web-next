@@ -11,6 +11,17 @@ export interface AdminWayBack {
   label: string;
 }
 
+/**
+ * Status-gated way back for the Kit error boundary: a throttled admin write
+ * (429) resolves to its form; every other status resolves to nothing, so the
+ * shared 429/500 shell never names a refused save it cannot mean. Pure string
+ * matching only: no session, cookie or DB reads.
+ */
+export function adminWayBackForStatus(status: number, path: string): AdminWayBack | null {
+  if (status !== 429) return null;
+  return adminWayBack(path);
+}
+
 /** Map a refused request path to its admin way back, or null outside /admin. */
 export function adminWayBack(path: string): AdminWayBack | null {
   const clean = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
