@@ -111,11 +111,32 @@ const renderers = [
 ];
 
 type Element = { attrs: string; body: string };
-const text = (html: string) =>
-  html
-    .replace(/<!--[\s\S]*?-->|<[^>]*>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+// Test-only text extraction for assertions (no HTML sink): walk the markup
+// token by token instead of a `<...>` regex replace so the helper does not
+// read as an HTML sanitizer (CodeQL incomplete sanitization). Comment tokens
+// end at the first `-->`, tag tokens at the first `>`, mirroring the
+// extractPairs walker in kit-join-attempt-detail-pairing-acceptance.
+function text(html: string): string {
+  let out = "";
+  let index = 0;
+  while (index < html.length) {
+    if (html.startsWith("<!--", index)) {
+      const end = html.indexOf("-->", index + 4);
+      index = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    if (html[index] === "<") {
+      const close = html.indexOf(">", index);
+      if (close === -1) break;
+      index = close + 1;
+      continue;
+    }
+    const next = html.indexOf("<", index);
+    out += html.slice(index, next === -1 ? html.length : next);
+    index = next === -1 ? html.length : next;
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
 const attr = (element: Element, name: string) =>
   new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(element.attrs)?.[1];
 const elements = (html: string, tag: string): Element[] =>
