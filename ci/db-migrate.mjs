@@ -174,7 +174,7 @@ export function safeMigrationError(error) {
   return "Migration failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
 }
 
-export function migrationClient(config) {
+export function migrationClient(config, hooks = {}) {
   return postgres(config.url.href, {
     port: 5432,
     max: 1,
@@ -195,6 +195,7 @@ export function migrationClient(config) {
       datestyle: "ISO, YMD",
     },
     onnotice: () => {},
+    onclose: () => hooks.onclose?.(),
   });
 }
 
@@ -207,7 +208,12 @@ export async function runMigration(mode, env = process.env, options = {}) {
     await report(text);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
   };
-  const client = migrationClient(config);
+  let connectionLost = false;
+  const client = migrationClient(config, {
+    onclose: () => {
+      connectionLost = true;
+    },
+  });
   const plan = async (connection) => {
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
@@ -247,6 +253,13 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await summary(
         `Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`,
       );
+      if (connectionLost) {
+        // The server closed our only connection after the PITR receipt (failover,
+        // backend termination). Fail closed here instead of issuing DDL on a dead
+        // socket: postgres-js 3.4.9 crashes with TypeError on write-after-close
+        // (null socket in nextWrite) instead of rejecting the query.
+        refuse(safeMigrationError(new Error("connection lost after PITR receipt")));
+      }
       // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
       // include ledger setup and history validation in the same locked transaction.
       // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
