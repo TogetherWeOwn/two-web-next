@@ -67,7 +67,10 @@ const expectNotModified = async (res: Response, base: Baseline) => {
   expect(res.status).toBe(304);
   expect(await res.text()).toBe("");
   expect(res.headers.get("etag")).toBe(base.etag);
-  expect(res.headers.get("cache-control")).toBe(base.cacheControl);
+  // Remaining TTL, rounded down, on a real clock: any elapsed millisecond
+  // makes a back-to-back hit answer 59, a same-instant hit answers the
+  // baseline 60. The miss baseline above stays exact.
+  expect(res.headers.get("cache-control")).toMatch(/^public, max-age=(59|60)$/);
   expect(res.headers.get("set-cookie")).toBeNull();
 };
 
@@ -75,7 +78,10 @@ const expectFresh = async (res: Response, base: Baseline) => {
   expect(res.status).toBe(200);
   expect(await res.text()).toBe(base.body);
   expect(res.headers.get("etag")).toBe(base.etag);
-  expect(res.headers.get("cache-control")).toBe(base.cacheControl);
+  // Remaining TTL, rounded down, on a real clock: any elapsed millisecond
+  // makes a back-to-back hit answer 59, a same-instant hit answers the
+  // baseline 60. The miss baseline above stays exact.
+  expect(res.headers.get("cache-control")).toMatch(/^public, max-age=(59|60)$/);
   expect(res.headers.get("set-cookie")).toBeNull();
 };
 
