@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import {
@@ -209,6 +210,29 @@ export function eventsUnavailable(): Error & { status: number } {
   return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
 }
 
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before mapping to the branded
+// 503, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts). Branded
+// throws pass through with the same outage headers and no new alert, so the
+// binding maps them once. Headers and bodies are byte-stable either way:
+// the binding ignores the thrown message.
+function reportEventsLoadFailure(
+  err: unknown,
+  setHeaders: (headers: Record<string, string>) => void,
+  vary: string,
+  requestId: string | undefined,
+  method: string,
+): never {
+  const headers = { "cache-control": "private, no-store", vary };
+  if (typeof (err as { status?: unknown })?.status === "number") {
+    setHeaders(headers);
+    throw err;
+  }
+  alertRequestError(err, { method, route: "/events", requestId });
+  setHeaders(headers);
+  throw eventsUnavailable();
+}
+
 export type KitEventsModelFor = (args: {
   db: Db;
   input: CalendarPageInput;
@@ -232,6 +256,8 @@ export interface KitEventsLoadArgs {
   modelForFn?: KitEventsModelFor;
   discordForFn: (env: Env) => DiscordEventsSource;
   now?: Date;
+  /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
+  requestId?: string;
 }
 
 export interface KitEventsLoadData extends CalendarPageModel {
@@ -283,6 +309,7 @@ export async function loadEventsPage(
     modelForFn = loadCalendarPageModel,
     discordForFn,
     now = new Date(),
+    requestId,
   } = args;
   const vary = "Cookie, X-Two-Island";
   const input = calendarInputOf(url);
@@ -300,9 +327,8 @@ export async function loadEventsPage(
   let db: Db | null;
   try {
     db = await dbForFn({ env });
-  } catch {
-    setHeaders({ "cache-control": "private, no-store", vary });
-    throw eventsUnavailable();
+  } catch (err) {
+    reportEventsLoadFailure(err, setHeaders, vary, requestId, method);
   }
   if (!db) {
     setHeaders({ "cache-control": "private, no-store", vary });
@@ -338,9 +364,8 @@ export async function loadEventsPage(
       discord: discordForFn(env),
       now,
     });
-  } catch {
-    setHeaders({ "cache-control": "private, no-store", vary });
-    throw eventsUnavailable();
+  } catch (err) {
+    reportEventsLoadFailure(err, setHeaders, vary, requestId, method);
   }
 
   // Request consumption after the read succeeds, like Hono's takeJoinResult.
