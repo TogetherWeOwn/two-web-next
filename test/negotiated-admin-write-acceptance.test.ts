@@ -41,7 +41,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
 }));
 
 const BROWSER = "text/html,application/xhtml+xml";
-const KEY = "fixture-event";
+const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const PRIVATE = "private admin fixture details";
 const event = {
   id: 1,

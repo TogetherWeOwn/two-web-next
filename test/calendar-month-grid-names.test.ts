@@ -272,6 +272,9 @@ describe("month grid accessible names", () => {
       title: "NY raid night",
       timezone: "America/New_York",
       startsAt: new Date("2030-01-15T01:00:00Z"),
+      // One NY wall day: multi-day intervals intentionally occupy every
+      // touched day, so the zone-naming assertion needs a same-day end.
+      endsAt: new Date("2030-01-15T02:00:00Z"),
     });
     const html = await renderGrid([ny]);
     const links = gridLinks(html);
