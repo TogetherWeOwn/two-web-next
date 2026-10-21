@@ -341,7 +341,13 @@ function browser(entry = ENTRY) {
     pages.set(key, {
       querySelector(selector: string) {
         if (selector === '[data-island="events-calendar"]') {
-          return { dataset: { view, month, past }, querySelectorAll: () => sources };
+          // Zones only answer their own selector; any other selector (for example
+          // the card sign-in links the island validates) matches nothing, as in a DOM.
+          return {
+            dataset: { view, month, past },
+            querySelectorAll: (selector: string) =>
+              selector === "[data-cal-zone]" ? sources : [],
+          };
         }
         if (selector.startsWith("link")) return { href: ORIGIN + path };
         if (selector === '[data-testid="events-search"]') {
