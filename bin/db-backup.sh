@@ -384,33 +384,35 @@ do_promote_weekly() {
 
 # Only registered receipts are managed. Pre-receipt manifests stay valid without
 # inventing/backfilling receipts. A failed paired delete never rewrites the manifest.
-# Deletes are idempotent: an already-missing object (a retried partial apply)
-# counts as done; only an object that still exists after a failed delete fails.
+# Deletes are idempotent: an already-missing object (a retried partial apply,
+# confirmed by the explicit missing-key diagnostic) counts as done; any other
+# probe outcome after a failed delete fails.
 delete_archive_pair() {
-  local key="$1" manifest="$2" workdir="$3" receipt probe
+  local key="$1" manifest="$2" workdir="$3" receipt probe probe_stderr
   receipt="$(receipt_key "$key")"
   probe="$workdir/probe.tmp"
+  probe_stderr="$workdir/probe.stderr"
   if ! wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-    if wr r2 object get "$BACKUP_BUCKET/$key" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
+    if wr r2 object get "$BACKUP_BUCKET/$key" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$probe_stderr" \
+       || ! python3 "$ROOT/bin/backup/manifest-helper" missing "$probe_stderr"; then
       echo "db-backup: delete failed: $key" >&2
-      rm -f "$probe"
+      rm -f "$probe" "$probe_stderr"
       return 1
-    else
-      rm -f "$probe"
     fi
+    rm -f "$probe" "$probe_stderr"
   fi
   if grep -qxF "$receipt" "$manifest"; then
     if ! wr r2 object delete "$BACKUP_BUCKET/$receipt" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-      if wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
+      if wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$probe" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$probe_stderr" \
+         || ! python3 "$ROOT/bin/backup/manifest-helper" missing "$probe_stderr"; then
         echo "db-backup: delete failed: $receipt" >&2
-        rm -f "$probe"
+        rm -f "$probe" "$probe_stderr"
         return 1
-      else
-        rm -f "$probe"
       fi
+      rm -f "$probe" "$probe_stderr"
     fi
   fi
-  rm -f "$probe"
+  rm -f "$probe" "$probe_stderr"
   echo "delete: $key"
   return 0
 }
