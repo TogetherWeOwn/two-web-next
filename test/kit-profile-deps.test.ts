@@ -108,12 +108,14 @@ describe("kitProfileDeps stats wiring", () => {
 
   it("reads the explicit bot database with a bounded client", async () => {
     const { db } = fixtureDb([], []);
+    const end = vi.fn().mockResolvedValue(undefined);
     makeSql.mockReturnValue({ fakeClient: true });
-    makeDb.mockReturnValue(db);
+    makeDb.mockReturnValue({ ...db, $client: { end } });
     const url = "postgres://bot.test/db";
     const { statsFor } = kitProfileDeps({ ...baseEnv, BOT_DATABASE_URL: url });
     // No member row: the block hides instead of failing the read.
     await expect(statsFor(MEMBER)).resolves.toBeNull();
+    expect(end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
     expect(makeSql).toHaveBeenCalledExactlyOnceWith(
       url,
       expect.objectContaining({

@@ -232,7 +232,7 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
-      - name: Install Kit workspace dependencies (profile, error shell and device timezone render)
+      - name: Install Kit workspace dependencies (profile, error shell, device timezone and member auth render)
         # Every browser fixture below SSR-compiles Svelte from the Kit workspace.
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Profile native 422 baseline regressions (memory fixtures)
@@ -265,6 +265,11 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone.json "event device timezone browser acceptance" 30
+      - name: Kit member auth (real Chromium, local HTTPS fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
@@ -380,6 +385,9 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Migration runtime-rights guard
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run migration:rights && npm run migration:rights:selftest
       - name: Seeded admin properties (10s budget, local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Skip npm's extra process startup; keep the same suite and hard budget.
@@ -437,6 +445,23 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # UTC-contract pin (hotzone period picker): the acceptance suite's
+      # shortcut expectations are UTC-derived, but the coverage run above
+      # executes under the runner's UTC zone, so a local-getter regression
+      # in src/hotzones/season.ts stays green there. Re-run just this
+      # hermetic suite (~4s) under a non-UTC TZ so the merge gate kills
+      # that mutant (32 fail with local getters, 162/162 pass with UTC
+      # getters). The node assertion fails closed if the image ever loses
+      # tzdata and TZ stops applying.
+      - name: Hotzone period suite under non-UTC TZ
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node -e "if (new Date('2026-04-01T00:00:00Z').getMonth() !== 2) throw new Error('TZ pin vacuous: expected March under America/Los_Angeles')"
+          npx vitest run test/hotzone-period-picker-acceptance.test.ts --pool=forks
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          TZ: America/Los_Angeles
       # Tier-0 check: validator properties, the role x route authz matrix and
       # the default-planner EXPLAIN seq-scan check. This existing check is
       # required; the trap keeps a failure before the report visible in logs.
@@ -590,6 +615,9 @@ jobs:
       - name: Backup restore-proof selftest (no network, no database)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-restore-proof/selftest.py
+      - name: Backup retention-plan selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-retention-plan-selftest.sh
       - name: Scrub QA token selftest (offline fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/scrub-qa-token-selftest

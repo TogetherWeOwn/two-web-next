@@ -9,7 +9,7 @@ in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
 Except for the event-write, admin event form, admin action, featured
-write, staging alert probe, profile write, logout and QA-login routes
+write, staging alert probe, profile write, logout, QA-login and MCP routes
 below, shared throttles run before buffering: oversized attempts consume
 admission budget and
 an exhausted bucket returns 429 without pulling the upload. The profile write
@@ -66,6 +66,13 @@ throttle-then-work order. Unauthenticated QA probes still 404 at the gate
 before either. Source-read failures return a static 400; downstream
 route and store exceptions still reach their existing handlers.
 
+`POST /mcp` is likewise cap-first: `requestBodyLimit("mcp")` runs before
+`admitted()` in [`src/mcp/routes.ts`](../src/mcp/routes.ts), so an over-cap
+body returns 413 with zero shared `events-read` budget spend even when the
+bucket is exhausted. Bodies at or under the cap still run the shared
+public-read admission before any body parse or database read, retaining the
+existing 429 envelope.
+
 ## Classes and derivation
 
 The legacy revision behind the parity port is `e1e939a` (`docs/parity.md`). These
@@ -75,10 +82,10 @@ including field names, escaping, multipart boundaries and metadata:
 
 | Class | Bytes | Routes | Basis |
 | --- | ---: | --- | --- |
-| `json` | 32,768 | Event create/PATCH (also accept forms) | Event title/game 100 each, description 1,000, accessibility notes 1,000, location 255 (`src/admin/validation.ts`, `parseEventForm`). The 2,455 bounded UTF-16 code units need at most 22,095 bytes when percent-encoded (nine bytes per code unit); 32 KiB leaves room for dates, timezone, capacity and form/JSON framing. |
+| `json` | 32,768 | Event create/PATCH (also accept forms) | Event title/game 100 each, description 1,000, accessibility notes 1,000, location 255, organizer name 500, public joining link 2,048, joining instructions 5,000 (`src/admin/validation.ts`, `parseEventForm`). The 10,003 bounded UTF-16 code units need about 10 KiB single-byte encoded and at most 90,027 bytes fully percent-encoded (nine bytes per code unit); 32 KiB leaves room for realistic submissions plus dates, timezone, capacity and form/JSON framing, while all-maximum multibyte payloads are refused 413 at the wire cap before validation. |
 | `form` | 65,536 | Profile PATCH/form POST; admin event create/update | Profile bio 1,000 code points, games_text 1,700 (20 games × 80 plus separators), per legacy UpdateProfileRequest (`src/profiles/validation.ts`, `docs/w10-islands-respec.md`). 2,700 four-byte Unicode code points need at most 32,400 bytes when percent-encoded; 64 KiB accommodates form keys, `_method`, trap fields and multipart framing. Also covers the smaller admin event form. |
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/payload.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
-| `mcp` | 32,768 | `POST /mcp` | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. |
+| `mcp` | 32,768 | `POST /mcp` (cap-first) | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. The cap runs before the shared public-read admission (zero `events-read` spend on 413). |
 | `featured` | 262,144 | Admin featured create/update (cap-first) | The four bounded title/URL/image/alt strings are 255 code units each and featured `body` is 1,000 Unicode code points after trim (`src/admin/validation-featured-form.ts`, `parseFeaturedForm`); over-max bodies 422 with a field-level error. 256 KiB is the unchanged total editorial-body transport allowance, not a claim of legacy equivalence; large submissions still receive 413 before validation instead of consuming unbounded memory. The create and update posts decide the cap before the admin-write throttle (zero spend on 413). |
 | `action` | 4,096 | Logout (cap-first), QA login (cap-first), staging alert probe (cap before throttle: over-cap probes 413 with no throttle spend), publish/cancel, RSVP pause/reopen (public and admin), queue redispatch, featured delete (cap-first), RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. Logout, QA login, featured delete, the staging alert probe, the four public `POST /events/:key/` actions, the four admin lifecycle actions and queue redispatch decide the cap before their throttle; the remaining throttled action routes keep the throttle-before-buffering order. |
 
@@ -100,6 +107,21 @@ and callers accepting `application/json` get exactly:
 
 Browsers receive the corresponding branded 413 page, following the existing
 shared 429 content-negotiation convention.
+
+`POST /mcp` uploads are the exception: over-cap and broken uploads answer the
+route-native JSON-RPC error whatever `Accept` says (absent, wildcard or HTML
+included), keeping the 413/400 status, the upload cancellation and the
+cap-before-admission order. The id is always null — the upload fails before
+any request id is known — and the code is the static transport code -32600:
+
+```json
+{"jsonrpc":"2.0","id": null,"error":{"code":-32600,"message":"Reduce the size of your request and try again."}}
+```
+
+A failed source read on `POST /mcp` answers the same shape with 400 and
+`{"jsonrpc":"2.0","id": null,"error":{"code":-32600,"message":"Check your request and try again."}}`.
+Both refusals send `Cache-Control: no-store, private` and merge `Accept`
+into `Vary`, with no submitted bytes or exception details.
 
 A failed source read instead returns 400 through the shared `badRequest`
 helper. API routes and JSON-only event writes always receive

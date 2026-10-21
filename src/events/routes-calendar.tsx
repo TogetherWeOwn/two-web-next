@@ -116,6 +116,7 @@ export function registerCalendarRoutes(
       state,
       upcoming,
       past: localPast,
+      pastMayBeTruncated,
       zone,
       totalPages,
       emptyState,
@@ -157,6 +158,7 @@ export function registerCalendarRoutes(
         state={state}
         upcoming={upcoming}
         past={localPast}
+        pastMayBeTruncated={pastMayBeTruncated}
         zone={zone}
         now={now}
         totalPages={totalPages}
@@ -203,7 +205,7 @@ export function registerCalendarRoutes(
     const input = resolveCalendarInput({ q: c.req.query("q") });
     if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");
-      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} archive />, 422);
     }
     const q = matchQuery(input.q);
     const limited = await publicReadGuard(c);

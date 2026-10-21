@@ -9,12 +9,16 @@ export const PUBLIC_DATA_BOUNDS = {
 /**
  * A3 bounds for the session-free `/api/public/*` surface. The collection is
  * capped at 20 rows (tighter than the session-gated `/events.json` 100) and
- * every JSON body must fit 32 KiB so AI pollers stay cheap to serve.
+ * every JSON body must fit 32 KiB so AI pollers stay cheap to serve. Raw page
+ * numbers cap at 1000 (20,000 events at 20/page, far beyond any real community
+ * calendar) so offsets stay safe integers and cache keys stay bounded; the
+ * database still clamps to the last page within that ceiling.
  */
 export const API_PUBLIC_BOUNDS = {
   defaultPageSize: 20,
   maxPageSize: 20,
   maxBodyBytes: 32 * 1024,
+  maxPage: 1000,
 } as const;
 
 /** One published event as the public API serves it. `going_count` is null — never 0 — when the RSVP aggregate cannot be read. */
@@ -135,6 +139,14 @@ export const PUBLIC_DATA_ERROR_CODES = [
   "unavailable",
 ] as const;
 export type PublicDataErrorCode = (typeof PUBLIC_DATA_ERROR_CODES)[number];
+
+/**
+ * Static `internal` message for unexpected public-read faults: never
+ * err.message (drizzle echoes the failed SQL, column names and bound params).
+ * Shared by the REST 500 envelope and the MCP tool error so the two machine
+ * surfaces cannot drift; the real error goes to error.alert only.
+ */
+export const PUBLIC_DATA_INTERNAL_MESSAGE = "Event data could not be read.";
 
 /** New routes use this envelope; existing event routes retain legacy errors for compatibility. */
 export interface PublicDataErrorDto {

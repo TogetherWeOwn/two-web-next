@@ -24,7 +24,9 @@ describe("parseJsonLines", () => {
   });
 
   it("ignores multi-arg plain-text calls", () => {
-    const { parsed, skipped } = parseJsonLines([["agent-events failed", "some-name"]]);
+    const { parsed, skipped } = parseJsonLines([
+      ["agent-events failed", { exception: "some-name" }],
+    ]);
 
     expect(parsed).toEqual([]);
     expect(skipped).toEqual([]);

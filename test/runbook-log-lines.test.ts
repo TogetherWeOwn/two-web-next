@@ -294,6 +294,165 @@ describe("analytics write-degradation warning docs", () => {
   });
 });
 
+describe("silent read-leg warnings docs", () => {
+  const CONTENT_GAP_READ = "Event search unavailable for content-gap read; omitting the widget.";
+  const MEMBER_STATS = "Member stats unavailable; showing the unavailable state.";
+  const MEMBER_MILESTONES = "Member milestones unavailable; keeping membership facts.";
+  const COUNTS_READ = "Counts read unavailable";
+  const ANALYTICS_HEADING = "### Analytics write-degradation warnings";
+  const OPTIONAL_HEADING = "### Optional-content degradation warnings";
+
+  /** A runbook subsection, up to (not including) the next heading. */
+  function runbookSection(heading: string): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(heading);
+    expect(start, `missing ${heading} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + heading.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents the content-gap read warning with its class-only exception field", () => {
+    const section = runbookSection(ANALYTICS_HEADING);
+    expect(section).toContain(CONTENT_GAP_READ);
+    expect(section).toContain("`exception`");
+    expect(section).toContain("topZeroResultSearches");
+  });
+
+  it("documents the read leg's silent paths next to the warning", () => {
+    const section = runbookSection(ANALYTICS_HEADING);
+    // A slow read and a down database look different from a broken one: only
+    // the ordinary rejection warns.
+    expect(section).toContain("omits silently");
+    expect(section).toContain("503 boundary");
+  });
+
+  it("documents the counts and stats warnings with their new fields", () => {
+    const section = runbookSection(OPTIONAL_HEADING);
+    expect(section).toContain(COUNTS_READ);
+    expect(section).toContain("`exception`");
+    expect(section).toContain(MEMBER_STATS);
+    expect(section).toContain(MEMBER_MILESTONES);
+    expect(section).toContain("`aborted`");
+    expect(section).toContain("`request_id`");
+    expect(section).toContain("Kit-served");
+  });
+
+  it("sources emit the three warnings with the documented class-only fields", () => {
+    const searchLog = readFileSync("src/events/search-log.ts", "utf8");
+    const gapCall = `console.warn("${CONTENT_GAP_READ}"`;
+    const gapStart = searchLog.indexOf(gapCall);
+    expect(gapStart, `missing ${gapCall} in src/events/search-log.ts`).toBeGreaterThanOrEqual(0);
+    const gapPayload = searchLog.slice(gapStart, searchLog.indexOf("});", gapStart));
+    expect(gapPayload).toContain("exception");
+    expect(gapPayload).toContain("exception: exceptionClass(err)");
+
+    const stats = readFileSync("src/profiles/stats.ts", "utf8");
+    expect(stats).toContain(`"${MEMBER_STATS}"`);
+    expect(stats).toContain(`"${MEMBER_MILESTONES}"`);
+    expect(stats).toContain("exception: exceptionClass(err)");
+    expect(stats).toContain("aborted");
+    expect(stats).toContain("request_id");
+    // Hono callers pass their request ID; Kit callers have none to pass.
+    expect(readFileSync("src/profiles/routes-stores.ts", "utf8")).toContain('c.get("requestId")');
+
+    const counts = readFileSync("src/counts.ts", "utf8");
+    const countsCall = `console.warn("${COUNTS_READ}"`;
+    const countsStart = counts.indexOf(countsCall);
+    expect(countsStart, `missing ${countsCall} in src/counts.ts`).toBeGreaterThanOrEqual(0);
+    const countsPayload = counts.slice(countsStart, counts.indexOf("});", countsStart));
+    expect(countsPayload).toContain("key");
+    expect(countsPayload).toContain("exception: exceptionClass(err)");
+  });
+});
+
+describe("kit session-store outage warning docs", () => {
+  const AUTH_STATUS_DOWN = "auth status store unavailable";
+  const KIT_SESSION_DOWN = "kit session store unavailable";
+  const KIT_BRIDGE_DOWN = "kit session bridge store unavailable";
+  const KIT_EVENTS_DOWN = "kit events session store unavailable";
+  const HEADING = "### Kit session-store outage warnings";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents all four exact warnings at warn severity with their fields", () => {
+    const section = warningSection();
+    expect(section).toContain(AUTH_STATUS_DOWN);
+    expect(section).toContain(KIT_SESSION_DOWN);
+    expect(section).toContain(KIT_BRIDGE_DOWN);
+    expect(section).toContain(KIT_EVENTS_DOWN);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("`exception`");
+    expect(section).toContain("validated `request_id`");
+    expect(section).toContain("no Hono");
+  });
+
+  it("states the outage-not-logout contract, the once-per-leg rule, and the silence boundaries", () => {
+    const section = warningSection();
+    expect(section).toContain("never reported as a logout");
+    expect(section).toContain("None pages");
+    expect(section).toContain("At most one line per leg");
+    expect(section).toContain("never twice");
+    expect(section).toContain("stay silent by design");
+  });
+
+  it("gives a read-only store check on the sessions table", () => {
+    const section = warningSection();
+    expect(section).toContain("SELECT count(*) FROM web_sessions");
+    expect(section).toContain("read-only");
+    expect(section).toContain("runbook-alerts.md");
+  });
+
+  it("sources emit the warnings with class-only fields, request_id on the probe leg only", () => {
+    const cases = [
+      { file: "src/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
+      { file: "src/kit-session.ts", message: KIT_SESSION_DOWN, requestId: false },
+      { file: "src/kit-session.ts", message: KIT_BRIDGE_DOWN, requestId: false },
+      { file: "src/kit-session.ts", message: KIT_EVENTS_DOWN, requestId: false },
+    ];
+    for (const { file, message, requestId } of cases) {
+      const source = readFileSync(file, "utf8");
+      const call = `console.warn("${message}"`;
+      const start = source.indexOf(call);
+      expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
+      // The warn payload carries the exception class plus, on the Hono probe
+      // leg only, the validated request id: no message, token, cookie, or
+      // member identity travels on any leg.
+      const payload = source.slice(start, source.indexOf("});", start));
+      expect(payload).toContain("exception");
+      if (requestId) {
+        expect(payload).toContain("request_id");
+      } else {
+        expect(payload).not.toContain("request_id");
+      }
+    }
+  });
+
+  it("links the new lines from the bridge and login-start triage rows", () => {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const link = "[Kit session-store outage warnings](#kit-session-store-outage-warnings)";
+    // The Kit bridge triage row points at the new section for store-outage warns.
+    const bridgeRow = docs
+      .split("\n")
+      .find((l) => l.startsWith("| `kit session bridge unavailable; rendering without locals.` |"));
+    expect(bridgeRow, "missing Kit bridge triage row").toBeDefined();
+    expect(bridgeRow as string).toContain(link);
+    // The login-start section points at the new section for the sibling probe leg.
+    const loginStart = docs.indexOf("### Login-start store failures and logout revocation");
+    expect(loginStart, "missing login-start section").toBeGreaterThanOrEqual(0);
+    const loginSection = docs.slice(loginStart, docs.indexOf("### Analytics", loginStart));
+    expect(loginSection).toContain(link);
+  });
+});
+
 describe("queue ledger runbook row cites", () => {
   const CONSUMER_PATH = "src/jobs/consumer.ts";
   const HEADING = "### Queue ledger, lock and malformed-carrier warnings";

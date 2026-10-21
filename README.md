@@ -190,14 +190,31 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
+a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
+(mirroring `API_PUBLIC_BOUNDS.maxBodyBytes`, enforced while streaming when a
+reader exists); settlement aborts the per-call fetch and releases its queue
+entry and pagehide forwarder. Failures reject with an `Error` carrying a
+stable `.code`, a safe `.message` naming the next step, and `.retryAfter`
+seconds (1–86400) on rate limits only. Codes: `timeout`,
+`invalid_response` (oversize, malformed, or unexpected redirect),
+`unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
+retried automatically), `not_found` (unknown event key, no retry),
+`invalid_request` (bad event key, thrown synchronously). Local check,
+fixtures only:
+
+```sh
+npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
+```
+
 ### Browser regressions
 
-These suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
-named suite passed and at least the minimum ran. The RSVP `node --test` suite
-writes a TAP report and runs `ci/rsvp-focus-require-executed.mjs` the same way.
+named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
+write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
@@ -214,6 +231,7 @@ to execute the same Chromium proof.
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -480,8 +498,9 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-`npm run check:worker-moderators` parses the top-level
-`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`npm run check:moderators -- --help` prints usage to stdout and reads nothing;
+`--json` emits the findings verdict. `npm run check:worker-moderators` parses
+the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
 `web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
 `env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
 Owner+Moderator pair (staging guild `1545644954272137297`:

@@ -1,5 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { discordWidgetHealth } from "../../../../src/discord-widget";
+import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../../../../src/home-copy";
+import { inviteDestination } from "../../../../src/invite";
 import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
 import { safeNext, sanitizeSource } from "../../../../src/join/service";
 import type { PageServerLoad } from "./$types";
@@ -50,8 +52,13 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
     cookies,
     setHeaders,
   });
+  // Sanitized like the Hono data source: a bad DISCORD_INVITE_URL renders
+  // the hardcoded fallback, never a dead, relative or hostile href. The
+  // banner and intro copy ride as load data (the Kit home homeCopy channel),
+  // so the page renders the shared bytes without importing the Hono screen.
   return {
-    inviteUrl: env.DISCORD_INVITE_URL,
+    inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
+    joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO },
     widgetUrl,
     widgetSnapshot,
     oneClickHref:

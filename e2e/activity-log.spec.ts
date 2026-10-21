@@ -7,6 +7,10 @@ import { expect, qaLogin, test } from "./fixtures";
 // unmatched filter renders the empty state. Guest-redirect and member-403
 // are unit-pinned in test/admin-activity-log.test.ts and not re-proven here.
 // Frozen testids: activity-log-table/activity-log-empty (src/admin/pages.tsx).
+// The profile admin-link check rides this same moderator session: POST
+// /auth/qa/:identity shares the 10/min `qa-login` throttle across the whole
+// sequential smoke, so a second moderator login in profile.spec.ts would push
+// the run over budget.
 test("moderator sees the created event in the activity-log viewer, plus the empty state", async ({
   page,
   context,
@@ -62,4 +66,12 @@ test("moderator sees the created event in the activity-log viewer, plus the empt
   await expect(page.getByTestId("activity-log-empty")).toContainText(
     "No activity matches these filters.",
   );
+
+  // 4. The moderator reaches the admin panel from the profile header on this
+  // same session (folded from profile.spec.ts to hold the throttle budget).
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
+  await page.getByTestId("profile-admin-link").click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("heading", { name: "Moderation", exact: true })).toBeVisible();
 });

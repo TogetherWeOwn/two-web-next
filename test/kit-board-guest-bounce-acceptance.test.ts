@@ -495,7 +495,7 @@ describe("passing controls: gate order and callback safety are unchanged", () =>
     for (const overrides of [
       { seasonParam: "bogus" },
       { scopeParam: "friends" },
-      { activityParam: "chess!" },
+      { activityParam: "a".repeat(101) },
     ]) {
       const { err, a } = await bounce({
         session: memberSession,

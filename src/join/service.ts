@@ -27,6 +27,7 @@
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
+import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../db/connection";
 import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
 
@@ -148,7 +149,18 @@ export async function checkJoinThrottle(
   bucket: string,
   max: number,
 ): Promise<ThrottleVerdict> {
-  if (!sql) return { limited: false };
+  if (!sql) {
+    // Fail open with a throttle-naming line so the generic middleware and the
+    // join funnel report a missing store. (Profile writes never reach this
+    // branch: no URL admits without calling here, and a URL always builds a
+    // client.) Only the route/throttle name is logged: the client segment is
+    // a member IP (or Discord ID on profile/RSVP-shaped buckets) and must
+    // never be logged. Names never contain a colon while IPv6 clients do, so
+    // the name is the segment before the first colon.
+    const throttle = bucket.split(":", 1)[0] ?? bucket;
+    console.warn("Throttle store unavailable; allowing the request.", { throttle });
+    return { limited: false };
+  }
   // The native postgres.js store supports transactions; the session SQL seam
   // deliberately exposes only the statements needed by session stores.
   const store = sql as Sql & {
@@ -162,6 +174,12 @@ export async function checkJoinThrottle(
       // Same `SET LOCAL lock_timeout` shape as the agent-events shield, inner
       // limiter and ingress operation locks.
       await tx.unsafe(`SET LOCAL lock_timeout = '${WEB_THROTTLE_LOCK_TIMEOUT_MS}ms'`);
+      // Per-request statement bound: a lock timeout alone cannot cancel an
+      // executing statement, so the INSERT below also carries the shared
+      // 5 s bound. It sits above the 2 s lock timeout, so lock waits still
+      // refuse with 55P03 while executing statements cancel with 57014 and
+      // propagate to the callers' fail-open/outage handling.
+      await tx.unsafe(PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
       // now() is transaction-start time, which can precede a long lock wait.
       const rows = await tx<{ n: number; wait: number }[]>`

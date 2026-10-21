@@ -1,4 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
+import type { AdminWayBack } from "./admin-wayback";
 import type { SuggestedEvent } from "./events/suggestions";
 import { RecoveryShell } from "./pages";
 
@@ -157,10 +158,14 @@ export const InternalErrorPage: FC<{ inviteUrl: string; supportReference?: strin
 
 // 429 (ports errors/429 + App\Support\ThrottleEnvelope::render). Same outage-safe
 // CTA as 500/503: the invite URL works when the session store is throttled or down.
-export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
-  inviteUrl,
-  supportReference,
-}) => (
+// A throttled admin write additionally names the refused form: adminBack is
+// path-derived (no session or DB reads) and states plainly that the submission
+// was not saved, since no-store kills back-button draft recovery.
+export const RateLimitedPage: FC<{
+  inviteUrl: string;
+  supportReference?: string;
+  adminBack?: AdminWayBack;
+}> = ({ inviteUrl, supportReference, adminBack }) => (
   <ErrorShell
     code="429"
     title="Slow down a little"
@@ -170,7 +175,17 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is
       not going anywhere.
     </p>
+    {adminBack ? (
+      <p class="admin-back-note">Your submission was not saved. Reopen the form and try again.</p>
+    ) : null}
     <p class="recovery-actions">
+      {adminBack ? (
+        <>
+          <a href={adminBack.href} data-testid="error-admin-back">
+            {adminBack.label}
+          </a>{" "}
+        </>
+      ) : null}
       <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
         Use the Discord invite instead
       </a>{" "}
@@ -187,8 +202,12 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
 // loop and no OAuth start — re-signing in cannot mint the member bit. The
 // primary recovery names the join-to-unlock path (/join); the invite URL that
 // works during an outage and the way back home stay. Moderator-only areas
-// stay locked by design, and the lead says so. No session or DB reads.
-export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+// stay locked by design, and the lead says so. The Support reference
+// correlates the refusal for incident follow-up. No session or DB reads.
+export const ForbiddenPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
+  inviteUrl,
+  supportReference,
+}) => (
   <ErrorShell
     code="403"
     title="You do not have access to this"
@@ -209,13 +228,36 @@ export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
+  </ErrorShell>
+);
+
+// 403 for a signed-in member writing another member's profile: only the
+// member's own profile can be edited, so the recovery links back to the
+// viewer's own profile (/profile) — never the join-to-unlock path (re-signing
+// in cannot mint ownership) and never the refused target (no leak surface).
+// Static copy only: no session, DB, target-id or target-field reads.
+export const OwnProfileOnlyPage: FC = () => (
+  <ErrorShell code="403" title="Only your own profile">
+    <p class="lead">
+      You can only edit your own profile — this save was refused and nothing was changed. Head back
+      to your profile and try again from there.
+    </p>
+    <p class="recovery-actions">
+      <a class="btn" href="/profile" data-testid="error-own-profile">
+        Back to your profile
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
+    </p>
   </ErrorShell>
 );
 
 // 410. Generic retired-page shell, distinct from the event-specific
 // EventGonePage: unknown and URL-freeze-retired paths stay 404, while an
 // explicitly retired document answers here. No session or DB reads.
-export const GonePage: FC = () => (
+export const GonePage: FC<{ supportReference?: string }> = ({ supportReference }) => (
   <ErrorShell code="410" title="This page is gone">
     <p class="lead">The page was removed. The lobby is still open — come in and say hello.</p>
     <p class="recovery-actions">
@@ -226,6 +268,7 @@ export const GonePage: FC = () => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
@@ -233,10 +276,11 @@ export const GonePage: FC = () => (
 // primary action only recovers the place, never the draft: member-write
 // surfaces return to their form (via returnHref/returnLabel), unknown and
 // admin paths keep the homepage return.
-export const PayloadTooLargePage: FC<{ returnHref?: string; returnLabel?: string }> = ({
-  returnHref = "/",
-  returnLabel = "Continue to the homepage",
-}) => (
+export const PayloadTooLargePage: FC<{
+  returnHref?: string;
+  returnLabel?: string;
+  supportReference?: string;
+}> = ({ returnHref = "/", returnLabel = "Continue to the homepage", supportReference }) => (
   <ErrorShell code="413" title="That request is too large">
     <p class="lead">Reduce the size of your request and try again.</p>
     <p>The refused request was not saved, so you will need to enter it again.</p>
@@ -248,6 +292,7 @@ export const PayloadTooLargePage: FC<{ returnHref?: string; returnLabel?: string
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
