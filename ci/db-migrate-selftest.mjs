@@ -14,6 +14,7 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  captureDriverRaceCrashes,
   migrationClient,
   migrationConfig,
   runMigration,
@@ -420,8 +421,14 @@ test("gapped/newer history and concurrent migration lock are refused", async () 
   });
 });
 
-test("connection loss after the PITR receipt fails closed while another session owns the lock", async () => {
+test("connection loss after the PITR receipt fails closed while another session owns the lock", async (t) => {
   await fixture(async ({ client, env, output }) => {
+    // Killing the lock holder can surface the driver race crash (a rollback
+    // write scheduled after the socket closed) instead of only the clean
+    // connection error. Capture that exact signature so the stray crash
+    // cannot kill the selftest process; the fail-closed rejection below is
+    // still required in both paths.
+    const race = captureDriverRaceCrashes();
     let interrupted;
     try {
       const operation = runMigration("apply", env, {
@@ -459,7 +466,16 @@ test("connection loss after the PITR receipt fails closed while another session 
     } finally {
       try {
         if (interrupted) await interrupted;
+        // Drain pending immediates while the capture is still attached: the
+        // race crash fires from a queued immediate that can land after the
+        // fail-closed rejection already resolved.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+        if (race.crashes.length > 0)
+          t.diagnostic(
+            `driver race crash captured ${race.crashes.length}x; fail-closed rejection still held`,
+          );
       } finally {
+        race.release();
         await client`select pg_advisory_unlock(11161001)`;
       }
     }

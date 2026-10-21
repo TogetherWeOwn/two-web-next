@@ -174,6 +174,56 @@ export function safeMigrationError(error) {
   return "Migration failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
 }
 
+// postgres.js surfaces kill-backend timing as an uncaught driver-internal
+// crash when a write is scheduled after the socket closed: `closed()` nulls
+// the socket, a later `write()` buffers and queues `nextWrite`, and the
+// immediate throws `TypeError: Cannot read properties of null (reading
+// 'write')` instead of rejecting the query. Inside `client.begin` the
+// automatic rollback is the write that loses this race, so the migration
+// itself still rejects fail-closed while the stray crash would kill the
+// process with a raw driver stack. Recognize that exact signature so the
+// CLI and the selftest can fail closed on it; anything else rethrows.
+export function isDriverConnectionRaceCrash(error) {
+  return (
+    error instanceof TypeError &&
+    /Cannot read propert\w+ of null \(reading 'write'\)/.test(error.message) &&
+    (error.stack ?? "").includes("nextWrite") &&
+    (error.stack ?? "").includes("postgres/src/connection.js")
+  );
+}
+
+// Capture the driver race crash for a bounded window. Returns the captured
+// crashes and a release function; the caller must release in a finally so a
+// late crash cannot leak into unrelated work, and must yield to the event
+// loop before releasing so a pending crash lands inside the window.
+// Merely adding a listener is not enough under `node --test`: the runner
+// attributes every emitted uncaughtException to the running test through its
+// own plain listener, so the capture temporarily replaces the listener set
+// (Node 22/24 use a plain listener, not a capture callback) and restores it
+// on release. Anything that does not match the exact driver race signature
+// restores the listeners and rethrows to crash loudly.
+export function captureDriverRaceCrashes() {
+  const crashes = [];
+  const saved = process.rawListeners("uncaughtException");
+  let released = false;
+  const restore = () => {
+    if (released) return;
+    released = true;
+    process.removeListener("uncaughtException", onCrash);
+    for (const listener of saved) process.on("uncaughtException", listener);
+  };
+  const onCrash = (error) => {
+    if (!isDriverConnectionRaceCrash(error)) {
+      restore();
+      throw error;
+    }
+    crashes.push(error);
+  };
+  process.removeAllListeners("uncaughtException");
+  process.on("uncaughtException", onCrash);
+  return { crashes, release: restore };
+}
+
 export function migrationClient(config, hooks = {}) {
   return postgres(config.url.href, {
     port: 5432,
@@ -284,10 +334,26 @@ export async function runMigration(mode, env = process.env, options = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // A connection lost mid-migration can additionally surface the driver race
+  // crash after the runner already rejected: swallow only that signature and
+  // fail closed instead of dumping a raw driver stack. The natural
+  // fail-closed rejection still carries the disposition; a crash landing
+  // after it settled must not print twice or override success. A crash
+  // landing first settles too, so the later catch skips its identical print.
+  let settled = false;
+  process.on("uncaughtException", (error) => {
+    if (!isDriverConnectionRaceCrash(error)) throw error;
+    if (settled) return;
+    console.error(safeMigrationError(error));
+    process.exitCode = 1;
+    settled = true;
+  });
   try {
     await runMigration(process.argv[2]);
   } catch (error) {
     console.error(safeMigrationError(error));
     process.exitCode = 1;
+  } finally {
+    settled = true;
   }
 }
