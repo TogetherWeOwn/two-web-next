@@ -122,7 +122,7 @@ function ogUrlsIn(html: string): string[] {
     .map((tag) => attr(tag, "content")!.replaceAll("&amp;", "&"));
 }
 
-function expectSearchForm(html: string) {
+function expectSearchForm(html: string, expectedQuery?: string) {
   const searchForms = formsIn(islandSection(html)).filter(
     (form) => inputsNamed(form.body, "q").length > 0,
   );
@@ -139,6 +139,9 @@ function expectSearchForm(html: string) {
   const qInputs = inputsNamed(form.body, "q");
   expect(qInputs).toHaveLength(1);
   expect(attr(qInputs[0]!, "type")?.toLowerCase() ?? "text").not.toBe("hidden");
+  if (expectedQuery !== undefined) {
+    expect(attr(qInputs[0]!, "value")).toBe(expectedQuery);
+  }
   expect(inputsNamed(form.body, "page")).toHaveLength(0);
   expect(hasSubmit(form.body)).toBe(true);
   return form;
@@ -150,24 +153,28 @@ describe.each(archiveTwins)("%s searchable past page", (twin) => {
     async (path) => {
       const source = archiveReadFixture();
       const html = await (await requestArchive(twin, path, source.env, kit)).text();
-      expectSearchForm(html);
+      expectSearchForm(html, path === "/events/past" ? "" : ARCHIVE_QUERY);
     },
   );
 
   it("renders the search form on empty and out-of-range states, not just result pages", async () => {
     const source = archiveReadFixture();
     source.replaceRows([]);
-    expectSearchForm(await (await requestArchive(twin, "/events/past", source.env, kit)).text());
+    expectSearchForm(
+      await (await requestArchive(twin, "/events/past", source.env, kit)).text(),
+      "",
+    );
     source.replaceRows(archiveRows());
     expectSearchForm(
       await (await requestArchive(twin, searchPath(ARCHIVE_QUERY, 999), source.env, kit)).text(),
+      ARCHIVE_QUERY,
     );
   });
 
   it("submits a fresh search to page one with q carried into the pager", async () => {
     const source = archiveReadFixture();
     const landing = await (await requestArchive(twin, "/events/past", source.env, kit)).text();
-    const form = expectSearchForm(landing);
+    const form = expectSearchForm(landing, "");
     // What the browser navigates to on submit: the action plus the named fields.
     const submit = new URL(form.action.href);
     submit.searchParams.set("q", ARCHIVE_QUERY);
@@ -227,6 +234,7 @@ describe.each(archiveTwins)("%s searchable past page", (twin) => {
     expect(html).toContain("No past events match your search.");
     expect(html).not.toContain(PAST_EVENTS_OUT_OF_RANGE_TESTID);
     expect(html).not.toContain(PAST_EVENTS_COPY.empty);
+    expect(pagerNav(html)).not.toMatch(/Page \d+ of/);
     const clear = linksIn(html).find(
       (link) =>
         link.url.pathname === "/events/past" &&
@@ -245,6 +253,7 @@ describe.each(archiveTwins)("%s searchable past page", (twin) => {
     expect(html).toContain(`data-testid="${PAST_EVENTS_EMPTY_TESTID}"`);
     expect(html).toContain(PAST_EVENTS_COPY.empty);
     expect(html).toContain(PAST_EVENTS_COPY.join);
+    expect(pagerNav(html)).not.toMatch(/Page \d+ of/);
     expect(canonicalsIn(html)).toEqual([`${ARCHIVE_ORIGIN}/events/past`]);
   });
 
