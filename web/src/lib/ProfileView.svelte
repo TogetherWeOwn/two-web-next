@@ -34,7 +34,8 @@ import {
   statsLabel,
   type ProfileFormValues,
 } from "../../../src/profiles/pages";
-import { MEMBER_MILESTONES_CAP, type MemberStats } from "../../../src/profiles/stats";
+import type { MemberStats } from "../../../src/profiles/stats";
+import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
 import { canonicalUrl } from "../../../src/seo";
@@ -54,7 +55,6 @@ let {
   joinResult = null,
   errors = null,
   values = null,
-  statsDraftWarning = false,
 }: {
   member: MemberView;
   stats?: MemberStats | null;
@@ -64,8 +64,9 @@ let {
   joinResult?: JoinResult | null;
   errors?: Record<string, string> | null;
   values?: ProfileFormValues | null;
-  /** Failed-save re-render: the stats recovery link warns that reloading discards the draft. */
-  statsDraftWarning?: boolean;
+  // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
+  // so no Kit route can set it. Re-add with wiring and a render test if Kit
+  // write parity ever needs it.
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -229,7 +230,6 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           <p class="profile-hint">Member stats unavailable right now.</p>
           <p class="profile-hint">
             <a href={`/members/${member.id}`}>Retry loading member stats</a>
-            {#if statsDraftWarning}{" "}Reloading discards your unsaved changes.{/if}
           </p>
         </section>
       {:else}
@@ -276,7 +276,6 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <p class="profile-hint">Milestones unavailable right now.</p>
             <p class="profile-hint">
               <a href={`/members/${member.id}`}>Retry loading milestones</a>
-              {#if statsDraftWarning}{" "}Reloading discards your unsaved changes.{/if}
             </p>
           {:else}
             {#if stats.milestonesTruncated}
