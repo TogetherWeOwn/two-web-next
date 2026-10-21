@@ -13,6 +13,7 @@ import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
 import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
 import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
 import syncRevisions from "../drizzle/1020_event-sync-revisions.sql?raw";
+import publicJoinDetails from "../drizzle/1031_event-public-join-details.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -86,7 +87,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // the agent ownership columns from 1019 (without its data migration — no
       // retired rows exist in this fresh schema), then the sync-revision
       // outbox columns from 1020 (without its triggers — the current service
-      // selects sync_revision/synced_revision on every shared-row read).
+      // selects sync_revision/synced_revision on every shared-row read), then
+      // the public host/join columns from 1031 (the dispatch re-read selects
+      // the full shared row after every write).
       const columnAdds = sharedAgentColumns
         .split("--> statement-breakpoint")
         .slice(0, 5)
@@ -106,6 +109,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         icsColumns,
         columnAdds,
         syncColumns,
+        publicJoinDetails,
       ]) {
         for (const statement of migration
           .replaceAll('"public".', `"${schemaName}".`)
