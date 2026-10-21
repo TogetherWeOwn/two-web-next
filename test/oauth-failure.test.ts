@@ -5,10 +5,10 @@
 // Ports the two legacy failure suites onto the Workers stack:
 //   - two-web JoinCallbackFailureTest: a 400 + `invalid_grant` body (or a
 //     lost/replayed state) is "expired, retry right now" (200 recovery);
-//     EVERYTHING else is an outage (503) — including a 503 whose body says
-//     invalid_grant, invalid_client, unparseable bodies, 429, transport
-//     failures and unknown exceptions. Status governs; the body can never
-//     reclassify a server error.
+//     EVERYTHING else is a 503 — a throttled 429 gets the throttle copy,
+//     and the rest (a 503 whose body says invalid_grant, invalid_client,
+//     unparseable bodies, transport failures, unknown exceptions) get the
+//     outage copy. Status governs; the body can never reclassify.
 //   - two-web AccessTokenIsNeverLoggedTest + DiscordLoginTest failure rows:
 //     synthetic secrets injected into nested exception message/cause/response
 //     objects vanish from every log line, every rendered page, every redirect
@@ -642,7 +642,7 @@ describe("join callback: consent errors stay out of response, attempts and diagn
       admitted: false,
     });
     expect(res.status).toBe(200);
-    expect(html).toContain("Join link expired");
+    expect(html).toContain("Join cancelled");
     expect(calls).toEqual([]);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
     const requestId = res.headers.get("x-request-id");
@@ -691,19 +691,28 @@ describe("join callback: expired recovery versus outage 503", () => {
   });
 
   it.each([
-    [401, "provider_reject"],
-    [403, "provider_reject"],
-    [429, "rate_limited"],
-    [500, "provider_outage"],
-    [503, "provider_outage"],
-  ] as [number, DiscordError["kind"]][])(
+    [401, "provider_reject", "Discord is unreachable"],
+    [403, "provider_reject", "Discord is unreachable"],
+    [429, "rate_limited", "Discord throttled the approval"],
+    [500, "provider_outage", "Discord is unreachable"],
+    [503, "provider_outage", "Discord is unreachable"],
+  ] as [number, DiscordError["kind"], string][])(
     "HTTP %i with invalid_grant cannot select expired join recovery",
-    async (status, kind) => {
+    async (status, kind, title) => {
       const { fake, env: e } = isolatedJoin();
       const { logs, calls, res, html } = await joinRoundTrip(e, () => invalidGrant(status));
       expect(res.status).toBe(503);
-      expect(html).toContain("Discord is unreachable");
+      expect(html).toContain(title);
       expect(html).not.toContain("approval expired");
+      // The throttle and outage pages never share copy: a throttled 429
+      // names the wait instead of "unreachable", and no other status names
+      // a throttle.
+      if (status === 429) {
+        expect(html).toContain("rate-limiting approvals");
+        expect(html).not.toContain("Discord is unreachable");
+      } else {
+        expect(html).not.toContain("throttled");
+      }
       expect(calls).toHaveLength(1); // no user lookup or guild mutation after a rejected exchange
       const exchangeLine = recordsFor(logs, JOIN_LOG);
       expect(exchangeLine).toHaveLength(1);
@@ -733,7 +742,8 @@ describe("join callback: expired recovery versus outage 503", () => {
       ),
     );
     expect(res.status).toBe(503);
-    expect(html).toContain("Discord is unreachable");
+    expect(html).toContain("rate-limiting approvals");
+    expect(html).not.toContain("Discord is unreachable");
     expect(res.headers.get("Retry-After") === null).toBe(true);
     expect(calls).toHaveLength(1);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
@@ -852,8 +862,10 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
         );
       throw new Error("unexpected Discord call");
     });
-    expect(res.status).toBe(200);
-    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(res.status).toBe(503);
+    expect(html).toContain("Discord throttled the automatic add");
+    expect(html).toContain("rate-limiting automatic adds");
+    expect(html).not.toContain("We couldn&#39;t add you automatically");
     expect(res.headers.get("Retry-After") === null).toBe(true);
     expect(
       res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { parse } from "yaml";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,6 +73,24 @@ test("focused inventory is exactly two suites and seven existing nightly mutants
     ids,
   );
   assert.deepEqual([...new Set(FOCUSED_MUTANTS.map((m) => m.file))], files);
+});
+
+test("CLI usage errors exit 2 with a usage line and write no report", () => {
+  const reportPath = join(repo, "artifacts/mutation-roles-wall-time/report.json");
+  const before = existsSync(reportPath) ? readFileSync(reportPath) : null;
+  for (const args of [["--bogus"], ["positional"]]) {
+    const child = spawnSync(process.execPath, ["ci/mutation-roles-wall-time.mjs", ...args], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    assert.equal(child.status, 2, `argv ${JSON.stringify(args)} must exit 2 (usage error)`);
+    assert.match(child.stderr, /Usage: node ci\/mutation-roles-wall-time\.mjs/);
+    assert.equal(child.stdout, "");
+  }
+  // A usage refusal must not run the harness: the repo report is byte-identical
+  // afterwards (or still absent), never rewritten with an infrastructure error.
+  if (before === null) assert.equal(existsSync(reportPath), false);
+  else assert.deepEqual(readFileSync(reportPath), before);
 });
 
 test("baseline precedes one mutant at a time, every outcome has verified restoration hashes", () => {

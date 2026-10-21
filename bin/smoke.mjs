@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { headerIndexingRules } from "../ci/robots-directives.mjs";
 
@@ -213,6 +214,9 @@ export function securityTxtAssertions(
   return failures;
 }
 
+// Optional per-route hook for machine verdicts (--json/--ledger): called once
+// per route with (path, failedAssertionCount) after its PASS/FAIL lines.
+// Omitting it leaves the human output byte-identical to previous versions.
 export async function smoke(
   baseUrl,
   {
@@ -224,6 +228,7 @@ export async function smoke(
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
+    onRoute,
   } = {},
 ) {
   const base = new URL(baseUrl);
@@ -719,95 +724,183 @@ export async function smoke(
         error instanceof Error ? error.name : "request error",
       );
     }
+    onRoute?.(route.path, routeFailures);
   }
   log(`smoke: ${routes.length} routes, ${failures} failed assertions`);
   return failures === 0;
 }
 
+// The single flag reference for this tool: --help prints it to stdout,
+// usage errors print it to stderr. Every flag the parser accepts is named.
+export const SMOKE_USAGE =
+  'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline] [--json] [--ledger <path>]';
+
+// Deploy-evidence ledger mirroring bin/json-smoke.mjs writeLedgerFile: one
+// entry per route plus a summary. The --json stdout verdict stays minimal
+// ({ok, routes, failed}); route detail lives here.
+export const SMOKE_LEDGER_VERSION = "smoke/1";
+
+export function writeSmokeLedger(path, origin, entries) {
+  const passed = entries.filter((entry) => entry.status === "pass").length;
+  const failed = entries.filter((entry) => entry.status === "fail").length;
+  const skipped = entries.filter((entry) => entry.status === "skip").length;
+  writeFileSync(
+    path,
+    `${JSON.stringify(
+      {
+        ledger: SMOKE_LEDGER_VERSION,
+        origin,
+        checks: entries,
+        summary: { total: entries.length, passed, failed, skipped },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+// The ledger is written on failure too: a red deploy keeps its evidence.
+// Reporting never decides the exit: a failed evidence write warns and the
+// probe result stands.
+export function tryWriteSmokeLedger(path, origin, entries, { warn = console.error } = {}) {
+  try {
+    writeSmokeLedger(path, origin, entries);
+    return true;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown write error";
+    warn(`smoke: ledger unwritten (${detail}); probe result stands`);
+    return false;
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  const [baseUrl, ...flags] = args;
-  let allowIndexable = false;
-  let versionOverride;
-  let expectedVersionId;
-  let failedBaseline;
-  let allowMissingBaseline = false;
-  let failOnReadyWaitCritical = false;
-  let usage = false;
-  for (let i = 0; i < flags.length; i += 1) {
-    if (flags[i] === "--allow-indexable") {
-      allowIndexable = true;
-    } else if (flags[i] === "--allow-missing-baseline") {
-      allowMissingBaseline = true;
-    } else if (flags[i] === "--fail-on-ready-wait-critical") {
-      failOnReadyWaitCritical = true;
-    } else if (flags[i] === "--version-override") {
-      const value = flags[i + 1];
-      if (value === undefined) {
-        usage = true;
-      } else {
-        versionOverride = value;
-      }
-      i += 1;
-    } else if (flags[i] === "--expected-version-id") {
-      const value = flags[i + 1];
-      if (value === undefined) {
-        usage = true;
-      } else {
-        expectedVersionId = value;
-      }
-      i += 1;
-    } else if (flags[i] === "--failed-baseline") {
-      const value = flags[i + 1];
-      if (value === undefined) {
-        usage = true;
-      } else {
-        failedBaseline = value;
-      }
-      i += 1;
-    } else {
-      usage = true;
-    }
-  }
-  if (typeof baseUrl !== "string" || usage) {
-    console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline]',
-    );
-    process.exitCode = 2;
+  if (args.includes("--help")) {
+    // Safe discovery: usage to stdout, exit 0, zero side effects — no probe,
+    // no ledger write, no env read.
+    console.log(SMOKE_USAGE);
+    process.exitCode = 0;
   } else {
-    try {
-      if (versionOverride !== undefined) assertVersionOverride(versionOverride);
-      if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
-      // Promotion workflows export the pre-deploy/promote retained-rows count
-      // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
-      // explicit --failed-baseline flag wins over the environment. An empty
-      // SMOKE_FAILED_BASELINE means the capture could not read /up and maps
-      // to no baseline. SMOKE_ALLOW_MISSING_BASELINE=1 (or the flag) makes
-      // that no-baseline state skip the dead-letter gate instead of failing
-      // on any positive count; ad-hoc runs without it keep the absolute gate.
-      const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
-      const baseline =
-        baselineRaw === undefined || baselineRaw === ""
-          ? undefined
-          : assertFailedBaseline(baselineRaw);
-      const allowMissingRaw = process.env.SMOKE_ALLOW_MISSING_BASELINE;
-      const allowMissing =
-        allowMissingBaseline ||
-        allowMissingRaw === "1" ||
-        allowMissingRaw?.toLowerCase() === "true";
-      process.exitCode = (await smoke(baseUrl, {
-        allowIndexable,
-        versionOverride,
-        expectedVersionId,
-        failedBaseline: baseline,
-        allowMissingBaseline: allowMissing,
-        failOnReadyWaitCritical,
-      }))
-        ? 0
-        : 1;
-    } catch (error) {
-      console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
+    const [baseUrl, ...flags] = args;
+    let allowIndexable = false;
+    let versionOverride;
+    let expectedVersionId;
+    let failedBaseline;
+    let allowMissingBaseline = false;
+    let failOnReadyWaitCritical = false;
+    let jsonVerdict = false;
+    let ledgerPath;
+    let usage = false;
+    for (let i = 0; i < flags.length; i += 1) {
+      if (flags[i] === "--allow-indexable") {
+        allowIndexable = true;
+      } else if (flags[i] === "--allow-missing-baseline") {
+        allowMissingBaseline = true;
+      } else if (flags[i] === "--fail-on-ready-wait-critical") {
+        failOnReadyWaitCritical = true;
+      } else if (flags[i] === "--json") {
+        jsonVerdict = true;
+      } else if (flags[i] === "--ledger") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          ledgerPath = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--version-override") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          versionOverride = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--expected-version-id") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          expectedVersionId = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--failed-baseline") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          failedBaseline = value;
+        }
+        i += 1;
+      } else {
+        usage = true;
+      }
+    }
+    if (typeof baseUrl !== "string" || usage) {
+      console.error(SMOKE_USAGE);
       process.exitCode = 2;
+    } else {
+      try {
+        if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+        if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
+        // Promotion workflows export the pre-deploy/promote retained-rows count
+        // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
+        // explicit --failed-baseline flag wins over the environment. An empty
+        // SMOKE_FAILED_BASELINE means the capture could not read /up and maps
+        // to no baseline. SMOKE_ALLOW_MISSING_BASELINE=1 (or the flag) makes
+        // that no-baseline state skip the dead-letter gate instead of failing
+        // on any positive count; ad-hoc runs without it keep the absolute gate.
+        const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
+        const baseline =
+          baselineRaw === undefined || baselineRaw === ""
+            ? undefined
+            : assertFailedBaseline(baselineRaw);
+        const allowMissingRaw = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+        const allowMissing =
+          allowMissingBaseline ||
+          allowMissingRaw === "1" ||
+          allowMissingRaw?.toLowerCase() === "true";
+        const entries = [];
+        const ok = await smoke(baseUrl, {
+          allowIndexable,
+          versionOverride,
+          expectedVersionId,
+          failedBaseline: baseline,
+          allowMissingBaseline: allowMissing,
+          failOnReadyWaitCritical,
+          onRoute:
+            jsonVerdict || ledgerPath !== undefined
+              ? (path, failedAssertions) => {
+                  entries.push({
+                    check: path,
+                    status: failedAssertions === 0 ? "pass" : "fail",
+                    ...(failedAssertions === 0
+                      ? {}
+                      : {
+                          reason: `${failedAssertions} failed assertion${failedAssertions === 1 ? "" : "s"}`,
+                        }),
+                  });
+                }
+              : undefined,
+        });
+        if (jsonVerdict) {
+          // One machine verdict line after the human output; exit codes unchanged.
+          console.log(
+            JSON.stringify({
+              ok,
+              routes: entries.length,
+              failed: entries.filter((entry) => entry.status === "fail").length,
+            }),
+          );
+        }
+        if (ledgerPath !== undefined) {
+          tryWriteSmokeLedger(ledgerPath, new URL(baseUrl).origin, entries);
+        }
+        process.exitCode = ok ? 0 : 1;
+      } catch (error) {
+        console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
+        process.exitCode = 2;
+      }
     }
   }
 }
