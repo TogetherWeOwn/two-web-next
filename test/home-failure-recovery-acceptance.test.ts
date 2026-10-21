@@ -219,7 +219,7 @@ describe("acceptance: signin failure notices offer a retry (Hono)", () => {
       expect(html.indexOf('data-testid="notice"')).toBeLessThan(
         html.indexOf('data-testid="notice-retry"'),
       );
-      expect(anchorText(retries[0]!).length).toBeGreaterThan(0);
+      expect(anchorText(retries[0]!)).toBe("Try signing in again");
     },
   );
 });
@@ -242,7 +242,7 @@ describe("acceptance: signin failure notices offer a retry (Kit)", () => {
       expect(html.indexOf('data-testid="notice"')).toBeLessThan(
         html.indexOf('data-testid="notice-retry"'),
       );
-      expect(anchorText(retries[0]!).length).toBeGreaterThan(0);
+      expect(anchorText(retries[0]!)).toBe("Try signing in again");
     },
   );
 });
@@ -261,7 +261,12 @@ describe("acceptance: empty schedule card links recovery (Hono)", () => {
       const links = [...scope.matchAll(EMPTY_LINK_ANCHOR)].map((m) => m[0]);
       expect(links).toHaveLength(1);
       expect(anchorHref(links[0]!)).toBe(href);
-      expect(anchorText(links[0]!).length).toBeGreaterThan(0);
+      expect(anchorText(links[0]!)).toBe(state === "empty" ? "Join the Discord" : "The Discord");
+      const sentence =
+        state === "empty"
+          ? "Game nights get posted here. Join the Discord and you’ll hear about the next one."
+          : "We couldn’t load the schedule. The Discord is still open — check there for the next game night.";
+      expect(anchorText(scope).replace(/\s+/g, " ").trim()).toContain(sentence);
       if (viewer === "guest") {
         const ctas = [...html.matchAll(GUEST_CTA_ANCHOR)].map((m) => m[0]);
         expect(ctas).toHaveLength(1);
@@ -287,7 +292,12 @@ describe("acceptance: empty schedule card links recovery (Kit)", () => {
       const links = [...scope.matchAll(EMPTY_LINK_ANCHOR)].map((m) => m[0]);
       expect(links).toHaveLength(1);
       expect(anchorHref(links[0]!)).toBe(href);
-      expect(anchorText(links[0]!).length).toBeGreaterThan(0);
+      expect(anchorText(links[0]!)).toBe(state === "empty" ? "Join the Discord" : "The Discord");
+      const sentence =
+        state === "empty"
+          ? "Game nights get posted here. Join the Discord and you’ll hear about the next one."
+          : "We couldn’t load the schedule. The Discord is still open — check there for the next game night.";
+      expect(anchorText(scope).replace(/\s+/g, " ").trim()).toContain(sentence);
       if (viewer === "guest") {
         const ctas = [...html.matchAll(GUEST_CTA_ANCHOR)].map((m) => m[0]);
         expect(ctas).toHaveLength(1);
