@@ -73,7 +73,7 @@ const copy = $derived(kitErrorCopy(code));
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
           Use the Discord invite instead
         </a>
-        <a href="/" data-testid="error-retry">Try again</a>
+        <a href="/" data-testid="error-retry">Back to the homepage</a>
       </p>
     {/if}
   </section>
