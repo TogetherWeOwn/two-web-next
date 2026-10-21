@@ -1,9 +1,9 @@
 // EventsCalendar: member-driven fragment re-renders (view toggle, month steps,
-// settled search, past drawer, retry, grid day jumps). One fetch in flight —
-// a newer action aborts the older. Skeleton + content swap on member-started
-// actions only; typing in the search box is deliberately untargeted so the
-// input never loses focus. Every control is a real anchor or a GET form, so
-// the whole surface works without this file.
+// month jump, settled search, past drawer, retry, grid day jumps). One fetch
+// in flight — a newer action aborts the older. Skeleton + content swap on
+// member-started actions only; typing in the search box is deliberately
+// untargeted so the input never loses focus. Every control is a real anchor
+// or a GET form, so the whole surface works without this file.
 (function () {
   "use strict";
   var root = document.querySelector('[data-island="events-calendar"]');
@@ -416,6 +416,10 @@
       authSwaps.forEach(function (swap) {
         if (swap.target) swap.target.setAttribute("href", swap.href);
       });
+      // A swap replaces the month-jump form with a fresh node: rewire it so
+      // the next submit re-enters the fragment flow. A no-op when the zones
+      // carry no form (e.g. the list view) or the node is already wired.
+      wireJumpForm();
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
@@ -622,6 +626,43 @@
     });
   }
 
+  // The month-jump form is a native GET form (view + past ride as hidden
+  // fields), so a jump works without this file. With it, submit reuses the
+  // fragment flow: the chosen month commits exactly like a month step, focus
+  // landing in the new form — or back on the origin submitter on failure.
+  // Typing in the month box schedules nothing: only submit navigates.
+  var JUMP_FORM_SELECTOR = '[data-testid="calendar-month-jump"]';
+  var JUMP_SUBMIT_SELECTOR = '[data-testid="calendar-month-jump-submit"]';
+  var wiredJumpForm = null;
+
+  function jumpUrl(formEl) {
+    var url = new URL("/events", window.location.origin);
+    url.searchParams.set("view", "calendar");
+    ["month", "past"].forEach(function (name) {
+      var field = formEl.querySelector('[name="' + name + '"]');
+      if (field && field.value) url.searchParams.set(name, field.value);
+    });
+    return url;
+  }
+
+  function wireJumpForm() {
+    var formEl = root.querySelector(JUMP_FORM_SELECTOR);
+    if (!formEl || formEl === wiredJumpForm) return;
+    wiredJumpForm = formEl;
+    formEl.addEventListener("submit", function (event) {
+      event.preventDefault();
+      cancelDebounce();
+      var submitter = (event && event.submitter) || formEl.querySelector(JUMP_SUBMIT_SELECTOR);
+      var control = submitter && formEl.contains(document.activeElement) ? submitter : null;
+      load(jumpUrl(formEl), true, {
+        skeleton: true,
+        syncInput: true,
+        control: control,
+        focus: JUMP_SUBMIT_SELECTOR,
+      });
+    });
+  }
+
   window.addEventListener("popstate", function () {
     var url = calendarHref(window.location.href);
     // A fragment-only navigation (the skip link to #main) also fires popstate.
@@ -632,4 +673,6 @@
     cancelDebounce();
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });
+
+  wireJumpForm();
 })();

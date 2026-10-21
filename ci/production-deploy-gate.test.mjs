@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -575,6 +575,36 @@ test("credential CLI fails closed without printing credentials or accessing the 
   assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_API_TOKEN));
   assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_ACCOUNT_ID));
 });
+
+test("help CLI prints usage without running the gate or touching GITHUB_OUTPUT", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-help-"));
+  const output = join(dir, "github-output");
+  const result = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", "--help"], {
+    env: { GITHUB_OUTPUT: output },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Usage: node ci\/production-deploy-gate\.mjs/);
+  for (const flag of ["--credentials", "--version-id", "--already-live", "--check-migrations"]) {
+    assert.ok(result.stdout.includes(flag), flag);
+  }
+  assert.equal(result.stderr, "");
+  assert.ok(!existsSync(output));
+});
+
+for (const flag of ["--bogus", "--check-migration"]) {
+  test(`unknown flag ${flag} refuses with usage instead of running the gate`, () => {
+    const result = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", flag], {
+      env: {},
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Usage: node ci\/production-deploy-gate\.mjs/);
+    assert.equal(result.stdout, "");
+    assert.ok(!result.stderr.includes("::error::"));
+    assert.ok(!result.stderr.match(/deployment disabled/));
+  });
+}
 
 test("both Environment gate jobs inherit contents and Actions read permissions", () => {
   const workflow = readFileSync(

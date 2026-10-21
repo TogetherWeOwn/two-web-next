@@ -1,12 +1,17 @@
 import type { FC } from "hono/jsx";
 import type { DiscordWidgetSnapshot } from "../discord-widget";
+import { JOIN_INTRO } from "../home-copy";
+import type { JOIN_START_FAILED_NOTICE } from "../join/route-shared";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { JoinResultBanner, Layout, SiteFooter, SiteHeader } from "../page-shell";
 
+// The intro literal lives in ../home-copy (single source both renderers read);
+// this re-export keeps the existing importers (md alternate, public API,
+// pages barrel) working untouched.
 // Join carries the same share tags as home (TOG-5624): the funnel lives on
 // shared links. The intro doubles as the share description, same as legacy.
-export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
+export { JOIN_INTRO };
 
 export const Join: FC<{
   inviteUrl: string;
@@ -17,7 +22,10 @@ export const Join: FC<{
   source?: string | null;
   appUrl: string;
   joinResult?: JoinResult | null;
-}> = ({ inviteUrl, widgetUrl, widgetSnapshot, next, source, appUrl, joinResult }) => {
+  // Already allowlisted by the route (JOIN_START_FAILED_NOTICE or null).
+  // Display-only: explains a failed start, never echoed into the one-click href.
+  notice?: typeof JOIN_START_FAILED_NOTICE | null;
+}> = ({ inviteUrl, widgetUrl, widgetSnapshot, next, source, appUrl, joinResult, notice }) => {
   const oneClickHref =
     next && source
       ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
@@ -37,6 +45,11 @@ export const Join: FC<{
       <SiteHeader />
       <main id="main" tabindex={-1}>
         {joinResult ? <JoinResultBanner result={joinResult} /> : null}
+        {notice ? (
+          <p class="notice" role="status" data-testid="join-start-notice">
+            The Discord approval failed to start — try again below.
+          </p>
+        ) : null}
         <section class="join-layout" aria-labelledby="join-heading">
           <div class="join-panel">
             <h1 id="join-heading">Join Together We Own</h1>

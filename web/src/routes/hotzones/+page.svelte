@@ -4,10 +4,20 @@ import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-// Only escaped JSX produced by renderHotzoneGrid in the server loader enters
-// these HTML slots; captions and every cell are escaped by the shared renderer.
-const { season, joinsHtml, joinsTotal, eventCount, voiceHtml, gamesHtml, retentionNote, appUrl } =
-  $derived(data);
+// Only escaped JSX produced by renderHotzoneGrid/renderPeriodPicker in the
+// server loader enters these HTML slots; captions, every cell and the picker
+// values are escaped by the shared renderer.
+const {
+  season,
+  joinsHtml,
+  joinsTotal,
+  eventCount,
+  voiceHtml,
+  gamesHtml,
+  retentionNote,
+  appUrl,
+  periodPickerHtml,
+} = $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
 // Every signal link keeps the selected season; absent/all stays canonical.
 const qs = $derived(season === "all" ? "" : `?season=${season}`);
@@ -31,6 +41,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
   <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
   {#if retentionNote}<p>{retentionNote}</p>{/if}
+  {@html periodPickerHtml}
   <nav aria-label="Signals">
     <ul>
       <li><a href="/hotzones/joins{qs}">Joins heatmap</a></li>

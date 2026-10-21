@@ -23,7 +23,7 @@ let {
 } = $props();
 </script>
 
-<Shell title={title} exactTitle="{title} — Together We Own" theme="event" activeNav="events" hideAccount>
+<Shell title={title} exactTitle="{title} — Together We Own" theme="event" activeNav="event" hideAccount>
   <nav class="event-back" aria-label="Event calendar">
     <a href="/events">← All events</a>
   </nav>
