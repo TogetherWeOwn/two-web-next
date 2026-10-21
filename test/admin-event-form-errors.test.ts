@@ -14,7 +14,7 @@ import { EVENT_BASELINE_FIELD, eventContentBaseline } from "../src/admin/event-b
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "event-form-test-secret-at-least-32-bytes";
-const KEY = "01JTESTWALLERRORS00000000000";
+const KEY = "01K00000000000000000000021";
 const FORM = {
   title: "Game night",
   game: "Chess",

@@ -399,7 +399,7 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
     const [row] = await db
       .insert(events)
       .values({
-        eventKey: `01J00000000000000000${String(Math.floor(Math.random() * 900) + 100)}`,
+        eventKey: `01J00000000000000000000${String(Math.floor(Math.random() * 900) + 100)}`,
         title: "Bounded night",
         game: "Chess",
         description: "Boards out",

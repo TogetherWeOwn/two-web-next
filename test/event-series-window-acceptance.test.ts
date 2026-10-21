@@ -111,7 +111,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [parent] = await db
         .insert(events)
         .values({
-          eventKey: "series-window-parent",
+          eventKey: "01K00000000000000000000022",
           title: FORM.title,
           game: FORM.game,
           description: FORM.description,

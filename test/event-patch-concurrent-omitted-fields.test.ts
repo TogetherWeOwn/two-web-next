@@ -41,7 +41,7 @@ import { savedForm } from "./helpers/event-save-document";
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
 const url = process.env.DATABASE_URL;
-const KEY = "patch-race-event";
+const KEY = "01K00000000000000000000023";
 const CHILD_KEY = "patch-race-child";
 const ORIGINAL = {
   title: "Original title",
