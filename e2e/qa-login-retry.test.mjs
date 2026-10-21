@@ -7,12 +7,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   parseRetryAfterSeconds,
-  postQaLoginWithRetry,
   qaLoginRetryBudgetMs,
   qaLoginThrottleError,
   QA_LOGIN_MAX_ATTEMPTS,
   QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
 } from "./qa-login-retry.mjs";
+import { postParityQaLogin } from "./kit-parity/parity-qa-login.mjs";
 
 test("a numeric Retry-After is honored verbatim", () => {
   assert.equal(parseRetryAfterSeconds({ "retry-after": "17" }), 17);
@@ -109,98 +109,182 @@ test("every staging spec login raises its block timeout by the retry budget firs
   assert.ok(logins > 0, "no staging spec logins found — the guard would pass vacuously");
 });
 
-// Bounded 429 retry for local Playwright QA logins: kit-parity's logins land
-// while journey-tail spends slide out of the shared 60 s bucket, so a 429
-// there means seconds of wait, not a blown budget. Each wait clamps to the
-// single-wait cap so the bounded attempts fit a 30 s test/hook timeout.
-function fakeQaResponse(status, retryAfter) {
-  return {
-    status: () => status,
-    headers: () => (retryAfter === undefined ? {} : { "retry-after": String(retryAfter) }),
-  };
-}
+// Kit parity QA-login retry: parity's shared (beforeAll) and
+// isolated (renewal) logins share the job-wide qa-login window with the e2e
+// suite's 10 logins, so a 429 there names the budget, not the verdict. The
+// POST retries 429s only, honoring Retry-After, bounded by
+// QA_LOGIN_MAX_ATTEMPTS; any other status passes through to the caller's own
+// assertion. Stubbed transport below: no browser, no token.
 
-test("a 204 first try returns without waiting", async () => {
-  const waits = [];
-  let sends = 0;
-  const login = await postQaLoginWithRetry(
-    async () => {
-      sends++;
-      return fakeQaResponse(204);
-    },
-    "qa-member",
-    { wait: async (ms) => void waits.push(ms) },
-  );
-  assert.equal(login.status(), 204);
-  assert.equal(sends, 1);
-  assert.deepEqual(waits, []);
+const parityOk = () => ({
+  status: () => 204,
+  headers: () => ({}),
 });
 
-test("a 429 then 204 waits out Retry-After and returns the session", async () => {
-  const waits = [];
-  let sends = 0;
-  const login = await postQaLoginWithRetry(
-    async () => {
-      sends++;
-      return sends === 1 ? fakeQaResponse(429, 2) : fakeQaResponse(204);
-    },
-    "qa-member",
-    { wait: async (ms) => void waits.push(ms) },
-  );
-  assert.equal(login.status(), 204);
-  assert.equal(sends, 2);
-  assert.deepEqual(waits, [2000]);
+const parityThrottled = (retryAfter = "3") => ({
+  status: () => 429,
+  headers: () => ({ "retry-after": retryAfter }),
 });
 
-test("each Retry-After wait clamps to the single-wait cap", async () => {
+test("parity QA login honors one 429 then succeeds on the retry", async () => {
+  let attempts = 0;
   const waits = [];
-  let sends = 0;
-  const login = await postQaLoginWithRetry(
+  const response = await postParityQaLogin(
     async () => {
-      sends++;
-      return sends === 1 ? fakeQaResponse(429, 60) : fakeQaResponse(204);
+      attempts++;
+      return attempts === 1 ? parityThrottled("7") : parityOk();
     },
-    "qa-moderator",
-    {
-      singleWaitCapSeconds: 5,
-      wait: async (ms) => void waits.push(ms),
-    },
+    { identity: "qa-member", wait: async (ms) => waits.push(ms) },
   );
-  assert.equal(login.status(), 204);
-  assert.deepEqual(waits, [5000]);
+  assert.equal(response.status(), 204);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [7_000]);
 });
 
-test("persistent 429s fail loud with the budget error after maxAttempts", async () => {
-  let sends = 0;
+test("parity QA login falls back to the window when Retry-After is missing", async () => {
+  let attempts = 0;
   const waits = [];
+  const response = await postParityQaLogin(
+    async () => {
+      attempts++;
+      return attempts === 1 ? { status: () => 429, headers: () => ({}) } : parityOk();
+    },
+    { identity: "qa-member", wait: async (ms) => waits.push(ms) },
+  );
+  assert.equal(response.status(), 204);
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [60_000]);
+});
+
+test("parity QA login exhausts after the bounded throttled attempts", async () => {
+  let attempts = 0;
+  let waits = 0;
   await assert.rejects(
-    () =>
-      postQaLoginWithRetry(
-        async () => {
-          sends++;
-          return fakeQaResponse(429, 1);
-        },
-        "qa-moderator",
-        { wait: async (ms) => void waits.push(ms) },
-      ),
-    /local QA login as qa-moderator refused with 429 after 3 attempt\(s\)/,
+    postParityQaLogin(
+      async () => {
+        attempts++;
+        return parityThrottled("1");
+      },
+      { identity: "qa-moderator", wait: async () => waits++ },
+    ),
+    (error) => {
+      assert.match(error.message, /parity QA login as qa-moderator/);
+      assert.match(error.message, /429/);
+      assert.match(error.message, /10\/min/);
+      assert.ok(!error.message.includes("X-TWO-QA-Auth"), "header name leaked");
+      return true;
+    },
   );
-  assert.equal(sends, QA_LOGIN_MAX_ATTEMPTS);
-  assert.equal(waits.length, QA_LOGIN_MAX_ATTEMPTS - 1);
+  assert.equal(attempts, QA_LOGIN_MAX_ATTEMPTS);
+  assert.equal(waits, QA_LOGIN_MAX_ATTEMPTS - 1);
 });
 
-test("a non-429 refusal returns at once for the caller to assert on", async () => {
-  let sends = 0;
-  const waits = [];
-  const login = await postQaLoginWithRetry(
-    async () => {
-      sends++;
-      return fakeQaResponse(500);
-    },
-    "qa-member",
-    { wait: async (ms) => void waits.push(ms) },
+test("parity QA login never retries a non-429 verdict", async () => {
+  for (const status of [204, 302, 401, 403, 404, 500]) {
+    let attempts = 0;
+    let waits = 0;
+    const response = await postParityQaLogin(
+      async () => {
+        attempts++;
+        return { status: () => status, headers: () => ({}) };
+      },
+      { identity: "qa-member", wait: async () => waits++ },
+    );
+    assert.equal(response.status(), status, `status ${status} must pass through`);
+    assert.equal(attempts, 1, `status ${status} must not retry`);
+    assert.equal(waits, 0, `status ${status} must not wait`);
+  }
+});
+
+// Static guards, staging-guard style: the parity spec routes both logins
+// through the bounded retry, keeps exactly-one logical counts and two logins,
+// and raises the beforeAll hook timeout by the one-login retry budget.
+
+const paritySpecUrl = new URL("./kit-parity/parity.spec.ts", import.meta.url);
+
+test("parity routes both QA logins through the bounded 429 retry", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "./parity-qa-login.mjs"'),
+    "parity.spec.ts must import the parity QA-login retry helper",
   );
-  assert.equal(login.status(), 500);
-  assert.equal(sends, 1);
-  assert.deepEqual(waits, []);
+  const sharedFn = source.indexOf("function honoMemberCookie");
+  const isolatedFn = source.indexOf("async function isolatedRenewalCookie");
+  assert.ok(sharedFn >= 0 && isolatedFn > sharedFn, "both parity login helpers must exist");
+  assert.ok(
+    source.slice(sharedFn, isolatedFn).includes("postParityQaLogin"),
+    "honoMemberCookie must POST through postParityQaLogin",
+  );
+  assert.ok(
+    source.slice(isolatedFn).includes("postParityQaLogin"),
+    "isolatedRenewalCookie must POST through postParityQaLogin",
+  );
+});
+
+test("parity keeps exactly one logical login per helper and two logins total", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.equal(
+    source.match(/qaLoginCount \+= 1/g)?.length ?? 0,
+    1,
+    "qaLoginCount must increment once per shared-helper execution (outside the retry loop)",
+  );
+  assert.equal(
+    source.match(/renewalLoginCount \+= 1/g)?.length ?? 0,
+    1,
+    "renewalLoginCount must increment once per isolated-helper execution (outside the retry loop)",
+  );
+  assert.equal(
+    source.match(/\.post\("\/auth\/qa\//g)?.length ?? 0,
+    2,
+    "parity must keep exactly its two QA login POSTs (no new logins)",
+  );
+  assert.ok(
+    source.includes('"exactly one shared QA login"'),
+    "shared exactly-one assert must stay",
+  );
+  assert.ok(
+    source.includes('"exactly one isolated renewal login"'),
+    "isolated exactly-one assert must stay",
+  );
+});
+
+test("parity beforeAll raises its hook timeout by the one-login retry budget", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "../qa-login-retry.mjs"'),
+    "parity.spec.ts must import the retry budget helper",
+  );
+  const hook = source.indexOf("test.beforeAll(");
+  const login = source.indexOf("await memberGoingRsvp()");
+  assert.ok(hook >= 0 && login > hook, "beforeAll must spend the shared login via memberGoingRsvp");
+  assert.ok(
+    source.lastIndexOf("qaLoginRetryBudgetMs(1)", login) > hook &&
+      source.lastIndexOf("test.setTimeout(", login) > hook,
+    "beforeAll must raise its own timeout first with " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
+      "on the bare 30s hook timeout instead of completing the bounded retry.",
+  );
+});
+
+test("parity isolated-login test raises its timeout by the one-login retry budget", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "../qa-login-retry.mjs"'),
+    "parity.spec.ts must import the retry budget helper",
+  );
+  const testStart = source.indexOf(
+    'test("member renders the no-JS RSVP form posting to the Hono controller"',
+  );
+  const callSite = source.indexOf("await isolatedRenewalCookie(", testStart);
+  assert.ok(
+    testStart >= 0 && callSite > testStart,
+    "isolated-login test must spend its login via isolatedRenewalCookie",
+  );
+  assert.ok(
+    source.lastIndexOf("qaLoginRetryBudgetMs(1)", callSite) > testStart &&
+      source.lastIndexOf("test.setTimeout(", callSite) > testStart,
+    "isolated-login test must raise its own timeout first with " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
+      "on the bare 30s test timeout instead of completing the bounded retry.",
+  );
 });
