@@ -213,7 +213,15 @@ const lineup = $derived(
           {/if}
         </dd>
       </div>
-    {/if}{#if model.series && model.series.hosts.length > 0}
+    {/if}{#if model.organizerName}
+      <div>
+        <dt>Hosted by</dt>
+        <dd>
+          <p data-testid="event-organizer">{model.organizerName}</p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
         <dd>
@@ -329,6 +337,29 @@ const lineup = $derived(
         >
           <h2 id="event-accessibility-heading">Accessibility</h2>
           <p>{model.accessibilityNotes}</p>
+        </section>
+      {/if}
+      {#if (model.status === "published" || model.status === "draft") && (model.joinUrl || model.joinInstructions)}
+        <section
+          class="event-description event-join-details"
+          aria-labelledby="event-join-details-heading"
+          data-testid="event-join-details"
+        >
+          <h2 id="event-join-details-heading">How to join</h2>
+          {#if model.joinUrl}
+            {#if model.status === "published"}
+              <p>
+                <a href={model.joinUrl} data-testid="event-public-join-link">
+                  Open the public joining link
+                </a>
+              </p>
+            {:else}
+              <p>Public joining link: {model.joinUrl}</p>
+            {/if}
+          {/if}
+          {#if model.joinInstructions}
+            <p data-testid="event-join-instructions">{model.joinInstructions}</p>
+          {/if}
         </section>
       {/if}
       {#if model.showJoinPitch}
