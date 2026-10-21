@@ -104,7 +104,7 @@ function browser(entry = "/events") {
       const id = /data-testid="([^"]+)"/.exec(selector)?.[1];
       return live[LIVE_IDS.indexOf(id ?? "")] ?? null;
     },
-    querySelectorAll: () => zones,
+    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? zones : []),
     contains: () => true,
     addEventListener(_type: string, listener: typeof click) {
       click = listener;
@@ -131,8 +131,16 @@ function browser(entry = "/events") {
       setTimeout,
       clearTimeout,
       document: {
+        // The fixture mounts no header or hero auth links, so unknown selectors
+        // match nothing — the island root only answers its own mount selector.
         querySelector: (selector: string) =>
-          selector.startsWith("link") ? canonical : selector.startsWith("meta") ? og : root,
+          selector === '[data-island="events-calendar"]'
+            ? root
+            : selector.startsWith("link")
+              ? canonical
+              : selector.startsWith("meta")
+                ? og
+                : null,
         importNode: (node: unknown) => node,
       },
       window: {
@@ -176,7 +184,9 @@ function browser(entry = "/events") {
         month: "2026-10",
         past: url.searchParams.get("past") ?? "",
       },
-      querySelectorAll: () => sourceZones,
+      // The fragment carries zones only: any other selector (for example the
+      // card sign-in links the island validates) matches nothing, as in a DOM.
+      querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? sourceZones : []),
     };
     const key = `page-${index}`;
     pages.set(key, {

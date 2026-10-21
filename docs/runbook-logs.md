@@ -125,7 +125,6 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | Message | Meaning | Severity | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
 | `Member read audit failed; refusing contents.` | The member-read audit write failed or reported no row written (`src/member-reads.ts`). | Fails closed: the contents are refused with the unavailable response. | Search logs for the line and the matching `http.request` status; then `SELECT count(*) FROM member_data_access_logs` over the same window to see whether writes resumed. | `exception` (class name), validated `request_id` |
-| `Member data access could not be recorded; refusing to serve the read.` | The access-log write failed after a handler declared a member-data read (`src/access-log.ts`). | Fails closed with the database-unavailable response unless `MEMBER_ACCESS_LOG_ENFORCE` is `false`, `0` or `no`; then it only logs. | Search logs for the `route` value; then `SELECT count(*) FROM member_data_access_logs` over the same window. | `route`, `exception` (class name) |
 | `admin guard could not resolve the session; refusing.` | The admin session lookup or pre-handler renewal threw (`src/admin/guard.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/admin` routes; then check database health with the [alert runbook](runbook-alerts.md). | `exception` (error name) |
 | `admin guard could not revalidate the session; refusing.` | The post-handler admin-session liveness check threw (`src/admin/guard.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/admin` routes; then check database health with the [alert runbook](runbook-alerts.md). | `exception` (error name) |
 | `event write-back enqueue failed; reconcile will re-dispatch` | Sending the event write-back to the sync queue threw (`src/events/sync.ts`). The request itself already succeeded. | Degrades: the write-back is late until reconcile re-dispatches it. | Search logs for the `eventKey` and `request_id`; then join through `events` (`event_sync_attempts` carries `event_id`, not `event_key`): `SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'` to see whether a later attempt landed. | `eventKey`, `exception` (error name), `request_id` |
@@ -394,9 +393,8 @@ Never equate warning count with lost requests, and never assume one warning
 per affected request.
 
 These two lines are fail-open anonymous analytics. Do not confuse them with
-the fail-closed mandatory auditing rows in the table above (`Member read audit
-failed; refusing contents.`, `Member data access could not be recorded;
-refusing to serve the read.`): a member-data read is refused when its
+the fail-closed mandatory auditing row in the table above (`Member read audit
+failed; refusing contents.`): a member-data read is refused when its
 `member_data_access_logs` row cannot be written, while a search or board view
 is always served when its analytics row cannot. The analytics tables store
 normalized dimensions (`normalized_query` on event searches;
