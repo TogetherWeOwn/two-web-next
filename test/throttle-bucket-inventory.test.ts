@@ -43,6 +43,61 @@ function stripComments(text: string): string {
   return out + text.slice(cursor);
 }
 
+function mcpAdmissionOffsets(source: string): { capAt: number; admitAt: number } {
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  const statements = ast.program.body.flatMap((node) =>
+    node.type === "ExportNamedDeclaration" &&
+    node.declaration?.type === "FunctionDeclaration" &&
+    node.declaration.id?.name === "registerMcpRoutes"
+      ? node.declaration.body.body
+      : [],
+  );
+  const posts = statements.flatMap((node) =>
+    node.type === "ExpressionStatement" &&
+    node.expression.type === "CallExpression" &&
+    node.expression.callee.type === "MemberExpression" &&
+    node.expression.callee.object.type === "Identifier" &&
+    node.expression.callee.object.name === "app" &&
+    !node.expression.callee.computed &&
+    node.expression.callee.property.type === "Identifier" &&
+    node.expression.callee.property.name === "post" &&
+    node.expression.arguments[0]?.type === "StringLiteral" &&
+    node.expression.arguments[0].value === "/mcp"
+      ? [node.expression]
+      : [],
+  );
+  if (posts.length !== 1) throw new Error("Expected one POST /mcp registration");
+  const post = posts[0]!;
+  const cap = post.arguments.find(
+    (arg) =>
+      arg.type === "CallExpression" &&
+      arg.callee.type === "Identifier" &&
+      arg.callee.name === "requestBodyLimit" &&
+      arg.arguments[0]?.type === "StringLiteral" &&
+      arg.arguments[0].value === "mcp",
+  );
+  const callback = post.arguments.find((arg) => arg.type === "ArrowFunctionExpression");
+  if (callback?.type !== "ArrowFunctionExpression" || callback.body.type !== "BlockStatement") {
+    throw new Error("Expected an inline POST /mcp callback");
+  }
+  // Inspect executed initializers in this callback, not an earlier helper
+  // declaration, comment, string or an uncalled nested function.
+  const admission = callback.body.body
+    .flatMap((node) =>
+      node.type === "VariableDeclaration" ? node.declarations.map((decl) => decl.init) : [],
+    )
+    .map((init) => (init?.type === "AwaitExpression" ? init.argument : init))
+    .find(
+      (init) =>
+        init?.type === "CallExpression" &&
+        init.callee.type === "Identifier" &&
+        (init.callee.name === "admitted" || init.callee.name === "mcpRefused") &&
+        init.arguments[0]?.type === "Identifier" &&
+        init.arguments[0].name === "c",
+    );
+  return { capAt: cap?.start ?? -1, admitAt: admission?.start ?? -1 };
+}
+
 // Middleware registrations: throttle("bucket", N). Excludes src/throttle.ts
 // itself (definition + doc comment example).
 function middlewareBuckets(): Map<string, { file: string; count: number }[]> {
@@ -173,6 +228,55 @@ describe("inventory comment stripping", () => {
     expect(stripped).toMatch(/throttle\(\s+"visible", 1\);/);
     expect(stripped).toMatch(/1;\s+const second/);
     expect(stripped).toContain('throttleGuard(c, "visible-guard", 1);');
+  });
+});
+
+describe.each(["admitted", "mcpRefused"])("MCP admission order via %s", (helper) => {
+  const prefix = `async function ${helper}(c) { return admissionRetryAfter(c); }`;
+  const register = (args: string) =>
+    `${prefix}\nexport function registerMcpRoutes(app) { app.post("/mcp", ${args}); }`;
+  const callback = `async (c) => { const refused = await ${helper}(c); return refused; }`;
+
+  it("finds the actual callback call after the cap, not the earlier definition", () => {
+    const source = register(`requestBodyLimit("mcp"), ${callback}`);
+    const { capAt, admitAt } = mcpAdmissionOffsets(source);
+    expect(capAt).toBe(source.indexOf('requestBodyLimit("mcp")'));
+    expect(admitAt).toBe(source.lastIndexOf(`${helper}(c)`));
+    expect(capAt).toBeLessThan(admitAt);
+  });
+
+  it("rejects the inverted middleware order", () => {
+    const { capAt, admitAt } = mcpAdmissionOffsets(
+      register(`${callback}, requestBodyLimit("mcp")`),
+    );
+    expect(capAt).toBeGreaterThanOrEqual(0);
+    expect(admitAt).toBeGreaterThanOrEqual(0);
+    expect(capAt).toBeGreaterThan(admitAt);
+  });
+
+  it("rejects a cap moved into the callback after admission", () => {
+    const { capAt, admitAt } = mcpAdmissionOffsets(
+      register(`async (c) => {
+        const refused = await ${helper}(c);
+        await requestBodyLimit("mcp")(c, async () => {});
+        return refused;
+      }`),
+    );
+    expect(capAt).toBe(-1);
+    expect(admitAt).toBeGreaterThanOrEqual(0);
+  });
+
+  it("does not treat definitions, comments, strings or nested callbacks as admission", () => {
+    const { capAt, admitAt } = mcpAdmissionOffsets(
+      register(`requestBodyLimit("mcp"), async (c) => {
+        // ${helper}(c)
+        const example = "${helper}(c)";
+        const unused = async () => ${helper}(c);
+        return example;
+      }`),
+    );
+    expect(capAt).toBeGreaterThanOrEqual(0);
+    expect(admitAt).toBe(-1);
   });
 });
 
@@ -328,9 +432,9 @@ describe("throttle bucket inventory", () => {
   it("documents the MCP cap-before-throttle order in docs/body-limits.md", () => {
     expect(bodyLimitsDoc).toContain("POST /mcp");
     expect(bodyLimitsDoc).toContain("src/mcp/routes.ts");
-    const mcp = stripComments(readFileSync(resolve(root, "src/mcp/routes.ts"), "utf8"));
-    const capAt = mcp.indexOf('requestBodyLimit("mcp")');
-    const admitAt = mcp.indexOf("admitted(c)");
+    const { capAt, admitAt } = mcpAdmissionOffsets(
+      readFileSync(resolve(root, "src/mcp/routes.ts"), "utf8"),
+    );
     expect(capAt).toBeGreaterThanOrEqual(0);
     expect(admitAt).toBeGreaterThanOrEqual(0);
     expect(capAt).toBeLessThan(admitAt);
