@@ -121,6 +121,37 @@ export function leafInlineStyleCsp(c: Context): void {
   );
 }
 
+// The catastrophic Kit fallback (web/src/error.html) inlines this single
+// <style> block: the page must render branded with no stylesheet fetch, so
+// the styles cannot move to an external file. When Kit serves the fallback
+// from inside resolve() (root-layout render throws, or the root error page
+// itself fails), the dispatch decorates it with the production CSP, whose
+// style-src 'self' would block the inline block and leave the page on UA
+// defaults. The block is allowlisted by hash so style-src keeps no
+// 'unsafe-inline' — the same shape as the leaf allowlist above, but scoped
+// to the fallback RESPONSE (any path can fail catastrophically) instead of
+// a path list. Pinned byte-identical to the template plus its sha256 by
+// test/kit-fallback-style.test.ts; edit the template and the constant together.
+export const KIT_FALLBACK_INLINE_STYLE: string =
+  "body{max-width:35rem;margin:3rem auto;padding:0 1.5rem;background:#121719;color:#f5f5eb;font:1rem/1.6 system-ui}a{display:inline-block;padding:.5rem;color:#c2f45b}a:focus-visible{outline:3px solid;outline-offset:3px}";
+export const KIT_FALLBACK_STYLE_SHA256: string = "U0fk7vWGFjI74MKJiDTgbYe0GqkdbUrAITcJlds8xL4=";
+
+// True when the body carries the exact fallback style element. The full
+// element (tags included) is the match, so the allowlist below can only
+// fire for a document embedding precisely these bytes.
+export function isKitFallbackDocument(body: string): boolean {
+  return body.includes(`<style>${KIT_FALLBACK_INLINE_STYLE}</style>`);
+}
+
+// Widens an emitted style-src 'self' with the fallback block's hash. String
+// replacement keeps the directive order byte-identical (the
+// leafInlineStyleCsp pattern); composes with the leaf hash on leaf paths,
+// and is a no-op when the hash is already present or style-src is absent.
+export function withKitFallbackStyleCsp(csp: string): string {
+  if (csp.includes(KIT_FALLBACK_STYLE_SHA256)) return csp;
+  return csp.replace("style-src 'self'", `style-src 'self' 'sha256-${KIT_FALLBACK_STYLE_SHA256}'`);
+}
+
 // Framework-neutral twin of the secureHeaders() options in src/index.tsx, for
 // hosts that are not Hono (the SvelteKit spike's web/src/hooks.server.ts,
 // TOG-12247). Same names, values and order as hono's middleware emits, so a

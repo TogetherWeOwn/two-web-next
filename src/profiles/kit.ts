@@ -46,7 +46,8 @@ export type KitProfileRequest = {
 export type KitProfileDeps = {
   store: ProfileStore | null;
   sessionSecret?: string;
-  /** Absent (or resolving null) hides the stats block; a read failure refuses. */
+  /** Absent (or resolving null) hides the stats block; a read failure resolves
+   * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
 };
 
