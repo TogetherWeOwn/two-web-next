@@ -938,8 +938,18 @@ class Node {
     this.attributes.delete(k);
   }
   appendChild(n: Node) {
+    n.parentNode?.removeChild(n);
     n.parentNode = this;
     this.children.push(n);
+    return n;
+  }
+  insertBefore(n: Node, anchor: Node | null) {
+    if (anchor === null) return this.appendChild(n);
+    if (!this.children.includes(anchor)) throw new Error("anchor is not a child");
+    if (n === anchor) return n;
+    n.parentNode?.removeChild(n);
+    n.parentNode = this;
+    this.children.splice(this.children.indexOf(anchor), 0, n);
     return n;
   }
   remove() {
@@ -1028,6 +1038,7 @@ function hydrate(status: "maybe" | "not_going" | null, state: SoftState = "open"
   const root = page.querySelector('[data-island="rsvp-button"]')!;
   const requests: { url: string; init: RequestInit; resolve: (r: Response) => void }[] = [];
   const broadcasts: { type: string; detail: unknown }[] = [];
+  const listeners = new Map<string, (event: { type: string; detail: unknown }) => void>();
   const context = {
     document: {
       querySelector: (s: string) => page.querySelector(s),
@@ -1038,9 +1049,11 @@ function hydrate(status: "maybe" | "not_going" | null, state: SoftState = "open"
         n.textContent = text;
         return n;
       },
-      addEventListener: () => {},
+      addEventListener: (type: string, fn: (event: { type: string; detail: unknown }) => void) =>
+        listeners.set(type, fn),
       dispatchEvent: (event: { type: string; detail: unknown }) => {
         broadcasts.push(event);
+        listeners.get(event.type)?.(event);
       },
     },
     CustomEvent: class {
@@ -1069,6 +1082,9 @@ function hydrate(status: "maybe" | "not_going" | null, state: SoftState = "open"
     requests,
     broadcasts,
     liveSoft,
+    listeners,
+    refresh: (detail: unknown) =>
+      context.document.dispatchEvent({ type: "going-count-refreshed", detail }),
     get: (id: string) => root.querySelector(`[data-testid="${id}"]`),
     action: (value: string) => root.querySelector(`[data-action="${value}"]`),
     settle: async () => {
@@ -1120,6 +1136,129 @@ describe("island hydration preserves soft answers (no CTA flash)", () => {
       expect(b.get("event-full")).toBeNull();
       expect(b.action("withdraw")).not.toBeNull();
       expect(b.requests).toHaveLength(0);
+    },
+  );
+
+  it.each(["maybe", "not_going"] as const)(
+    "capacity refresh to full keeps %s without the unanswered full notice",
+    (status) => {
+      const b = hydrate(status);
+      const line = b.liveSoft(status);
+      expect(line).not.toBeNull();
+      expect(b.action("going")).not.toBeNull();
+      expect(b.listeners.has("going-count-refreshed")).toBe(true);
+      b.refresh({ eventKey: KEY, goingCount: 1, goingOccupancy: 2, capacity: 2 });
+      expect(b.root.getAttribute("data-full")).toBe("true");
+      expect(b.liveSoft(status)).toBe(line);
+      expect(line!.textContent).not.toMatch(SEAT_CLAIM);
+      expect(b.get("event-full")).toBeNull();
+      expect(b.root.querySelectorAll('[data-testid="waitlist-join"]')).toHaveLength(1);
+      expect(b.get("waitlist-join")!.getAttribute("data-action")).toBe("waitlisted");
+      expect(b.get("waitlist-join")!.getAttribute("value")).toBe("waitlisted");
+      expect(b.get("rsvp-going")).toBeNull();
+      expect(b.action("going")).toBeNull();
+      expect(b.action("withdraw")).not.toBeNull();
+      expect(b.requests).toHaveLength(0);
+    },
+  );
+
+  it("capacity refresh to full paints the unanswered full notice (control)", () => {
+    const b = hydrate(null);
+    expect(b.get("event-full")).toBeNull();
+    expect(b.action("going")).not.toBeNull();
+    expect(b.listeners.has("going-count-refreshed")).toBe(true);
+    b.refresh({ eventKey: KEY, goingCount: 1, goingOccupancy: 2, capacity: 2 });
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("event-full")?.textContent).toContain("Cap is 2.");
+    expect(b.root.querySelectorAll('[data-testid="waitlist-join"]')).toHaveLength(1);
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.liveSoft("maybe")).toBeNull();
+    expect(b.liveSoft("not_going")).toBeNull();
+    expect(b.requests).toHaveLength(0);
+  });
+
+  it.each(["maybe", "not_going"] as const)(
+    "settling %s as waitlisted replaces the soft answer with the real position",
+    async (status) => {
+      const b = hydrate(status, "full");
+      expect(b.liveSoft(status)).not.toBeNull();
+      expect(b.get("event-full")).toBeNull();
+      expect(b.get("waitlist-position")).toBeNull();
+      const join = b.action("waitlisted");
+      expect(join).not.toBeNull();
+      join!.click();
+      expect(b.requests).toHaveLength(1);
+      expect(b.requests[0]!.url).toBe(`/events/${KEY}/rsvp`);
+      expect(b.requests[0]!.init.method).toBe("PUT");
+      expect(b.requests[0]!.init.body).toBe('{"status":"waitlisted"}');
+      b.requests[0]!.resolve(
+        new Response(
+          JSON.stringify({
+            data: { status: "waitlisted", waitlist_position: 3, synced_to_discord_at: null },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+      await b.settle();
+      expect(b.get("rsvp-maybe")).toBeNull();
+      expect(b.get("rsvp-not-going")).toBeNull();
+      expect(b.liveSoft(status)).toBeNull();
+      expect(b.root.querySelectorAll('[data-testid="waitlist-position"]')).toHaveLength(1);
+      expect(b.get("waitlist-position")!.textContent).toBe("You're on the waitlist — #3 in line");
+      expect(b.root.querySelectorAll('[data-testid="waitlist-leave"]')).toHaveLength(1);
+      expect(b.root.querySelectorAll("[data-action]")).toHaveLength(1);
+      expect(b.action("withdraw")).not.toBeNull();
+      expect(b.get("rsvp-withdraw")).toBeNull();
+      expect(b.get("waitlist-join")).toBeNull();
+      expect(b.get("rsvp-going")).toBeNull();
+      expect(b.get("rsvp-confirmed")).toBeNull();
+      expect(b.get("event-full")).toBeNull();
+      expect(
+        b.broadcasts.map((e) => (e.detail as { viewerState?: string })?.viewerState),
+      ).toContain("waitlisted");
+      expect(b.requests).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["maybe", "open"],
+    ["maybe", "full"],
+    ["not_going", "open"],
+    ["not_going", "full"],
+  ] as const)(
+    "withdrawal from %s on %s leaves exactly one replacement control",
+    async (status, state) => {
+      const b = hydrate(status, state);
+      expect(b.liveSoft(status)).not.toBeNull();
+      const withdraw = b.action("withdraw");
+      expect(withdraw, "soft branch must offer withdraw").not.toBeNull();
+      withdraw!.click();
+      expect(b.requests).toHaveLength(1);
+      expect(b.requests[0]!.url).toBe(`/events/${KEY}/rsvp`);
+      expect(b.requests[0]!.init.method).toBe("DELETE");
+      expect(b.requests[0]!.init.body).toBeUndefined();
+      b.requests[0]!.resolve(new Response(null, { status: 204 }));
+      await b.settle();
+      expect(b.get("rsvp-maybe")).toBeNull();
+      expect(b.get("rsvp-not-going")).toBeNull();
+      expect(b.liveSoft(status)).toBeNull();
+      expect(b.action("withdraw")).toBeNull();
+      expect(b.get("rsvp-withdraw")).toBeNull();
+      expect(b.root.querySelectorAll('[data-testid="rsvp-going"]')).toHaveLength(
+        state === "open" ? 1 : 0,
+      );
+      expect(b.root.querySelectorAll('[data-testid="waitlist-join"]')).toHaveLength(
+        state === "full" ? 1 : 0,
+      );
+      expect(b.root.querySelectorAll("[data-action]")).toHaveLength(1);
+      expect(b.action(state === "open" ? "going" : "waitlisted")).not.toBeNull();
+      expect(b.action(state === "open" ? "waitlisted" : "going")).toBeNull();
+      expect(b.get("rsvp-confirmed")).toBeNull();
+      expect(b.get("waitlist-position")).toBeNull();
+      expect(
+        b.broadcasts.map((e) => (e.detail as { viewerState?: string })?.viewerState),
+      ).toContain("none");
+      expect(b.requests).toHaveLength(1);
     },
   );
 
