@@ -84,8 +84,10 @@ function runCountReads(tool: Tool, args: string[]) {
   );
   expect(result.error).toBeUndefined();
   expect(result.signal).toBeNull();
-  const reads = Number(String(result.output[3]));
-  expect(Number.isInteger(reads)).toBe(true);
+  // Fail closed on a missing report: an empty fd 3 read must never become 0.
+  const report = String(result.output[3]);
+  expect(report).toMatch(/^\d+$/);
+  const reads = Number(report);
   return { result, reads };
 }
 
@@ -222,6 +224,54 @@ describe("role-audit source validation opens no input files", () => {
     const { result, reads } = runCountReads("role-audit", [...args, "--json"]);
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
+    expect(reads).toBe(0);
+  });
+  it("read counter observes a valid file source", () => {
+    const { result, reads } = runCountReads("role-audit", [
+      `--discord-file=${empty}`,
+      `--app-file=${empty}`,
+      "--json",
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(reads).toBeGreaterThan(0);
+  });
+});
+
+describe("oversized inputs are refused before reading", () => {
+  const oversized: [string, Tool, string[], string][] = [
+    [
+      "check-moderators --config",
+      "check-moderators",
+      [`--config=${largeConfig}`],
+      "CONFIG_TOO_LARGE",
+    ],
+    [
+      "role-audit discord file",
+      "role-audit",
+      [`--discord-file=${largeIds}`, `--app-file=${empty}`],
+      "DISCORD_INPUT_TOO_LARGE",
+    ],
+    [
+      "role-audit app file",
+      "role-audit",
+      ["--discord-ids=100000000000000001", `--app-file=${largeIds}`],
+      "APP_INPUT_TOO_LARGE",
+    ],
+  ];
+  it.each(oversized)("oversized input opens no input files: %s", (_name, tool, args, code) => {
+    const { result, reads } = runCountReads(tool, [...args, "--json"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    const error = JSON.parse(result.stderr);
+    expect(error).toMatchObject({
+      schema: "operator-probe-error.v1",
+      tool,
+      mode: "error",
+      ok: false,
+      code,
+      retryable: false,
+    });
     expect(reads).toBe(0);
   });
 });
