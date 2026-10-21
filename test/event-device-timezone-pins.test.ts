@@ -61,7 +61,12 @@ describe("event device timezone served-markup pins", () => {
         jsonLd: "{}",
       }),
     );
-    const mount = html.slice(html.indexOf("data-event-device-timezone"));
+    // Bound the Starts slice at the Ends block so the pin below cannot pass
+    // by matching the Ends button instead.
+    const mount = html.slice(
+      html.indexOf("data-event-device-timezone"),
+      html.indexOf("<dt>Ends</dt>"),
+    );
     expect(mount).toMatch(
       /<button type="button" hidden[^>]*>\s*Show in my device timezone\s*<\/button>/,
     );
