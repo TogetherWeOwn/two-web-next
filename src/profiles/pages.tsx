@@ -45,6 +45,8 @@ export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
   timezone: "profile-timezone-error",
   leaderboard_opt_out: "profile-leaderboard-opt-out-error",
 };
+// The timezone help text stays associated in both valid and error states.
+export const PROFILE_TIMEZONE_HELP_ID = "profile-timezone-help";
 export const profileFieldForErrorKey = (key: string): ProfileField | null =>
   key === "bio"
     ? "bio"
@@ -189,6 +191,9 @@ export const ProfilePage: FC<{
             <a class="btn" href="/profile">
               Your profile
             </a>
+            <a class="btn profile-secondary" href="/events">
+              Events
+            </a>
             {/* Convenience link only: /admin still 403s anyone without the moderator bit. */}
             {isModerator ? (
               <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
@@ -293,9 +298,14 @@ export const ProfilePage: FC<{
           >
             <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
             <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
-            <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
-              {PROFILE_NEW_MEMBER_COPY.cta}
-            </a>
+            <div class="actions">
+              <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+                {PROFILE_NEW_MEMBER_COPY.cta}
+              </a>
+              <a class="btn profile-secondary" href="/events">
+                Find an event
+              </a>
+            </div>
           </section>
         ) : null}
         {stats ? <MemberStatsBlock stats={stats} /> : null}
@@ -410,7 +420,11 @@ export const ProfilePage: FC<{
                   value={form.timezone}
                   placeholder="Europe/London"
                   aria-invalid={errors?.timezone ? "true" : undefined}
-                  aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+                  aria-describedby={
+                    errors?.timezone
+                      ? `${PROFILE_TIMEZONE_HELP_ID} ${PROFILE_ERROR_IDS.timezone}`
+                      : PROFILE_TIMEZONE_HELP_ID
+                  }
                 />
               </label>
               {errors?.timezone ? (
@@ -418,6 +432,22 @@ export const ProfilePage: FC<{
                   {errors.timezone}
                 </p>
               ) : null}
+              <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">
+                {PROFILE_COPY.timezoneHelp}
+              </p>
+              <div data-device-timezone hidden>
+                <button
+                  class="btn profile-secondary"
+                  type="button"
+                  data-device-timezone-use
+                  aria-describedby="profile-device-timezone-help"
+                >
+                  {PROFILE_COPY.deviceTimezone}
+                </button>
+                <p id="profile-device-timezone-help" class="profile-hint">
+                  {PROFILE_COPY.deviceTimezoneHelp}
+                </p>
+              </div>
               <div aria-hidden="true" class="sr-only">
                 <label>
                   Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />

@@ -27,6 +27,7 @@ import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
   PROFILE_SHARE_DESCRIPTION,
+  PROFILE_TIMEZONE_HELP_ID,
   profileFieldForErrorKey,
   profileInitials,
   statsDate,
@@ -123,6 +124,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     <div class="profile-header-actions">
       <nav aria-label="Primary">
         <a class="btn" href="/profile">Your profile</a>
+        <a class="btn profile-secondary" href="/events">Events</a>
         {#if isModerator}
           <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
             Moderator admin
@@ -209,9 +211,12 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       >
         <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
         <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
-        <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
-          {PROFILE_NEW_MEMBER_COPY.cta}
-        </a>
+        <div class="actions">
+          <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+            {PROFILE_NEW_MEMBER_COPY.cta}
+          </a>
+          <a class="btn profile-secondary" href="/events">Find an event</a>
+        </div>
       </section>
     {/if}
     {#if stats}
@@ -360,12 +365,28 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               value={form.timezone}
               placeholder="Europe/London"
               aria-invalid={errors?.timezone ? "true" : undefined}
-              aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+              aria-describedby={errors?.timezone
+                ? `${PROFILE_TIMEZONE_HELP_ID} ${PROFILE_ERROR_IDS.timezone}`
+                : PROFILE_TIMEZONE_HELP_ID}
             />
           </label>
           {#if errors?.timezone}
             <p id={PROFILE_ERROR_IDS.timezone} class="error">{errors.timezone}</p>
           {/if}
+          <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">{PROFILE_COPY.timezoneHelp}</p>
+          <div data-device-timezone hidden>
+            <button
+              class="btn profile-secondary"
+              type="button"
+              data-device-timezone-use
+              aria-describedby="profile-device-timezone-help"
+            >
+              {PROFILE_COPY.deviceTimezone}
+            </button>
+            <p id="profile-device-timezone-help" class="profile-hint">
+              {PROFILE_COPY.deviceTimezoneHelp}
+            </p>
+          </div>
           <div aria-hidden="true" class="sr-only">
             <label>
               Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />

@@ -140,6 +140,43 @@ is not confirmation that your changes saved. Validation errors still use their
 normal field errors. If the outage continues, use the response's support reference
 when contacting the maintainers.
 
+## Busy inventory reads and retrying
+
+The event, featured-content and activity-log inventory lists each run inside
+one transaction with transaction-local `lock_timeout` and `statement_timeout`
+database bounds of two seconds each, covering the event list's second
+Going-count statement as well. These are per-statement bounds, not a
+whole-request deadline: each inventory statement gets its own budget, and the
+bounds expire with the transaction without changing pooled connection defaults.
+
+If an inventory statement times out, the read transaction rolls back before
+the existing private, no-store 503 outage response is returned. A refused
+inventory never renders as an empty list: wait briefly, then reload the page.
+If the outage continues, use the response's support reference when contacting
+the maintainers.
+
+## Correct a rejected draft
+
+Event and featured-content create/edit forms show the actual validation errors
+above the editor after a rejected save (HTTP 422). Submitted values remain in
+the form; a rejection is not a successful save. With JavaScript enabled, focus
+starts at this error summary. Press Tab to reach an error link and Enter to move
+to its control, then correct the value using the message beside that field.
+The links also work by keyboard without JavaScript. General errors with no
+editable control remain plain text in the summary; read and resolve those too.
+
+For event schedules, check the local wall time and IANA timezone together: a
+clock-change gap is not a valid time. Check capacity and create-only repeat
+settings when listed. For featured images, correct the approved HTTPS image URL
+and its image description. Explicitly choose **Create draft**, **Create** or
+**Save** again after correcting the errors. The summary is from the last rejected
+submission, not live validation, and does not disappear merely because you type.
+
+Ordinary form loads do not move focus. The existing unsaved-draft departure
+warning stays armed after rejection and while you correct the draft; navigating
+away can still discard it. Kit presentations use the same form actions: rejected
+POSTs are rendered by Hono, not a second Kit save or error endpoint.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
@@ -252,6 +289,7 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Title | Required, at most 100 characters. |
    | Game | Optional, at most 100 characters. |
    | Description | Optional, at most 1000 characters. |
+   | Accessibility notes | Optional, at most 1000 characters. Confirmed access details only; shown on the event page under Accessibility. |
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
@@ -263,8 +301,8 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description and location reject control/invisible characters; ordinary emoji
-   sequences are allowed.
+   description, accessibility notes and location reject control/invisible
+   characters; ordinary emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement
@@ -557,6 +595,10 @@ cards plus these diagnostic sections when their data is available:
   and capped at 255 characters; there is no searcher identity/IP attribution.
   The widget query does not itself apply a 90-day cutoff. Treat repeated misses
   as content-planning hints, not promises of demand or a way to identify someone.
+  Only complete reads are recorded here: a search run while `/events` warns that
+  Discord events may be missing is skipped, because a partial read cannot prove a
+  genuine no-match. A query absent from this list may still have been tried during
+  a Discord outage, so never read a missing row as proof nobody searched for it.
 
 A missing section is not proof of zero incidents: failing/slow optional funnel
 or missed-search reads can omit their section while the dashboard remains

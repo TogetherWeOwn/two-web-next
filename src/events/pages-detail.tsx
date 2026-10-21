@@ -6,6 +6,7 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { attendeePageHref } from "./attendee-paths";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
@@ -78,6 +79,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -115,11 +117,19 @@ export const EventPage: FC<{
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
-          <dt>When</dt>
+          <dt>Starts</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
+          </dd>
+        </div>
+        <div>
+          <dt>Ends</dt>
+          <dd>
+            <time datetime={e.endsAt.toISOString()}>
+              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
         </div>
@@ -165,6 +175,12 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
             </section>
           ) : null}
           {!session ? (
@@ -256,7 +272,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeesPaging.page <= 1 ? path : `${path}?attendees=${attendeesPaging.page}`}
+              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees

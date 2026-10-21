@@ -75,7 +75,7 @@ including field names, escaping, multipart boundaries and metadata:
 
 | Class | Bytes | Routes | Basis |
 | --- | ---: | --- | --- |
-| `json` | 32,768 | Event create/PATCH (also accept forms) | Event title/game 100 each, description 1,000, location 255 (`src/admin/validation.ts`, `parseEventForm`). The 1,455 bounded UTF-16 code units need at most 13,095 bytes when percent-encoded (nine bytes per code unit); 32 KiB leaves room for dates, timezone, capacity and form/JSON framing. |
+| `json` | 32,768 | Event create/PATCH (also accept forms) | Event title/game 100 each, description 1,000, accessibility notes 1,000, location 255 (`src/admin/validation.ts`, `parseEventForm`). The 2,455 bounded UTF-16 code units need at most 22,095 bytes when percent-encoded (nine bytes per code unit); 32 KiB leaves room for dates, timezone, capacity and form/JSON framing. |
 | `form` | 65,536 | Profile PATCH/form POST; admin event create/update | Profile bio 1,000 code points, games_text 1,700 (20 games × 80 plus separators), per legacy UpdateProfileRequest (`src/profiles/validation.ts`, `docs/w10-islands-respec.md`). 2,700 four-byte Unicode code points need at most 32,400 bytes when percent-encoded; 64 KiB accommodates form keys, `_method`, trap fields and multipart framing. Also covers the smaller admin event form. |
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/payload.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
 | `mcp` | 32,768 | `POST /mcp` | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. |
@@ -90,7 +90,7 @@ support for file uploads.
 
 ## Response and exception
 
-Every shared-limit refusal is 413, `Cache-Control: no-store, private`, with no
+Every shared-limit overflow refusal is 413, `Cache-Control: no-store, private`, with no
 submitted content, field names, limit internals or exception details. API routes
 and callers accepting `application/json` get exactly:
 
@@ -100,6 +100,16 @@ and callers accepting `application/json` get exactly:
 
 Browsers receive the corresponding branded 413 page, following the existing
 shared 429 content-negotiation convention.
+
+A failed source read instead returns 400 through the shared `badRequest`
+helper. API routes and JSON-only event writes always receive
+`{"error":"bad_request","message":"Check your request and try again."}`;
+other routes negotiate JSON or the branded “Check your request” page using
+Accept quality and specificity. Feed paths (`.ics`, `.rss`, `.md`, `/llms.txt`)
+retain the exact plaintext `Bad request`. These refusals send
+`Cache-Control: no-store, private` and merge `Accept` into `Vary`. No source
+exception or submitted bytes enter the response, and the route is not called.
+Malformed profile and admin form bodies use this same 400 contract.
 
 `POST /csp-reports` deliberately retains its existing 8,192-byte capped reader
 and always-204/drop behavior to avoid browser report retries. Its capped handler
