@@ -2,8 +2,8 @@
 // The join page renders the invite floor, not the raw env value: with a
 // misconfigured or hostile DISCORD_INVITE_URL (evil host, javascript:,
 // non-Discord scheme), the Hono join-invite href serves FALLBACK_INVITE and
-// the configured value leaves no trace in the HTML — the same rule /join.md
-// and /discord already apply through inviteDestination. Valid configured
+// the configured value leaves no trace in the HTML — the same rule /discord
+// already applies through inviteDestination. Valid configured
 // invites pass through unchanged, so the existing join-invite href pins keep
 // passing. The Kit load cannot run in the root test process
 // (cloudflare:workers), so its boundary is pinned by reading it as text, the
