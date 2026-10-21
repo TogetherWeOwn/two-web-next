@@ -266,10 +266,10 @@ class ManifestAdmission(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(any(op != "get" for op, _ in self.calls()))
-        result = self.run_backup("rotate")
+        result = self.run_backup("rotate", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.store / MANIFEST).read_text().splitlines(), sorted(dailies[-7:] + weeklies[-4:]))
-        self.assertEqual([key for op, key in self.calls() if op == "delete"], dailies[:2] + weeklies[:2])
+        self.assertEqual([key for op, key in self.calls() if op == "delete"], sorted(dailies[:2] + weeklies[:2]))
         self.assertEqual(self.run_backup("check").returncode, 0)
 
     def test_selected_branch_and_prefix(self):
