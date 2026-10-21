@@ -10,6 +10,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { llmsTxt } from "../src/ai-friendly/md";
+import {
+  communitySnapshotOutputSchema,
+  joinHandoffOutputSchema,
+  publicApiEventCollectionOutputSchema,
+  publicApiEventOutputSchema,
+} from "../src/mcp/output-schemas";
 import { MCP_TOOL_NAMES, createPublicMcpServer } from "../src/mcp/server";
 import {
   COMMUNITY_RANK_FIELDS,
@@ -48,9 +54,8 @@ const allowsNull = (schema) => {
 // "null"]} but nullable integers as {anyOf:[{type:"integer"...},
 // {type:"null"}]}, while OpenAPI spells both as type arrays. Normalize
 // both sides to base types plus a null flag, so a drifted property type
-// (or a dropped null) fails by name. Formats, descriptions and integer
-// bounds stay unchecked: they describe the same values and must never
-// false-reject a real payload.
+// (or a dropped null) fails by name. The payload checks below use the SDK's
+// exact zod schemas to catch bounds, formats and other runtime constraints.
 const collectTypes = (schema, into) => {
   if (!schema) return;
   for (const t of Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : []) {
@@ -112,73 +117,6 @@ const resolveRef = (doc, schema) => {
   let node = doc;
   for (const part of ref.replace(/^#\//, "").split("/")) node = node?.[part];
   return node;
-};
-
-// Minimal JSON Schema conformance check (type, required, properties,
-// items, enum, const, anyOf, oneOf), mirroring the acceptance suite's
-// validator so realistic payloads prove the advertised schemas accept
-// real serializer shapes. Unknown keywords are ignored.
-const matchesJsonType = (value, type) => {
-  switch (type) {
-    case "object":
-      return typeof value === "object" && value !== null && !Array.isArray(value);
-    case "array":
-      return Array.isArray(value);
-    case "string":
-      return typeof value === "string";
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value);
-    case "number":
-      return typeof value === "number";
-    case "boolean":
-      return typeof value === "boolean";
-    case "null":
-      return value === null;
-    default:
-      return false;
-  }
-};
-
-const validateJson = (value, schema, path = "$") => {
-  const problems = [];
-  if (schema.const !== undefined) {
-    if (JSON.stringify(value) !== JSON.stringify(schema.const))
-      problems.push(`${path} is not the const`);
-    return problems;
-  }
-  if (schema.enum) {
-    if (!schema.enum.some((option) => JSON.stringify(option) === JSON.stringify(value)))
-      problems.push(`${path} not in enum`);
-    return problems;
-  }
-  for (const key of ["anyOf", "oneOf"]) {
-    const branches = schema[key];
-    if (branches) {
-      if (!branches.some((branch) => validateJson(value, branch, path).length === 0))
-        problems.push(`${path} matches no ${key} branch`);
-      return problems;
-    }
-  }
-  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
-  if (types.length > 0 && !types.some((type) => matchesJsonType(value, type))) {
-    problems.push(`${path} is not ${types.join("|")}`);
-    return problems;
-  }
-  const isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-  if ((types.includes("object") || (!schema.type && schema.properties)) && isRecord(value)) {
-    for (const name of schema.required ?? []) {
-      if (!(name in value)) problems.push(`${path}.${name} is missing`);
-    }
-    for (const [name, property] of Object.entries(schema.properties ?? {})) {
-      if (name in value) problems.push(...validateJson(value[name], property, `${path}.${name}`));
-    }
-  }
-  if (types.includes("array") && Array.isArray(value) && schema.items) {
-    value.forEach((item, index) =>
-      problems.push(...validateJson(item, schema.items, `${path}[${index}]`)),
-    );
-  }
-  return problems;
 };
 
 // Serializer-shaped payloads exercising every type branch the fixtures
@@ -418,11 +356,16 @@ const rpc = async () => {
     // OpenAPI property type, nullability and enum. Required-key checks
     // alone let a drifted type through while the SDK rejects real
     // payloads, so each property fails by name here.
+    // Use the same exported zod schemas registered with the SDK, not a
+    // partial JSON Schema interpreter that silently ignores constraints.
     const expectValid = (label, value, schema) => {
-      const problems = schema ? validateJson(value, schema) : ["missing schema"];
+      const result = schema.safeParse(value);
+      const problems = result.success
+        ? []
+        : result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
       check(
-        `${label} validates against the advertised schema${problems.length ? `: ${problems.join("; ")}` : ""}`,
-        problems.length === 0,
+        `${label} validates against the SDK output schema${problems.length ? `: ${problems.join("; ")}` : ""}`,
+        result.success,
       );
     };
     if (listSchema) {
@@ -450,15 +393,19 @@ const rpc = async () => {
           limit: 20,
           meta: { current_page: 1, per_page: 20, total: 1, last_page: 1 },
         },
-        listSchema,
+        publicApiEventCollectionOutputSchema,
       );
     }
     if (eventSchema) {
       pinProperties("get_event", eventSchema.properties, schemas.PublicApiEvent.properties, [
         ...PUBLIC_API_EVENT_FIELDS,
       ]);
-      expectValid("realistic non-null event vs get_event", REALISTIC_EVENT, eventSchema);
-      expectValid("all-null event vs get_event", NULLISH_EVENT, eventSchema);
+      expectValid(
+        "realistic non-null event vs get_event",
+        REALISTIC_EVENT,
+        publicApiEventOutputSchema,
+      );
+      expectValid("all-null event vs get_event", NULLISH_EVENT, publicApiEventOutputSchema);
     }
     if (communitySchema) {
       const snapshotProps = schemas.CommunitySnapshot.properties;
@@ -479,8 +426,16 @@ const rpc = async () => {
       pinProperties("get_community.ranks[]", ranks?.items?.properties, rankOpenapi?.properties, [
         ...COMMUNITY_RANK_FIELDS,
       ]);
-      expectValid("ranks-bearing community vs get_community", REALISTIC_COMMUNITY, communitySchema);
-      expectValid("all-null community vs get_community", NULLISH_COMMUNITY, communitySchema);
+      expectValid(
+        "ranks-bearing community vs get_community",
+        REALISTIC_COMMUNITY,
+        communitySnapshotOutputSchema,
+      );
+      expectValid(
+        "all-null community vs get_community",
+        NULLISH_COMMUNITY,
+        communitySnapshotOutputSchema,
+      );
     }
     if (joinSchema) {
       pinProperties("get_join", joinSchema.properties, schemas.JoinHandoff.properties, [
@@ -489,7 +444,7 @@ const rpc = async () => {
       expectValid(
         "join handoff vs get_join",
         { intro: "Join us.", invite_url: "https://discord.gg/machine-contract-check" },
-        joinSchema,
+        joinHandoffOutputSchema,
       );
     }
   } finally {
