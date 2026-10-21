@@ -18,6 +18,7 @@ import type { Env, Session } from "../env";
 import { safeRequestId } from "../request-log";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
+import { eventKeyAllowed } from "./keys";
 import { getPublicEvent, withGoingCount } from "./reads";
 import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
 import { SESSION_COOKIE } from "../session-cookie";
@@ -142,6 +143,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
       try {
         // PATCH: omitted fields resolve from the locked row inside the same
         // transaction that commits the update (patchEvent), never from a
@@ -195,6 +197,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         try {
           const actor = { id: who.id, username: who.username };
           const key = c.req.param("key");
+          if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
