@@ -5,8 +5,9 @@ import { IDEMPOTENCY_KEY_RETENTION_DAYS } from "../src/jobs/constants";
 
 // The operator CLI is standalone JS, not part of the Workers TypeScript bundle.
 // @ts-expect-error Standalone import tooling has no declaration file.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
-import { AuditUsageError, databaseConfig, parseOptions, safeFailure, validateGrant, IDEMPOTENCY_RETENTION_DAYS } from "../bin/import/audit.mjs";
+import * as auditModule from "../bin/import/audit.mjs";
+
+const { AuditUsageError, databaseConfig, parseOptions, safeFailure, validateGrant, IDEMPOTENCY_RETENTION_DAYS } = auditModule;
 
 const cli = fileURLToPath(new URL("../bin/import/audit.mjs", import.meta.url));
 
