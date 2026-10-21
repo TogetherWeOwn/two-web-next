@@ -500,7 +500,7 @@ describe("gradient rationing (BRAND-SYSTEM §5)", () => {
       "public/event-theme.css",
       "public/profile-theme.css",
       "public/schedule-theme.css",
-      "web/src/app.css",
+      // web/src/app.css is the Kit @theme token mirror (BRAND-SYSTEM §6), not a component sheet.
     ]) {
       const css = read(sheet).replace(/\/\*[\s\S]*?\*\//g, "");
       expect(css, `${sheet}: orange stop`).not.toMatch(/#ff9c36/i);
