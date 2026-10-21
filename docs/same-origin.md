@@ -19,9 +19,13 @@ For guarded requests:
   `same-site`, `cross-site` and `none` are not substitutes.
 - An explicit foreign, empty, malformed or `null` Origin never falls back to
   Fetch Metadata. Missing both headers and invalid `APP_URL` fail closed.
-- Refusals always return HTTP 403 with JSON `{"error":"cross_origin"}` and
-  `Cache-Control: no-store, private`, regardless of Accept. They do not set a
-  session cookie or consume a write throttle. Security headers still apply.
+- Refusals always return HTTP 403 and `Cache-Control: no-store, private`.
+  Explicit HTML-preferring browser requests receive the branded forbidden page;
+  JSON callers, absent/wildcard Accept, `/api/` paths and JSON-only event writes
+  retain exactly `{"error":"cross_origin"}`. Feed paths retain their existing
+  machine representation. The guard merges `Accept` into `Vary` without removing
+  existing dimensions. It does not set a session cookie or consume a write
+  throttle. Security headers still apply.
 
 ## Exact exemptions
 
@@ -46,9 +50,12 @@ send a matching Origin; neither Origin nor Fetch Metadata is authentication.
 `test/same-origin.test.ts` enumerates `app.routes`, proves a single global guard
 precedes every unsafe/ALL route registration, and pins all three exemptions to
 real routes. A mutation case proves a handler inserted before the guard fails the
-audit. It sends a foreign-origin request to every concrete unsafe route/method
-(including the ALL RSVP fallback), with a signed moderator cookie and a filled
-honeypot; each must return the same 403 without reading or changing sessions.
+audit. It sends a JSON-preferring foreign-origin request to every concrete unsafe
+route/method (including the ALL RSVP fallback), with a signed moderator cookie and
+a filled honeypot; each must return the same 403 without reading or changing
+sessions. `test/negotiated-guard-upload-acceptance.test.ts` additionally pins
+branded browser refusals, Accept preference, unchanged machine envelopes and
+preservation of existing `Vary` dimensions.
 Unit cases cover all four methods, missing/null/malformed origins, scheme/port
 mismatch, same-site Fetch Metadata, alternate request hosts, invalid config,
 both admitted header forms, safe methods and exact exemption boundaries.

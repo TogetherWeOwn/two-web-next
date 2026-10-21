@@ -22,6 +22,10 @@ test("QA member edits and persists their profile, then signs out", async ({ page
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("Europe/London");
   await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Use this device's timezone", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeFocused();
   const saved = page.waitForResponse(
     (response) =>
