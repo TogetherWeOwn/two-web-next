@@ -649,6 +649,22 @@ describe("route ownership", () => {
     expectSlideCookie(res, token);
     expect(h.renewCalls).toHaveLength(1);
   });
+
+  it("a released non-admin member page never renews (admin-family-scoped renewal)", async () => {
+    // The shipped manifest already enables the member board: an authenticated
+    // moderator 200 there must leave the bearer alone. Pins the admin
+    // route-family check in the renewal gate — without it, any released
+    // moderator member-read would slide the session.
+    const h = harness({ path: "/leaderboards/members", routeId: "/leaderboards/members" });
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("x-two-renderer")).toBe("kit");
+    expect(sessionSets(res)).toEqual([]);
+    expect(h.renewCalls).toEqual([]);
+    expect(await h.store.get(await hashToken(token))).not.toBeNull();
+  });
 });
 
 describe("renewal helper guards", () => {
