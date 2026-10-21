@@ -73,6 +73,12 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
   getPublicEvent: vi.fn(),
 }));
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
+// The event harness has no throttle store; keep the (separately-logged) fail-open
+// throttle warn out of the refused-write line counts.
+vi.mock("../src/throttle", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/throttle")>()),
+  throttle: () => async (_c: unknown, next: () => Promise<void>) => next(),
+}));
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
