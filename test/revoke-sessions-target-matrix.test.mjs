@@ -6,6 +6,9 @@ import {
 } from "../bin/revoke-sessions.mjs";
 
 const discordId = "100000000000000201";
+// Bare URLs carry no TLS parameters on purpose: remote classes prove the
+// shared floor refuses them even with a target, and each remote refusal is
+// paired with its verify-full twin to prove the target routing underneath.
 const classes = [
   { url: "postgres://fixture@agent-testdb/test", local: true, production: false },
   { url: "postgres://fixture@localhost/test", local: true, production: false },
@@ -20,6 +23,8 @@ const classes = [
   { url: "postgres://fixture@[::1]/%70roduction", local: true, production: true },
 ];
 
+const TLS_REQUIRED = "sslmode=verify-full or sslrootcert=system";
+
 describe("revocation target by URL class", () => {
   for (const { url, local, production } of classes) {
     for (const target of [undefined, "staging", "production"]) {
@@ -28,9 +33,25 @@ describe("revocation target by URL class", () => {
         if (target) args.push("--target", target);
         const parsed = parseRevokeArgs(args);
         const validate = () => validateRevokeEnvironment({ DATABASE_URL: url }, parsed.target);
-        const allowed = production ? target === "production" : local || target !== undefined;
-        if (allowed) expect(validate()).toEqual({ databaseUrl: url });
-        else expect(validate).toThrow(production ? "--target production" : "--target staging");
+        if (production && target !== "production") {
+          expect(validate).toThrow("--target production");
+          return;
+        }
+        if (!local && target === undefined) {
+          expect(validate).toThrow("--target staging");
+          return;
+        }
+        if (!local) {
+          // Target routing passes, but the shared TLS floor refuses the bare
+          // URL; the verify-full twin proves the target itself is accepted.
+          expect(validate).toThrow(TLS_REQUIRED);
+          const verified = `${url}?sslmode=verify-full`;
+          expect(validateRevokeEnvironment({ DATABASE_URL: verified }, target)).toEqual({
+            databaseUrl: verified,
+          });
+          return;
+        }
+        expect(validate()).toEqual({ databaseUrl: url });
       });
     }
   }
@@ -60,8 +81,16 @@ describe("staging retains remote TLS requirements", () => {
     ).toThrow("disables TLS verification");
   });
 
-  for (const query of ["", "?sslmode=verify-full", "?sslrootcert=system"]) {
-    it(`constructs a verified staging client for ${query || "default TLS"}`, () => {
+  it("refuses a remote URL without TLS instead of defaulting it", () => {
+    const raw = "postgres://fixture@db.staging.test/test";
+    expect(() => validateRevokeEnvironment({ DATABASE_URL: raw }, "staging")).toThrow(
+      "sslmode=verify-full",
+    );
+    expect(() => createRevokeClient(() => ({}), raw)).toThrow("verify-full");
+  });
+
+  for (const query of ["?sslmode=verify-full", "?sslrootcert=system"]) {
+    it(`constructs a verified staging client for ${query}`, () => {
       const raw = `postgres://fixture@db.staging.test/test${query}`;
       const { databaseUrl } = validateRevokeEnvironment({ DATABASE_URL: raw }, "staging");
       let options;
