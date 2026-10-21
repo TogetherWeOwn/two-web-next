@@ -148,6 +148,24 @@ test("CLI verify mode exits 0 on the deployed commit", async () => {
   });
 });
 
+test("CLI human verify failure exits 1 after the configured attempts", async () => {
+  await withServer({ revision: { version_id: VERSION, commit: OTHER } }, async (origin, hits) => {
+    const result = await cliWithEnv([origin, COMMIT], {
+      ...FAST_RETRY,
+      REVISION_CHECK_ATTEMPTS: "2",
+    });
+    assert.equal(result.status, 1);
+    assert.equal(
+      result.stderr,
+      `revision-check: /up revision.commit is ${OTHER}, expected ${COMMIT}\n`,
+    );
+    assert.match(result.stdout, /revision attempt 1\/2:/);
+    assert.match(result.stdout, /revision attempt 2\/2:/);
+    assert.doesNotMatch(result.stdout, /Deployed revision verified/);
+    assert.equal(hits(), 2);
+  });
+});
+
 test("CLI rejects a missing origin, an extra argument and a non-SHA commit", () => {
   for (const args of [[], ["http://127.0.0.1:1", "main"], ["http://127.0.0.1:1", COMMIT, "x"]]) {
     const result = spawnSync(process.execPath, ["bin/revision-check.mjs", ...args], {
@@ -191,8 +209,23 @@ test("revisionRetryConfig defaults to production retries and validates overrides
     { REVISION_CHECK_ATTEMPTS: "0", REVISION_CHECK_DELAY_MS: "-1" },
     { REVISION_CHECK_ATTEMPTS: "99", REVISION_CHECK_DELAY_MS: "99999" },
     { REVISION_CHECK_ATTEMPTS: "x", REVISION_CHECK_DELAY_MS: "y" },
+    { REVISION_CHECK_ATTEMPTS: "1oops", REVISION_CHECK_DELAY_MS: "0oops" },
+    { REVISION_CHECK_ATTEMPTS: "1e3", REVISION_CHECK_DELAY_MS: "2e3" },
   ]) {
     assert.deepEqual(revisionRetryConfig(env), { attempts: 6, delayMs: 10_000 });
+  }
+});
+
+test("CLI human and JSON verify retain six attempts for a malformed retry override", async () => {
+  for (const flags of [[], ["--json"]]) {
+    await withServer({ revision: { version_id: VERSION, commit: OTHER } }, async (origin, hits) => {
+      const result = await cliWithEnv([origin, COMMIT, ...flags], {
+        ...FAST_RETRY,
+        REVISION_CHECK_ATTEMPTS: "1oops",
+      });
+      assert.equal(result.status, 1);
+      assert.equal(hits(), 6);
+    });
   }
 });
 

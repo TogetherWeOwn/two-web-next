@@ -131,8 +131,9 @@ function verifyNextAction(code) {
 // JSON verify arms share this so offline fixtures stay fast without changing
 // deploy behavior.
 export function revisionRetryConfig(env = process.env) {
-  const attempts = Number.parseInt(env.REVISION_CHECK_ATTEMPTS ?? "", 10);
-  const delayMs = Number.parseInt(env.REVISION_CHECK_DELAY_MS ?? "", 10);
+  const parse = (value) => (/^\d+$/.test(value ?? "") ? Number(value) : Number.NaN);
+  const attempts = parse(env.REVISION_CHECK_ATTEMPTS);
+  const delayMs = parse(env.REVISION_CHECK_DELAY_MS);
   return {
     attempts: Number.isInteger(attempts) && attempts >= 1 && attempts <= 6 ? attempts : 6,
     delayMs: Number.isInteger(delayMs) && delayMs >= 0 && delayMs <= 10_000 ? delayMs : 10_000,
