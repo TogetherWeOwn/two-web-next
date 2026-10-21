@@ -1526,22 +1526,28 @@ definitive `action_not_allowed` refusal.
 
 ### Queue incident targets by environment (checked-in expectations, live readback required)
 
-Checked-in expectations below are parsed from `wrangler.jsonc` (top-level
-staging producers, `env.production` queues, consumers, crons, owner, Tail
-Worker and origin) and `wrangler.jobs.jsonc` (top-level staging consumers,
-crons, owner, Tail Worker and origin). They are expectations only: confirm
+Checked-in expectations below are parsed from `wrangler.jobs.jsonc` (top-level
+staging consumers, crons, owner and Tail Worker; `env.production` queues,
+consumers, crons, owner and Tail Worker) and `wrangler.jsonc` (top-level
+staging producers, `env.production` producers, Tail Worker and origin). The
+web `env.production` only produces: both production consumers and both crons
+are declared on the jobs Worker, and readiness still reads the web Worker's
+`/up` (jobs has no fetch handler). They are expectations only: confirm
 every target with authorized live readback before containment — `queues info`,
 `consumer list`, `deployments status` and `GET /up` on the environment's
-readiness origin. Never assume the planned jobs transfer is already deployed:
-checked-in production consumers and crons remain on
-`two-web-next-production`, and `wrangler.jobs.jsonc` has no production env,
-so a future jobs Worker needs its own reviewed config change plus readback.
+readiness origin. Never assume the live transfer has completed: a Worker
+Version promotion never applies triggers, so live consumers and crons can
+still sit on `two-web-next-production` until the sequenced Operator transfer
+in [production-jobs-handoff.md](production-jobs-handoff.md) completes. If
+readback shows the web Worker as the live consumer owner, stop and reconcile
+per [Production trigger reconciliation](#production-trigger-reconciliation-manual-domain-safe)
+before any owner-sensitive step.
 Production incident guidance never silently defaults to staging targets.
 
 | Environment | Queues (checked-in) | Consumer/cron owner (checked-in) | Tail Worker (checked-in) | Readiness origin (checked-in) |
 | --- | --- | --- | --- | --- |
 | staging | `two-sync-event`, `two-internal-action` | `two-web-jobs` | `two-web-next-alerts` | `https://next.togetherweown.com` |
-| production | `two-web-next-production-sync-event`, `two-web-next-production-internal-action` | `two-web-next-production` | `two-web-next-alerts-production` | `https://togetherweown.com` |
+| production | `two-web-next-production-sync-event`, `two-web-next-production-internal-action` | `two-web-jobs-production` | `two-web-next-alerts-production` | `https://togetherweown.com` |
 
 #### Staging (read-only metadata)
 
@@ -1569,8 +1575,10 @@ Production incident guidance never silently defaults to staging targets.
   npx --no-install wrangler queues info two-web-next-production-internal-action
   npx --no-install wrangler queues consumer list two-web-next-production-sync-event
   npx --no-install wrangler queues consumer list two-web-next-production-internal-action
-  npx --no-install wrangler deployments status --name two-web-next-production --json
+  npx --no-install wrangler deployments status --name two-web-jobs-production --json
   curl -sS --max-time 10 https://togetherweown.com/up
+  # Live consumers may still sit on two-web-next-production until the sequenced
+  # transfer completes: readback decides, never this checked-in name.
   # Tail paging source for production: two-web-next-alerts-production.
 )
 ```
@@ -1596,14 +1604,16 @@ mutation, so production containment never silently defaults to staging targets.
     production)
       QUEUES=(two-web-next-production-sync-event two-web-next-production-internal-action)
       UP_URL="https://togetherweown.com/up"
-      OWNER="two-web-next-production"
+      OWNER="two-web-jobs-production"
       ;;
     *) echo "unknown ENVIRONMENT=$ENVIRONMENT; refusing to mutate" >&2; exit 1 ;;
   esac
   # Confirm live readback matches the checked-in matrix above before mutation:
   # queues info plus consumer list show OWNER as the single consumer,
   # deployments status names the live version, and GET "$UP_URL" shows the
-  # expected origin. On any mismatch, stop; do not continue by pasting the
+  # expected origin. If live still shows two-web-next-production (transfer
+  # pending), stop and reconcile triggers before any owner-sensitive step.
+  # On any mismatch, stop; do not continue by pasting the
   # resume block.
   # REMOTE MUTATION: authorized incident containment, not a test.
   for q in "${QUEUES[@]}"; do npx --no-install wrangler queues pause-delivery "$q"; done
@@ -1624,7 +1634,7 @@ before any drain: staging reads `GET https://next.togetherweown.com/up` (HTTP
 implementation gate on `two-web-jobs` and quiet paging from
 `two-web-next-alerts`; production reads `GET https://togetherweown.com/up`
 with the same readiness shape, the implementation gate on
-`two-web-next-production` and quiet paging from
+`two-web-jobs-production` and quiet paging from
 `two-web-next-alerts-production`. After the implementation gate, holds and
 downstream readiness are explicitly cleared, the approved drain starts by
 resuming the **existing** transport. Resume is an owned-pause only: the same

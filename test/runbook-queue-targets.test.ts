@@ -31,11 +31,13 @@ const stagingQueues = queueNames(jobs);
 const stagingOwner = jobs.name as string;
 const stagingTail = jobs.tail_consumers?.[0]?.service as string;
 const stagingOrigin = jobs.vars?.APP_URL as string;
-const production = main.env?.production;
-const productionQueues = queueNames(production ?? {});
-const productionOwner = production?.name as string;
-const productionTail = production?.tail_consumers?.[0]?.service as string;
-const productionOrigin = production?.vars?.APP_URL as string;
+const webProduction = main.env?.production;
+const jobsProduction = jobs.env?.production;
+const productionQueues = queueNames(jobsProduction ?? {});
+const productionOwner = jobsProduction?.name as string;
+const productionTail = jobsProduction?.tail_consumers?.[0]?.service as string;
+// Readiness still reads the web Worker's /up: the jobs Worker has no fetch handler.
+const productionOrigin = webProduction?.vars?.APP_URL as string;
 
 const environments = [
   {
@@ -138,13 +140,16 @@ describe("runbook queue incident targets by environment", () => {
       "two-web-next-production-sync-event",
       "two-web-next-production-internal-action",
     ]);
-    expect(productionOwner).toBe("two-web-next-production");
+    expect(productionOwner).toBe("two-web-jobs-production");
     expect(productionTail).toBe("two-web-next-alerts-production");
     expect(productionOrigin).toBe("https://togetherweown.com");
-    // The planned jobs transfer is not deployed: jobs has no production env.
-    expect(jobs.env ?? {}).not.toHaveProperty("production");
+    // The production jobs split is declared: jobs env.production owns both
+    // consumers and both crons; the web env.production only produces.
+    expect(jobsProduction?.name).toBe("two-web-jobs-production");
+    expect(queueNames(webProduction ?? {})).toEqual([]);
+    expect(webProduction?.triggers?.crons).toEqual([]);
+    expect(jobsProduction?.triggers?.crons).toEqual(["*/10 * * * *", "0 0 * * *"]);
     expect(main.triggers?.crons).toEqual([]);
-    expect(production?.triggers?.crons).toContain("*/10 * * * *");
 
     expect(queueSection).toContain("Queue incident targets by environment");
     const matrix = queueSection.split("#### Staging (read-only metadata)")[0]!;
@@ -185,9 +190,11 @@ describe("runbook queue incident targets by environment", () => {
     expect(queueSection).toMatch(/queues info/);
     expect(queueSection).toMatch(/consumer list/);
     expect(queueSection).toMatch(/deployments status/);
-    // Never assume the planned jobs transfer is already deployed.
-    expect(queueSection).toMatch(/never assume.*planned jobs transfer/i);
-    expect(queueSection).toMatch(/has no production env/);
+    // Never assume the live transfer has completed: a Version promotion never
+    // applies triggers, so live can still sit on the web Worker.
+    expect(queueSection).toMatch(/never assume.*live transfer/i);
+    expect(queueSection).toMatch(/promotion never applies triggers/i);
+    expect(queueSection).toMatch(/production-jobs-handoff\.md/);
     expect(queueSection).toContain(`\`${productionOwner}\``);
   });
 
