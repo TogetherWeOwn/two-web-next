@@ -642,7 +642,7 @@ describe("join callback: consent errors stay out of response, attempts and diagn
       admitted: false,
     });
     expect(res.status).toBe(200);
-    expect(html).toContain("Join link expired");
+    expect(html).toContain("Join cancelled");
     expect(calls).toEqual([]);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([]);
     const requestId = res.headers.get("x-request-id");
@@ -742,7 +742,8 @@ describe("join callback: expired recovery versus outage 503", () => {
       ),
     );
     expect(res.status).toBe(503);
-    expect(html).toContain("Discord is unreachable");
+    expect(html).toContain("rate-limiting approvals");
+    expect(html).not.toContain("Discord is unreachable");
     expect(res.headers.get("Retry-After") === null).toBe(true);
     expect(calls).toHaveLength(1);
     expect(withheld(fake.attempts, [TOK, SECRET])).toEqual([
@@ -861,8 +862,10 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
         );
       throw new Error("unexpected Discord call");
     });
-    expect(res.status).toBe(200);
-    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(res.status).toBe(503);
+    expect(html).toContain("Discord throttled the automatic add");
+    expect(html).toContain("rate-limiting automatic adds");
+    expect(html).not.toContain("We couldn&#39;t add you automatically");
     expect(res.headers.get("Retry-After") === null).toBe(true);
     expect(
       res.headers.getSetCookie().some((cookie) => cookie.includes("__Host-two_session=")),
