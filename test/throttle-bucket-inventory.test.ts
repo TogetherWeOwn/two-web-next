@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,7 +29,18 @@ function srcFiles(): string[] {
 }
 
 function stripComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+  // Parse comment ranges so wildcard strings, templates, regexes and JSX cannot
+  // swallow registrations. Blank only comments; preserve tokens and line breaks.
+  const { comments } = parse(text, { sourceType: "module", plugins: ["typescript", "jsx"] });
+  let out = "";
+  let cursor = 0;
+  for (const { start, end } of comments ?? []) {
+    if (start === undefined || end === undefined) throw new Error("Comment source range missing");
+    out += text.slice(cursor, start);
+    out += text.slice(start, end).replace(/[^\r\n]/g, " ");
+    cursor = end;
+  }
+  return out + text.slice(cursor);
 }
 
 // Middleware registrations: throttle("bucket", N). Excludes src/throttle.ts
@@ -112,6 +124,57 @@ function nonLiteralGuardSites(): Map<string, number> {
   }
   return counts;
 }
+
+describe("inventory comment stripping", () => {
+  it.each([
+    'const path = "/probe/*";',
+    "const path = '/probe/*';",
+    "const path = `/probe/*`;",
+    'const path = `/probe/${"/*"}/${throttleGuard(ctx, "nested-guard", 1)}`;',
+    'const path = "escaped \\" /* https://example.test/*";',
+    "const path = /[/*]+/;",
+    'const path = <div title="/probe/*">{/* jsx-only */}</div>;',
+  ])("preserves literals and registrations after %s", (prefix) => {
+    const registrations = [
+      'throttle("hidden-bucket", 1);',
+      'throttleGuard(c, "hidden-guard", 1);',
+      "throttle(BUCKET, 1);",
+      'throttleGuard(ctx, "renamed-context", 1);',
+    ].join("\n");
+    const stripped = stripComments(`${prefix}\n${registrations}\n/* trailing-only */`);
+    expect(stripped).toContain(registrations);
+    expect(stripped).toContain(prefix.replace("{/* jsx-only */}", "{              }"));
+    expect(stripped).not.toContain("trailing-only");
+  });
+
+  it("removes real comments without merging tokens or consuming later code", () => {
+    const stripped = stripComments(
+      [
+        '/* throttle("block-only", 1); */',
+        'const path = "/probe/*";// throttle("line-only", 1);',
+        'const url = "https://example.test/*";',
+        'throttle(/* argument-only */ "visible", 1);',
+        'const path2 = `/probe/${/* interpolation-only */ "*"}`;',
+        "const first = 1;/* separator-only */const second = 2;",
+        'throttleGuard(c, "visible-guard", 1);',
+      ].join("\n"),
+    );
+    for (const comment of [
+      "block-only",
+      "line-only",
+      "argument-only",
+      "interpolation-only",
+      "separator-only",
+    ]) {
+      expect(stripped).not.toContain(comment);
+    }
+    expect(stripped).toContain('const path = "/probe/*";');
+    expect(stripped).toContain('const url = "https://example.test/*";');
+    expect(stripped).toMatch(/throttle\(\s+"visible", 1\);/);
+    expect(stripped).toMatch(/1;\s+const second/);
+    expect(stripped).toContain('throttleGuard(c, "visible-guard", 1);');
+  });
+});
 
 describe("throttle bucket inventory", () => {
   it("pins middleware buckets to their registration files and counts", () => {
