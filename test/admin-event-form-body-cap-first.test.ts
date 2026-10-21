@@ -13,7 +13,12 @@
 // spies and a fail-if-touched Db double; no DATABASE_URL, no sockets.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
-import { createEvent, getEvent, recordAccess, updateEvent } from "../src/admin/store";
+import {
+  createEvent,
+  getEvent,
+  recordAccess,
+  updateEventIfBaselineMatches,
+} from "../src/admin/store";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -26,7 +31,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/admin/store")>()),
   createEvent: vi.fn(),
   getEvent: vi.fn(),
-  updateEvent: vi.fn(),
+  updateEventIfBaselineMatches: vi.fn(),
   recordAccess: vi.fn(),
 }));
 
@@ -36,6 +41,9 @@ const ERROR = {
   reason: "payload_too_large",
   message: "Reduce the size of your request and try again.",
 };
+// Well-formed only: the store is mocked, so the route checks the shape, not
+// the content match. Create ignores the unknown carrier.
+const BASELINE = "0123456789abcdef".repeat(4);
 const FORM = {
   title: "Game night",
   game: "Chess",
@@ -45,6 +53,7 @@ const FORM = {
   starts_at: "2099-11-04 20:00",
   ends_at: "2099-11-04 22:00",
   timezone: "Europe/London",
+  saved_baseline: BASELINE,
 };
 const row = {
   id: 1,
@@ -155,7 +164,7 @@ function postForm(cookie: string, values: Record<string, string>) {
 function expectNoStoreWork() {
   expect(getEvent).not.toHaveBeenCalled();
   expect(createEvent).not.toHaveBeenCalled();
-  expect(updateEvent).not.toHaveBeenCalled();
+  expect(updateEventIfBaselineMatches).not.toHaveBeenCalled();
   expect(dbTouched).not.toHaveBeenCalled();
 }
 
@@ -168,7 +177,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getEvent).mockResolvedValue(row);
   vi.mocked(createEvent).mockResolvedValue({ row, writeBack: null });
-  vi.mocked(updateEvent).mockResolvedValue({ row, writeBack: null, childWriteBacks: [] });
+  vi.mocked(updateEventIfBaselineMatches).mockResolvedValue({
+    row,
+    writeBack: null,
+    childWriteBacks: [],
+  });
   vi.mocked(recordAccess).mockResolvedValue(true);
 });
 
@@ -287,7 +300,8 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
         expect(getEvent).not.toHaveBeenCalled();
       } else {
         expect(getEvent).toHaveBeenCalledOnce();
-        expect(updateEvent).toHaveBeenCalledOnce();
+        expect(updateEventIfBaselineMatches).toHaveBeenCalledOnce();
+        expect(vi.mocked(updateEventIfBaselineMatches).mock.calls[0]?.[3]).toBe(BASELINE);
       }
       expect(dbTouched).not.toHaveBeenCalled();
     },
@@ -307,7 +321,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       expect(await response.text()).toContain('data-testid="form-errors"');
       expect(throttle.count()).toBe(1);
       expect(createEvent).not.toHaveBeenCalled();
-      expect(updateEvent).not.toHaveBeenCalled();
+      expect(updateEventIfBaselineMatches).not.toHaveBeenCalled();
       // Update reads the stored event before validation, as today; create does not.
       if (label === "update") expect(getEvent).toHaveBeenCalledOnce();
       else expect(getEvent).not.toHaveBeenCalled();

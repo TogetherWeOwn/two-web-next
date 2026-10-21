@@ -37,6 +37,11 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('data-testid="save-event"');
     expect(source).toContain(">Save<");
     expect(source).toContain('href="/admin/events">Cancel');
+    // The Hono-owned update refuses a save without the current baseline, so
+    // the ported form carries the view's mint under the shared carrier name.
+    expect(source).toContain('type="hidden"');
+    expect(source).toContain("EVENT_BASELINE_FIELD");
+    expect(source).toContain("view.baseline");
   });
 
   it("keeps every Hono field name, id and label the E2E suite drives", () => {

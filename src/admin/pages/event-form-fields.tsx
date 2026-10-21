@@ -4,9 +4,41 @@
 // save/cancel actions. Field errors render through the shared Field helper.
 
 import type { FC } from "hono/jsx";
+import { EVENT_BASELINE_FIELD } from "../event-baseline";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
+
+/**
+ * A refused save that keeps the typed draft: another moderator committed
+ * first (stale baseline) or the form carried no valid baseline (bypass).
+ * The notice names the refusal, and the native review link re-enters the
+ * current values — the whole workflow stays keyboard-operable with no
+ * scripting, exactly like the validation summary above it.
+ */
+export type SaveConflict = {
+  heading: string;
+  detailLead: string;
+  detailTail: string;
+  reviewHref: string;
+  reviewText: string;
+};
+
+const ConflictNotice: FC<{ conflict: SaveConflict }> = ({ conflict }) => (
+  <div
+    class="notice"
+    role="alert"
+    tabindex={-1}
+    data-testid="save-conflict"
+    data-admin-conflict-summary=""
+  >
+    <p>{conflict.heading}</p>
+    <p>
+      {conflict.detailLead} <a href={conflict.reviewHref}>{conflict.reviewText}</a>
+      {conflict.detailTail}
+    </p>
+  </div>
+);
 
 export const EventFormFields: FC<{
   mode: "new" | "edit";
@@ -14,16 +46,25 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  conflict?: SaveConflict;
+}> = ({ mode, row, values, errors, action, conflict }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
+      {conflict ? <ConflictNotice conflict={conflict} /> : null}
       <form
         method="post"
         action={action}
         data-event-editor=""
-        data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+        data-event-draft={conflict || Object.keys(errors).length > 0 ? "" : undefined}
       >
+        {mode === "edit" ? (
+          <input
+            type="hidden"
+            name={EVENT_BASELINE_FIELD}
+            value={val(values, EVENT_BASELINE_FIELD)}
+          />
+        ) : null}
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
             <input

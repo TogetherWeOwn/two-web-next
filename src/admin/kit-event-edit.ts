@@ -28,6 +28,7 @@
 // no event delete anywhere on this resource.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { eventContentBaseline } from "./event-baseline";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -94,6 +95,8 @@ export type KitEventEditView = {
   key: string;
   title: string;
   status: string;
+  /** The Hono save precondition for this row; the ported form posts it back. */
+  baseline: string;
   values: KitEventEditValues;
   errors: Record<string, string>;
   hasErrors: boolean;
@@ -208,6 +211,10 @@ export async function resolveKitEventEdit(
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      // The save form posts to the Hono-owned update, which refuses a save
+      // without the current baseline — mint it from the same row the Hono
+      // edit GET mints from.
+      baseline: await eventContentBaseline(row),
       values: {
         title: row.title,
         game: row.game ?? "",

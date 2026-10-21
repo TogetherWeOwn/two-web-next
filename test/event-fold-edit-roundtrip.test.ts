@@ -16,6 +16,7 @@ import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "fold-roundtrip-test-secret-at-least-32-bytes";
@@ -106,16 +107,20 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     });
   const saved = async (key: string) =>
     (await fixture.db.select().from(events).where(eq(events.eventKey, key)))[0]!;
-  const post = (key: string, values: Record<string, string>) =>
-    app.request(
+  const post = async (key: string, values: Record<string, string>) => {
+    // The save precondition rides with the moderator's own GET.
+    const page = await app.request(APP_URL + `/admin/events/${key}`, { headers: { cookie } }, env);
+    expect(page.status).toBe(200);
+    return app.request(
       APP_URL + `/admin/events/${key}`,
       {
         method: "POST",
         headers: { cookie, origin: APP_URL },
-        body: new URLSearchParams(values),
+        body: new URLSearchParams({ ...values, ...savedForm(await page.text()).hidden }),
       },
       env,
     );
+  };
 
   // GET the real edit page, resubmit its rendered wall text unchanged: the
   // stored instant must survive byte-for-byte on either side of the fold.

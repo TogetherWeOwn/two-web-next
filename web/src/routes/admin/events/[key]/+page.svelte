@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { EVENT_BASELINE_FIELD } from "../../../../../../src/admin/event-baseline";
 import { validationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -58,6 +59,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-editor=""
     data-event-draft={hasErrors ? "" : undefined}
   >
+    <!-- The Hono-owned update refuses a save without the current baseline. -->
+    <input type="hidden" name={EVENT_BASELINE_FIELD} value={view.baseline} />
     <div class="field">
       <label for="f-title">Title</label>
       <input

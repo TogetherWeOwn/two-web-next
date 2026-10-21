@@ -26,7 +26,15 @@ import {
 } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
-import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
+import { eventContentBaseline } from "./event-baseline";
+import {
+  audit,
+  boundModeratorWrite,
+  dirty,
+  NotFoundError,
+  StaleBaselineError,
+  type Actor,
+} from "./store-shared";
 
 export type EventRow = typeof events.$inferSelect;
 
@@ -214,6 +222,42 @@ export async function updateEvent(
       return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
+  retireAnonEventCaches();
+  await retireHomeGuestCache();
+  return result;
+}
+
+/**
+ * Form save behind the content baseline: the same committing lock as
+ * updateEvent, but the submitted baseline is compared against the locked row
+ * before anything mutates. A concurrent commit between the moderator's GET
+ * and this lock acquisition refuses with StaleBaselineError (no content
+ * change, no audit, no child shift, no agent_version bump); a rolled-back
+ * contender leaves the row matching and the save commits. The unconditional
+ * updateEvent/patchEvent contract is untouched for non-form writers.
+ */
+export async function updateEventIfBaselineMatches(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  baseline: string,
+  input: EventFormInput,
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
+  const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
+    await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
+      // Judge the baseline only after the lock wait, against the row this
+      // transaction will commit from — never a pre-lock snapshot.
+      const [locked] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, eventKey))
+        .for("update");
+      if (!locked) throw new NotFoundError("event");
+      if ((await eventContentBaseline(locked)) !== baseline) throw new StaleBaselineError();
+      return commitLockedUpdate(tx, actor, eventKey, locked, input);
+    });
+  // Committed: same retirement point as updateEvent, only after success.
   retireAnonEventCaches();
   await retireHomeGuestCache();
   return result;

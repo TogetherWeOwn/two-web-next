@@ -36,11 +36,14 @@ export function eventEditorBrowser({
   draft = false,
   initial = {},
   path = "/admin/events/abc",
+  summary = null,
 }: {
   missing?: boolean;
   draft?: boolean;
   initial?: Record<string, string>;
   path?: string;
+  /** Which refusal notice the render carries, for the island's focus-on-load. */
+  summary?: "validation" | "conflict" | null;
 } = {}) {
   const values = new Map([
     ["title", "Game night"],
@@ -181,6 +184,9 @@ export function eventEditorBrowser({
   const clearTimer = (id: number) => {
     timers.delete(id);
   };
+  const summaries: Record<string, FakeElement> = {};
+  if (summary === "validation") summaries["[data-admin-validation-summary]"] = makeElement("div");
+  if (summary === "conflict") summaries["[data-admin-conflict-summary]"] = makeElement("div");
   runInNewContext(binder, {
     // The member-profile recovery pattern uses a bare setTimeout; island code
     // here uses window.setTimeout. Back both spellings with the same timers.
@@ -189,6 +195,7 @@ export function eventEditorBrowser({
     document: {
       querySelector: (selector: string) => {
         if (selector === "[data-event-editor]") return missing ? null : editor;
+        if (selector in summaries) return summaries[selector]!;
         const found = created.find(
           (el) => `[data-testid="${el.attrs["data-testid"]}"]` === selector,
         );
@@ -218,6 +225,7 @@ export function eventEditorBrowser({
   });
   return {
     values,
+    summaries,
     search,
     windowListeners,
     listeners,

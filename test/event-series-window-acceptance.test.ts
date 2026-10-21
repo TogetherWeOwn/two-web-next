@@ -25,6 +25,7 @@ import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env as baseEnv, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -81,12 +82,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
       vi.mocked(dispatchWriteBack).mockClear();
     });
 
-    const post = (path: string, values: Record<string, string>) =>
-      native().request(
+    const post = async (path: string, values: Record<string, string>) => {
+      // The save precondition rides with the moderator's own GET.
+      const page = await native().request(path, { headers: { cookie } }, liveEnv());
+      expect(page.status).toBe(200);
+      return native().request(
         path,
-        { method: "POST", headers: { cookie }, body: new URLSearchParams(values) },
+        {
+          method: "POST",
+          headers: { cookie },
+          body: new URLSearchParams({ ...values, ...savedForm(await page.text()).hidden }),
+        },
         liveEnv(),
       );
+    };
     const patch = (key: string, body: unknown) =>
       app.request(
         `/events/${key}`,

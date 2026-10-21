@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { isDatabaseUnavailable } from "../src/db/errors";
+import { eventContentBaseline } from "../src/admin/event-baseline";
 import {
   resolveKitEventEdit,
   type KitEventEditDeps,
@@ -78,6 +79,12 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
       capacity: "8",
     });
     expect(outcome.view.endsAt).toBe("2026-07-01T21:00:00.000Z");
+  });
+
+  it("mints the Hono save baseline from the same row the form displays", async () => {
+    const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.baseline).toBe(await eventContentBaseline(baseRow));
   });
 
   it("renders nullables the way the Hono form does (empty strings, never null)", async () => {

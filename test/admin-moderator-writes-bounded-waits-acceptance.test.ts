@@ -65,6 +65,7 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { savedForm } from "./helpers/event-save-document";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -839,6 +840,15 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
 
   it("admin event save behind a held row answers 503 with no redirect or write-back", async () => {
     const seeded = await seedEvent({ status: "published" });
+    // The save precondition, minted before the holder takes its lock (the
+    // holder commits nothing, so one baseline serves the 503 and the retry).
+    const read = await testApp.request(
+      `/admin/events/${seeded.eventKey}`,
+      { headers: { cookie } },
+      liveEnv(),
+    );
+    expect(read.status).toBe(200);
+    const save = { ...EVENT_FORM, ...savedForm(await read.text()).hidden };
     const holder = holderClient();
     let pending: Promise<Response> | undefined;
     try {
@@ -855,7 +865,7 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
               origin: baseEnv.APP_URL,
               "content-type": "application/x-www-form-urlencoded",
             },
-            body: new URLSearchParams(EVENT_FORM),
+            body: new URLSearchParams(save),
           },
           liveEnv(),
         ),
@@ -892,7 +902,7 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
           origin: baseEnv.APP_URL,
           "content-type": "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams(EVENT_FORM),
+        body: new URLSearchParams(save),
       },
       liveEnv(),
     );
