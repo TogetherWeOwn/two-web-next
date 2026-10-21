@@ -74,6 +74,53 @@ async function modules() {
   return { ...synthetic, ...reads, fixture };
 }
 
+// SQL keywords that textually resemble unqualified `name(` calls but invoke
+// nothing: grouping keywords, EXISTS/IN predicates and the SQL-standard
+// conditional. CTE column-alias definitions are derived per read instead, so a
+// new builtin cannot hide behind either form.
+const UNQUALIFIED_KEYWORDS = [
+  "AND",
+  "AS",
+  "CASE",
+  "COALESCE",
+  "EXISTS",
+  "IN",
+  "NOT",
+  "ON",
+  "OR",
+  "WHERE",
+];
+
+function assertBuiltinCalls(read, builtins) {
+  for (const [, builtin] of read.sql.matchAll(/pg_catalog\.(\w+)\s*\(/g)) {
+    assert.ok(builtins.includes(builtin), `${read.id}: builtin outside fixed list: ${builtin}`);
+  }
+  const ctes = new Set(
+    [...read.sql.matchAll(/(\w+)\s*\([^)]*\)\s*AS\s*\(/gi)].map((m) => m[1].toUpperCase()),
+  );
+  for (const [, name] of read.sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
+    const upper = name.toUpperCase();
+    if (UNQUALIFIED_KEYWORDS.includes(upper) || ctes.has(upper)) continue;
+    assert.fail(`${read.id}: unqualified call outside fixed list: ${name}`);
+  }
+}
+
+function assertCatalogColumns(read, catalogColumns) {
+  const aliases = new Map(
+    [...read.sql.matchAll(/(?:FROM|JOIN)\s+pg_catalog\.(\w+)(?:\s+AS)?\s+(\w+)/gi)].map((m) => [
+      m[2],
+      m[1],
+    ]),
+  );
+  for (const [, alias, column] of read.sql.matchAll(/\b(\w+)\.(\w+)\b/g)) {
+    if (aliases.has(alias))
+      assert.ok(
+        catalogColumns[aliases.get(alias)].includes(column),
+        `${read.id}: ${alias}.${column}`,
+      );
+  }
+}
+
 test("unbound or arbitrary transport denies before any client work", async () => {
   const { runSyntheticInventory, syntheticClient, fixture } = await modules();
   for (const transport of [
@@ -159,9 +206,7 @@ test("fixed PG18 reads expose only declared columns, catalogs and builtins", asy
     for (const [, catalog] of read.sql.matchAll(/\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)/gi)) {
       assert.ok(Object.hasOwn(CATALOG_COLUMNS, catalog), `catalog outside fixed list: ${catalog}`);
     }
-    for (const [, builtin] of read.sql.matchAll(/pg_catalog\.(\w+)\s*\(/g)) {
-      assert.ok(BUILTINS.includes(builtin), `builtin outside fixed list: ${builtin}`);
-    }
+    assertBuiltinCalls(read, BUILTINS);
   }
   assert.ok(Object.isFrozen(READS));
   assert.match(sql, /pg_catalog\.pg_default_acl/);
@@ -172,6 +217,51 @@ test("fixed PG18 reads expose only declared columns, catalogs and builtins", asy
   assert.match(sql, /acldefault/);
   assert.match(sql, /pg_has_role/);
   assert.doesNotMatch(sql, /inet_server_addr\(\)\s*(?:AS|,)/i);
+});
+
+test("policy scope pins exact proposal names against schema declarations", async () => {
+  const { POLICY_TABLES } = await modules();
+  assert.deepEqual(POLICY_TABLES, [
+    "users",
+    "profiles",
+    "discord_event_snapshots",
+    "job_unique_locks",
+    "queue_jobs",
+    "featured_contents",
+    "rsvps",
+    "agent_event_idempotency_keys",
+    "agent_event_audits",
+    "agent_event_hits",
+    "member_data_access_logs",
+    "event_search_logs",
+    "board_view_logs",
+    "events",
+    "event_sync_attempts",
+    "queue_failed_jobs",
+    "activity_log",
+    "agent_event_grants",
+    "join_attempts",
+    "web_throttle_hits",
+    "web_sessions",
+    "web_oauth_journeys",
+  ]);
+  const declared = [];
+  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts"]) {
+    const text = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+    for (const [, name] of text.matchAll(/pgTable\(\s*"([A-Za-z0-9_]+)"/g)) declared.push(name);
+  }
+  // web_session_grace postdates the frozen proposal scope: the census still
+  // surfaces it as an extra-table finding, but the candidate policies read
+  // covers only the exact proposal tables plus the separate ledger. Any other
+  // drift in either direction fails loudly here.
+  assert.deepEqual(
+    declared.filter((name) => !POLICY_TABLES.includes(name)),
+    ["web_session_grace"],
+  );
+  assert.deepEqual(
+    POLICY_TABLES.filter((name) => !declared.includes(name)),
+    [],
+  );
 });
 
 test("every failed read, setup, rollback, close or delivery is a fixed-label STOP", async () => {
@@ -201,9 +291,17 @@ test("every failed read, setup, rollback, close or delivery is a fixed-label STO
 });
 
 test("version, fields, missing roles and incomplete outputs are unknown, never safe", async () => {
-  const { runSyntheticInventory, syntheticClient, syntheticTransport, fixture, READS } =
-    await modules();
-  const mutations = [
+  const {
+    runSyntheticInventory,
+    syntheticClient,
+    syntheticTransport,
+    fixture,
+    READS,
+    TRANSACTION,
+  } = await modules();
+  // Identity-gate failures must stop at identity: the frozen PG18 SQL must
+  // not run any later catalog SELECT against another major version.
+  const gateMutations = [
     (f) => {
       f.identity.rows[0].server_version_num = 170000;
     },
@@ -213,6 +311,23 @@ test("version, fields, missing roles and incomplete outputs are unknown, never s
     (f) => {
       f.identity.rows[0].server_address_present = false;
     },
+  ];
+  for (const mutate of gateMutations) {
+    const data = fixture();
+    mutate(data);
+    const client = syntheticClient(data);
+    const transport = syntheticTransport();
+    assert.equal(await runSyntheticInventory({ client, transport }), "inventory stopped");
+    assert.equal(transport.payloads.length, 0);
+    assert.deepEqual(client.events, [
+      TRANSACTION.begin,
+      ...TRANSACTION.setup,
+      "identity",
+      "ROLLBACK",
+      "CLOSE",
+    ]);
+  }
+  const mutations = [
     (f) => {
       f.roles.rows = [];
     },
@@ -347,21 +462,38 @@ test("membership SQL keeps forward and reverse traversals separate", async () =>
 
 test("catalog column references stay inside the exact per-catalog allowlist", async () => {
   const { READS, CATALOG_COLUMNS } = await modules();
-  for (const read of READS) {
-    const aliases = new Map(
-      [...read.sql.matchAll(/(?:FROM|JOIN)\s+pg_catalog\.(\w+)\s+(\w+)/gi)].map((m) => [
-        m[2],
-        m[1],
-      ]),
-    );
-    for (const [, alias, column] of read.sql.matchAll(/\b(\w+)\.(\w+)\b/g)) {
-      if (aliases.has(alias))
-        assert.ok(
-          CATALOG_COLUMNS[aliases.get(alias)].includes(column),
-          `${read.id}: ${alias}.${column}`,
-        );
-    }
-  }
+  for (const read of READS) assertCatalogColumns(read, CATALOG_COLUMNS);
+});
+
+test("allowlist checks reject AS aliases and unqualified builtins", async () => {
+  const { CATALOG_COLUMNS, BUILTINS } = await modules();
+  const mutant = (sql) => ({ id: "mutant", sql });
+  // AS-aliased catalog references must still resolve against the allowlist.
+  assertCatalogColumns(mutant("SELECT p.prokind FROM pg_catalog.pg_proc AS p"), CATALOG_COLUMNS);
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT p.provolatile FROM pg_catalog.pg_proc AS p"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: p\.provolatile/,
+  );
+  // Unqualified builtins resolve via the pg_catalog search path, so they fail.
+  assert.throws(
+    () =>
+      assertBuiltinCalls(
+        mutant("SELECT has_table_privilege(c.oid, 'SELECT') FROM pg_catalog.pg_class c"),
+        BUILTINS,
+      ),
+    /mutant: unqualified call outside fixed list: has_table_privilege/,
+  );
+  // Qualified allowlisted calls and keyword forms still pass.
+  assertBuiltinCalls(
+    mutant(
+      "SELECT pg_catalog.pg_has_role(r.oid, 1, 'MEMBER'), current_user::text FROM pg_catalog.pg_roles r",
+    ),
+    BUILTINS,
+  );
 });
 
 test("cycles terminate and incomplete ACL or MEMBER rows cannot pass", async () => {
@@ -443,7 +575,8 @@ test("manifest hashes raw blob bytes and refuses missing or symlinked protected 
     "./staging-rights-inventory/manifest.mjs"
   );
   const { createHash } = await import("node:crypto");
-  const bytes = Buffer.from("synthetic\\r\\nblob\\0bytes");
+  const bytes = Buffer.from("synthetic\r\nblob\0bytes\xff", "latin1");
+  assert.ok([13, 10, 0, 255].every((byte) => bytes.includes(byte)));
   const entries = PROTECTED_PATHS.map((path, i) => ({
     path,
     mode: i === 0 ? "100755" : "100644",

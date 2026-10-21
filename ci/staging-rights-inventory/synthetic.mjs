@@ -1,6 +1,6 @@
 // Test-only, memory-only protocol seam. Never imported by normal inventory entry.
 // Brands are private: no injected driver, function, URL, file or real transport.
-import { POLICY_TABLES, READS, TRANSACTION } from "./reads.mjs";
+import { POLICY_TABLES, READS, RELATION_ACL_KINDS, TRANSACTION } from "./reads.mjs";
 
 const clients = new WeakMap();
 const transports = new WeakMap();
@@ -114,13 +114,17 @@ function validateImage(reads) {
   for (const name of ["relation_acls", "column_acls", "schema_acls"]) {
     if (reads[name].length === 0) stop();
   }
+  // Only kinds the relation_acls read returns can have ACL rows; indexes,
+  // composite types and other census-only kinds are excluded, never stopped on.
   if (
-    reads.relations.some(
-      (r) =>
-        !reads.relation_acls.some(
-          (a) => a.relation_oid === r.relation_oid && a.owner_oid === r.owner_oid,
-        ),
-    )
+    reads.relations
+      .filter((r) => RELATION_ACL_KINDS.includes(r.relation_kind))
+      .some(
+        (r) =>
+          !reads.relation_acls.some(
+            (a) => a.relation_oid === r.relation_oid && a.owner_oid === r.owner_oid,
+          ),
+      )
   )
     stop();
   if (
@@ -149,10 +153,12 @@ function validateImage(reads) {
       const checks = reads.member_checks.filter(
         (c) => c.member_oid === role.role_oid && c.role_oid === root.role_oid,
       );
+      // pg_has_role reports a superuser as member of every role with no edge.
       if (
         checks.length !== 1 ||
         checks[0].is_member !==
-          closure(reads.memberships, role.role_oid, false).includes(root.role_oid)
+          (role.superuser ||
+            closure(reads.memberships, role.role_oid, false).includes(root.role_oid))
       )
         stop();
     }

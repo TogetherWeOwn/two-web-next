@@ -18,17 +18,19 @@ export function fixture() {
     privilege: null,
     grantable: null,
   };
+  // The synthetic owner is a superuser, as catalog owners routinely are; its
+  // MEMBER expectations below are superuser-derived, not edge-derived.
   const roles = [
     [10, "two_web_app"],
     [20, "pg_read_all_data"],
     [30, "pg_write_all_data"],
-    [40, "synthetic_owner"],
+    [40, "synthetic_owner", true],
     [50, "synthetic_delegate"],
     [60, "synthetic_nested"],
-  ].map(([role_oid, role_name]) => ({
+  ].map(([role_oid, role_name, superuser = false]) => ({
     role_oid,
     role_name,
-    superuser: false,
+    superuser,
     inherit: true,
     create_role: false,
     create_database: false,
@@ -77,6 +79,28 @@ export function fixture() {
         schema_name: "public",
         relation_name: "synthetic_sequence",
         relation_kind: "S",
+        owner_oid: 40,
+        row_security: false,
+        force_row_security: false,
+        is_partition: false,
+      },
+      // Census-only kinds: the relations read returns these, but relation_acls
+      // has no rows for them, so the completeness check must skip them.
+      {
+        relation_oid: 103,
+        schema_name: "public",
+        relation_name: "users_pkey",
+        relation_kind: "i",
+        owner_oid: 40,
+        row_security: false,
+        force_row_security: false,
+        is_partition: false,
+      },
+      {
+        relation_oid: 104,
+        schema_name: "public",
+        relation_name: "synthetic_composite",
+        relation_kind: "c",
         owner_oid: 40,
         row_security: false,
         force_row_security: false,
@@ -132,7 +156,9 @@ export function fixture() {
       set_option: true,
     })),
     roles,
-    // Independent known closure for this graph, not the implementation's helper.
+    // Independent known expectations, not the implementation's helper: edge
+    // closure for every role except the superuser owner, which pg_has_role
+    // reports as member of every target with no membership edge.
     member_checks: roles.flatMap((r) =>
       [10, 20, 30].map((role_oid) => ({
         member_oid: r.role_oid,
@@ -141,7 +167,7 @@ export function fixture() {
           10: [10, 20, 30],
           20: [20, 30],
           30: [30],
-          40: [40],
+          40: [10, 20, 30, 40],
           50: [10, 20, 30, 50],
           60: [10, 20, 30, 50, 60],
         }[r.role_oid].includes(role_oid),

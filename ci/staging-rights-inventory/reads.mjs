@@ -31,6 +31,10 @@ export const POLICY_TABLES = freeze([
   "web_oauth_journeys",
 ]);
 
+// Relation kinds the relation_acls read returns. The relations census returns every
+// kind (including indexes and composite types); only these kinds have ACL rows.
+export const RELATION_ACL_KINDS = freeze(["r", "p", "v", "m", "f", "S"]);
+
 // Exact catalog-column surface. No wildcard or visibility-filtered grants views.
 export const CATALOG_COLUMNS = freeze({
   pg_class: [
@@ -310,7 +314,7 @@ export const READS = freeze([
   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(c.relacl,
     pg_catalog.acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) x ON true
-  WHERE ${scope} AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+  WHERE ${scope} AND c.relkind IN (${RELATION_ACL_KINDS.map((k) => `'${k}'`).join(", ")})
   ORDER BY c.oid, x.grantor, x.grantee, x.privilege_type`,
   ),
   read(
