@@ -138,7 +138,8 @@ describe("llms.txt guidance matches its actual content", () => {
 
   it("names where event times actually render, never 'below'", () => {
     for (const body of [llmsTxt(APP_URL)]) {
-      const lines = body.split("\n").filter((l) => /event times/i.test(l));
+      const lines = body.split("\n").filter((l) => /Starts and Ends/.test(l));
+      expect(lines.length).toBeGreaterThan(0);
       for (const line of lines) expect(line).not.toMatch(/below/i);
     }
   });
