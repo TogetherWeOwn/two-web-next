@@ -37,12 +37,16 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   stays quiet; never `role="alert"`.
 - Refresh: `going-count-updated` DOM CustomEvent `{eventKey, viewerState}` → exactly
   one `GET /events.json?event_key=…` per answered event (key filtered before
-  pagination); non-matching island keys fire nothing; missing row keeps last known-good. A newer write owns its refresh even when an
+  pagination); non-matching island keys fire nothing; a missing row keeps the last
+  known-good numbers, visibly qualified as stale (polite note with last-saved
+  context plus one aggregate-only Try again retry; a confirmed RSVP state is never
+  retracted). A newer write owns its refresh even when an
   older fetch/body finishes later. The accepted aggregate emits
   `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
   without another request. A hung read aborts at the owned ~5 s deadline
   (`GOING_COUNT_READ_DEADLINE_MS`, fetch headers plus JSON body); the badge keeps
-  its last known-good value with no announcement. Executable: `test/islands-going-count*.test.ts`.
+  its last known-good numbers, qualified as stale. Executable: `test/islands-going-count*.test.ts`,
+  `test/going-count-stale-retry-acceptance.test.ts`.
 
 ## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
