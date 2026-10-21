@@ -309,7 +309,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       const response = await request(
         mode === "admin" ? "POST" : "PATCH",
         `${mode === "admin" ? "/admin" : ""}/events/${eventKey}`,
-        mode === "admin" ? { ...fields, location: "   ", ...(await adminBaseline()) } : { location: "   " },
+        mode === "admin"
+          ? { ...fields, location: "   ", ...(await adminBaseline()) }
+          : { location: "   " },
         mode === "admin",
       );
       expect(response.status).toBe(mode === "admin" ? 422 : 422);

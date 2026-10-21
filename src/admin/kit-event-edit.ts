@@ -123,6 +123,8 @@ export type KitEventEditRow = {
   title: string;
   game: string | null;
   description: string | null;
+  /** Read by the baseline mint: narrowing the Kit projection breaks saves. */
+  accessibilityNotes?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;

@@ -114,5 +114,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(fresh.hidden).not.toEqual(b.hidden);
       expect((await save({ ...fresh.fields, title: "Reviewed title" })).status).toBe(303);
     });
+
+    it("refuses a baseline-free save with exactly 400, draft kept, nothing written", async () => {
+      const before = await fixture.db.select().from(events).where(eq(events.eventKey, KEY));
+      const document = savedForm((await read()).html);
+      const fields: Record<string, string> = { ...document.fields, title: "Baseline-free title" };
+      for (const name of Object.keys(document.hidden)) delete fields[name];
+      const rejected = await save(fields);
+      expect(rejected.status).toBe(400);
+      const html = await rejected.text();
+      expect(savedForm(html).fields.title).toBe("Baseline-free title");
+      reviewCurrentHref(html, KEY);
+      expect(await fixture.db.select().from(events).where(eq(events.eventKey, KEY))).toEqual(
+        before,
+      );
+    });
   },
 );
