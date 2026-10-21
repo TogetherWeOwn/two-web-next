@@ -48,7 +48,7 @@ export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes">
 
 export type HomeEvent = Pick<
   PublicEvent,
-  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount"
+  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount" | "capacity"
 >;
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
@@ -291,13 +291,14 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     // The teaser renders `startsAt` unguarded, so unrenderable windows are
     // refused here too (this read never had #232's `isfinite()` guard).
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
-      ({ eventKey, title, startsAt, timezone, location, goingCount }) => ({
+      ({ eventKey, title, startsAt, timezone, location, goingCount, capacity }) => ({
         eventKey,
         title,
         startsAt,
         timezone,
         location,
         goingCount,
+        capacity,
       }),
     );
   });

@@ -225,6 +225,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
             timezone: "Europe/London",
             location: null,
             goingCount: 3,
+            capacity: null,
           },
         ],
       }),

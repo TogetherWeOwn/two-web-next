@@ -241,6 +241,7 @@ describe("homepage upcoming events", () => {
     expect(f.queries[3]!.params).toEqual([1, 2, 3, "going"]);
     expect(f.queries[3]!.sql).not.toContain('inner join "users"');
     expect(Object.keys(rows[0]!).sort()).toEqual([
+      "capacity",
       "eventKey",
       "goingCount",
       "location",

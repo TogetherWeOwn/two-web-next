@@ -3,7 +3,13 @@ import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import { featuredImageSrc } from "../../../src/featured-image";
 import type { HomeNotice } from "../../../src/home-copy";
-import { cardTimeLabel, isValidZone } from "../../../src/islands/contracts";
+import {
+  SPOTS_LEFT_TESTID,
+  cardTimeLabel,
+  goingCountText,
+  isValidZone,
+  spotsLeftText,
+} from "../../../src/islands/contracts";
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
@@ -203,7 +209,15 @@ const siteGraph = $derived(siteJsonLd(appUrl));
                 </p>
                 <h3>{event.title}</h3>
                 {#if event.location}<p>{event.location}</p>{/if}
-                <p>{event.goingCount} going</p>
+                <p>
+                  {goingCountText(event.goingCount, event.capacity)}
+                  {#if event.capacity !== null && event.goingCount >= event.capacity}
+                    {" · "}
+                    <span data-testid={SPOTS_LEFT_TESTID}>
+                      {spotsLeftText(event.goingCount, event.capacity)}
+                    </span>
+                  {/if}
+                </p>
               </a>
             </li>
           {/if}
