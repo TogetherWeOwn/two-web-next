@@ -288,7 +288,8 @@ The staging target is the reviewed Kit config
 `DB` and `BOT_DB`, Tail consumer and worker-first assets. It is distinct from
 the Kit preview config [`web/wrangler.jsonc`](../web/wrangler.jsonc), which is
 never the staging deploy target. The root [wrangler.jsonc](../wrangler.jsonc)
-remains the Hono config and production cutover template. `two-web-next-staging`
+remains the Hono config and the production config (never the staging target).
+`two-web-next-staging`
 is a Hyperdrive resource description, **not** a Worker name or a Wrangler
 environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
@@ -634,18 +635,23 @@ step.
 
 #### Production trigger reconciliation (manual, domain-safe)
 
-Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
-queue consumers, and neither `wrangler deploy --env production` nor `wrangler
-triggers deploy --env production` may be used to apply them: both re-sync
+Promoting a Worker Version does not apply cron schedules or queue consumers,
+and neither `wrangler deploy --env production` nor `wrangler triggers deploy
+--env production` may be used to apply them on the web Worker: both re-sync
 routes and custom domains, retry provisioning the already-attached apex, and
-fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins the
-literal reviewed `env.production` schedules and consumers, so any change
-fails CI until the test is updated in the same release PR; the authorized
-production principal then reconciles
-only the changed trigger kind below and reads back the result. These endpoints
-manage schedules and consumers only and never touch custom domains or DNS.
-Never delete/recreate the apex DNS record or the custom domain, and never
-remove consumers to hide an incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
+fail with Cloudflare 100117. Both production schedules and both production
+consumers live on `two-web-jobs-production` (`wrangler.jobs.jsonc`
+`env.production`); the web `env.production` only produces.
+`test/probe-workflows.test.ts` and `test/jobs-worker-config.test.ts` pin the
+literal reviewed schedules and consumers, so any change fails CI until the
+tests are updated in the same release PR; the authorized production
+principal then reconciles only the changed trigger kind below and reads back
+the result. `node ci/check-production-triggers.mjs` automates the
+read-and-compare (exit 0 clean, 1 drift, 2 unreadable); the manual steps
+remain the mutation path. These endpoints manage schedules and consumers
+only and never touch custom domains or DNS. Never delete/recreate the apex
+DNS record or the custom domain, and never remove consumers to hide an
+incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
 
 1. Read the live state (metadata reads, no mutation; approved Cloudflare
    credentials must already be injected, never supplied on argv). Resolve
@@ -664,6 +670,7 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
        (async () => {
          for (const p of [
            `/accounts/${acct}/workers/scripts/two-web-next-production/schedules`,
+           `/accounts/${acct}/workers/scripts/two-web-jobs-production/schedules`,
            `/accounts/${acct}/queues`,
          ]) {
            const r = await fetch("https://api.cloudflare.com/client/v4" + p, {
@@ -678,17 +685,19 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
    )
    ```
 
-   Compare the schedules against `wrangler.jsonc`
-   `env.production.triggers.crons`, and each production queue's consumers
-   (`GET .../queues/<queue_id>/consumers`) against
-   `env.production.queues.consumers`. Identical means nothing to do.
-2. On cron drift only, replace the script schedules with the reviewed crons:
-   `PUT .../workers/scripts/two-web-next-production/schedules` with
-   `[{"cron": "<each env.production cron>"}]`, then repeat the GET read-back
-   until it matches.
+   Compare the jobs schedules against `wrangler.jobs.jsonc`
+   `env.production.triggers.crons` (the web script must hold none), and each
+   production queue's consumers (`GET .../queues/<queue_id>/consumers`)
+   against the jobs `env.production.queues.consumers`. Identical means
+   nothing to do.
+2. On cron drift only, replace the owning script's schedules with the
+   reviewed crons: `PUT
+   .../workers/scripts/two-web-jobs-production/schedules` with `[{"cron":
+   "<each reviewed cron>"}]`, then repeat the GET read-back until it
+   matches. Residue on the web script clears the same way with `[]`.
 3. On consumer drift only, reconcile that queue's consumer with the
    reviewed `script_name`, `type: "worker"` and settings, then repeat the
-   list read-back until it matches. Wrangler maps `wrangler.jsonc` keys to
+   list read-back until it matches. Wrangler maps the jobs config keys to
    API fields: `max_batch_size` → `batch_size`, `max_batch_timeout`
    (seconds) → `max_wait_time_ms` (milliseconds, so `5` becomes `5000`;
    copying `5` verbatim would set a 5 ms wait), `max_retries` unchanged.
@@ -701,7 +710,7 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
      script on the queue): create it with `POST
      .../queues/<queue_id>/consumers` and this body (current reviewed
      values): `{"type": "worker", "script_name":
-     "two-web-next-production", "settings": {"batch_size": 10,
+     "two-web-jobs-production", "settings": {"batch_size": 10,
      "max_retries": 10, "max_wait_time_ms": 5000}}`.
    - Consumer exists: replace it with `PUT
      .../queues/<queue_id>/consumers/<consumer_id>` and the same body.
@@ -1471,7 +1480,7 @@ below, not its older `/up` row, define these outcomes.
 | `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | A classified DB outage returns the branded sanitized **503** before any Discord call. The throttle detects it on ordinary callbacks and `/join/discord`; non-error oversized callbacks instead use a read-only availability query with zero throttle spend before recovery; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
-| `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
+| `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns the shared sanitized **503** response (HTML, or JSON when negotiated, with `request_id`) and keeps the cookie, because the server row may still be valid. |
 | `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
 | `/e/:key` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`; other failed reads are refused with plain-text **503** `Member data is temporarily unavailable.` Invalid keys can be **404** before DB access. |
 | `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |

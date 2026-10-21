@@ -127,13 +127,15 @@ export function logsPath(script: string): string {
 
 // Exact app script names this pager accepts. Wrangler does not inherit
 // tail_consumers into named environments, so production traces arrive under
-// the production app name, and the staging jobs Worker (two-web-jobs)
-// tails separately from the web Worker. Never match by prefix: a
-// prefix wildcard would page for foreign Workers in the same account.
+// the production app names, and each jobs Worker (two-web-jobs,
+// two-web-jobs-production) tails separately from its web Worker. Never match
+// by prefix: a prefix wildcard would page for foreign Workers in the same
+// account.
 export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
   "two-web-next",
   "two-web-next-production",
   "two-web-jobs",
+  "two-web-jobs-production",
 ]);
 
 // Uptime prober: two attempts per cron run, at least 10 s apart, each with a
