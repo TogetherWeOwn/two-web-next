@@ -132,14 +132,18 @@ const lineup = $derived(
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
       </dd>
       <dd class="event-device-timezone" data-event-device-timezone>
-        <button type="button" hidden>Show in my device timezone</button>
-        <p role="status" aria-live="polite"></p>
+        <button type="button" hidden data-testid="event-device-timezone-starts-button">Show in my device timezone</button>
+        <p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>
       </dd>
     </div>
     <div>
       <dt>Ends</dt>
       <dd>
         <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
+      </dd>
+      <dd class="event-device-timezone" data-event-device-timezone>
+        <button type="button" hidden data-testid="event-device-timezone-ends-button">Show in my device timezone</button>
+        <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
     {#if model.location}

@@ -47,7 +47,7 @@ function eventFixture(): PublicEvent {
 }
 
 describe("event device timezone served-markup pins", () => {
-  it("serves the Hono action hidden with an empty result region", () => {
+  it("serves the Hono actions hidden with empty result regions", () => {
     // A fresh server render never shows a focusable dead button (no-JS keeps
     // the host presentation) and never pre-fills a conversion: the island
     // unhides the action only after it binds, and fills the result only on
@@ -65,6 +65,17 @@ describe("event device timezone served-markup pins", () => {
     expect(mount).toMatch(
       /<button type="button" hidden[^>]*>\s*Show in my device timezone\s*<\/button>/,
     );
-    expect(mount).toContain('<p role="status" aria-live="polite"></p>');
+    expect(mount).toContain(
+      '<p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>',
+    );
+    // The Ends mount reuses the Starts shape verbatim inside the Ends block.
+    const ends = html.slice(html.indexOf("<dt>Ends</dt>"));
+    expect(ends).toContain("data-event-device-timezone");
+    expect(ends).toMatch(
+      /<button type="button" hidden[^>]*data-testid="event-device-timezone-ends-button"[^>]*>\s*Show in my device timezone\s*<\/button>/,
+    );
+    expect(ends).toContain(
+      '<p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>',
+    );
   });
 });
