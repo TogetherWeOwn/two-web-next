@@ -211,10 +211,10 @@ const siteGraph = $derived(siteJsonLd(appUrl));
                 {#if event.location}<p>{event.location}</p>{/if}
                 <p>
                   {goingCountText(event.goingCount, event.capacity)}
-                  {#if event.capacity !== null && event.goingCount >= event.capacity}
+                  {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
                     {" · "}
                     <span data-testid={SPOTS_LEFT_TESTID}>
-                      {spotsLeftText(event.goingCount, event.capacity)}
+                      {spotsLeftText(event.goingOccupancy ?? event.goingCount, event.capacity)}
                     </span>
                   {/if}
                 </p>

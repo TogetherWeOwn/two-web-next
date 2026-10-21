@@ -79,6 +79,7 @@ function fixture(
   holdAt?: "events" | "rsvps",
   featured = false,
   discord?: { rows?: import("../src/islands/contracts").DiscordTransient[]; failed?: boolean },
+  counts?: { named?: [number, number][]; occupied?: [number, number][] },
 ) {
   const queries: { sql: string; params: unknown[] }[] = [];
   let started!: () => void;
@@ -105,12 +106,19 @@ function fixture(
       });
     }
     if (sql.includes('from "rsvps"')) {
-      return {
-        rows: [
-          [1, 2],
-          [2, 1],
-        ].filter(([id]) => params.includes(id)),
-      };
+      // The attributable aggregate joins users; the occupancy aggregate reads
+      // every going row, so the join distinguishes the two batched counts.
+      // Occupancy defaults to the named rows (existing cases never diverge);
+      // fullness cases override either side per event id.
+      const named: [number, number][] = counts?.named ?? [
+        [1, 2],
+        [2, 1],
+      ];
+      const occupied = counts?.occupied ?? named;
+      const countRows = (sql.includes('inner join "users"') ? named : occupied).filter(([id]) =>
+        (params as unknown[]).includes(id),
+      );
+      return { rows: countRows };
     }
     // Hidden-event suppression probe: persisted discord ids for the merge.
     // The canonical teaser selects every column (including the title); the
@@ -175,6 +183,13 @@ function fixture(
     rejectRead: () => rejectRead(new Error("late private-session failure")),
     request: () => app.request("/", {}, env),
   };
+}
+
+/** The one teaser row for `key`, so a sibling's marker cannot satisfy the pin. */
+function teaserRow(html: string, key: string): string {
+  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  if (!hit) throw new Error(`no teaser row for ${key}`);
+  return hit.split("</li>")[0]!;
 }
 
 afterEach(() => {
@@ -244,6 +259,7 @@ describe("homepage upcoming events", () => {
       "capacity",
       "eventKey",
       "goingCount",
+      "goingOccupancy",
       "location",
       "startsAt",
       "timezone",
@@ -490,5 +506,61 @@ describe("homepage upcoming events", () => {
     for (const secret of ["postgres://", "secret", "private-member", "private-session"]) {
       expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
     }
+  });
+});
+
+describe("homepage teaser fullness verdict (owned pins)", () => {
+  it("projects seat occupancy from the all-rows aggregate, not the named count", async () => {
+    const f = fixture([event(1, { capacity: 2 })], undefined, undefined, false, undefined, {
+      named: [[1, 1]],
+      occupied: [[1, 2]],
+    });
+    const rows = await listHomeUpcoming(f.db, NOW);
+    expect(rows.map((r) => r.goingCount)).toEqual([1]);
+    expect(rows.map((r) => r.goingOccupancy)).toEqual([2]);
+  });
+
+  it("marks a teaser row full from occupancy even when the named count has room", async () => {
+    // One nameless going row holds the last seat: the card and the detail
+    // lineup call this full, so the teaser must match instead of offering a
+    // seat the write path cannot grant.
+    const f = fixture([event(1, { capacity: 2 })], undefined, undefined, false, undefined, {
+      named: [[1, 1]],
+      occupied: [[1, 2]],
+    });
+    const html = await (await f.request()).text();
+    const row = teaserRow(html, "event-1");
+    expect(row).toContain("1 of 2 going");
+    expect(row).toContain('data-testid="event-spots-left"');
+    expect(row).toContain(">Full<");
+  });
+
+  it("leaves an open capped teaser row unmarked: count only, no marker node", async () => {
+    // Kills the dropped-verdict mutant (capacity check without the >=
+    // comparison renders "3 of 4 spots left" on this row): the open row
+    // carries no marker node at all, and the full sibling proves the
+    // negative is scoped, not vacuous.
+    const f = fixture(
+      [event(1, { capacity: 4 }), event(2, { capacity: 2 })],
+      undefined,
+      undefined,
+      false,
+      undefined,
+      {
+        named: [
+          [1, 1],
+          [2, 2],
+        ],
+        occupied: [
+          [1, 1],
+          [2, 2],
+        ],
+      },
+    );
+    const html = await (await f.request()).text();
+    expect(teaserRow(html, "event-2")).toContain(">Full<");
+    const row = teaserRow(html, "event-1");
+    expect(row).toContain("1 of 4 going");
+    expect(row).not.toContain("event-spots-left");
   });
 });

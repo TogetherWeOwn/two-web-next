@@ -162,6 +162,7 @@ describe("performance CI", () => {
         timezone: "Europe/London",
         location: "Community voice channel",
         goingCount: 3,
+        goingOccupancy: 3,
         capacity: 20,
       },
     ]);

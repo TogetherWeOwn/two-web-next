@@ -217,14 +217,20 @@ export const Home: FC<{
                         <p>
                           {goingCountText(event.goingCount, event.capacity)}
                           {/* Full marker, same node and copy as cards and the
-                              detail lineup. The teaser reads the attributable
-                              count it carries: HomeEvent gains capacity only,
-                              not occupancy. */}
-                          {event.capacity !== null && event.goingCount >= event.capacity ? (
+                              detail lineup. The verdict reads seat occupancy,
+                              never the attributable count alone, so the teaser
+                              never offers a seat the write path cannot grant;
+                              older fixtures without occupancy fall back to the
+                              named count (the GoingCountState precedent). */}
+                          {event.capacity !== null &&
+                          (event.goingOccupancy ?? event.goingCount) >= event.capacity ? (
                             <>
                               {" · "}
                               <span data-testid={SPOTS_LEFT_TESTID}>
-                                {spotsLeftText(event.goingCount, event.capacity)}
+                                {spotsLeftText(
+                                  event.goingOccupancy ?? event.goingCount,
+                                  event.capacity,
+                                )}
                               </span>
                             </>
                           ) : null}
