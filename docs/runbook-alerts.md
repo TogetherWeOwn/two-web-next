@@ -294,6 +294,12 @@ catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
 
+Queue-only blindness pages nowhere here: an unreadable ledger reports
+top-level `degraded` with `queue.status: unknown` on HTTP 200, so this prober
+stays green by design. That 200 does not double with the direct
+`scheduled.failing` page above, which remains the paging signal for failed
+reconcile/prune runs.
+
 ### Synthetic main-flow checks: `synthetic.down`
 
 Scheduled runs landing on a five-minute boundary also probe the main flow
@@ -362,10 +368,12 @@ configuration silently drops outbound work; it is not a successful probe.
    `npx wrangler secret put OPS_ALERT_WEBHOOK_URL --config tail/wrangler.jsonc`.
    Enter it through the secure prompt, never a command argument, repo file or
    issue comment. Do not create/rotate/export credentials to run this drill.
-3. Deploy the app (`npx wrangler deploy`). `wrangler.jsonc` attaches
-   `tail_consumers: [{ service: "two-web-next-alerts" }]`. The staging deploy
-   workflow performs the same Tail-first ordering. Both bundles are dry-run
-   built by CI.
+3. Deploy the app through `.github/workflows/deploy.yml`, which builds and
+   deploys `web/wrangler.staging.jsonc` after deploying the Tail Worker. That
+   Kit staging config attaches `tail_consumers: [{ service:
+   "two-web-next-alerts" }]`; the workflow also retains the exact-SHA gate,
+   version tag and consumer handoff. Do not deploy the Kit preview config as
+   staging. CI dry-run builds both the staging Kit config and the preview config.
 4. Verify the deployed app revision, exact `next.togetherweown.com` target,
    staging Hyperdrive binding and the attachment in Cloudflare. Run the probe
    below with the already-approved staging QA token. Record the revision and

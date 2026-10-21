@@ -35,6 +35,19 @@ export type ErasureCounts = {
   join_attempts: number;
 };
 
+/**
+ * Erasure result: per-table counts plus session-chase forensics. `passes` is
+ * the number of chase passes executed and `deletesPerPass` the session rows
+ * each pass deleted, in order. On apply results `passes ===
+ * deletesPerPass.length` and `web_sessions === sum(deletesPerPass)` hold;
+ * dry-run returns `passes: 0` with an empty array next to the counted
+ * `web_sessions`. Numbers only, never ids.
+ */
+export type ErasureResult = ErasureCounts & {
+  passes: number;
+  deletesPerPass: number[];
+};
+
 export const ERASURE_TABLES = [
   "users",
   "profiles",
@@ -98,16 +111,20 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
 
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all six member tables in one transaction and returns rows removed.
- * The id is validated before any query runs.
+ * deletes all six member tables in one transaction and returns rows removed
+ * plus the session-chase pass forensics. The id is validated before any
+ * query runs.
  */
 export async function eraseMember(
   sql: ErasureSql,
   discordId: string,
   opts: { dryRun: boolean },
-): Promise<ErasureCounts> {
+): Promise<ErasureResult> {
   assertDiscordId(discordId);
-  if (opts.dryRun) return countMemberRows(sql, discordId);
+  if (opts.dryRun) {
+    const counts = await countMemberRows(sql, discordId);
+    return { ...counts, passes: 0, deletesPerPass: [] };
+  }
   return sql.begin(async (tx) => {
     const counts = zeroCounts();
     const users = await tx`delete from users where id = ${discordId} returning 1`;
@@ -127,9 +144,11 @@ export async function eraseMember(
     // quiescence. Database errors still propagate and roll the whole
     // erasure back.
     let sessions = 0;
+    const deletesPerPass: number[] = [];
     for (;;) {
       const deleted = await tx`delete from web_sessions where user_id = ${discordId} returning 1`;
       sessions += deleted.length;
+      deletesPerPass.push(deleted.length);
       const [remaining] = await tx<
         { n: number }[]
       >`select count(*)::int as n from web_sessions where user_id = ${discordId}`;
@@ -144,6 +163,6 @@ export async function eraseMember(
     counts.web_sessions = sessions;
     counts.web_session_grace = grace.length;
     counts.join_attempts = attempts.length;
-    return counts;
+    return { ...counts, passes: deletesPerPass.length, deletesPerPass };
   });
 }

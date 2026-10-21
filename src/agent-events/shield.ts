@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import type { Answer, IngressConfig } from "./types";
 import { audit } from "./audit";
+import { pruneAgentEventHits } from "./prune-hits";
 import { throttleEnvelope } from "./rate-limit";
 
 // The outer shield's counter (two-web TOG-8402): one bucket per credential
@@ -30,13 +31,12 @@ import { throttleEnvelope } from "./rate-limit";
 // - The advisory lock waits at most lockWaitMs (SET LOCAL lock_timeout, as in
 //   the operation transaction). Contention is a 503 operation_busy audited as
 //   an error — a retryable answer, never a hung connection.
-// - Stale counters are pruned here, on every shield pass, capped per pass so a
-//   long-idle table cannot stall admission. The candidate select is SKIP LOCKED
-//   so expired rows held by unrelated transactions are left for a later pass
-//   instead of turning a fresh credential's admission into a 503. Denied-only
-//   and replay-only periods still run this transaction, so expiry no longer
-//   depends on a successful authenticated operation reaching the inner rate
-//   limiter.
+// - Stale counters are pruned after the admission transaction, never while a
+//   bucket lock is held. Cleanup is single-flighted and uses a 1ms lock timeout;
+//   a held row or concurrent prune defers cleanup without delaying the verdict.
+//   Denied-only and replay-only periods still run the cleanup, so expiry no
+//   longer depends on a successful authenticated operation reaching the inner
+//   rate limiter.
 /** Bucket class for the outer-shield audit row: credential hash, never raw identity. */
 export type ShieldBucketClass = { kind: "credential"; hash: string } | { kind: "anonymous" };
 
@@ -76,7 +76,6 @@ export async function shield(
     const wait = await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
-      await tx`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
       const [r] =
         await tx`SELECT count(*)::int AS n, coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
                            FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
@@ -84,6 +83,7 @@ export async function shield(
       await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
       return null as number | null;
     });
+    await pruneAgentEventHits(sql);
     if (wait === null) return null;
     retryAfter = wait;
   } catch (err) {

@@ -119,14 +119,15 @@ describe("CSP sink shed signal", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
   });
 
-  it("stays silent on quiet traffic: no shed without drops", async () => {
+  it("accounts one malformed report without shedding: no shed without drops", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expectFunnel(await post(validBody()));
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("csp.report.violation", expectedViolation);
     await expectFunnel(await post("not-json{{{"));
     await expectFunnel(await post(validBody(), makeEnv("0")));
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(2, "csp.report.malformed", { bytes: 11 });
     expect(shedCalls(warn)).toHaveLength(0);
   });
 

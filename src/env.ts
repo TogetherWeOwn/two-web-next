@@ -32,7 +32,8 @@ export type Env = AgentEventsEnv & {
   // Optional explicit Postgres URL (agent-testdb locally); web DB consumers
   // use DB.connectionString when absent. `QA_AUTH_TOKEN` enables the staging-only
   // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
-  // defaults to true (a log write failure refuses the read; "false" degrades).
+  // is legacy: a log write failure refuses the read whatever it says, and the
+  // parsed value feeds only the informational /up enforcement label.
   DATABASE_URL?: string;
   // Bot database for the homepage counts' and profile stats' `web_v1` views
   // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`
@@ -87,6 +88,12 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
+  // staging APP_URL activates a fail-closed route manifest: unset or malformed
+  // values keep archive and static families on Hono. Preview fixture workers
+  // and production do not set these flags.
+  KIT_ROUTE_ARCHIVE?: string;
+  KIT_ROUTE_STATIC?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

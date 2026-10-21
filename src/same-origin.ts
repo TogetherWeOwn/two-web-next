@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import type { Env } from "./env";
+import { forbidden, prefersHtmlError, varyAccept } from "./errors";
 
 export const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 
@@ -49,6 +50,8 @@ export const sameOrigin = createMiddleware<{ Bindings: Env }>(async (c, next) =>
       : c.req.header("sec-fetch-site") === "same-origin" && new URL(c.req.url).origin === expected);
   if (!trusted) {
     c.header("cache-control", "no-store, private");
+    varyAccept(c);
+    if (prefersHtmlError(c)) return forbidden(c);
     return c.json({ error: "cross_origin" }, 403);
   }
   return next();

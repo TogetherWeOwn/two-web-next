@@ -36,7 +36,7 @@ expect Hono for the right reason.
 | `GET /hotzones/joins` | `web/src/routes/hotzones/[signal]/+page.svelte` (`csr=false`, thin binding over `loadHotzoneSignalData` in `src/kit-hotzones.ts`, shared `renderHotzoneGrid`; locked joins/voice/games vocabulary with unknown segments 404, live joins aggregate, same 400/503/log/cache shape as the Hono handler) | public | Kit (`enabled: true`) |
 | `GET /hotzones/voice` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
 | `GET /hotzones/games` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
-| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blockers: the RSVP companion, plus the session-rotation divergence — the Kit detail load never rotates or re-stamps the sliding session (`docs/parity.md` section 12) — until the Kit detail path rotates) |
+| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocker: the RSVP companion — the detail read renews the sliding session post-release, matching Hono's re-stamp) |
 | `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
@@ -91,11 +91,11 @@ baseline, or route. Run it on both the local Hono worker and built Kit Worker,
 for each viewport above. Assertions are observable rendered-page behavior:
 
 - **Voice page:** direct load `/hotzones/voice` returns 200 HTML; the visible
-  heading is `voice hot zone`; the page explains that voice activity for the
-  displayed season is estimated pending bot event-store calibration and shows a
-  numeric total estimate. The one rendered grid is a labelled, focusable
+  heading is `voice hot zone`; the page explains that voice activity is a
+  season-independent seeded estimate pending bot event-store calibration and
+  shows a numeric total estimate. The one rendered grid is a labelled, focusable
   scroll region containing a table with weekday rows and hour columns; its
-  caption is `Estimated voice activity for season all` for the fixture URL.
+  caption is `Season-independent seeded estimate of voice activity` for the fixture URL.
 - **Games page:** same contract for `/hotzones/games`, with `games` substituted
   for `voice` in the heading, estimate copy and caption.
 - **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link

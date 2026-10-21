@@ -348,9 +348,15 @@ describe("retention ledger doc rows", () => {
 
   it("pins the board-view writer and scheduled prune paths without duplicating prune proofs", () => {
     for (const [path, call] of [
-      ["src/hotzones/routes.tsx", "await recordBoardView(db, {"],
-      ["src/leaderboards/routes.tsx", "await recordBoardView(db, entry).catch(() => {});"],
-      ["src/kit-hotzones.ts", "await (args.recordBoardViewFn ?? recordBoardView)(db, opts)"],
+      ["src/hotzones/routes.tsx", "await recordBoardView("],
+      [
+        "src/leaderboards/routes.tsx",
+        'await recordBoardView(db, entry, undefined, c.get("requestId")).catch(() => {});',
+      ],
+      [
+        "src/kit-hotzones.ts",
+        "await (args.recordBoardViewFn ?? recordBoardView)(db, opts, undefined, args.requestId)",
+      ],
       [
         "web/src/hooks.server.ts",
         "recordQueuedBoardView(event.locals, response.status, recordBoardView)",
@@ -379,7 +385,7 @@ describe("retention ledger doc rows", () => {
     expect(cron).toContain('["boardViews", boardViews.capped]');
     expect(cron).toContain('alertScheduledFailing("model:prune", new PruneBatchCapError())');
     expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
-      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
+      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
     );
     const proof = read("test/prune.test.ts");
     for (const name of [
@@ -609,7 +615,15 @@ describe("retention ledger agent-event rows (L8a)", () => {
       "never by deletion",
       "5-minute rolling",
       "60-second budget",
-      "no named constant",
+      "literal windows in code",
+      "pruneAgentEventHits",
+      "separate transaction",
+      "without explicit row locks",
+      "try-advisory transaction lock",
+      "1 ms lock timeout",
+      "Shield lock-contention 503s do not run cleanup",
+      "order by at, id limit 1000",
+      "src/agent-events/prune-hits.ts",
       "retired by `drizzle/1019_shared-agent-events.sql`",
       'DROP TABLE "agent_events"',
       "no `agentEvents` export",
@@ -664,7 +678,9 @@ describe("retention ledger agent-event rows (L8a)", () => {
     expect(line("| `agent_event_grants`")).toContain("bin/import/audit.mjs");
     // Hits mirror the throttle row: the cutoff is an age, not a timer.
     expect(line("| `agent_event_hits`")).toMatch(/an age cutoff, not a deletion timer/i);
-    expect(line("| `agent_event_hits`")).toMatch(/linger on a quiet ingress until a later pass/i);
+    expect(line("| `agent_event_hits`")).toMatch(
+      /linger on a quiet or contended ingress until a later successful cleanup/i,
+    );
     // Age-pruned pair: cutoff-exact rows survive both.
     expect(line("| `agent_event_audits`")).toMatch(/cutoff-exact rows survive/i);
     expect(line("| `agent_event_idempotency_keys`")).toMatch(/cutoff-exact rows survive/i);
@@ -731,11 +747,14 @@ describe("retention ledger agent-event rows (L8a)", () => {
     expect(cron).toContain('["agentEventAudits", agentEventAudits.capped]');
     expect(cron).toContain('["idempotencyKeys", idempotencyKeys.capped]');
     const pg = normalizeSqlWindow(read("src/jobs/postgres.ts"));
+    // Scoped tables prune without explicit row locks: a held row cancels the
+    // bounded statement instead of skipping past it. These exact pins keep
+    // the age, cap, and both-clock guards, and fail if SKIP LOCKED returns.
     expect(pg).toContain(
-      "delete from agent_event_audits where id in ( select id from agent_event_audits where created_at < ${cutoff} and created_at < clock_timestamp() - interval '2160 hours' order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
+      "delete from agent_event_audits where id in ( select id from agent_event_audits where created_at < ${cutoff} and created_at < clock_timestamp() - interval '2160 hours' order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
     );
     expect(pg).toContain(
-      "delete from agent_event_idempotency_keys where id in ( select id from agent_event_idempotency_keys where created_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
+      "delete from agent_event_idempotency_keys where id in ( select id from agent_event_idempotency_keys where created_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
     );
     // Sole audit writer is insert-only; dispatch reads the trail, postgres only prunes.
     expect(read("src/agent-events/audit.ts")).toContain("INSERT INTO agent_event_audits");
@@ -785,49 +804,87 @@ describe("retention ledger agent-event rows (L8a)", () => {
   });
 
   it("agent hits prune lazily on the shield and rate-limit paths", () => {
-    const window =
-      "DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id";
-    // One bounded oldest-first statement per pass: shield runs it inside the
-    // bucket lock on every pass; the limiter runs it after every verdict
-    // (admitted, refused, and busy-503) outside the locks.
-    expect(
-      deleteWindows(read("src/agent-events/shield.ts"), "agent_event_hits").map(normalizeSqlWindow),
-    ).toEqual([window]);
-    expect(
-      deleteWindows(read("src/agent-events/rate-limit.ts"), "agent_event_hits").map(
-        normalizeSqlWindow,
-      ),
-    ).toEqual([window, window]);
-    // Repo-wide: only those two modules may delete hit rows.
+    // One shared bounded oldest-first cleanup, called after admission —
+    // never inline in a verdict transaction and never under a bucket lock.
+    const cleanup = read("src/agent-events/prune-hits.ts");
+    const windows = deleteWindows(cleanup, "agent_event_hits").map(normalizeSqlWindow);
+    expect(windows).toEqual([
+      "delete from agent_event_hits where id in ( select id from agent_event_hits where at < now() - interval '5 minutes' order by at, id limit ${PRUNE_BATCH_SIZE} )",
+    ]);
+    // No explicit row locks on the scoped hit table: a held row defers the
+    // batch via the 1 ms lock timeout instead of skipping past it.
+    for (const banned of ["for update", "for no key update", "for share", "for key share"]) {
+      expect(
+        windows[0]!.toLowerCase(),
+        `shared cleanup must not take row locks: ${banned}`,
+      ).not.toContain(banned);
+    }
+    expect(cleanup, "shared cleanup cap").toContain("PRUNE_BATCH_SIZE = 1000");
+    expect(cleanup, "shared cleanup lock bound").toContain("PRUNE_LOCK_TIMEOUT_MS = 1");
+    expect(cleanup, "shared cleanup lock bound").toContain("SET LOCAL lock_timeout");
+    expect(cleanup, "shared cleanup single-flight").toContain("pg_try_advisory_xact_lock");
+    expect(cleanup, "shared cleanup separate transaction").toContain(
+      "await sql.begin(async (tx) => {",
+    );
+    // Housekeeping must never flip a decided verdict: the cleanup swallows
+    // every failure instead of raising.
+    expect(cleanup, "shared cleanup never raises").not.toContain("throw");
+    // Both admission paths call the shared cleanup after deciding, and the
+    // shield's lock-contention 503 path never does.
+    for (const path of ["src/agent-events/shield.ts", "src/agent-events/rate-limit.ts"]) {
+      expect(read(path), `${path} cleanup import`).toContain(
+        'import { pruneAgentEventHits } from "./prune-hits";',
+      );
+    }
+    const shield = read("src/agent-events/shield.ts");
+    expect(shield.match(/await pruneAgentEventHits\(sql\);/g)).toHaveLength(1);
+    const shieldCall = shield.indexOf("await pruneAgentEventHits(sql);");
+    expect(shieldCall).toBeGreaterThan(shield.indexOf("INSERT INTO agent_event_hits"));
+    expect(shieldCall).toBeLessThan(shield.indexOf("} catch (err) {"));
+    const limiter = read("src/agent-events/rate-limit.ts");
+    expect(limiter.match(/await pruneAgentEventHits\(sql\);/g)).toHaveLength(2);
+    const busyCall = limiter.indexOf("await pruneAgentEventHits(sql);");
+    expect(busyCall).toBeGreaterThan(limiter.indexOf("} catch (err) {"));
+    expect(busyCall).toBeLessThan(limiter.indexOf("return busyEnvelope"));
+    const verdictCall = limiter.indexOf("await pruneAgentEventHits(sql);", busyCall + 1);
+    expect(verdictCall).toBeGreaterThan(limiter.indexOf("return busyEnvelope"));
+    expect(verdictCall).toBeLessThan(limiter.indexOf("return verdict;"));
+    // Repo-wide: only the shared cleanup may delete hit rows, so neither
+    // admission path can widen back into an inline drain.
     const offenders = listTsFiles(join(root, "src")).filter((file) => {
-      if (
-        file.endsWith("src/agent-events/shield.ts") ||
-        file.endsWith("src/agent-events/rate-limit.ts")
-      )
-        return false;
+      if (file.endsWith("src/agent-events/prune-hits.ts")) return false;
       return deleteWindows(readFileSync(file, "utf8"), "agent_event_hits").length > 0;
     });
     expect(
       offenders,
-      `only shield/rate-limit may delete agent_event_hits: ${offenders.join(", ")}`,
+      `only prune-hits may delete agent_event_hits: ${offenders.join(", ")}`,
     ).toEqual([]);
-    // Full statement including the WITH candidates CTE that carries the age
-    // and the bound: per-file presence is not enough — either limiter
-    // statement drifting must turn the suite red (1 in shield, 2 in rate-limit).
-    const full =
-      "WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) " +
-      window;
-    const fullCount = (path: string): number =>
-      normalizeSqlWindow(read(path)).split(full).length - 1;
-    expect(fullCount("src/agent-events/shield.ts")).toBe(1);
-    expect(fullCount("src/agent-events/rate-limit.ts")).toBe(2);
     // Budget is the rows in the last 60 s; five minutes is the prune age.
+    // The budget stays on both admission paths (the verdict boundary); the
+    // age and bound live in the shared cleanup.
     for (const path of ["src/agent-events/shield.ts", "src/agent-events/rate-limit.ts"]) {
       const body = read(path);
       expect(body, `${path} budget`).toContain("at > now() - interval '60 seconds'");
-      expect(body, `${path} prune age`).toContain("at < now() - interval '5 minutes'");
-      expect(body, `${path} bound`).toContain("ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED");
+      expect(body, `${path} no inline hit age`).not.toContain("at < now() - interval '5 minutes'");
     }
+    expect(cleanup, "shared cleanup prune age").toContain("at < now() - interval '5 minutes'");
+    expect(cleanup, "shared cleanup bound").toContain("order by at, id limit ${PRUNE_BATCH_SIZE}");
+    // Live proofs stay in the behavior suites; this pin only wires them.
+    const limiterProof = read("test/agent-events-inner-limiter-prune.test.ts");
+    for (const name of [
+      "prunes expired rows on a refused call and keeps fresh rows",
+      "drains an expired backlog over refused-only calls, capped at 1000 per pass",
+      "caps the admitted call's prune at 1000 rows per pass",
+      "does not stall admission on an unrelated locked expired row",
+    ]) {
+      expect(limiterProof, `existing limiter proof: ${name}`).toContain(`it("${name}"`);
+    }
+    expect(
+      read("test/agent-events-prune-contention-acceptance.test.ts"),
+      "existing shield lazy-cleanup proof",
+    ).toContain(
+      `it("shield-only refusals drain capped oldest-first batches without authenticating"`,
+    );
   });
 });
 

@@ -83,8 +83,9 @@ if (envs.length > 0) {
     process.exit(2);
   }
   try {
-    // Top-level config only: deploy must use this exact --config without --env
-    // or --var overrides. Never fall back to an independent process/CI value.
+    // Read the top-level moderator vars from this config. Deploys may override
+    // unrelated vars, but must not override either moderator var. Never fall
+    // back to an independent process/CI value.
     const config = readWranglerConfig(readFileSync(configs[0].slice("--config=".length), "utf8"));
     raw = config.vars?.DISCORD_MODERATOR_ROLE_IDS;
     if (raw !== undefined && typeof raw !== "string") throw new Error("invalid var");

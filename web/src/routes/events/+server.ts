@@ -32,6 +32,9 @@ export const GET: RequestHandler = async ({ request, cookies, url, setHeaders })
       sessionForFn: kitEventsSessionFor(env),
       journeyForFn: kitEventsJourneyFor(env),
       discordForFn: discordEventsSource,
+      // Same correlation source as the Hono request log: the validated
+      // cf-ray (safeRequestId inside the alert drops anything else).
+      requestId: request.headers.get("cf-ray") ?? undefined,
     });
     const rendered = await renderEventsHtml(data, collected);
     const response = new Response(rendered.body, {
