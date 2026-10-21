@@ -205,7 +205,10 @@ for (const renderer of ["hono", "kit"] as const) {
       const before = await snapshot(page);
       await navigate(page, h, TARGET);
       await h.respond(0, (html) =>
-        html.replace('href="/auth/discord?next=', `href="/auth/discord?${STALE_NEXT}&next=`),
+        html.replace(
+          `href="/auth/discord?${TARGET_NEXT}"`,
+          `href="/auth/discord?${TARGET_NEXT}&${STALE_NEXT}"`,
+        ),
       );
       await expect(page.locator("[data-cal-feedback]")).not.toHaveText("");
       expect(await snapshot(page)).toEqual(before);
