@@ -170,7 +170,12 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).toContain(`href="/join?next=${encodeURIComponent(PATH)}"`);
     expect(html).toContain("Log in with Discord");
     expect(html).not.toContain('data-testid="event-attendees"');
-    expect(html).not.toContain("Who&#39;s going");
+    // The roster is named, not hidden: the guest nudge carries the count and
+    // the sign-in return, never identities.
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("Who&#39;s going");
+    expect(html).toContain("sign in to see who&#39;s in");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(PATH)}"`);
     expect(html).not.toContain("/members/");
     expect(html).not.toContain(">member</a>");
     // No roster-shaped read runs for guests; the public attributable count
