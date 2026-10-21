@@ -293,6 +293,75 @@ describe("analytics write-degradation warning docs", () => {
   });
 });
 
+describe("silent read-leg warnings docs", () => {
+  const CONTENT_GAP_READ = "Event search unavailable for content-gap read; omitting the widget.";
+  const MEMBER_STATS = "Member stats unavailable; hiding the stats block.";
+  const COUNTS_READ = "Counts read unavailable";
+  const ANALYTICS_HEADING = "### Analytics write-degradation warnings";
+  const OPTIONAL_HEADING = "### Optional-content degradation warnings";
+
+  /** A runbook subsection, up to (not including) the next heading. */
+  function runbookSection(heading: string): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(heading);
+    expect(start, `missing ${heading} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + heading.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents the content-gap read warning with its class-only exception field", () => {
+    const section = runbookSection(ANALYTICS_HEADING);
+    expect(section).toContain(CONTENT_GAP_READ);
+    expect(section).toContain("`exception`");
+    expect(section).toContain("topZeroResultSearches");
+  });
+
+  it("documents the read leg's silent paths next to the warning", () => {
+    const section = runbookSection(ANALYTICS_HEADING);
+    // A slow read and a down database look different from a broken one: only
+    // the ordinary rejection warns.
+    expect(section).toContain("omits silently");
+    expect(section).toContain("503 boundary");
+  });
+
+  it("documents the counts and stats warnings with their new fields", () => {
+    const section = runbookSection(OPTIONAL_HEADING);
+    expect(section).toContain(COUNTS_READ);
+    expect(section).toContain("`exception`");
+    expect(section).toContain(MEMBER_STATS);
+    expect(section).toContain("`aborted`");
+    expect(section).toContain("`request_id`");
+    expect(section).toContain("Kit-served");
+  });
+
+  it("sources emit the three warnings with the documented class-only fields", () => {
+    const searchLog = readFileSync("src/events/search-log.ts", "utf8");
+    const gapCall = `console.warn("${CONTENT_GAP_READ}"`;
+    const gapStart = searchLog.indexOf(gapCall);
+    expect(gapStart, `missing ${gapCall} in src/events/search-log.ts`).toBeGreaterThanOrEqual(0);
+    const gapPayload = searchLog.slice(gapStart, searchLog.indexOf("});", gapStart));
+    expect(gapPayload).toContain("exception");
+    expect(gapPayload).toContain("err.constructor.name");
+
+    const stats = readFileSync("src/profiles/stats.ts", "utf8");
+    expect(stats).toContain(`console.warn("${MEMBER_STATS}"`);
+    expect(stats).toContain("exception: exceptionClass(err)");
+    expect(stats).toContain("aborted");
+    expect(stats).toContain("request_id");
+    // Hono callers pass their request ID; Kit callers have none to pass.
+    expect(readFileSync("src/profiles/routes-stores.ts", "utf8")).toContain('c.get("requestId")');
+
+    const counts = readFileSync("src/counts.ts", "utf8");
+    const countsCall = `console.warn("${COUNTS_READ}"`;
+    const countsStart = counts.indexOf(countsCall);
+    expect(countsStart, `missing ${countsCall} in src/counts.ts`).toBeGreaterThanOrEqual(0);
+    const countsPayload = counts.slice(countsStart, counts.indexOf("});", countsStart));
+    expect(countsPayload).toContain("key");
+    expect(countsPayload).toContain("exception: exceptionClass(err)");
+  });
+});
+
 describe("queue ledger runbook row cites", () => {
   const CONSUMER_PATH = "src/jobs/consumer.ts";
   const HEADING = "### Queue ledger, lock and malformed-carrier warnings";

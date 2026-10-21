@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
+import { exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import { keyedMemberRead } from "../member-reads";
 import { memberReadDb } from "../db/member-reads";
+import { safeRequestId } from "../request-log";
 
 export type Milestone = { type: string; occurredAt: Date; detail: string | null };
 export type MemberStats = {
@@ -18,10 +20,25 @@ export const MEMBER_STATS_BUDGET_MS = 500;
 // member cannot force an unbounded scan. Matches the sibling 100-row caps.
 export const MEMBER_MILESTONES_CAP = 100;
 
+// Class-only warn shared by both stats legs: the exception class tells slow
+// from down from broken, `aborted` tells a budget-trip settle from a live
+// failure, and the validated request_id joins Hono-served lines to
+// `http.request` (Kit callers have no request ID and omit it). Never a driver
+// message (it can carry a connection string) or a member id.
+const warnStatsUnavailable = (err: unknown, aborted: boolean, requestId: unknown): void => {
+  const validated = safeRequestId(requestId);
+  console.warn("Member stats unavailable; hiding the stats block.", {
+    exception: exceptionClass(err),
+    aborted,
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  });
+};
+
 // One budget for connection setup and both optional reads, not one per query.
 export async function memberStatsWithBudget(
   source: MemberStatsSource,
   id: string,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -33,8 +50,8 @@ export async function memberStatsWithBudget(
   });
   try {
     return await Promise.race([source(id, controller.signal), expired]);
-  } catch {
-    console.warn("Member stats unavailable; hiding the stats block.");
+  } catch (err) {
+    warnStatsUnavailable(err, controller.signal.aborted, requestId);
     return null;
   } finally {
     clearTimeout(timer);
@@ -48,6 +65,7 @@ export async function readOwnedMemberStats(
   db: Pick<Db, "execute" | "$client">,
   id: string,
   signal: AbortSignal,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   let closing: Promise<void> | undefined;
   const close = () => {
@@ -56,7 +74,7 @@ export async function readOwnedMemberStats(
   signal.addEventListener("abort", close, { once: true });
   try {
     signal.throwIfAborted();
-    return await readMemberStats(db, id, signal);
+    return await readMemberStats(db, id, signal, requestId);
   } finally {
     signal.removeEventListener("abort", close);
     close();
@@ -83,10 +101,15 @@ export async function readMemberStats(
   db: Pick<Db, "execute"> | null,
   id: string,
   signal?: AbortSignal,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   if (!db) return null;
   if (!signal)
-    return memberStatsWithBudget((memberId, budget) => readMemberStats(db, memberId, budget), id);
+    return memberStatsWithBudget(
+      (memberId, budget) => readMemberStats(db, memberId, budget, requestId),
+      id,
+      requestId,
+    );
   const connection = memberReadDb(db as Db);
   try {
     signal.throwIfAborted();
@@ -130,8 +153,8 @@ export async function readMemberStats(
           : [];
       }),
     };
-  } catch {
-    console.warn("Member stats unavailable; hiding the stats block.");
+  } catch (err) {
+    warnStatsUnavailable(err, signal.aborted, requestId);
     return null;
   }
 }

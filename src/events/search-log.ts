@@ -138,6 +138,12 @@ export async function topZeroResultSearches(
       });
     } catch (err) {
       if (isDatabaseUnavailable(err)) throw err;
+      // Ordinary failure only: classified outages propagate silently to the
+      // dashboard's shared 503 boundary, and the deadline below omits silently.
+      // Class-only: a driver message can carry the DSN.
+      console.warn("Event search unavailable for content-gap read; omitting the widget.", {
+        exception: err instanceof Error ? err.constructor.name : typeof err,
+      });
       return undefined;
     }
   })();
