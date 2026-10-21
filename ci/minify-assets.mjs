@@ -69,7 +69,9 @@ function minifyBytes(entry, root) {
   // .js extension silently dropped the "use strict" prefix.
   const args = entry.endsWith(".css")
     ? ["--loader:.css=css", "--minify", source]
-    : ["--minify", source];
+    : entry === "public/islands/event-device-timezone.js"
+      ? ["--bundle", "--format=iife", "--minify", source]
+      : ["--minify", source];
   return execFileSync(esbuild, args, { maxBuffer: 16 * 1024 * 1024 });
 }
 

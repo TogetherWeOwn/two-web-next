@@ -32,7 +32,8 @@ export type Env = AgentEventsEnv & {
   // Optional explicit Postgres URL (agent-testdb locally); web DB consumers
   // use DB.connectionString when absent. `QA_AUTH_TOKEN` enables the staging-only
   // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
-  // defaults to true (a log write failure refuses the read; "false" degrades).
+  // is legacy: a log write failure refuses the read whatever it says, and the
+  // parsed value feeds only the informational /up enforcement label.
   DATABASE_URL?: string;
   // Bot database for the homepage counts' and profile stats' `web_v1` views
   // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`

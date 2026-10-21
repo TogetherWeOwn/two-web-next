@@ -90,7 +90,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID` | Evidence-verifier authorized incident var (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | Canonical positive ID only, and the request path ID must equal it. Unparseable/mismatched ID gets 403 (non-canonical path IDs get 422) without a source read. |
 | `SOURCE_EVIDENCE_VERIFIER_ISSUED_AT` | Evidence-verifier authorization start, epoch ms (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | With the expiry instant it pins an issued-to-expiry window of at most one hour containing now; otherwise 403 without a source read. |
 | `SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT` | Evidence-verifier authorization end, epoch ms (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | Must be after now and within the one-hour window from the issued instant; otherwise 403 without a source read. |
-| `MEMBER_ACCESS_LOG_ENFORCE` | Optional boolean-like var | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` disable enforcement; all other values enable it. Failed access-log writes refuse member/admin reads with 503 by default; disabled enforcement logs and serves instead. |
+| `MEMBER_ACCESS_LOG_ENFORCE` | Legacy boolean-like var (no production read honors it) | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` parse as off; all other values parse as on. Since the keyed read boundary (PR #145), every failed access-log write refuses member/admin reads with 503 regardless of this flag; the parsed value feeds only the informational /up `member_access_log_enforcement` label. Do not set it for behavior. |
 | `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Violation sampling precedes the shared per-isolate log budget; setting 1 does not bypass that budget. Report sink remains 204. |
 | `BOT_ENDPOINT_URL` | Optional signed bot base URL | dev: stub only; staging: provision separately; prod: no new access implied | None | Missing/non-HTTPS URL fails read observation closed to `bot_unreachable`; redirects are refused. The jobs Worker (`JobsEnv`) uses the same three bindings to send sync/announcement/role jobs; if any is missing the job fails terminally and alerts (`queue.failing`), never acks as success. A URL that is not bare HTTPS (another scheme, embedded credentials, query or fragment, missing host, or unparseable) sends no signed request: the job sees `bot unreachable` and retries as it would for a down bot; a 3xx answer is refused, not followed. |
 | `BOT_KEY_ID` | Optional bot signing key identifier | dev/staging/prod | None | Missing ID fails observation closed; no implicit production key selection. |
@@ -173,16 +173,19 @@ return an empty, no-store `204`, including suppressed logs; there is no `429` or
 
 One token bucket per Worker isolate permits a burst of 20 warnings and refills
 one token every 3 seconds (20 per minute), capped at 20 stored tokens. Valid
-violation reports and `csp.report.dropped_oversize` warnings share this budget,
-so neither input shape bypasses the cap. Malformed and sampled-out reports do
-not consume tokens. Exhaustion is silent: no per-drop warning or extra summary
-line amplifies a flood. The bucket stores only two numbers, not IPs or report
-contents, and uses no database, network calls or background timers.
+violation reports, sampled-in malformed reports, sink-failure diagnostics and
+`csp.report.dropped_oversize` warnings share this budget, so no input shape
+bypasses the cap. Sampled-out and empty reports do not consume tokens.
+Budget-exhausted drops fold into the bounded `csp.report.shed` signal (at most
+one warn per refill window): no per-drop warning amplifies a flood. The bucket
+stores only two numbers, not IPs or report contents, and uses no database,
+network calls or background timers.
 
-`CSP_REPORT_SAMPLE_RATE` remains an additional gate for valid reports only.
-Lower it to reduce ordinary violation log volume; `1` includes every valid
-report **eligible for the bucket**, not every received report. It cannot bypass
-the cap. Oversize diagnostics do not use the sample rate but are capped too.
+`CSP_REPORT_SAMPLE_RATE` remains an additional gate for valid and malformed
+reports only. Lower it to reduce ordinary violation and malformed log volume;
+`1` includes every valid report **eligible for the bucket**, not every received
+report. It cannot bypass the cap. Oversize and sink-failure diagnostics do not
+use the sample rate but are capped too.
 
 This is best-effort **per-isolate log suppression**, not a request-rate or
 fleet-wide cost guarantee. Isolates refill independently; eviction, restart and
