@@ -9,9 +9,11 @@ import { CalCard } from "../src/events/pages-calendar-card";
 import { MonthGrid } from "../src/events/pages-calendar-grid";
 import {
   GRID_CANCELLED_COPY,
+  calendarDayLongLabel,
   cardDayLabel,
   existingResponsesText,
   gridAccessibleName,
+  gridContinuationAccessibleName,
   gridTitle,
   wallTimeHm,
 } from "../src/islands/contracts";
@@ -106,6 +108,34 @@ describe("cancelled schedule copy", () => {
     const e = cancellationEvent();
     const names = titles.map((title) => gridAccessibleName(title, e.startsAt, ZONE, true));
     expect(names[0]).not.toBe(names[1]);
+  });
+
+  it("names a cancelled continuation with both words, badge included", async () => {
+    // Unreachable through today's reads — upcoming cancelled rows leave the
+    // grid and past rows plot start-day-only — but the merged renderer must
+    // still name the combination truthfully if admission ever changes.
+    const e = cancellationEvent({ title: "Game night spectacular raid evening alpha Hobbiton" });
+    const dayIso = "2099-01-16";
+    const visible = `Continues ${gridTitle(e.title)} ${GRID_CANCELLED_COPY}`;
+    const name = gridContinuationAccessibleName(e.title, dayIso, true);
+    expect(name.startsWith(visible)).toBe(true);
+    expect(name).toContain(e.title);
+    expect(name).toContain(calendarDayLongLabel(dayIso));
+    const html = await jsx(MonthGrid, {
+      state: cancellationState,
+      weeks: [[{ iso: dayIso, day: 16, inMonth: true, isToday: false, events: [e] }]],
+      zone: ZONE,
+    }).toString();
+    const link = /<a[^>]*data-cal-jump[^>]*aria-label="([^"]*)"[^>]*>([\s\S]*?)<\/a>/.exec(html);
+    expect(link).not.toBeNull();
+    expect(link![0]).toContain('data-cancelled="true"');
+    expect(renderedText(link![2]!)).toContain(`Continues ${gridTitle(e.title)}`);
+    expect(link![2]).toContain(`<span class="schedule-badge">${GRID_CANCELLED_COPY}</span>`);
+    expect(renderedText(link![1]!).startsWith(renderedText(link![2]!))).toBe(true);
+    // The published continuation shape is untouched by the new flag default.
+    expect(gridContinuationAccessibleName(e.title, dayIso)).toBe(
+      `Continues ${e.title}, ${calendarDayLongLabel(dayIso)}`,
+    );
   });
 
   it("pins the cancelled hook and both badge-stacking rules", async () => {

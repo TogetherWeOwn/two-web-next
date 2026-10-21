@@ -6,7 +6,9 @@
 
 export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 export {
+  calendarDayLongLabel,
   calendarZone,
+  canonicalIntervalDays,
   cardDayLabel,
   cardTimeLabel,
   isValidZone,
@@ -16,7 +18,7 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
 import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -335,6 +337,24 @@ export function gridAccessibleName(
     return `${time} ${visibleTitle} ${GRID_CANCELLED_COPY}${fullTitle}, ${cardDayLabel(startsAt, zone)}`;
   }
   return `${time} ${title}, ${cardDayLabel(startsAt, zone)}`;
+}
+
+/** Continuation link name starts with the visible "Continues title" (WCAG
+ * 2.5.3), then the displayed day — never the original start. */
+export function gridContinuationAccessibleName(
+  title: string,
+  dayIso: string,
+  cancelled = false,
+): string {
+  if (cancelled) {
+    const visibleTitle = gridTitle(title);
+    // Same visible-prefix rule as gridAccessibleName: the badge follows the
+    // truncated title, so keep that exact prefix before restoring the full
+    // title for same-prefix event disambiguation.
+    const fullTitle = visibleTitle === title ? "" : `, ${title}`;
+    return `Continues ${visibleTitle} ${GRID_CANCELLED_COPY}${fullTitle}, ${calendarDayLongLabel(dayIso)}`;
+  }
+  return `Continues ${title}, ${calendarDayLongLabel(dayIso)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

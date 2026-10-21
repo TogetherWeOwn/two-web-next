@@ -15,7 +15,9 @@ import {
   calendarMonthLabel,
   calendarUrl,
   gridAccessibleName,
+  gridContinuationAccessibleName,
   gridTitle,
+  wallDateIso,
   wallTimeHm,
   type CalendarDay,
   type CalendarState,
@@ -72,6 +74,12 @@ export const MonthGrid: FC<{
                   <span>{day.day}</span>
                   <ul>
                     {day.events.map((e) => {
+                      const entryZone = rowZone(e, zone);
+                      // A row lands on a non-start cell only through canonical
+                      // interval expansion — transients and past rows bucket on
+                      // their start day — so a day mismatch is exactly the
+                      // continuation case.
+                      const continued = day.iso !== wallDateIso(e.startsAt, entryZone);
                       // Cancelled entries keep their day-jump to the retained
                       // list card, but say so in words — never color alone —
                       // with the same badge word the card carries.
@@ -82,14 +90,15 @@ export const MonthGrid: FC<{
                             href={calendarJumpUrl(state.past, rowKey(e))}
                             data-cal-jump
                             data-cancelled={cancelled ? "true" : undefined}
-                            aria-label={gridAccessibleName(
-                              rowTitle(e),
-                              e.startsAt,
-                              rowZone(e, zone),
-                              cancelled,
-                            )}
+                            aria-label={
+                              continued
+                                ? gridContinuationAccessibleName(rowTitle(e), day.iso, cancelled)
+                                : gridAccessibleName(rowTitle(e), e.startsAt, entryZone, cancelled)
+                            }
                           >
-                            {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
+                            {continued
+                              ? `Continues ${gridTitle(rowTitle(e))}`
+                              : `${wallTimeHm(e.startsAt, entryZone)} ${gridTitle(rowTitle(e))}`}
                             {cancelled ? (
                               <>
                                 {" "}
