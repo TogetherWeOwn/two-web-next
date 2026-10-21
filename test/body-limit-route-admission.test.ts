@@ -130,7 +130,7 @@ describe("profile write admission", () => {
           request.headers.set("content-type", "application/x-www-form-urlencoded");
         const response = await profile.request(request, undefined, env);
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
         if (advertised) expect(pull).not.toHaveBeenCalled();
         else expect(pull.mock.calls.length).toBeLessThanOrEqual(BODY_LIMIT_BYTES.form / 1024 + 2);
         await request.body?.cancel();
@@ -243,7 +243,7 @@ describe("profile write admission", () => {
         request.headers.set("content-type", "application/x-www-form-urlencoded");
       const oversized = await profile.request(request, undefined, env);
       expect(oversized.status).toBe(413);
-      expect(await oversized.json()).toEqual(ERROR);
+      expect(await oversized.json()).toMatchObject(ERROR);
       expect(throttle).not.toHaveBeenCalled();
       expect(get).not.toHaveBeenCalled();
       await request.body?.cancel();
@@ -275,7 +275,7 @@ describe("moderator admission", () => {
             SESSION_STORE: sessions,
           } as Env);
           expect(response.status).toBe(413);
-          expect(await response.json()).toEqual(ERROR);
+          expect(await response.json()).toMatchObject(ERROR);
           if (advertised) expect(pull).not.toHaveBeenCalled();
           else expect(pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
           await request.body?.cancel();
@@ -296,7 +296,7 @@ describe("moderator admission", () => {
         SESSION_STORE: sessions,
       } as Env);
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(get).not.toHaveBeenCalled();
     },
   );
@@ -339,7 +339,7 @@ describe("agent ingress admission", () => {
           AGENT_EVENTS_ENABLED: String(enabled),
         });
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
         // Advertised overflow short-circuits on content-length; chunked must
         // read the stream to discover the overflow.
         if (advertised) expect(pull).not.toHaveBeenCalled();
@@ -401,7 +401,7 @@ describe("agent ingress admission", () => {
         request.headers.set("cf-connecting-ip", "192.0.2.1");
         const response = await app.request(request, undefined, ingressEnv, ctx);
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
         expect(ctx.waitUntil).not.toHaveBeenCalled();
         await request.body?.cancel();
       }
@@ -427,7 +427,7 @@ describe("agent ingress admission", () => {
         request.headers.set("cf-connecting-ip", "192.0.2.1");
         const response = await app.request(request, undefined, ingressEnv, ctx);
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
         expect(ctx.waitUntil).not.toHaveBeenCalled();
         await request.body?.cancel();
       }

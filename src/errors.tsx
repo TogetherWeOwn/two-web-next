@@ -22,6 +22,7 @@ export {
   MCP_TRANSPORT_ERROR_CODE,
   notFoundHandler,
   notFoundResponse,
+  outageRepresentation,
   payloadTooLarge,
   prefersHtmlError,
   rateLimitExceeded,
