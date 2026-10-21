@@ -11,7 +11,14 @@ import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
 import { activityLog, featuredContents } from "../db/admin-schema";
 import type { FeaturedFormInput } from "./validation";
-import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
+import {
+  audit,
+  boundInventoryRead,
+  boundModeratorWrite,
+  dirty,
+  NotFoundError,
+  type Actor,
+} from "./store-shared";
 import { retireHomeGuestCache } from "../home-cache";
 
 export type FeaturedRow = typeof featuredContents.$inferSelect;
@@ -202,6 +209,11 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
   await retireHomeGuestCache();
 }
 
+/**
+ * Featured inventory: one transaction behind the shared transaction-local
+ * lock/statement bound, so a stalled table cancels server-side and the
+ * caller refuses only after the transaction settles.
+ */
 export async function listFeatured(
   db: Db,
   opts: { published?: boolean; q?: string; sort?: string; order?: string; page?: string | number },
@@ -212,22 +224,25 @@ export async function listFeatured(
     order: opts.order,
     page: opts.page === undefined ? undefined : String(opts.page),
   });
-  const conds: SQL[] = [];
-  if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
-  if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
-  const column =
-    query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
-  const order = query.order === "desc" ? desc(column) : asc(column);
-  // Fetch one extra row so pagination needs no separate count query.
-  return nonSensitiveRead("featured", () =>
-    db
-      .select()
-      .from(featuredContents)
-      .where(and(...conds))
-      .orderBy(order, asc(featuredContents.id))
-      .limit(FEATURED_PAGE_SIZE + 1)
-      .offset((query.page - 1) * FEATURED_PAGE_SIZE),
-  );
+  return db.transaction(async (tx) => {
+    await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    const conds: SQL[] = [];
+    if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
+    if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
+    const column =
+      query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
+    const order = query.order === "desc" ? desc(column) : asc(column);
+    // Fetch one extra row so pagination needs no separate count query.
+    return nonSensitiveRead("featured", () =>
+      tx
+        .select()
+        .from(featuredContents)
+        .where(and(...conds))
+        .orderBy(order, asc(featuredContents.id))
+        .limit(FEATURED_PAGE_SIZE + 1)
+        .offset((query.page - 1) * FEATURED_PAGE_SIZE),
+    );
+  });
 }
 
 /** Imported source IDs are independent of native IDs; never fall back to a native match. */
