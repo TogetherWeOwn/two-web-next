@@ -363,8 +363,8 @@ continues, depending on whether the write wins the deadline race. A
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
-| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN), `request_id` (only when the caller's ID validates) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text), `request_id` (only when the caller's ID validates) |
 
 The `exception` field tells a rejection apart from a deadline expiry: a
 rejected write carries the error's class name (with a `typeof` fallback for a
@@ -404,11 +404,15 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-Neither line carries a `request_id`, so correlate by time window and route,
-not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
-member identity, cookies, tokens, connection strings, and invented request IDs
-out of diagnostic output: the aggregates above are sufficient, and the
-warning's `exception` is a class name, never the message.
+Both lines carry the serving request's validated `request_id`, so join a
+warning to its `http.request` by ID, not by time window. The ID travels only
+when it validates: Hono-served searches and board views always carry one,
+while Kit-served lines omit it — no request ID is plumbed through the Kit
+bindings, so correlate those by time window and route. Keep raw
+`normalized_query` and `normalized_board_key` values, member identity,
+cookies, tokens, connection strings, and invented request IDs out of
+diagnostic output: the aggregates above are sufficient, and the warning's
+`exception` is a class name, never the message.
 
 ### Missing sync-queue binding warning
 
