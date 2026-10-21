@@ -6,8 +6,9 @@
 // the Test Author instead of changing it.
 //
 // RED (fail on unmodified main, pass after the build):
-//   H1/H2/H4 + K1/K2/K4 + P1/P2/P3 — past share heading, calendar actions
-//   and way-forward, per twin plus parity.
+//   H1/H2/H4/H5 + K1/K2/K4/K5 + P1/P2/P3/P4 — past share heading, calendar
+//   actions and way-forward, per twin plus parity. H5/K5/P4 cover an elapsed
+//   published row (status published, January 2020 dates).
 // GREEN controls (pass before and after; guard what must not change):
 //   H3/K3 — past share keeps Copy link + toast.
 //   S1/S2 — live/upcoming share box byte-stable per twin.
@@ -392,9 +393,9 @@ function shareHeading(share: string): string {
   return match[1]!;
 }
 
-/** Exact `/events` or `/events/past` return inside the share box, if any. */
+/** Exact `/events/past` return inside the share box, if any. */
 function shareWayForward(share: string): string | null {
-  const match = share.match(/href="(\/events\/past|\/events)"/);
+  const match = share.match(/href="(\/events\/past)"/);
   return match ? match[1]! : null;
 }
 
@@ -417,13 +418,19 @@ function expectHonestPastShare(share: string, twin: string) {
   // Copy link and its toast stay.
   expect(share, `${twin}: copy link kept`).toContain('data-testid="event-copy-link"');
   expect(share, `${twin}: copy toast kept`).toContain('data-testid="event-copy-toast"');
-  // A way forward: the past archive or the upcoming schedule.
+  // A way forward: the past archive, exactly.
+  expect(share, `${twin}: browse past events link text`).toContain("Browse past events");
   const wayForward = shareWayForward(share);
   expect(wayForward, `${twin}: past share way forward present`).not.toBeNull();
-  expect(wayForward).toMatch(/^\/events(\/past)?$/);
+  expect(wayForward, `${twin}: past share way forward destination`).toBe("/events/past");
 }
 
 const PAST_OVER = { status: "past", startsAt: PAST_START, endsAt: PAST_END } as const;
+const ELAPSED_PUBLISHED_OVER = {
+  status: "published",
+  startsAt: PAST_START,
+  endsAt: PAST_END,
+} as const;
 
 describe("past-event share acceptance (Hono)", () => {
   it("H1: past detail renders an honest share heading instead of Save the date", async () => {
@@ -456,11 +463,19 @@ describe("past-event share acceptance (Hono)", () => {
     expect(share).toContain('data-testid="event-copy-toast"');
   });
 
-  it("H4: past share offers a way forward to the archive or schedule", async () => {
+  it("H4: past share offers a way forward to the past archive", async () => {
     const { html } = await honoHtml({ ...PAST_OVER });
-    const wayForward = shareWayForward(shareSection(html));
+    const share = shareSection(html);
+    expect(share, "Hono: browse past events link text").toContain("Browse past events");
+    const wayForward = shareWayForward(share);
     expect(wayForward, "Hono past share way forward present").not.toBeNull();
-    expect(wayForward).toMatch(/^\/events(\/past)?$/);
+    expect(wayForward, "Hono past share way forward destination").toBe("/events/past");
+  });
+
+  it("H5: elapsed published detail renders the honest past share box", async () => {
+    const { status, html } = await honoHtml({ ...ELAPSED_PUBLISHED_OVER });
+    expect(status).toBe(200);
+    expectHonestPastShare(shareSection(html), "Hono elapsed");
   });
 });
 
@@ -491,10 +506,19 @@ describe("past-event share acceptance (Kit)", () => {
     expect(share).toContain('data-testid="event-copy-toast"');
   });
 
-  it("K4: past share offers a way forward to the archive or schedule", async () => {
-    const wayForward = shareWayForward(shareSection(await kitHtml({ ...PAST_OVER })));
+  it("K4: past share offers a way forward to the past archive", async () => {
+    const share = shareSection(await kitHtml({ ...PAST_OVER }));
+    expect(share, "Kit: browse past events link text").toContain("Browse past events");
+    const wayForward = shareWayForward(share);
     expect(wayForward, "Kit past share way forward present").not.toBeNull();
-    expect(wayForward).toMatch(/^\/events(\/past)?$/);
+    expect(wayForward, "Kit past share way forward destination").toBe("/events/past");
+  });
+
+  it("K5: elapsed published detail renders the honest past share box", async () => {
+    expectHonestPastShare(
+      shareSection(await kitHtml({ ...ELAPSED_PUBLISHED_OVER })),
+      "Kit elapsed",
+    );
   });
 });
 
@@ -507,16 +531,31 @@ describe("past share twin parity", () => {
   });
 
   it("P2: both twins agree on the past share way-forward destination", async () => {
-    const hono = shareWayForward(shareSection((await honoHtml({ ...PAST_OVER })).html));
-    const kit = shareWayForward(shareSection(await kitHtml({ ...PAST_OVER })));
+    const honoShare = shareSection((await honoHtml({ ...PAST_OVER })).html);
+    const kitShare = shareSection(await kitHtml({ ...PAST_OVER }));
+    expect(honoShare, "Hono: browse past events link text").toContain("Browse past events");
+    expect(kitShare, "Kit: browse past events link text").toContain("Browse past events");
+    const hono = shareWayForward(honoShare);
+    const kit = shareWayForward(kitShare);
     expect(hono, "Hono past share way forward present").not.toBeNull();
-    expect(hono).toMatch(/^\/events(\/past)?$/);
+    expect(hono, "Hono past share way forward destination").toBe("/events/past");
     expect(kit).toBe(hono);
   });
 
   it("P3: the full honest past share bar holds on both twins", async () => {
     expectHonestPastShare(shareSection((await honoHtml({ ...PAST_OVER })).html), "Hono");
     expectHonestPastShare(shareSection(await kitHtml({ ...PAST_OVER })), "Kit");
+  });
+
+  it("P4: both twins agree on the honest past share box for an elapsed published row", async () => {
+    expectHonestPastShare(
+      shareSection((await honoHtml({ ...ELAPSED_PUBLISHED_OVER })).html),
+      "Hono elapsed",
+    );
+    expectHonestPastShare(
+      shareSection(await kitHtml({ ...ELAPSED_PUBLISHED_OVER })),
+      "Kit elapsed",
+    );
   });
 });
 
