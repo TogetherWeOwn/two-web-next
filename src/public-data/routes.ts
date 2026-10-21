@@ -234,13 +234,14 @@ export function fitByteBudget(
 }
 
 /**
- * Remaining TTL, rounded up: a hit served 59 s after the write tells the
+ * Remaining TTL, rounded down: a hit served 59 s after the write tells the
  * downstream cache `max-age=1`, never a fresh full window, so downstream
- * freshness can never extend past the original expiry. A hit always has a
- * positive remainder (expired entries miss), so the floor is belt and braces.
+ * freshness can never extend past the original expiry. A sub-second
+ * remainder — or a hit that crosses expiry between the cache read and this
+ * second clock sample — answers `max-age=0`: immediately stale, revalidate.
  */
 function remainingMaxAge(expiresAt: number, now: number): number {
-  return Math.max(1, Math.ceil((expiresAt - now) / 1000));
+  return Math.max(0, Math.floor((expiresAt - now) / 1000));
 }
 
 function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
@@ -271,9 +272,17 @@ async function servePublicJson(
     "cache-control": PUBLIC_MAX_AGE,
     etag,
   };
-  writeApiPublicCache(cacheKey, { status: 200, headers, body }, Date.now(), expectedGeneration);
+  const settled = writeApiPublicCache(
+    cacheKey,
+    { status: 200, headers, body },
+    Date.now(),
+    expectedGeneration,
+  );
+  // Overtaken by a retire: answer our own bytes, but never as reusable —
+  // a full max-age here would keep pre-mutation bytes fresh downstream.
+  if (!settled) headers["cache-control"] = "public, max-age=0, must-revalidate";
   if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
-    return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"] });
   }
   return c.body(body, 200, headers);
 }

@@ -55,17 +55,20 @@ export function writeApiPublicCache(
   value: Omit<ApiPublicCacheEntry, "expiresAt">,
   now = Date.now(),
   expectedGeneration?: number,
-): void {
+): boolean {
   // Generation fence: a read that captured the generation before a retire
   // landed must not settle its pre-retire bytes afterwards. The compare runs
   // synchronously inside the write, so it is atomic within the isolate.
-  // Callers without a read (community/join, probes) omit the fence.
-  if (expectedGeneration !== undefined && expectedGeneration !== generation) return;
+  // Callers without a read (community/join, probes) omit the fence. The
+  // return tells the route whether the entry settled, so an overtaken read
+  // can answer its own bytes without granting downstream reuse.
+  if (expectedGeneration !== undefined && expectedGeneration !== generation) return false;
   if (!entries.has(key) && entries.size >= MAX_ENTRIES) {
     const oldest = entries.keys().next();
     if (!oldest.done) entries.delete(oldest.value);
   }
   entries.set(key, { ...value, expiresAt: now + API_PUBLIC_CACHE_TTL_MS });
+  return true;
 }
 
 function isEventEntry(key: string): boolean {
