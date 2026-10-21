@@ -66,9 +66,9 @@ afterEach(() => {
 function innerText(html: string): string {
   return html
     .replace(/<[^>]*>/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
 }
