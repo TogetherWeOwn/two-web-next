@@ -31,7 +31,7 @@ import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { eventKeyAllowed } from "../events/keys";
 import { eventContentBaseline } from "./event-baseline";
-import { EventHostJoinFields } from "./pages/event-host-join-fields";
+import { EventHostJoinFields, EventNotesField } from "./pages/event-host-join-fields";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -107,6 +107,7 @@ export type KitEventEditView = {
   values: KitEventEditValues;
   /** Escaped application-generated HTML from the Hono field renderer, never raw row HTML. */
   hostJoinFieldsHtml: string;
+  notesHtml: string;
   errors: Record<string, string>;
   hasErrors: boolean;
   isDraft: boolean;
@@ -262,6 +263,10 @@ export async function resolveKitEventEdit(
         capacity: row.capacity === null ? "" : String(row.capacity),
       },
       hostJoinFieldsHtml: EventHostJoinFields({ values: hostJoinValues, errors: {} }).toString(),
+      notesHtml: EventNotesField({
+        values: { accessibility_notes: row.accessibilityNotes ?? "" },
+        errors: {},
+      }).toString(),
       errors: {},
       hasErrors: false,
       isDraft: false,

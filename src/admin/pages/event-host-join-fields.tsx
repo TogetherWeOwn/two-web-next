@@ -3,6 +3,29 @@
 // duplicate field templates in Kit's unhydrated structural client node.
 import { Field, val } from "./shell";
 
+export function EventNotesField({
+  values,
+  errors,
+}: {
+  values: Record<string, unknown>;
+  errors: Record<string, string>;
+}) {
+  return (
+    <Field
+      name="accessibility_notes"
+      label="Accessibility notes"
+      errors={errors}
+      hint="Optional; include only confirmed details, not personal contact information."
+    >
+      {(id) => (
+        <textarea id={id} name="accessibility_notes" rows={4} data-event-text-limit={1000}>
+          {val(values, "accessibility_notes")}
+        </textarea>
+      )}
+    </Field>
+  );
+}
+
 export function EventHostJoinFields({
   values,
   errors,

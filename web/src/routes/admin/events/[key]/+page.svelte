@@ -1,6 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { EVENT_BASELINE_FIELD } from "../../../../../../src/admin/event-baseline";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -22,16 +21,16 @@ import type { PageProps } from "./$types";
 // Hono-owned too.
 let { data }: PageProps = $props();
 const view = $derived(data.view);
-const values = $derived(view.values ?? {});
-const errors = $derived(view.errors ?? {});
-const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
+const values = $derived(view.values);
+const errors = $derived(view.errors);
+const hasErrors = $derived(view.hasErrors);
 const val = (name: string) => values[name] ?? "";
-const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
-const textLimitsIsland =
-  '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
-const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const editorIslands =
+  '<script type="module" src="/islands/admin-event-text-limits.js"></' +
+  'script><script src="/islands/admin-event-editor.js" defer></' +
+  "script>";
 </script>
 
 <AdminShell title={`Edit ${view.title}`}>
@@ -60,7 +59,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-draft={hasErrors ? "" : undefined}
   >
     <!-- The Hono-owned update refuses a save without the current baseline. -->
-    <input type="hidden" name={EVENT_BASELINE_FIELD} value={view.baseline} />
+    <input type="hidden" name="saved_baseline" value={view.baseline} />
     <div class="field">
       <label for="f-title">Title</label>
       <input
@@ -108,32 +107,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </p>
       {/if}
     </div>
-    <div class="field">
-      <label for="f-accessibility-notes">Accessibility notes</label>
-      <textarea
-        id="f-accessibility-notes"
-        name="accessibility_notes"
-        rows={4}
-        data-event-text-limit={1000}
-        aria-invalid={errors.accessibility_notes ? "true" : undefined}
-        aria-describedby={errors.accessibility_notes
-          ? "f-accessibility-notes-hint f-accessibility-notes-error"
-          : "f-accessibility-notes-hint"}
-      >{val("accessibility_notes")}</textarea>
-      <p id="f-accessibility-notes-hint" class="hint">
-        Optional; include only confirmed details, not personal contact information.
-      </p>
-      {#if errors.accessibility_notes}
-        <p
-          id="f-accessibility-notes-error"
-          class="error"
-          role="alert"
-          data-testid="error-accessibility_notes"
-        >
-          {errors.accessibility_notes}
-        </p>
-      {/if}
-    </div>
+    <!-- Same escaped SSR field as Hono; keeps notes visible without a duplicate client template. -->
+    {@html view.notesHtml}
     <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
@@ -174,7 +149,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         id="f-timezone"
         name="timezone"
         type="text"
-        value={timezoneVal}
+        value={val("timezone") || "Europe/London"}
         aria-invalid={errors.timezone ? "true" : undefined}
         aria-describedby={errors.timezone ? "f-timezone-hint f-timezone-error" : "f-timezone-hint"}
       />
@@ -322,7 +297,6 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </nav>
   </section>
-  {@html textLimitsIsland}
-  {@html editorIsland}
+  {@html editorIslands}
 </section>
 </AdminShell>

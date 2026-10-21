@@ -27,11 +27,15 @@ instructions as well as the original nine fields. Missing optional fixture
 columns normalize to null, just as stored defaults do. The compare still runs
 inside the committing row lock.
 
-Both renderers use the same Hono `EventHostJoinFields` component. The Kit read
-model retains the raw field values and supplies an application-generated escaped
-HTML fragment to the Svelte form. The fragment is not stored or caller-supplied
-HTML. Reusing the server renderer avoids compiling duplicate field templates into
-Kit's unhydrated structural client node. Hono owns every write and error render.
+Both renderers use the same Hono `EventHostJoinFields` and `EventNotesField`
+components. The Kit read model retains the raw field values and supplies
+application-generated escaped HTML fragments to the Svelte form. These are not
+stored or caller-supplied HTML. Reusing the server renderer avoids compiling
+duplicate field templates into Kit's unhydrated structural client node. Hono owns
+every write and error render. The required view bindings are direct, the fixed
+hidden carrier is a static attribute, and the two progressive scripts share one
+HTML slot without changing their order. The real rendered-form POST tests pin the
+carrier name against the shared Hono constant.
 
 ## Opened browser evidence
 
@@ -64,9 +68,23 @@ reported as an axe pass, and no axe rule is disabled. A separate admin-theme
 follow-up owns that existing problem; this correction changes no stylesheet.
 Hono accessibility/Lighthouse/visual gates do not exercise the Kit route.
 
-The locked Kit build fits every existing ceiling without a budget edit: client
+The initial correction's locked Kit build fits the existing ceilings: client
 JavaScript 51/51 files, raw 241874/242176 bytes, gzip 97279/97536; server JavaScript
-120/120 files, raw 1077583/1203200, gzip 317517/327680. No baseline, mask, audit or
-threshold is changed. Exact-head CI remains authoritative for the pinned-runner
-visual comparisons and merge gates. The corrected revision has not been opened
-on staging; staging verification follows deployment.
+120/120 files, raw 1077583/1203200, gzip 317517/327680.
+
+A subsequently confirmed base conflict brings in the admin 429 recovery UI.
+Copying current main's numeric ceilings unchanged, the combined tree initially
+fails at client raw 243099/242176 and gzip 97801/97792. Instead of adding an
+allowance, the notes field now also reuses the Hono server renderer, and redundant
+client binding/slot overhead is removed as described above. Two locked builds
+measure client 51/51 files, raw **242175/242176**, gzip **97551/97792**; server
+120/120 files, raw 1081782–1081814/1203200, gzip 318685–318693/327680. The raw
+margin is only one byte; it is reported, not padded with a ceiling increase.
+Every numeric ceiling equals current main's values. All six refreshed screenshots
+are byte-identical to the opened captures above, and the actual serialized form
+save/conflict proof passes again.
+
+No baseline, mask, audit or threshold is changed. Exact-head CI remains
+authoritative for the pinned-runner visual comparisons and merge gates. The
+corrected revision has not been opened on staging; staging verification follows
+deployment.
