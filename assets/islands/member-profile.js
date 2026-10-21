@@ -332,15 +332,8 @@
     var gamesCount = root.querySelector('[id="profile-games-text-count"]');
     if (games && gamesCount) gamesCount.textContent = gamesCountText(parseGamesText(games.value));
   }
-  // Native reset restores the defaults after its handlers run, so the reset
-  // refresh must land past it; a microtask beats the next paint and works
-  // where only setTimeout exists.
-  var deferRefresh =
-    typeof queueMicrotask !== "undefined"
-      ? queueMicrotask
-      : function (fn) {
-          setTimeout(fn, 0);
-        };
+  // Reset-refresh timing lives at the reset listener: it must be a task, not
+  // a microtask (see below).
 
   function clientErrors(bio, games, tz) {
     var e = [];
@@ -616,7 +609,10 @@
     if (editControl) editControl.hidden = true;
     clearNotices();
     // Counts refresh from the restored values once native reset lands them.
-    deferRefresh(refreshCounts);
+    // This must be a task: for a user-initiated reset the listener runs with
+    // an empty JS stack, so a microtask checkpoint fires right after the
+    // listener returns, before the restore step lands the defaults.
+    setTimeout(refreshCounts, 0);
     // The draft that "still finishing" promised to keep is gone: an unsettled
     // write goes back to the plain saving line.
     if (pending) setPending(true);
