@@ -202,7 +202,15 @@ describe("moderator event Unicode boundaries", () => {
       },
     );
   });
-  for (const field of ["title", "description", "location"] as const) {
+  for (const field of [
+    "title",
+    "description",
+    "location",
+    "accessibility_notes",
+    "organizer_name",
+    "join_url",
+    "join_instructions",
+  ] as const) {
     it.each([0, 0x200b, 0x202e, 0xfeff].map((codePoint) => String.fromCodePoint(codePoint)))(
       `keeps forbidden controls rejected in ${field}: %j`,
       (control) => {

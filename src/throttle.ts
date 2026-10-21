@@ -90,15 +90,43 @@ export const clientKey = (c: Context) => {
   return "anon";
 };
 
+/** Class-only classification of a store rejection: never the message, which can quote statement bindings. */
+const MAX_THROTTLE_CLASS_LENGTH = 100;
+
+function exceptionClass(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.name
+      : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // Only strings are sanitized: a non-string name must degrade to unknown
+  // instead of throwing the fail-open catch into a 500.
+  const name = typeof raw === "string" ? raw : "unknown";
+  // De-newline and bound: a hostile error name must not forge log lines.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
+}
+
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
   c: Context<{ Bindings: Env }>,
   name: string,
   max: number,
 ): Promise<Response | null> {
+  const bucket = `${name}:${clientKey(c)}`;
   const verdict = await throttleStore(c)
-    .then((sql) => checkJoinThrottle(sql, `${name}:${clientKey(c)}`, max))
-    .catch(() => ({ limited: false }) as const);
+    .then((sql) => checkJoinThrottle(sql, bucket, max))
+    .catch((err: unknown) => {
+      // Fail open with a throttle-naming, class-only line: the client segment
+      // is a member IP and must never be logged, and the message can quote
+      // statement bindings. Exactly one line per allow: the null-store
+      // allow already warned inside checkJoinThrottle (no throw, so this
+      // catch never runs for it), and the verdict transaction never warns
+      // before rethrowing.
+      console.warn("Throttle store failed; allowing the request.", {
+        throttle: name,
+        exception: exceptionClass(err),
+      });
+      return { limited: false } as const;
+    });
   return verdict.limited ? await rateLimitExceeded(c, verdict.retryAfter) : null;
 }
 

@@ -40,7 +40,7 @@
   --color-lobby-on-accent: #14200a;
   --color-lobby-line: #4b5b5d;
   --color-lobby-focus: #ffffff;
-  --font-display: Display, "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-display: Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
   --font-sans: ui-sans-serif, system-ui, sans-serif;
 }
 

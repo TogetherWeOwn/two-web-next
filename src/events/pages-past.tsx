@@ -9,12 +9,14 @@ import {
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   goingCountText,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
+import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 
@@ -25,8 +27,17 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => (
       <h2>
         <a href={`/e/${e.eventKey}`}>{e.title}</a>
       </h2>
+      {/* Upcoming-card shape (time · zone · location): the zone always
+          renders, the location only when the row has one. */}
       <p>
-        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
+        <span>{e.timezone}</span>
+        {e.location ? (
+          <>
+            {" · "}
+            <span>{e.location}</span>
+          </>
+        ) : null}
       </p>
       {e.game ? <p>{e.game}</p> : null}
     </div>
@@ -40,19 +51,21 @@ export const PastEventsPage: FC<{
   hasMore: boolean;
   totalPages: number;
   appUrl: string;
-}> = ({ rows, page, hasMore, totalPages, appUrl }) => (
+  q?: string;
+}> = ({ rows, page, hasMore, totalPages, appUrl, q = "" }) => (
   <ScheduleShell
     title="Past events"
-    canonical={canonicalUrl(appUrl, pastEventsUrl(page))}
+    canonical={canonicalUrl(appUrl, pastEventsUrl(page, q))}
     description="Look back at the community’s game nights and tournaments."
     robots="noindex, follow"
-    loginReturnTo={pastEventsUrl(page)}
+    loginReturnTo={pastEventsUrl(page, q)}
   >
     <section
       data-island={PAST_EVENTS_ISLAND}
       data-testid={PAST_EVENTS_TESTID}
       data-page={page}
       data-total-pages={totalPages}
+      data-query={q}
       data-load-error={PAST_EVENTS_COPY.failed}
       aria-labelledby="past-events-heading"
     >
@@ -71,9 +84,19 @@ export const PastEventsPage: FC<{
         </a>{" "}
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
+      {subscriptionHelp(appUrl)}
       <div data-archive-state>
+        {q ? (
+          <p role="status">
+            Past events matching “{q}”. <a href="/events/past">Clear search</a>
+          </p>
+        ) : null}
         {rows.length === 0 ? (
-          totalPages === 0 ? (
+          totalPages === 0 && q ? (
+            <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
+              No past events match “{q}”. <a href="/events/past">Clear search</a>
+            </p>
+          ) : totalPages === 0 ? (
             <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
               <p>{PAST_EVENTS_COPY.empty}</p>
               <p>
@@ -94,12 +117,12 @@ export const PastEventsPage: FC<{
       </ul>
       <nav aria-label="Past event pages" data-archive-pager>
         {page > 1 && totalPages > 0 ? (
-          <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>
+          <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>
             Newer
           </a>
         ) : null}{" "}
         {hasMore ? (
-          <a data-archive-page href={pastEventsUrl(page + 1)}>
+          <a data-archive-page href={pastEventsUrl(page + 1, q)}>
             Older
           </a>
         ) : null}
@@ -109,6 +132,7 @@ export const PastEventsPage: FC<{
       </p>
       <p role="status" data-archive-feedback></p>
     </section>
+    <script src="/islands/copy-link.js" defer />
     <script src="/islands/past-events.js" defer />
   </ScheduleShell>
 );

@@ -19,6 +19,7 @@ import {
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
 import { listPast, normalizePastPage } from "./reads";
+import { matchQuery } from "./search-log";
 import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
@@ -109,6 +110,7 @@ export function registerCalendarRoutes(
       includeDrafts: session?.moderator ?? false,
       discord: discordEventsSource(c.env),
       now,
+      requestId: c.get("requestId"),
     });
     const {
       state,
@@ -198,13 +200,19 @@ export function registerCalendarRoutes(
   });
 
   app.get("/events/past", async (c) => {
+    const input = resolveCalendarInput({ q: c.req.query("q") });
+    if (input.queryTooLong) {
+      c.header("cache-control", "no-store, private");
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} archive />, 422);
+    }
+    const q = matchQuery(input.q);
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     // Anonymous shared entry (N6 retire): the archive renders no session, no
-    // flash and no RSVP controls, so every cookieless render is shareable.
+    // flash and no RSVP controls. Only search-free cookieless renders share bytes.
     // Only data pages settle — empty and out-of-range renders stay uncached
     // so a fresh archive never pins a stale "never ran" state, and keys stay
     // bounded.
@@ -212,7 +220,7 @@ export function registerCalendarRoutes(
       method: c.req.method,
       hasCookie: c.req.header("cookie") !== undefined,
       hasSession: false,
-      searching: false,
+      searching: input.searching,
       flashed: false,
     });
     const pastSource = pastEligible ? anonCacheSource(c.env) : null;
@@ -231,8 +239,8 @@ export function registerCalendarRoutes(
     // Same retire-generation guard as `/events`: an edit that commits while
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
-    const { rows, hasMore, totalPages } = await listPast(db, page);
-    c.header("cache-control", "public, max-age=300");
+    const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
+    c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
     const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
@@ -240,6 +248,7 @@ export function registerCalendarRoutes(
         hasMore={hasMore}
         totalPages={totalPages}
         appUrl={c.env.APP_URL}
+        q={q ?? ""}
       />,
     );
     // Buffer before the final generation comparison (see /events above): a

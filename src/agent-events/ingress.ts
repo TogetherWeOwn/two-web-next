@@ -2,6 +2,7 @@ import type { Sql } from "postgres";
 import { sha256Hex } from "../bot/signer";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
+import { retireApiPublicEventCache } from "../public-data/cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
 import {
@@ -367,9 +368,17 @@ async function processAgentEvent(
       // Replay identity spans operations and explicit/implicit event addresses.
       // Acquire its lock before the operation lock and transactional replay check.
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grant.id}:${idem}`}, 0))`;
-      // Fast receipts can wait on the grant FK too; bound them after the
-      // idempotency lock, without an operation lock, inner budgets or effects.
-      if (replay) return replayAnswer(tx, grant, op, replay, dig, requestId, idem);
+      // Fast receipts waited on the idempotency lock too: revalidate liveness
+      // after the wait and hold the grant lock through the receipt, like
+      // execution and raced replays — without an operation lock, inner budgets
+      // or dispatch effects. Admission wins over replay semantics: a grant disabled,
+      // removed or expired during the wait is refused even when the stored
+      // receipt would otherwise replay (combined precedence owned here).
+      if (replay) {
+        const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn, true);
+        if (refused) return refused;
+        return replayAnswer(tx, grant, op, replay, dig, requestId, idem);
+      }
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
       // Admission can change while the operation lock waits. Do not replay a success
       // for a grant that has since expired or been disabled.
@@ -410,6 +419,7 @@ async function processAgentEvent(
       (committed.status === 200 || committed.status === 201)
     ) {
       retireAnonEventCaches();
+      retireApiPublicEventCache();
       await retireHomeGuestCache();
     }
     return { status: committed.status, body: committed.body };

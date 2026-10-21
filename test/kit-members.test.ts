@@ -4,6 +4,7 @@ import {
   queueMembersBoardView,
   recordQueuedMembersBoardView,
   type QueueBoardView,
+  type RecordBoardView,
 } from "../src/kit-members";
 import { memberReadResponse } from "../src/member-reads";
 
@@ -47,12 +48,16 @@ describe("Kit member-board load parity", () => {
     expect(data.rows[1]).toMatchObject({ rank: 2, username: "Vic", isViewer: true });
     expect("viewerId" in data).toBe(false);
     expect(data.available).toBe(true);
-    expect(queueBoardViewFn).toHaveBeenCalledWith(db, {
-      boardKey: "members",
-      scope: "overall",
-      season: "all",
-      resultCount: 3,
-    });
+    expect(queueBoardViewFn).toHaveBeenCalledWith(
+      db,
+      {
+        boardKey: "members",
+        scope: "overall",
+        season: "all",
+        resultCount: 3,
+      },
+      undefined,
+    );
     expect(setHeaders).toHaveBeenCalledTimes(1);
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
@@ -88,6 +93,7 @@ describe("Kit member-board load parity", () => {
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ scope: "relative", resultCount: 3 }),
+      undefined,
     );
   });
 
@@ -140,6 +146,7 @@ describe("Kit member-board load parity", () => {
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ season: "2026-Q3" }),
+      undefined,
     );
   });
 
@@ -198,7 +205,7 @@ describe("Kit member-board load parity", () => {
       { seasonParam: "bogus" },
       { scopeParam: "friends" },
       { scopeParam: "bogus" },
-      { activityParam: "chess!" },
+      { activityParam: "chess\u0000" },
     ]) {
       const dbForFn = vi.fn(async () => ({}) as never);
       const loadRankingFn = vi.fn(async () => ranked);
@@ -238,6 +245,7 @@ describe("Kit member-board load parity", () => {
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       null,
       expect.objectContaining({ boardKey: "members", resultCount: 0 }),
+      undefined,
     );
   });
 
@@ -257,6 +265,8 @@ describe("Kit member-board load parity", () => {
     expect(recordBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ boardKey: "members", resultCount: 3 }),
+      undefined,
+      undefined,
     );
     // The stash is consumed: a second release record writes nothing more.
     await recordQueuedMembersBoardView(locals, 200, recordBoardViewFn);
@@ -342,5 +352,49 @@ describe("Kit member-board load parity", () => {
     );
     expect(released.status).toBe(200);
     expect(await released.text()).toBe("<h1>Member leaderboard</h1>");
+  });
+});
+
+describe("Kit member-board request id", () => {
+  const VALID_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  const entry = { boardKey: "members", scope: "overall", season: "all", resultCount: 3 };
+
+  it("forwards a caller-supplied request id to the queue call", async () => {
+    const queueBoardViewFn = vi.fn(() => {});
+    await loadMembersBoardData(args({ queueBoardViewFn, requestId: VALID_ID }));
+    expect(queueBoardViewFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ boardKey: "members" }),
+      VALID_ID,
+    );
+  });
+
+  it("omits the request id the caller does not supply", async () => {
+    const queueBoardViewFn = vi.fn<QueueBoardView>(() => {});
+    await loadMembersBoardData(args({ queueBoardViewFn }));
+    expect(queueBoardViewFn).toHaveBeenCalledTimes(1);
+    expect(queueBoardViewFn.mock.calls[0]![2]).toBeUndefined();
+  });
+
+  it("a queued request id rides along to the post-release record", async () => {
+    const recordBoardViewFn = vi.fn(async () => {});
+    const locals: Record<string, unknown> = {};
+    queueMembersBoardView(locals, {} as never, entry, VALID_ID);
+    await recordQueuedMembersBoardView(locals, 200, recordBoardViewFn);
+    expect(recordBoardViewFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ boardKey: "members" }),
+      undefined,
+      VALID_ID,
+    );
+  });
+
+  it("an unqueued request id reaches the record call as undefined", async () => {
+    const recordBoardViewFn = vi.fn<RecordBoardView>(async () => {});
+    const locals: Record<string, unknown> = {};
+    queueMembersBoardView(locals, {} as never, entry);
+    await recordQueuedMembersBoardView(locals, 200, recordBoardViewFn);
+    expect(recordBoardViewFn).toHaveBeenCalledTimes(1);
+    expect(recordBoardViewFn.mock.calls[0]![3]).toBeUndefined();
   });
 });

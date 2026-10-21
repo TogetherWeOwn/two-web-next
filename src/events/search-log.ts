@@ -6,15 +6,25 @@ import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
 import { isDatabaseUnavailable } from "../db/errors";
 import { nonSensitiveRead } from "../member-reads";
+import { safeRequestId } from "../request-log";
 
 export const MAX_QUERY_LENGTH = 255;
 
 /** NUL is rejected by PostgreSQL text parameters; drop it before matching or logging. */
 const stripNul = (raw: string | null | undefined): string => (raw ?? "").replace(/\u0000/g, "");
 
+/**
+ * HTML input preprocessing normalizes CR/CRLF in attribute values to LF, so a
+ * raw CR in `data-query` would desync the island from the %0D canonical and
+ * break every enhanced page turn. Normalize here so the SQL term, canonical,
+ * pager hrefs and data-query share one meaning on both twins.
+ */
+const normalizeNewlines = (value: string): string =>
+  value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
 /** Matching input: trimmed original text (no collapse/lowercase, as legacy). null = blank = not a search. */
 export function matchQuery(raw: string | null | undefined): string | null {
-  const t = stripNul(raw).trim();
+  const t = normalizeNewlines(stripNul(raw)).trim();
   return t === "" ? null : t;
 }
 
@@ -30,19 +40,23 @@ export const LOG_WRITE_DEADLINE_MS = 500;
 /** DB-side cap, shorter than the response deadline, so a blocked INSERT is cancelled server-side rather than left queued. */
 export const LOG_DB_TIMEOUT_MS = 400;
 
-/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN). */
+/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN), plus the validated request_id so the line joins to `http.request`. */
 export async function recordSearch(
   db: Db,
   raw: string | null | undefined,
   resultCount: number,
   deadlineMs = LOG_WRITE_DEADLINE_MS,
+  requestId?: string | null,
 ): Promise<void> {
   const normalized = normalizeQuery(raw);
   if (normalized === null) return;
-  const warn = (exception: string) =>
+  const warn = (exception: string) => {
+    const validated = safeRequestId(requestId);
     console.warn("Event search unavailable for logging; serving results without recording.", {
       exception,
+      ...(validated !== undefined ? { request_id: validated } : {}),
     });
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const write = (async () => {
     try {

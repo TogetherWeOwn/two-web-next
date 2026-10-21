@@ -38,7 +38,9 @@ import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./que
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
+import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   FEATURED_PAGE_SIZE,
@@ -71,6 +73,7 @@ import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
+import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
@@ -136,6 +139,13 @@ function errorPage(
 ) {
   c.status(status);
   return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+}
+
+function writeUnavailable(c: Context<Vars>) {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  if (prefersHtmlError(c)) return errorPage(c, 503, "Admin temporarily unavailable");
+  return c.text("Admin temporarily unavailable", 503);
 }
 
 /** Validation errors re-render the form (422). */
@@ -266,6 +276,22 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           throw result.reason;
         }
       }
+      // One correlated line per degraded widget: with a db present, a settled
+      // value of undefined is exactly the degraded signal for both helpers
+      // (they resolve undefined on cancellations, ordinary failures and
+      // deadline timeouts), so the log distinguishes degraded from healthy.
+      // Outages threw above; rejected cancellations fall through to the same
+      // line.
+      const requestId = safeRequestId(c.get("requestId"));
+      if (funnelResult.status !== "fulfilled" || funnelResult.value === undefined) {
+        console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
+      }
+      if (zeroSearchesResult.status !== "fulfilled" || zeroSearchesResult.value === undefined) {
+        console.warn("dashboard widget degraded", {
+          widget: "zero_searches",
+          request_id: requestId,
+        });
+      }
       funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
       zeroSearches =
         zeroSearchesResult.status === "fulfilled" ? zeroSearchesResult.value : undefined;
@@ -367,9 +393,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       let recurrence;
       try {
@@ -409,7 +435,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit" });
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const row = await getEvent(db, c.req.param("key"));
+    const key = c.req.param("key");
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+    const row = await getEvent(db, key);
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
     const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
@@ -435,12 +463,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -497,10 +526,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       async (c) => {
         const db = await dbOr503(c);
-        if (!db) return c.text("Admin temporarily unavailable", 503);
+        if (!db) return writeUnavailable(c);
+        const key = c.req.param("key");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
         try {
           const actor = c.get("adminActor");
-          const key = c.req.param("key");
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
@@ -588,9 +618,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -653,11 +683,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -701,7 +731,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);
@@ -720,11 +750,15 @@ function eventValues(row: EventRow): Record<string, unknown> {
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
+    accessibility_notes: row.accessibilityNotes ?? "",
     // Wall text in the row's zone — what the moderator typed is what they see.
     starts_at: utcToWall(row.startsAt, row.timezone),
     ends_at: utcToWall(row.endsAt, row.timezone),
     timezone: row.timezone,
     location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
     capacity: row.capacity === null ? "" : String(row.capacity),
   };
 }

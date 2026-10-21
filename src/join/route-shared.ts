@@ -73,8 +73,11 @@ export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 // A throwing store degrades to allow — the same verdict as throttleGuard
 // ("a missed count beats a 500") — unless the throw is a classified database
 // outage, which stays fail-closed: the global handler renders the branded 503
-// the outage matrix pins for both join routes. Silent by design: the error can
-// carry connection detail, so nothing is logged here.
+// the outage matrix pins for both join routes. This throw-path catch stays
+// silent by scope carve-out: only the throttleGuard path warns (see the
+// `Throttle store failed` row in docs/runbook-logs.md), while the null-store
+// allow warns inside checkJoinThrottle. A class-only line here would comply
+// with the no-echo pin, but that widening is a follow-up, not this leg.
 export async function throttled(c: Ctx): Promise<Response | null> {
   const verdict = await joinStore(c)
     .then((sql) =>

@@ -1,7 +1,12 @@
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
-import { databaseUnavailable, forbidden, NotFoundPage } from "../errors";
+import {
+  databaseUnavailable,
+  databaseUnavailableBuffered,
+  forbidden,
+  NotFoundPage,
+} from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
@@ -18,6 +23,7 @@ import {
   nextAttendeePage,
   parseAttendeePageParam,
   type EventLink,
+  type EventNeighbors,
   type PublicEvent,
 } from "./reads";
 import { waitlistPosition } from "./waitlist";
@@ -122,7 +128,7 @@ export function registerDetailRoutes(
           }
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
-          if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+          if (!db) return databaseUnavailableBuffered(c);
           const e = await getPublicEvent(db, key);
           if (!e) return notFound();
           if (e.status === "cancelled") {
@@ -181,9 +187,24 @@ export function registerDetailRoutes(
           // Both go through the keyed read, so every retrieved identity —
           // lookahead included — is audited before any private bytes release.
           const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
+          // Decorative reads fail open: a flaky neighbors/related lookup
+          // settles to its empty shape instead of 503ing the whole page.
+          // The page already renders both shapes (a lone event has null
+          // neighbors; an event with no siblings has an empty related
+          // rail), and both reads stay nonSensitive published-only, so no
+          // private bytes release and no audit row is skipped. Viewer reads
+          // below stay closed: their throws still refuse.
+          const neighborsSettled = getEventNeighbors(db, e).then(
+            (neighbors) => neighbors,
+            (): EventNeighbors => ({ previous: null, next: null }),
+          );
+          const relatedSettled = listRelatedEvents(db, e).then(
+            (related) => related,
+            (): EventLink[] => [],
+          );
           const [neighbors, related, attendees, position, answer] = await Promise.all([
-            getEventNeighbors(db, e),
-            listRelatedEvents(db, e),
+            neighborsSettled,
+            relatedSettled,
             session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),

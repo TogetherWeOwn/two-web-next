@@ -27,6 +27,13 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 - Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
 - Queue and scheduler code includes retries, locking, a queue ledger, `events:reconcile`, retention pruning, and `/up` readiness (503 on DB/schema failure, on a missing `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, or `DISCORD_BOT_TOKEN`, or on a weak `SESSION_SECRET` under the documented strength floor). The jobs worker uses a bot client and Postgres event store; missing bot endpoint/key/secret configuration makes bot calls fail as terminal jobs. Internal-action producer/consumer logic and its Wrangler queue binding exist, but the alert probe is the only sender to the internal-action queue; this does not claim normal web dispatch or end-to-end live bot parity ([`src/jobs/worker.ts`](src/jobs/worker.ts), [`src/jobs/call-internal-action.ts`](src/jobs/call-internal-action.ts), [`src/bot/client.ts`](src/bot/client.ts), [`src/alert-probe.ts`](src/alert-probe.ts), [`src/up.ts`](src/up.ts), [`wrangler.jsonc`](wrangler.jsonc), [`test/jobs.test.ts`](test/jobs.test.ts), [`test/jobs-worker-config.test.ts`](test/jobs-worker-config.test.ts), [`test/callinternalaction-no-web-dispatch.test.ts`](test/callinternalaction-no-web-dispatch.test.ts), [`test/up.test.ts`](test/up.test.ts)). Guarded one-row re-dispatch applies a single `replay` advice by queueing a fresh sync-event via `POST /admin/queue/failed/:id/redispatch`; it is staging-only and disabled until separately authorized ([queue-redrive runbook](docs/queue-redrive-runbook.md)) ([`src/admin/queue-redispatch.ts`](src/admin/queue-redispatch.ts), [`src/admin/routes.tsx`](src/admin/routes.tsx), [`test/queue-redispatch-route.test.ts`](test/queue-redispatch-route.test.ts), [`test/queue-redispatch-postgres.test.ts`](test/queue-redispatch-postgres.test.ts)).
 
+## Event search
+
+Calendar past searches preview up to 20 matches. Use **Continue search in past events**
+to page through older matches without losing the query; **Clear search** returns to
+the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
+for matching rules, empty-state recovery and cache boundaries.
+
 ## Moderator guides
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
@@ -170,6 +177,12 @@ them with esbuild into the checked-in `public/islands/*.js` and
 frontend framework bundle to generate. Island and stylesheet tests execute the
 minified bytes, so edit the source, rebuild, and commit both.
 
+Successful calendar fragment navigation and Back/Forward keep guest header sign-in,
+hero Join and card sign-in destinations aligned with the committed URL, retaining
+ordinary-login versus join endpoints and attribution parameters. Unsent search
+drafts and failed, superseded or invalid fragments do not install new destinations;
+replacement links and zones are admitted together without replacing the search input.
+
 ```sh
 npm run build:assets                 # regenerate public/ from assets/
 npm run build:assets:check           # fail when the output drifted
@@ -177,14 +190,31 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
+a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
+(mirroring `API_PUBLIC_BOUNDS.maxBodyBytes`, enforced while streaming when a
+reader exists); settlement aborts the per-call fetch and releases its queue
+entry and pagehide forwarder. Failures reject with an `Error` carrying a
+stable `.code`, a safe `.message` naming the next step, and `.retryAfter`
+seconds (1–86400) on rate limits only. Codes: `timeout`,
+`invalid_response` (oversize, malformed, or unexpected redirect),
+`unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
+retried automatically), `not_found` (unknown event key, no retry),
+`invalid_request` (bad event key, thrown synchronously). Local check,
+fixtures only:
+
+```sh
+npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
+```
+
 ### Browser regressions
 
-These suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
-named suite passed and at least the minimum ran. The RSVP `node --test` suite
-writes a TAP report and runs `ci/rsvp-focus-require-executed.mjs` the same way.
+named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
+write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
@@ -193,12 +223,15 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
 | `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -465,8 +498,9 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-`npm run check:worker-moderators` parses the top-level
-`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`npm run check:moderators -- --help` prints usage to stdout and reads nothing;
+`--json` emits the findings verdict. `npm run check:worker-moderators` parses
+the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
 `web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
 `env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
 Owner+Moderator pair (staging guild `1545644954272137297`:

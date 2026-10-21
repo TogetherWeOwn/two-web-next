@@ -221,12 +221,19 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
 // configuration means a no-op upsert so DB-free sign-in tests still work.
 // No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
 // the migrate workflow.
-async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
+function rosterSqlFor(c: Context<{ Bindings: Env }>): {
+  sql: Sql | null;
+  close?: () => Promise<void>;
+} {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
-  if (injected) return injected;
+  if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
-  if (!url) return null;
-  return postgres(url, databaseOptions) as unknown as Sql;
+  if (!url) return { sql: null };
+  const client = postgres(url, databaseOptions);
+  return {
+    sql: client as unknown as Sql,
+    close: () => client.end({ timeout: 0 }),
+  };
 }
 
 /** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
@@ -316,12 +323,19 @@ async function issueSession(
   // carries no moderator field — `users` has no such column, and the flag is
   // recomputed from Discord role IDs into the session row only.
   try {
-    await upsertRosterUser(await rosterSqlFor(c), {
-      id: row.userId,
-      username: row.username,
-      avatar: row.avatar,
-      member: row.member,
-    });
+    const roster = rosterSqlFor(c);
+    try {
+      await upsertRosterUser(roster.sql, {
+        id: row.userId,
+        username: row.username,
+        avatar: row.avatar,
+        member: row.member,
+      });
+    } finally {
+      // Dedicated optional client only: never close injected/shared or session
+      // storage. SQL limits cancel backend work; end also settles pending I/O.
+      await roster.close?.();
+    }
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
@@ -529,7 +543,13 @@ app.get("/", async (c) => {
     executionCtx,
     c.get("requestId"),
   );
-  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
+  const featuredPromise = cachedFeatured(
+    c.env,
+    () => dbFor(c),
+    new Date(),
+    executionCtx,
+    c.get("requestId"),
+  );
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
     await Promise.all([
       sessionPromise,
@@ -692,12 +712,11 @@ app.get("/up", async (c) => {
     // the status code. Parsing mirrors enforceOn exactly — no raw value or
     // variable name is echoed into the body. Security note: this two-state
     // label is intentionally public on the unauthenticated /up body. The
-    // control name and its degraded meaning are already public in the
-    // operator runbooks, and dashboards poll /up without credentials, so an
-    // authenticated-only signal would not reach its consumers. Exploiting a
-    // log-only window still needs an authenticated read plus a failed audit
-    // write, so the field aids operators without giving an unauthenticated
-    // caller a bypass. Consistent with the existing public config/db/queue
+    // control name is already public in the operator runbooks, and dashboards
+    // poll /up without credentials, so an authenticated-only signal would not
+    // reach its consumers. `log_only` is a legacy label with no serving
+    // effect — the keyed read boundary always fails closed — so the field
+    // aids operators without giving an unauthenticated caller a bypass. Consistent with the existing public config/db/queue
     // signals, which likewise describe operational posture, not secrets.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
