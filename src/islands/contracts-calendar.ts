@@ -6,7 +6,9 @@
 
 export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 export {
+  calendarDayLongLabel,
   calendarZone,
+  canonicalIntervalDays,
   cardDayLabel,
   cardTimeLabel,
   isValidZone,
@@ -16,7 +18,7 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
 import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -344,6 +346,12 @@ export function gridTitle(title: string): string {
 /** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
 export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
   return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+}
+
+/** Continuation link name starts with the visible "Continues title" (WCAG
+ * 2.5.3), then the displayed day — never the original start. */
+export function gridContinuationAccessibleName(title: string, dayIso: string): string {
+  return `Continues ${title}, ${calendarDayLongLabel(dayIso)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

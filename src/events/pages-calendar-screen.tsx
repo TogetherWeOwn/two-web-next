@@ -15,10 +15,12 @@ import {
   EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
+  calendarGridRange,
   calendarMonthEmptyCopy,
   calendarSearching,
   calendarShowingPast,
   calendarUrl,
+  canonicalIntervalDays,
   monthGrid,
   wallDateIso,
   wallMonth,
@@ -39,7 +41,7 @@ import {
 } from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
 import { CalendarList } from "./pages-calendar-list";
-import { type CalRow, rowZone } from "./pages-calendar-row";
+import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
 
 /**
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
@@ -104,11 +106,34 @@ export const EventsCalendarPage: FC<{
   const searchMiss = searching && !hasVisibleResults && emptyState === null && !outOfRange;
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
-  for (const e of [...upcoming, ...(showPast ? past : [])]) {
-    const key = wallDateIso(e.startsAt, rowZone(e, zone));
-    const list = byDay.get(key) ?? [];
+  const pushDay = (day: string, e: CalRow) => {
+    const list = byDay.get(day) ?? [];
     list.push(e);
-    byDay.set(key, list);
+    byDay.set(day, list);
+  };
+  // Canonical upcoming rows occupy every host-zone day their finite interval
+  // touches, clipped to the grid before iteration; transients and past rows
+  // keep start-day-only plotting.
+  const gridRange = calendarGridRange(state.month);
+  for (const e of upcoming) {
+    if (!isTransient(e) && gridRange) {
+      for (const day of canonicalIntervalDays(
+        e.startsAt,
+        e.endsAt,
+        e.timezone,
+        gridRange.first,
+        gridRange.last,
+      )) {
+        pushDay(day, e);
+      }
+    } else {
+      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
+    }
+  }
+  if (showPast) {
+    for (const e of past) {
+      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
+    }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   // Month-local emptiness counts past rows even with the drawer closed: the
@@ -262,8 +287,13 @@ export const EventsCalendarPage: FC<{
   );
 };
 
-/** No-JS over-limit search: a notice with site chrome. It never echoes the query back. */
-export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
+/** No-JS over-limit search: a notice with site chrome. It never echoes the query back.
+ * Served for both the upcoming schedule and the past archive; the archive
+ * turn keeps archive searchers in context instead of ejecting them. */
+export const EventsSearchTooLongPage: FC<{ appUrl: string; archive?: boolean }> = ({
+  appUrl,
+  archive = false,
+}) => (
   <ScheduleShell
     title="Events"
     canonical={canonicalUrl(appUrl, "/events")}
@@ -275,7 +305,11 @@ export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
     </div>
     <p role="alert">{EVENTS_SEARCH_TOO_LONG_COPY}</p>
     <p>
-      <a href="/events">Back to events</a>
+      {archive ? (
+        <a href="/events/past">Back to past events</a>
+      ) : (
+        <a href="/events">Back to events</a>
+      )}
     </p>
   </ScheduleShell>
 );
