@@ -43,6 +43,7 @@ describe("dbFor connection wiring", () => {
       connect_timeout: 10,
       prepare: false,
       fetch_types: false,
+      connection: { statement_timeout: 5000 },
     });
     expect(makeDb).toHaveBeenCalledWith({ client: true }, { schema: expect.any(Object) });
   });

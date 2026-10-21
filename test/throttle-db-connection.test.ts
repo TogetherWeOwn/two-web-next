@@ -48,6 +48,7 @@ describe("throttle runtime connection wiring", () => {
       connect_timeout: 10,
       prepare: false,
       fetch_types: false,
+      connection: { statement_timeout: 5000 },
     });
   });
 

@@ -5,7 +5,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { Db } from "../db/index";
 import { memberReadDb } from "../db/member-reads";
-import { databaseOptions, databaseUrl } from "../db/connection";
+import { databaseUrl, perRequestDatabaseOptions } from "../db/connection";
 import * as adminSchema from "../db/admin-schema";
 import * as baseSchema from "../db/schema";
 import type { Env } from "../env";
@@ -20,6 +20,6 @@ export async function dbFor(c: { env: Env }): Promise<Db | null> {
   const url = databaseUrl(c.env);
   if (!url) return null;
   const { default: postgres } = await import("postgres");
-  const client = postgres(url, databaseOptions);
+  const client = postgres(url, perRequestDatabaseOptions());
   return memberReadDb(drizzle(client, { schema: { ...baseSchema, ...adminSchema } }));
 }

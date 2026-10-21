@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseUrl, perRequestDatabaseOptions } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -212,7 +212,7 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   if (!url) return createMemorySessionStore();
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
+  const sql = postgres(url, perRequestDatabaseOptions()) as unknown as Sql;
   return createPostgresSessionStore(sql);
 }
 
@@ -229,7 +229,7 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
   if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
   if (!url) return { sql: null };
-  const client = postgres(url, databaseOptions);
+  const client = postgres(url, perRequestDatabaseOptions());
   return {
     sql: client as unknown as Sql,
     close: () => client.end({ timeout: 0 }),
@@ -254,8 +254,9 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
 const freshLoginChains = new Map<string, Promise<void>>();
 
 /** Bound on waiting for the previous same-user issuance (see
- * withFreshLoginUserLock): a holder that never settles its tail — a hung
- * store query (no statement timeout is configured) or a disconnect-cancelled
+ * withFreshLoginUserLock): a holder that never settles its tail — a store
+ * query stalled on transport (the per-request statement timeout cancels
+ * server-side execution, not a dead socket) or a disconnect-cancelled
  * callback — would otherwise hang that user's future logins on the isolate
  * indefinitely. Normal insert+sweep work is millisecond-scale and the
  * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only

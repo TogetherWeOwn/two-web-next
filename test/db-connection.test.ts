@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { databaseOptions, databaseUrl } from "../src/db/connection";
+import { databaseOptions, databaseUrl, perRequestDatabaseOptions } from "../src/db/connection";
 
 describe("web database connection selection", () => {
   it("uses the provisioned Hyperdrive binding without DATABASE_URL", () => {
@@ -35,5 +35,13 @@ describe("web database connection selection", () => {
       prepare: false,
       fetch_types: false,
     });
+  });
+
+  it("bounds fresh per-request clients without touching the shared options", () => {
+    expect(perRequestDatabaseOptions()).toEqual({
+      ...databaseOptions,
+      connection: { statement_timeout: 5000 },
+    });
+    expect(databaseOptions).not.toHaveProperty("statement_timeout");
   });
 });
