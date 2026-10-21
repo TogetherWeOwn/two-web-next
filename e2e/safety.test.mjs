@@ -60,8 +60,10 @@ test("default Playwright project ignores staging specs and wires a local-only te
 
   const teardown = readFileSync(new URL("./local-global-teardown.ts", import.meta.url), "utf8");
   assert.match(teardown, /requireGithubRunner\(\)/);
-  assert.match(teardown, /baseURL:\s*LOCAL_FIXTURE_ORIGIN/);
-  assert.match(teardown, /ignoreHTTPSErrors:\s*true/);
+  // DB-direct backstop: disposable CI Postgres only, zero QA logins, no HTTP.
+  assert.match(teardown, /requireTestDatabase\(process\.env\.DATABASE_URL\)/);
+  assert.match(teardown, /sweepLocalFixturesDb\(sql\)/);
+  assert.doesNotMatch(teardown, /\/auth\/qa|E2E_QA_TOKEN|request\.newContext/);
   assert.doesNotMatch(teardown, /stagingOrigin|playwright\.staging\.config/);
 });
 

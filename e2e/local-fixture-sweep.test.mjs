@@ -1,336 +1,65 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  LOCAL_FIXTURE_ORIGIN,
+  isLocalFixtureTitle,
   LOCAL_FIXTURE_TITLE_PREFIXES,
-  loginLocalSweep,
-  localSweepListPath,
-  localSweepNextListPath,
-  parseLocalFixtureRows,
-  sweepLocalFixtures,
+  LOCAL_SWEEP_STATUSES,
+  sweepLocalFixturesDb,
 } from "./local-fixture-sweep.mjs";
 
-const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const row = (key, title) => `<a href="/admin/events/${key}">${title}</a>`;
-const response = (status, html = "") => ({ status: () => status, text: async () => html });
-const throttled = () => ({ status: () => 429, headers: () => ({ "retry-after": "60" }) });
-
-test("local teardown login honors the shared throttle before retrying", async () => {
-  let time = 0;
-  let attempts = 0;
-  const waits = [];
-  await loginLocalSweep(
-    async (options) => {
-      attempts++;
-      assert.equal(options.maxRedirects, 0);
-      assert.equal(options.timeout, 30_000);
-      return attempts === 1 ? throttled() : response(204);
-    },
-    {
-      now: () => time,
-      wait: async (ms) => {
-        waits.push(ms);
-        time += ms;
-      },
-    },
-  );
-  assert.equal(attempts, 2);
-  assert.deepEqual(waits, [60_000]);
-});
-
-test("local teardown login exhausts after three throttled attempts", async () => {
-  let attempts = 0;
-  let waits = 0;
-  await assert.rejects(
-    loginLocalSweep(
-      async () => {
-        attempts++;
-        return throttled();
-      },
-      { wait: async () => waits++ },
-    ),
-    /QA login throttle retry limit exhausted/,
-  );
-  assert.equal(attempts, 3);
-  assert.equal(waits, 2);
-});
-
-test("local teardown login never retries refused credentials or transport errors", async () => {
-  for (const status of [302, 401, 403, 404, 500]) {
-    let attempts = 0;
-    await assert.rejects(
-      loginLocalSweep(async () => {
-        attempts++;
-        return response(status);
-      }),
-      new RegExp(`QA moderator login answered ${status}`),
+// Fake postgres.js client: records the interpolated statement, returns canned rows.
+function fakeSql(rows) {
+  const seen = [];
+  const sql = (strings, ...values) => {
+    seen.push(
+      strings.reduce(
+        (text, part, index) => text + part + (index < values.length ? `$${index + 1}` : ""),
+        "",
+      ),
     );
-    assert.equal(attempts, 1);
-  }
-  let attempts = 0;
-  await assert.rejects(
-    loginLocalSweep(async () => {
-      attempts++;
-      throw new Error("sanitized transport failure");
-    }),
-    /sanitized transport failure/,
-  );
-  assert.equal(attempts, 1);
-});
-
-test("local teardown login refuses a wait beyond the shared deadline", async () => {
-  await assert.rejects(
-    loginLocalSweep(async () => throttled(), {
-      now: () => 0,
-      deadline: 60_000,
-      wait: async () => assert.fail("No time remains for another request"),
-    }),
-    /time limit exhausted before QA login retry/,
-  );
-});
-
-test("local teardown checks the shared deadline again after a throttle wait", async () => {
-  let time = 0;
-  let attempts = 0;
-  await assert.rejects(
-    loginLocalSweep(
-      async () => {
-        attempts++;
-        return throttled();
-      },
-      {
-        now: () => time,
-        wait: async () => {
-          time = 300_000;
-        },
-      },
-    ),
-    /time limit exhausted/,
-  );
-  assert.equal(attempts, 1);
-});
-
-test("local sweep targets only its fixed origin and cancels matching leftovers", async () => {
-  let cancelled = false;
-  const requests = [];
-  const api = {
-    async get(path, options) {
-      requests.push({ method: "GET", path, options });
-      assert.ok(path.startsWith("/admin/events?"));
-      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
-      const prefix = LOCAL_FIXTURE_TITLE_PREFIXES.find((value) => value.trim() === query.get("q"));
-      const hasLeftover =
-        !cancelled && query.get("status") === "draft" && prefix === LOCAL_FIXTURE_TITLE_PREFIXES[0];
-      return response(200, hasLeftover ? row(KEY, `${prefix}fixture`) : "");
-    },
-    async post(path, options) {
-      requests.push({ method: "POST", path, options });
-      cancelled = true;
-      return response(303);
-    },
+    return Promise.resolve(rows);
   };
-
-  assert.equal(await sweepLocalFixtures(api), 1);
-  assert.equal(cancelled, true);
-  assert.equal(requests.filter((entry) => entry.method === "POST").length, 1);
-  for (const { path, options } of requests) {
-    assert.ok(path.startsWith("/"), "requests must be relative to the local API context");
-    assert.equal(options.maxRedirects, 0);
-    assert.ok(options.timeout > 0 && options.timeout <= 30_000);
-    if (options.headers) assert.equal(options.headers.Origin, LOCAL_FIXTURE_ORIGIN);
-  }
-  assert.ok(requests.some(({ path }) => path.includes(encodeURIComponent(KEY))));
-});
+  return { sql, seen };
+}
 
 test("local sweep matches only its named fixture titles", () => {
-  const html = [
-    row(KEY, "E2E Waitlist fixture"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAW", "E2E Promotion fixture"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAA", "E2E Pause fixture"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAD", "E2E Moderator Game Night"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAE", "E2E Filter Draft 1760860000000"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAF", "E2E Filter Paused 1760860000000"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAB", "E2E Waitlistish unrelated"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAC", "Staging E2E event"),
-  ].join("");
-  assert.deepEqual(parseLocalFixtureRows(html, "E2E Waitlist "), [
-    { eventKey: KEY, title: "E2E Waitlist fixture" },
-  ]);
-  assert.deepEqual(parseLocalFixtureRows(html, "E2E Promotion "), [
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW", title: "E2E Promotion fixture" },
-  ]);
-  assert.deepEqual(parseLocalFixtureRows(html, "E2E Pause "), [
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "E2E Pause fixture" },
-  ]);
-  assert.deepEqual(parseLocalFixtureRows(html, "E2E Moderator "), [
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD", title: "E2E Moderator Game Night" },
-  ]);
-  assert.deepEqual(parseLocalFixtureRows(html, "E2E Filter "), [
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAE", title: "E2E Filter Draft 1760860000000" },
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAF", title: "E2E Filter Paused 1760860000000" },
-  ]);
-  assert.throws(() => localSweepListPath("Staging E2E ", "draft"), /invalid list filter/);
-});
-
-test("local sweep lists and deletes E2E Filter fixtures in both swept statuses", async () => {
-  assert.ok(LOCAL_FIXTURE_TITLE_PREFIXES.includes("E2E Filter "));
-  const draftKey = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
-  const publishedKey = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
-  const cancelled = new Set();
-  const seen = [];
-  const api = {
-    async get(path) {
-      seen.push(path);
-      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
-      if (query.get("q") !== "E2E Filter") return response(200);
-      if (query.get("status") === "draft" && !cancelled.has(draftKey)) {
-        return response(200, row(draftKey, "E2E Filter Draft 1760860000000"));
-      }
-      if (query.get("status") === "published" && !cancelled.has(publishedKey)) {
-        return response(200, row(publishedKey, "E2E Filter Paused 1760860000000"));
-      }
-      return response(200);
-    },
-    async post(path) {
-      cancelled.add(path.split("/")[3]);
-      return response(303);
-    },
-  };
-  assert.equal(await sweepLocalFixtures(api), 2);
-  assert.deepEqual([...cancelled].sort(), [draftKey, publishedKey].sort());
-  const listed = (status) =>
-    seen.some((path) => {
-      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
-      return query.get("q") === "E2E Filter" && query.get("status") === status;
-    });
-  assert.ok(listed("draft"), "sweep lists E2E Filter fixtures with status=draft");
-  assert.ok(listed("published"), "sweep lists E2E Filter fixtures with status=published");
-});
-
-test("local pagination rejects staging and other non-local origins", () => {
-  const current = localSweepListPath("E2E Waitlist ", "draft");
-  const allowedNext = localSweepListPath("E2E Waitlist ", "draft", 2);
-  assert.equal(
-    localSweepNextListPath(`<a rel="next" href="${allowedNext}">Next</a>`, current),
-    allowedNext,
-  );
-  for (const href of [
-    `https://next.togetherweown.com${allowedNext}`,
-    `https://togetherweown.com${allowedNext}`,
-    "//example.invalid/admin/events?page=2",
-    `${allowedNext}&status=published`,
-    `${allowedNext}#external`,
+  for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
+    assert.equal(isLocalFixtureTitle(`${prefix}fixture`), true);
+  }
+  // The seeded event and every other title stay live: the sweep must never
+  // cancel the event the parity and perf steps read.
+  for (const title of [
+    "E2E Community Night",
+    "E2E Waitlistish unrelated",
+    "Staging E2E event",
+    "E2E Filter",
+    "",
   ]) {
-    assert.throws(
-      () => localSweepNextListPath(`<a rel="next" href="${href}">Next</a>`, current),
-      /invalid pagination link/,
-    );
+    assert.equal(isLocalFixtureTitle(title), false, title);
   }
 });
 
-test("local sweep fails closed if cancellation leaves a fixture behind", async () => {
-  const api = {
-    async get(path) {
-      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
-      return response(
-        200,
-        query.get("status") === "draft" && query.get("q") === "E2E Waitlist"
-          ? row(KEY, "E2E Waitlist fixture")
-          : "",
-      );
-    },
-    async post() {
-      return response(303);
-    },
-  };
-  await assert.rejects(sweepLocalFixtures(api), /left 1 RSVP fixture\(s\) live after 4 passes/);
+test("local sweep cancels live fixtures in one statement and returns their keys", async () => {
+  const { sql, seen } = fakeSql([
+    { event_key: "01ARZ3NDEKTSV4RRFFQ69G5FAV" },
+    { event_key: "01ARZ3NDEKTSV4RRFFQ69G5FAW" },
+  ]);
+  const swept = await sweepLocalFixturesDb(sql);
+  assert.deepEqual(swept, ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"]);
+  assert.equal(seen.length, 1);
+  const statement = seen[0];
+  assert.match(statement, /UPDATE events SET status = 'cancelled'/);
+  assert.match(statement, /RETURNING event_key/);
+  for (const status of LOCAL_SWEEP_STATUSES) {
+    assert.ok(statement.includes(`'${status}'`), `sweeps status ${status}`);
+  }
+  for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
+    assert.ok(statement.includes(`title LIKE '${prefix}%'`), `sweeps prefix ${prefix}`);
+  }
 });
 
-test("local sweep traverses lookalike-only pages and removes published promotion fixtures", async () => {
-  let cancelled = false;
-  let sawSecondPage = false;
-  const api = {
-    async get(path) {
-      const query = new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams;
-      if (query.get("q") !== "E2E Promotion" || query.get("status") !== "published") {
-        return response(200);
-      }
-      if (query.get("page") === "2") {
-        sawSecondPage = true;
-        return response(200, cancelled ? "" : row(KEY, "E2E Promotion leftover"));
-      }
-      return response(
-        200,
-        `${row("01ARZ3NDEKTSV4RRFFQ69G5FAW", "Not an E2E Promotion fixture")}<a rel="next" href="${localSweepListPath("E2E Promotion ", "published", 2)}">Next</a>`,
-      );
-    },
-    async post(path) {
-      assert.equal(path, `/admin/events/${KEY}/cancel`);
-      cancelled = true;
-      return response(303);
-    },
-  };
-  assert.equal(await sweepLocalFixtures(api), 1);
-  assert.equal(sawSecondPage, true);
-});
-
-test("local sweep fails closed on list redirects and cancellation errors", async () => {
-  let writes = 0;
-  await assert.rejects(
-    sweepLocalFixtures({
-      get: async () => response(302),
-      post: async () => {
-        writes++;
-        return response(303);
-      },
-    }),
-    /admin events list answered 302/,
-  );
-  assert.equal(writes, 0);
-  await assert.rejects(
-    sweepLocalFixtures({
-      get: async () => response(200, row(KEY, "E2E Waitlist leftover")),
-      post: async () => response(429),
-    }),
-    /cancel answered 429/,
-  );
-});
-
-test("local sweep bounds pagination before page 21", async () => {
-  let reads = 0;
-  await assert.rejects(
-    sweepLocalFixtures({
-      async get(path) {
-        reads++;
-        const page = Number(new URL(path, LOCAL_FIXTURE_ORIGIN).searchParams.get("page") ?? 1);
-        return response(
-          200,
-          `<a rel="next" href="${localSweepListPath("E2E Waitlist ", "published", page + 1)}">Next</a>`,
-        );
-      },
-      post: async () => assert.fail("No matching fixture to cancel"),
-    }),
-    /pagination limit exhausted/,
-  );
-  assert.equal(reads, 20);
-});
-
-test("local sweep refuses further requests after its deadline", async () => {
-  let time = 0;
-  let reads = 0;
-  await assert.rejects(
-    sweepLocalFixtures(
-      {
-        async get() {
-          reads++;
-          time = 300_000;
-          return response(200);
-        },
-        post: async () => assert.fail("No matching fixture to cancel"),
-      },
-      { now: () => time },
-    ),
-    /time limit exhausted/,
-  );
-  assert.equal(reads, 1);
+test("local sweep returns no keys when no fixture is live", async () => {
+  const { sql, seen } = fakeSql([]);
+  assert.deepEqual(await sweepLocalFixturesDb(sql), []);
+  assert.equal(seen.length, 1);
 });
