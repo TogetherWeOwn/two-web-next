@@ -346,12 +346,14 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 | `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |
 | `public/islands/avatar.js` | 287 / 213 | 512 / 512 |
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
-| `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
+| `public/islands/events-calendar.js` | 7180 / 2639 | 7680 / 2816 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
 | `public/islands/member-profile.js` | 9471 / 3500 | 12288 / 4608 |
 | `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
 | `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |
+
+2026-10-21: the `events-calendar.js` row now records the calendar month-jump merge (7180/2639 B); ceilings 7680/2816 B are the minimal steps covering it.
 
 The auth-status gzip ceiling uses the repository's ×1.25 rule on its recorded
 2026-10-10 baseline (1213 B → 1536 B). This approved headroom covers two
