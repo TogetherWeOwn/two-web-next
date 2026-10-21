@@ -1322,7 +1322,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
     });
 
-    async function openProfile(saveThrows: () => unknown) {
+    async function openProfile(saveThrows: () => unknown, withholdIslandUntilWrite = true) {
       const sessions = createMemorySessionStore();
       const token = newSessionToken();
       await sessions.create({
@@ -1369,6 +1369,9 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       });
       contexts.push(context);
       const writes: { method: string; status: number }[] = [];
+      // Withheld only until the first native write navigates; the 503 page
+      // and everything after get the shipped binder.
+      let withholdIsland = withholdIslandUntilWrite;
       const assets: Record<string, { body: string; contentType: string }> = {
         "/styles.css": { body: readFileSync("public/styles.css", "utf8"), contentType: "text/css" },
         "/islands/member-profile.js": {
@@ -1386,6 +1389,11 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           const url = new URL(request.url!, base);
           const asset = assets[url.pathname];
           if (asset) {
+            if (url.pathname === "/islands/member-profile.js" && withholdIsland) {
+              reply.writeHead(404);
+              reply.end();
+              return;
+            }
             reply.writeHead(200, { "content-type": asset.contentType });
             reply.end(asset.body);
             return;
@@ -1415,8 +1423,10 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
               (_, prefix) => prefix + String(Date.now() - 5000),
             );
           }
-          if (request.method !== "GET")
+          if (request.method !== "GET") {
             writes.push({ method: request.method!, status: response.status });
+            withholdIsland = false;
+          }
           reply.writeHead(response.status, Object.fromEntries(response.headers));
           reply.end(body);
         } catch (error) {
