@@ -61,41 +61,6 @@ export function sleep(ms) {
 }
 
 /**
- * One QA login POST with bounded 429 retries for specs that post through
- * Playwright (the local browser smoke and Kit parity; staging posts over
- * Node fetch via qa-request.mjs instead, so the token never enters a trace).
- *
- * Only a 429 retries: any other status returns immediately for the caller to
- * assert, so a bad token or a downed worker fails fast with the caller's own
- * message. A refused 429 inserts no throttle row (checkJoinThrottle admits
- * or records under one advisory lock, src/join/service.ts), so each retry
- * spends nothing — it only waits out the window the server names in
- * Retry-After, then the retry is admitted unless a concurrent spender refills
- * the bucket. Past QA_LOGIN_MAX_ATTEMPTS the wait becomes the loud
- * qaLoginThrottleError, which points at cutting logins instead of retrying
- * harder. Callers size their block timeout with qaLoginRetryBudgetMs first:
- * one capped wait already exceeds the 30 s config timeout that also bounds
- * hooks, so without that raise a 429 dies as a hook/test timeout instead of
- * completing its retry.
- *
- * @template T
- * @param {() => Promise<T & { status(): number, headers(): Record<string, string> }>} post one login attempt
- * @param {string} identity "qa-member" | "qa-moderator"
- * @param {string} [scope] "local" (default) or "staging"
- * @returns {Promise<T & { status(): number, headers(): Record<string, string> }>} the first non-429 response
- */
-export async function postQaLoginWithRetry(post, identity, scope = "local") {
-  let retryAfterSeconds = 60;
-  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt += 1) {
-    const response = await post();
-    if (response.status() !== 429) return response;
-    retryAfterSeconds = parseRetryAfterSeconds(response.headers());
-    if (attempt < QA_LOGIN_MAX_ATTEMPTS) await sleep(retryAfterSeconds * 1000);
-  }
-  throw qaLoginThrottleError(identity, retryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS, scope);
-}
-
-/**
  * Longest the Retry-After waits can take across `loginCount` sequential
  * logins: each login sleeps at most QA_LOGIN_MAX_ATTEMPTS - 1 times, bounded
  * by QA_LOGIN_RETRY_AFTER_CAP_SECONDS. Callers running under a test or hook
