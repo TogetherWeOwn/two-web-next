@@ -12,10 +12,11 @@ import { pathToFileURL } from "node:url";
 //
 // Session lifecycle: after the event checks the probe also pins the QA
 // session's cookie attributes (login Set-Cookie for both the session and the
-// auth-status probe cookie), one-shot rotation on an authenticated page view
-// (the replayed old cookie stops authenticating on /auth/status, the new one
-// does), server-side logout revocation with both cookies cleared, and that the
-// QA bad-token 404 is indistinguishable from a missing-route 404. Failure
+// auth-status probe cookie), rotation on an authenticated page view (the new
+// cookie authenticates on /auth/status, and the replayed old cookie stops
+// authenticating once the bounded immediate-predecessor grace ends),
+// server-side logout revocation with both cookies cleared, and that the QA
+// bad-token 404 is indistinguishable from a missing-route 404. Failure
 // output names attributes and states only, never a token or cookie value.
 //
 
@@ -269,9 +270,25 @@ function parseBody(text) {
   }
 }
 
+// Product contract (src/sessions.ts SESSION_PREDECESSOR_GRACE_SECONDS): the
+// immediate predecessor may keep authenticating for at most 10s after a
+// winning rotation. The replay check polls past that window and fails closed
+// if the old cookie still authenticates once the window has ended. Tests pass
+// a short window so the loopback suite stays fast.
+export const PREDECESSOR_GRACE_MS = 10_000;
+const REPLAY_POLL_MS = 1_000;
+
 export async function jsonSmoke(
   baseUrl,
-  { token, timeoutMs = 5_000, log = console.log, warn = console.error, ledgerPath = null } = {},
+  {
+    token,
+    timeoutMs = 5_000,
+    log = console.log,
+    warn = console.error,
+    ledgerPath = null,
+    predecessorGraceMs = PREDECESSOR_GRACE_MS,
+    replayPollMs = REPLAY_POLL_MS,
+  } = {},
 ) {
   if (typeof token !== "string" || !token) {
     throw new Error("QA_AUTH_TOKEN is required (staging QA login token)");
@@ -699,10 +716,13 @@ export async function jsonSmoke(
       else pass(label);
     }
 
-    // One authenticated page view rotates the token: the old value is revoked
-    // in the same statement that mints its replacement.
+    // One authenticated page view rotates the token. The predecessor stays
+    // valid only inside the bounded grace window (fixed 10s from the winning
+    // rotation, never extended by reads), so the replay verdict below polls
+    // until that window ends instead of requiring instant death.
     try {
       const page = await call("/", { session: cookie, headers: { accept: "text/html" } });
+      const rotatedAt = Date.now();
       const replacement = cookieNamed(page, SESSION_COOKIE);
       // The server may already have rotated. Cleanup must track the issued value
       // even when reading the page or checking either status response fails.
@@ -723,7 +743,27 @@ export async function jsonSmoke(
         const flags = sessionCookieProblems(replacementStatus);
         if (flags.length) problems.push(`replacement status cookie violated ${flags.join(", ")}`);
       }
-      const old = await authenticates(cookie);
+      // Poll the old cookie until the grace window ends. Only a clean
+      // `authenticated: true` verdict keeps polling (that is the grace);
+      // any other verdict — outage, mutation, malformed body — still fails
+      // fast, so a broken probe cannot hide behind the window. When the
+      // rotation itself already failed (no distinct replacement), there is
+      // no grace to wait out: judge the first verdict alone.
+      const graceApplies =
+        page.status === 200 && !!replacement?.value && replacement.value !== cookie;
+      let old = await authenticates(cookie);
+      while (graceApplies && old.verdict === true) {
+        const remaining = rotatedAt + predecessorGraceMs - Date.now();
+        if (remaining <= 0) {
+          // The last probe may have started inside the window and returned
+          // a pre-deadline verdict after it; judge one fresh post-deadline
+          // probe instead of that stale verdict.
+          old = await authenticates(cookie);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(replayPollMs, remaining)));
+        old = await authenticates(cookie);
+      }
       if (old.verdict !== false) problems.push(`old cookie ${describeReplay(old, false)}`);
       if (replacement?.value && replacement.value !== cookie) {
         const fresh = await authenticates(replacement.value);
@@ -733,7 +773,7 @@ export async function jsonSmoke(
       if (problems.length)
         fail(
           "session rotation replay",
-          "old cookie unauthenticated and replacement authenticated on /auth/status",
+          "old cookie unauthenticated after predecessor grace and replacement authenticated on /auth/status",
           problems.join("; "),
         );
       else pass("session rotation replay");

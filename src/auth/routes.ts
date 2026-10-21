@@ -21,6 +21,8 @@ import {
   isProviderOutage,
 } from "../discord";
 import type { Env } from "../env";
+import { maintenanceHandler, prefersHtmlError, varyAccept } from "../errors";
+import { inviteDestination } from "../invite";
 import { STATE_TTL_SECONDS } from "../index";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
@@ -315,6 +317,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         } catch {
           // Authoritative, not best-effort: a failed revocation must not clear
           // this browser's cookie as if the server row were gone.
+          c.header("cache-control", "no-store, private");
+          varyAccept(c);
+          if (prefersHtmlError(c)) {
+            return maintenanceHandler(inviteDestination(c.env.DISCORD_INVITE_URL))(c);
+          }
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }

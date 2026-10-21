@@ -47,6 +47,13 @@ describe("normalizeQuery (legacy EventSearchLogger::normalize)", () => {
     expect(matchQuery("  Chess  night ")).toBe("Chess  night");
   });
 
+  it("normalizes CR/CRLF to LF so HTML attribute parsing cannot desync data-query", () => {
+    expect(matchQuery("alpha\rbeta")).toBe("alpha\nbeta");
+    expect(matchQuery("alpha\r\nbeta")).toBe("alpha\nbeta");
+    expect(matchQuery("alpha\nbeta")).toBe("alpha\nbeta");
+    expect(matchQuery("\r\n")).toBeNull();
+  });
+
   it("blank input is not a search", () => {
     expect(normalizeQuery("   ")).toBeNull();
     expect(normalizeQuery("")).toBeNull();

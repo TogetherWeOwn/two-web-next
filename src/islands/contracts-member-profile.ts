@@ -67,6 +67,9 @@ export const PROFILE_COPY = {
   edit: "Edit profile",
   save: "Save",
   cancel: "Cancel",
+  timezoneHelp: "Use an IANA timezone, such as Europe/London. Leave blank if you prefer.",
+  deviceTimezone: "Use this device's timezone",
+  deviceTimezoneHelp: "Fills this field from your device setting. Save to apply the change.",
 } as const;
 
 /**
