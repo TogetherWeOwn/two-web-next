@@ -18,6 +18,38 @@ export const LOCAL_SWEEP_MAX_DURATION_MS = 300_000;
 
 const ROW_LINK = /<a href="\/admin\/events\/([0-9A-HJKMNP-TV-Z]{26})">([^<]*)<\/a>/g;
 
+// DB gate for the backstop sweep (QA-LOGIN BUDGET FIX).
+//
+// The sweep's one QA login spends the shared `qa-login` throttle (10/min per
+// runner IP, src/throttle.ts) on EVERY run — even green runs whose journeys
+// already withdrew every fixture. The parity step follows in the same
+// throttle window, so that unconditional spend is what pushes fast runs over
+// the budget. Gate it: when no live sweep-target fixture exists, the teardown
+// skips the login and the HTTP pass entirely (0 spends); when orphans exist,
+// it runs the unchanged login + cancel pass below.
+//
+// The gate predicate MUST stay a superset-or-equal of the HTTP sweep set:
+// parseLocalFixtureRows keeps titles starting with a frozen prefix (the admin
+// `q` search is a case-insensitive substring that can only widen, never
+// narrow, that set) with a frozen status. It is built FROM the frozen lists
+// so a new prefix or status can never slip past the gate, and the unit tests
+// pin every entry. A false positive only costs the login we spend today; a
+// false negative would leave orphans for parity — so err broad, never narrow.
+export function liveLocalFixtureGateQuery() {
+  const statuses = [...LOCAL_SWEEP_STATUSES];
+  const prefixes = [...LOCAL_FIXTURE_TITLE_PREFIXES];
+  const statusParams = statuses.map((_, index) => `$${index + 1}`).join(", ");
+  const titleParams = prefixes
+    .map((_, index) => `starts_with(title, $${statuses.length + index + 1})`)
+    .join(" OR ");
+  return {
+    text:
+      `select 1 as one from events where status in (${statusParams}) ` +
+      `and (${titleParams}) limit 1`,
+    values: [...statuses, ...prefixes],
+  };
+}
+
 export function localSweepListPath(prefix, status, page = 1) {
   if (!LOCAL_FIXTURE_TITLE_PREFIXES.includes(prefix) || !LOCAL_SWEEP_STATUSES.includes(status)) {
     throw new Error("local fixture sweep: invalid list filter");

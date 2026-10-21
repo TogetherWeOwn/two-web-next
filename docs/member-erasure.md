@@ -17,7 +17,11 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 - Dry-run is the default: it prints per-table row counts only, never row
   contents. `--apply` deletes.
 - `DATABASE_URL` comes from the environment only — never argv, never logs.
-  The output is one JSON line (`{"mode","counts"}`); the URL is never printed.
+  The output is one JSON line (`{"mode","counts","passes","deletesPerPass"}`);
+  the URL is never printed. `counts` keeps one key per table; `passes` is the
+  number of session-chase passes executed and `deletesPerPass` the session
+  rows each pass deleted, in order. A dry-run reports `passes: 0` with an
+  empty list because no chase ran.
 - Any host outside `agent-testdb` and loopback (`localhost`, `127.0.0.1`,
   `::1`) needs `--target staging` or `--target production`. A
   production-looking URL needs `--target production`, and `--target staging`
@@ -26,7 +30,11 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 - A remote connection must verify the server certificate. The URL needs
   `sslmode=verify-full` or `sslrootcert=system` (an alias for verify-full).
   `require`, `verify-ca`, `disable`, and other query parameters are refused.
-  The driver receives only the parsed endpoint fields.
+  The driver receives only the parsed endpoint fields. Both destructive
+  operator CLIs (`erase-member` and `revoke-sessions`) enforce this same
+  floor through one shared core, `bin/operator-db-core.mjs`: the override
+  refusal, the verify-full requirement, and the throwing client are
+  identical in both.
 - A loopback URL without `sslmode` connects without TLS, as
   `revoke-sessions` does. Add `sslmode=require` when the local server enforces
   TLS.
@@ -47,9 +55,10 @@ Like `revoke-sessions`, the command sets its own session
 only; global database policy is unchanged. If a member row or table is
 locked, the run fails bounded with exit 1 and the redacted "operation
 failed; changes rolled back" message; the transaction rolls back, so a
-timed-out run erases nothing and all member tables stay unchanged. Verify
-with a dry-run to read the per-table counts, then retry (re-run) the apply
-once the lock clears. If timeouts repeat, escalate to the DevOps &
+timed-out run erases nothing and all member tables stay unchanged. A lock
+timeout (SQLSTATE 55P03) carries a distinct retry hint instead of the
+generic failure text. Verify with a dry-run to read the per-table counts,
+then retry (re-run) the apply once the lock clears. If timeouts repeat, escalate to the DevOps &
 Reliability Engineer with the redacted error and the dry-run counts; do
 not retry in a loop and do not erase by another path.
 
@@ -84,9 +93,12 @@ A rotation that is already in flight when erasure reaches its session
 removal cannot smuggle its successor past the erase. The session removal
 repeats its DELETE with a fresh snapshot until one pass finds no session
 row left for the member, and the reported `web_sessions` count is the
-rows the erase itself physically deleted, accumulated across passes. A
-rotation that starts after erasure has removed its source fails on the
-missing row without minting a successor.
+rows the erase itself physically deleted, accumulated across passes. The
+result also reports `passes` (how many chase passes ran) and
+`deletesPerPass` (session rows deleted per pass, in order), so a rotated
+member's chase is visible forensically without changing the uncapped
+chase itself. A rotation that starts after erasure has removed its
+source fails on the missing row without minting a successor.
 
 Boundary: this converges over rotations of sessions that existed when
 erasure ran. It is not a tombstone and not a sign-in ban: a genuinely
