@@ -101,6 +101,21 @@ and callers accepting `application/json` get exactly:
 Browsers receive the corresponding branded 413 page, following the existing
 shared 429 content-negotiation convention.
 
+`POST /mcp` uploads are the exception: over-cap and broken uploads answer the
+route-native JSON-RPC error whatever `Accept` says (absent, wildcard or HTML
+included), keeping the 413/400 status, the upload cancellation and the
+cap-before-admission order. The id is always null — the upload fails before
+any request id is known — and the code is the static transport code -32600:
+
+```json
+{"jsonrpc":"2.0","id": null,"error":{"code":-32600,"message":"Reduce the size of your request and try again."}}
+```
+
+A failed source read on `POST /mcp` answers the same shape with 400 and
+`{"jsonrpc":"2.0","id": null,"error":{"code":-32600,"message":"Check your request and try again."}}`.
+Both refusals send `Cache-Control: no-store, private` and merge `Accept`
+into `Vary`, with no submitted bytes or exception details.
+
 A failed source read instead returns 400 through the shared `badRequest`
 helper. API routes and JSON-only event writes always receive
 `{"error":"bad_request","message":"Check your request and try again."}`;

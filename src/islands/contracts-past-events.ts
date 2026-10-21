@@ -24,6 +24,7 @@ export const PAST_EVENTS_PAGER_TESTID = "past-events-pager";
 export const PAST_EVENTS_PAGER_NEWER_TESTID = "past-events-pager-newer";
 export const PAST_EVENTS_PAGER_OLDER_TESTID = "past-events-pager-older";
 export const PAST_EVENTS_BACK_TESTID = "past-events-back";
+export const PAST_EVENTS_SEARCH_MISS_TESTID = "past-events-search-miss";
 export const PAST_EVENTS_COPY = {
   empty: "No past events yet.",
   join: "Join the community and help make the next one happen.",

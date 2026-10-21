@@ -294,8 +294,9 @@ describe("internal-action-drill CLI", () => {
 
   it("exit 2 when the bot is not configured", () => {
     const { BOT_SHARED_SECRET: _dropped, ...noSecret } = stagingEnv;
-    const r = run(opts, noSecret);
+    const r = run([...opts, "--apply"], noSecret);
     expect(r.code).toBe(2);
+    expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });
 
   it("is wired as drill:internal-action without touching check or CI scripts", () => {

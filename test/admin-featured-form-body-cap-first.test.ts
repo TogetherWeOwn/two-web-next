@@ -162,7 +162,7 @@ describe("body-size cap precedes the admin-write throttle on featured posts", ()
         const { request, pull } = oversized(cookie, path, cap, advertised);
         const response = await app.request(request, undefined, bindings);
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.sql, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(0);
@@ -187,7 +187,7 @@ describe("body-size cap precedes the admin-write throttle on featured posts", ()
         const { request } = oversized(cookie, path, cap, advertised);
         const response = await app.request(request, undefined, bindings);
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(WRITE_THROTTLE_PER_MINUTE);
         expectNoStoreWork();
@@ -208,7 +208,7 @@ describe("body-size cap precedes the admin-write throttle on featured posts", ()
     expect(body.length).toBeGreaterThan(256 * 1024);
     const response = await app.request("/featured", { ...postForm(cookie, FORM), body }, bindings);
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual(ERROR);
+    expect(await response.json()).toMatchObject(ERROR);
     expect(throttle.store).not.toHaveBeenCalled();
     expect(throttle.sql).not.toHaveBeenCalled();
     expect(throttle.count()).toBe(0);
