@@ -35,6 +35,7 @@ import {
   type ProfileFormValues,
 } from "../../../src/profiles/pages";
 import type { MemberStats } from "../../../src/profiles/stats";
+import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
 import { canonicalUrl } from "../../../src/seo";
@@ -72,6 +73,9 @@ let {
   restoredWrite?: string | null;
   errors?: Record<string, string> | null;
   values?: ProfileFormValues | null;
+  // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
+  // so no Kit route can set it. Re-add with wiring and a render test if Kit
+  // write parity ever needs it.
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -230,57 +234,83 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       </section>
     {/if}
     {#if stats}
-      <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
-        <h2 id="member-stats-heading">Member stats</h2>
-        <dl class="profile-stats-grid">
-          {#if stats.rankKey}
+      {#if stats.membershipUnavailable}
+        <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
+          <h2 id="member-stats-heading">Member stats</h2>
+          <p class="profile-hint">Member stats unavailable right now.</p>
+          <p class="profile-hint">
+            <a href={`/members/${member.id}`}>Retry loading member stats</a>
+          </p>
+        </section>
+      {:else}
+        <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
+          <h2 id="member-stats-heading">Member stats</h2>
+          <dl class="profile-stats-grid">
+            {#if stats.rankKey}
+              <div>
+                <dt>Rank</dt>
+                <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
+              </div>
+            {/if}
+            {#if stats.joinedAt}
+              <div>
+                <dt>Joined</dt>
+                <dd data-testid={PROFILE_JOINED_TESTID}>
+                  <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
+                </dd>
+              </div>
+            {/if}
+            {#if stats.tenureDays !== null}
+              <div>
+                <dt>Tenure</dt>
+                <dd>{stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}</dd>
+              </div>
+            {/if}
             <div>
-              <dt>Rank</dt>
-              <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
+              <dt>Membership</dt>
+              <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
             </div>
-          {/if}
-          {#if stats.joinedAt}
             <div>
-              <dt>Joined</dt>
-              <dd data-testid={PROFILE_JOINED_TESTID}>
-                <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
+              <dt>Milestones</dt>
+              <dd>
+                {stats.milestonesUnavailable
+                  ? "Unavailable"
+                  : stats.milestonesTruncated
+                    ? `${stats.milestones.length}+`
+                    : stats.milestones.length}
               </dd>
             </div>
+          </dl>
+          <h3>Milestones</h3>
+          {#if stats.milestonesUnavailable}
+            <p class="profile-hint">Milestones unavailable right now.</p>
+            <p class="profile-hint">
+              <a href={`/members/${member.id}`}>Retry loading milestones</a>
+            </p>
+          {:else}
+            {#if stats.milestonesTruncated}
+              <p class="profile-hint">Showing the newest {MEMBER_MILESTONES_CAP} milestones.</p>
+            {/if}
+            {#if stats.milestones.length > 0}
+              <ol class="profile-milestones">
+                {#each stats.milestones as milestone}
+                  <li>
+                    <div>
+                      <strong>{statsLabel(milestone.type)}</strong>
+                      {#if milestone.detail}<p>{milestone.detail}</p>{/if}
+                    </div>
+                    <time datetime={milestone.occurredAt.toISOString()}>
+                      {statsDate(milestone.occurredAt)}
+                    </time>
+                  </li>
+                {/each}
+              </ol>
+            {:else}
+              <p>No milestones yet.</p>
+            {/if}
           {/if}
-          {#if stats.tenureDays !== null}
-            <div>
-              <dt>Tenure</dt>
-              <dd>{stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}</dd>
-            </div>
-          {/if}
-          <div>
-            <dt>Membership</dt>
-            <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
-          </div>
-          <div>
-            <dt>Milestones</dt>
-            <dd>{stats.milestonesTruncated ? `${stats.milestones.length}+` : stats.milestones.length}</dd>
-          </div>
-        </dl>
-        <h3>Milestones</h3>
-        {#if stats.milestones.length > 0}
-          <ol class="profile-milestones">
-            {#each stats.milestones as milestone}
-              <li>
-                <div>
-                  <strong>{statsLabel(milestone.type)}</strong>
-                  {#if milestone.detail}<p>{milestone.detail}</p>{/if}
-                </div>
-                <time datetime={milestone.occurredAt.toISOString()}>
-                  {statsDate(milestone.occurredAt)}
-                </time>
-              </li>
-            {/each}
-          </ol>
-        {:else}
-          <p>No milestones yet.</p>
-        {/if}
-      </section>
+        </section>
+      {/if}
     {/if}
     {#if isOwner}
       <section

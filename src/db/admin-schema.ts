@@ -50,6 +50,9 @@ const eventsTable = pgTable(
     // truth; this is how they render back.
     timezone: text("timezone").notNull().default("UTC"),
     location: text("location"),
+    organizer_name: text("organizer_name"),
+    join_url: text("join_url"),
+    join_instructions: text("join_instructions"),
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
@@ -95,9 +98,15 @@ const eventsTable = pgTable(
   ],
 );
 
-type EventSelect = Omit<typeof eventsTable.$inferSelect, "accessibilityNotes"> & {
-  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+type EventSelect = Omit<
+  typeof eventsTable.$inferSelect,
+  "accessibilityNotes" | "organizer_name" | "join_url" | "join_instructions"
+> & {
+  /** Optional for older in-memory row fixtures; live database rows include these nullable columns. */
   accessibilityNotes?: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
 };
 
 export const events = eventsTable as Omit<typeof eventsTable, "$inferSelect"> & {
