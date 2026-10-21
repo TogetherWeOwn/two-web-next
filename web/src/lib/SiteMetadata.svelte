@@ -35,6 +35,17 @@ const share = $derived(shareTitle ?? fullTitle);
 const shareDescription = $derived(
   description || "Together We Own: a close-knit adult gaming community, founded 1998.",
 );
+// Absolute share-image URL from the page canonical's origin (og:image and
+// twitter:image must be absolute; the render is a new file so no cache entry
+// needs invalidating). Only canonical pages carry share images.
+const shareImage = $derived.by(() => {
+  if (!canonical) return null;
+  try {
+    return new URL("/og-1200x630.png", canonical).href;
+  } catch {
+    return "/og-1200x630.png";
+  }
+});
 const themeStylesheet = $derived(
   theme === "schedule"
     ? "/schedule-theme.css"
@@ -63,17 +74,19 @@ const leafStyleBlock = $derived(leafCss ? `<style>${leafCss}</style>` : "");
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={share} />
     {#if description}<meta property="og:description" content={description} />{/if}
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content={shareImage} />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={share} />
     {#if description}<meta name="twitter:description" content={description} />{/if}
+    <meta name="twitter:image" content={shareImage} />
   {/if}
   <link rel="alternate" type="application/rss+xml" title="{SITE_NAME} Events" href="/events.rss" />
   {#if theme === "content"}
     {@html leafStyleBlock}
   {:else}
     <link rel="stylesheet" href="/styles.css" />
-    <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
-    <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Open Lobby),
+    <link rel="preload" href="/fonts/chakra-petch-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+    <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Lobby Ember),
       not public/theme-tokens.css, which stays Hono-only outside the inlined
       leaf block above. -->
     <link rel="stylesheet" href="/theme.css" />

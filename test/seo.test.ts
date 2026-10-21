@@ -169,22 +169,30 @@ describe("sitemap + robots (per-env host)", () => {
 });
 
 describe("share meta parity (TOG-5624)", () => {
-  it("home carries canonical + OG/Twitter tags and no og:image", async () => {
+  it("home carries canonical + OG/Twitter tags and the share image", async () => {
     const html = await (await app.request("/", {}, env)).text();
     expect(html).toContain('<link rel="canonical" href="https://next.example.test/"');
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/"');
     expect(html).toContain('<meta property="og:type" content="website"');
     expect(html).toContain('<meta property="og:site_name" content="Together We Own"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
     expect(html).toContain('<meta property="og:description"');
-    expect(html).not.toContain("og:image");
+    expect(html).toContain(
+      '<meta property="og:image" content="https://next.example.test/og-1200x630.png"',
+    );
+    expect(html).toContain(
+      '<meta name="twitter:image" content="https://next.example.test/og-1200x630.png"',
+    );
   });
 
   it("the about leaf carries its self-canonical and keeps feed autodiscovery", async () => {
     const html = await (await app.request("/about", {}, env)).text();
     expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
+    expect(html).toContain(
+      '<meta property="og:image" content="https://next.example.test/og-1200x630.png"',
+    );
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });

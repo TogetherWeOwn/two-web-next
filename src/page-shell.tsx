@@ -1,11 +1,24 @@
 import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { BRAND_ICON_SVG, BRAND_LOCKUP_SVG } from "./brand-lockup";
 import type { Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
 
 const SITE_NAME = "Together We Own";
+
+// Absolute share-image URL from the page canonical's origin: og:image and
+// twitter:image must be absolute, and the render is a new file so no cache
+// entry needs invalidating. A relative canonical cannot happen (canonicalUrl
+// always prefixes APP_URL); the fallback keeps the tag well-formed anyway.
+const shareImageUrl = (canonical: string): string => {
+  try {
+    return new URL("/og-1200x630.png", canonical).href;
+  } catch {
+    return "/og-1200x630.png";
+  }
+};
 
 export const SkipLink: FC = () => (
   <a class="skip-link" href="#main">
@@ -50,8 +63,10 @@ export const Layout: FC<
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#151720" />
+        <meta name="theme-color" content="#141117" />
         <link rel="manifest" href="/site.webmanifest" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/icons/icon-32.png" type="image/png" sizes="32x32" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
         {robots ? <meta name="robots" content={robots} /> : null}
@@ -73,11 +88,13 @@ export const Layout: FC<
             {shareDescription ? (
               <meta property="og:description" content={shareDescription} />
             ) : null}
-            <meta name="twitter:card" content="summary" />
+            <meta property="og:image" content={shareImageUrl(canonical)} />
+            <meta name="twitter:card" content="summary_large_image" />
             <meta name="twitter:title" content={shareTitle ?? title} />
             {shareDescription ? (
               <meta name="twitter:description" content={shareDescription} />
             ) : null}
+            <meta name="twitter:image" content={shareImageUrl(canonical)} />
           </>
         ) : null}
         <link
@@ -100,8 +117,9 @@ export const Layout: FC<
           // preload hints for the same files measured zero. The homepage
           // reuses the exact same bundle: its hero paints at first paint
           // (LCP equals FCP every staging run), so removing the three external
-          // stylesheet requests is the primary FCP improvement. Keep the Display-700 preload for an early font
-          // fetch; the Arial-metric 'Display Fallback' reduces delayed-font layout shift
+          // stylesheet requests is the primary FCP improvement. Keep the Chakra Petch
+          // 700 preload for an early font fetch; the Arial-metric 'Display Fallback'
+          // reduces delayed-font layout shift
           // (the preload alone cannot close the FCP/font gap on cold mobile). The block is
           // allowlisted by hash in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
@@ -113,7 +131,7 @@ export const Layout: FC<
             {theme !== "content" ? (
               <link
                 rel="preload"
-                href="/fonts/display-latin-700.woff2"
+                href="/fonts/chakra-petch-latin-700-normal.woff2"
                 as="font"
                 type="font/woff2"
                 crossorigin="anonymous"
@@ -190,7 +208,8 @@ export const SiteHeader: FC<
       ) : null}
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
-      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+      {raw(BRAND_LOCKUP_SVG)}
+      {raw(BRAND_ICON_SVG)}
     </a>
     {account ? (
       <nav class="header-account" aria-label="Account">

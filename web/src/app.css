@@ -26,22 +26,25 @@
  * values or arbitrary hex. Spacing and radius stay on the Tailwind scale
  * (no arbitrary p-[…]/rounded-[…] values).
  *
- * Values are the Open Lobby direction, not Tailwind Plus: the Plus catalogue
- * is design reference only and must never be pasted into this repo. The
- * display stack reuses the self-hosted Display font already served from
- * public/fonts; swapping the direction swaps this token, not every caller.
+ * Values are the Lobby Ember direction (Logo 1 brand), not Tailwind Plus:
+ * the Plus catalogue is design reference only and must never be pasted
+ * into this repo. The display stack leads with self-hosted Chakra Petch
+ * over the Display fallback served from public/fonts; swapping the
+ * direction swaps this token, not every caller.
  */
 @theme {
-  --color-lobby-surface: #121719;
-  --color-lobby-raised: #1e292c;
-  --color-lobby-ink: #f5f5eb;
-  --color-lobby-muted: #b5c1c1;
-  --color-lobby-accent: #c2f45b;
-  --color-lobby-on-accent: #14200a;
-  --color-lobby-line: #4b5b5d;
-  --color-lobby-focus: #ffffff;
-  --font-display: Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --color-lobby-surface: #141117;
+  --color-lobby-raised: #1e1a25;
+  --color-lobby-ink: #f7f7f7;
+  --color-lobby-muted: #bdb7d1;
+  --color-lobby-accent: #ff9c36;
+  --color-lobby-on-accent: #1d0b00;
+  --color-lobby-line: #3c344c;
+  --color-lobby-focus: #ff9c36;
+  --font-display:
+    "Chakra Petch", Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui,
+    sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 /*
@@ -56,6 +59,19 @@
  */
 :root {
   color-scheme: dark;
+}
+
+/*
+ * Type tokens. Kit never links public/theme-tokens.css outside the inlined
+ * leaf block, so the shared theme sheets' var(--two-font-*) reads resolve
+ * here — the same stacks the Hono token file defines, keeping one swap
+ * point per shell.
+ */
+:root {
+  --two-font-display:
+    "Chakra Petch", "Display", "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui,
+    sans-serif;
+  --two-font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 html {
@@ -88,6 +104,7 @@ html body {
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);
+  --brand-ink: var(--theme-accent-ink, var(--color-lobby-on-accent));
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
@@ -104,6 +121,7 @@ html body {
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);
+  --brand-ink: var(--theme-schedule-accent-ink, var(--color-lobby-on-accent));
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);

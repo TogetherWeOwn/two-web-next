@@ -253,6 +253,7 @@ describe("sitemap published events (SitemapTest.php:21)", () => {
 // the full OG/Twitter set; exactly one self-pointing canonical each.
 describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
   const tags = (html: string, canonical: string, title: string, description: string) => {
+    const image = new URL("/og-1200x630.png", canonical).href;
     for (const needle of [
       `<title>${title}</title>`,
       `<meta name="description" content="${description}"/>`,
@@ -262,9 +263,11 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
       `<meta property="og:url" content="${canonical}"`,
       `<meta property="og:title" content="${title}"`,
       `<meta property="og:description" content="${description}"`,
-      '<meta name="twitter:card" content="summary"',
+      `<meta property="og:image" content="${image}"`,
+      '<meta name="twitter:card" content="summary_large_image"',
       `<meta name="twitter:title" content="${title}"`,
       `<meta name="twitter:description" content="${description}"`,
+      `<meta name="twitter:image" content="${image}"`,
     ]) {
       expect(html, needle).toContain(needle);
     }
@@ -273,7 +276,6 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
   it("tags the homepage for sharing", async () => {
     const html = await (await harness([]).request("/")).text();
     tags(html, `${APP_URL}/`, HOME_TITLE, HOME_DESCRIPTION);
-    expect(html).not.toContain("og:image");
   });
 
   it("tags the join page with its own canonical and the funnel intro", async () => {

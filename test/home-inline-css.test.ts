@@ -4,7 +4,7 @@ import { Layout } from "../src/pages";
 import { pageShellFixture } from "./helpers/page-shells";
 
 // Homepage paint path: "/" reuses the leaf critical-CSS bundle inline while
-// retaining the Display-700 preload for an early font fetch; the
+// retaining the Chakra Petch 700 preload for an early font fetch; the
 // Arial-metric 'Display Fallback' limits layout changes during delayed swaps.
 // Recovery/error shells keep theme="home" without the flag and stay external.
 describe("homepage inlined critical CSS", () => {
@@ -12,13 +12,13 @@ describe("homepage inlined critical CSS", () => {
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
   });
 
   it("keeps the unflagged home shell on external stylesheets with the preload", () => {
     const html = Layout({ title: "Fixture", theme: "home" })!.toString();
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     expect(html).not.toContain("<style>");
   });
 
@@ -28,7 +28,7 @@ describe("homepage inlined critical CSS", () => {
     const html = await response.text();
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     const csp = response.headers.get("content-security-policy") ?? "";
     expect(csp).toContain(`style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
     expect(csp).not.toContain("unsafe-inline");
@@ -47,8 +47,11 @@ describe("homepage inlined critical CSS", () => {
     expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 123%");
     expect(LEAF_CRITICAL_CSS).toContain("descent-override: 46%");
     expect(LEAF_CRITICAL_CSS).toContain("line-gap-override: 0%");
-    expect(LEAF_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
-    expect(LEAF_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
+    expect(LEAF_CRITICAL_CSS).toContain("var(--two-font-display");
+    expect(LEAF_CRITICAL_CSS).toContain(
+      '"Chakra Petch", "Display", "Display Fallback", "Arial Narrow"',
+    );
+    expect(LEAF_CRITICAL_CSS).not.toMatch(/"Display", "Arial Narrow"/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
     expect(html).toContain("'Display Fallback'");
   });

@@ -1,9 +1,9 @@
-// Kit content leaves must not preload the Display webfont.
+// Kit content leaves must not preload the display webfont.
 // Staging mobile LCP on /about, /faq, /rules and /privacy measured 2197–2255
 // ms against the 2000 ms budget while FCP sat at 1687–1750 ms: the Display
 // webfont arrives after first paint and its swap re-lays-out the leaf, so the
 // largest text block repaints late and becomes LCP. The Hono shell
-// (src/page-shell.tsx) already skips the Display preload for theme "content";
+// (src/page-shell.tsx) already skips the display-face preload for theme "content";
 // the SvelteKit twin (web/src/lib/SiteMetadata.svelte) must agree, or enabling
 // the Kit routes reintroduces the same unused high-priority fetch on the same
 // mobile-LCP pages.
@@ -85,7 +85,7 @@ export function renderMeta(props) {
   }
 }
 
-describe("Kit content shell preloads no Display webfont", () => {
+describe("Kit content shell preloads no display webfont", () => {
   let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 
   beforeAll(async () => {
@@ -97,10 +97,10 @@ describe("Kit content shell preloads no Display webfont", () => {
     expect(html).not.toContain('.woff2" as="font"');
   });
 
-  it("keeps the Display preload on every other theme", () => {
+  it("keeps the display-face preload on every other theme", () => {
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
       const html = renderMeta({ title: "Fixture", theme });
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+      expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
       expect(html).toContain('crossorigin="anonymous"');
     }
   });

@@ -300,11 +300,11 @@ export function renderErrorShell(code, adminBack) {
         expect(dom.headings).toEqual([{ tag: "H1", id: "error-heading", text: copy.title }]);
         expect(dom.labelledBy).toBe("error-heading");
         expect(dom.labelTargetTag).toBe("H1");
-        // Palette guard: the page must be evaluating in the dark Open Lobby
-        // colours members see (--color-lobby-surface, #121719, from the
+        // Palette guard: the page must be evaluating in the dark Lobby Ember
+        // colours members see (--color-lobby-surface, #141117, from the
         // compiled app.css), never the light Hono canvas — otherwise the axe
         // contrast run below checks a page nobody is served.
-        expect(dom.bodyBackground).toBe("rgb(18, 23, 25)");
+        expect(dom.bodyBackground).toBe("rgb(20, 17, 23)");
         expect(dom.title).toBe(`${copy.title} — Together We Own`);
         expect(dom.robots).toBe("noindex, nofollow");
         // The big status numeral is decorative: visible, but out of the a11y tree.

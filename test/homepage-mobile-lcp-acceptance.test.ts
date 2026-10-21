@@ -37,15 +37,18 @@ import worker from "../ci/lighthouse-worker";
 const require = createRequire(import.meta.url);
 const lighthouserc = require("../ci/lighthouserc.cjs").ci;
 
-// Tight ratchets: current main serves 24,711 B HTML with an 18,943 B inlined
-// style block (77% of the document). Dropping the dead 500 face saves exactly
-// 155 raw bytes (verified by simulation), landing at 24,556 / 18,788, so the
-// budgets below are red now and green after that fix with <100 B slack. They
-// exist to stop the fix (or any later change) from regrowing homepage weight
-// while headroom is being restored. Gzip is deliberately not asserted: the
-// repetitive face bytes compress away (7 B), so a gzip ratchet would be noise.
-const MAX_HOMEPAGE_HTML_RAW_BYTES = 24650;
-const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18850;
+// Tight ratchets (<100 B slack): the Lobby Ember brand re-baselined both.
+// Measured 37,488 B HTML / 25,017 B inlined CSS. The HTML growth is the
+// inline header lockup + mobile icon SVGs (~6.5 KB, kept byte-verbatim from
+// the brand kit so the vectors stay diffable), the CSS growth below, and
+// ~0.5 KB of OG/favicon/preload head tags. The CSS growth is the full
+// brand token contract (~5.0 KB: ramps, semantics, gradients, schedule
+// variant) plus four @font-face faces, Inter body scoping and lockup
+// rules (~1.2 KB), partly offset by the shorter var(--two-font-*)
+// stacks. Gzip is deliberately not asserted: the repetitive face bytes
+// compress away, so a gzip ratchet would be noise.
+const MAX_HOMEPAGE_HTML_RAW_BYTES = 37550;
+const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 25100;
 
 const context = {
   waitUntil: vi.fn(),
@@ -107,11 +110,11 @@ describe("homepage mobile LCP acceptance", () => {
     expect(inlineCss(html)).toContain(".hero h1");
   });
 
-  it("retains exactly one font preload (Display 700): never add a 500 preload as a fix", async () => {
+  it("retains exactly one font preload (Chakra Petch 700): never add a second preload as a fix", async () => {
     const { html } = await homepageHtml();
     const preloads = [...html.matchAll(/<link[^>]*as="font"[^>]*>/g)].map((m) => m[0]);
     expect(preloads).toHaveLength(1);
-    expect(preloads[0]).toContain("/fonts/display-latin-700.woff2");
+    expect(preloads[0]).toContain("/fonts/chakra-petch-latin-700-normal.woff2");
   });
 
   it("retains the Display Fallback swap chain for delayed font swaps", async () => {
@@ -123,12 +126,12 @@ describe("homepage mobile LCP acceptance", () => {
     expect(css).toContain("descent-override: 46%");
   });
 
-  it("keeps homepage images non-blocking and sized", async () => {
+  it("keeps homepage images non-blocking and the inline lockup sized", async () => {
     const { html } = await homepageHtml();
     for (const match of html.matchAll(/<img\b[^>]*>/g)) {
       const img = match[0];
-      // The header logo is above the fold; fixture featured rows carry no
-      // image, but any featured image must stay lazy/async/sized.
+      // Fixture featured rows carry no image, but any featured image must
+      // stay lazy/async/sized.
       if (img.includes('class="featured-image"')) {
         expect(img).toContain('loading="lazy"');
         expect(img).toContain('decoding="async"');
@@ -136,7 +139,10 @@ describe("homepage mobile LCP acceptance", () => {
       expect(img).toMatch(/width="[0-9]+"/);
       expect(img).toMatch(/height="[0-9]+"/);
     }
-    expect(html).toContain("<img");
+    // The header lockup is inline SVG (no fetch above the fold): explicit
+    // dimensions on both variants so neither shifts layout.
+    expect(html).toContain('<svg width="180" height="50" class="brand-lockup"');
+    expect(html).toContain('<svg width="40" height="40" class="brand-icon"');
   });
 
   it("serves a single Display weight: no 500 face fetch on the funnel top", async () => {

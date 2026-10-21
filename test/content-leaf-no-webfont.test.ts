@@ -15,7 +15,9 @@ describe("content leaves render without the Display webfont", () => {
     const offenders: string[] = [];
     // Split the bundle into selector/declaration pairs; @font-face only
     // ships the file (other themes use it) and can never paint text by
-    // itself. Everything else that names Display must stay off the content
+    // itself, and neither can a custom-property DEFINITION (:root --two-*
+    // tokens name the Display fallback in the stack value without using
+    // it). Everything else that names Display must stay off the content
     // theme — including ::marker, which does trigger a font fetch.
     const rules = LEAF_CRITICAL_CSS.match(/[^{}]+{[^{}]*}/g) ?? [];
     for (const rule of rules) {
@@ -24,6 +26,13 @@ describe("content leaves render without the Display webfont", () => {
       if (!/Display/.test(declarations)) continue;
       const selectorWithoutComments = selector.replace(/\/\*[\s\S]*?\*\//g, "").trim();
       if (/^@font-face/.test(selectorWithoutComments)) continue;
+      const pairs = declarations
+        .slice(1, -1)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (pairs.length > 0 && pairs.every((pair) => /^--[a-z0-9-]+\s*:/i.test(pair))) continue;
       if (!/:not\(\.content-theme\)/.test(selector)) offenders.push(selector.trim());
     }
     expect(offenders).toEqual([]);
@@ -34,7 +43,7 @@ describe("content leaves render without the Display webfont", () => {
     expect(content).not.toContain('.woff2" as="font"');
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
       const html = Layout({ title: "Fixture", theme })!.toString();
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+      expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     }
   });
 });

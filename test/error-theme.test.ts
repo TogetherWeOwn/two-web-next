@@ -60,9 +60,9 @@ function errors() {
 function assertTheme(html: string) {
   expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
   expect(html).toContain('href="/theme.css"');
-  expect(html).toContain('href="/fonts/display-latin-700.woff2"');
+  expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2"');
   expect(html).toContain('<header class="bar site-header">');
-  expect(html).toContain('src="/logo.svg"');
+  expect(html).toContain('class="brand-lockup"');
   expect(html).toContain('class="hero recovery-hero"');
   expect(html).toContain('<main id="main" tabindex="-1">');
   expect(html).toContain('<nav aria-label="Site">');

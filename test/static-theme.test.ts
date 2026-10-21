@@ -67,15 +67,16 @@ it.each(paths)(
       expect(html).toContain(".content-page");
       expect(html).not.toContain('rel="stylesheet"');
     }
-    // Only the join shell still preloads Display; content
-    // leaves render no Display text so they preload no font.
+    // Only the join shell still preloads the display face; content
+    // leaves render no display text so they preload no font.
     if (path === "/join") {
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+      expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     } else {
       expect(html).not.toContain('.woff2" as="font"');
     }
     expect(html).toContain('class="bar site-header"');
-    expect(html).toContain('src="/logo.svg" width="64" height="64"');
+    expect(html).toContain('class="brand-lockup"');
+    expect(html).toContain('aria-label="Together We Own homepage"');
     expect(html).toContain('aria-label="Primary"');
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);

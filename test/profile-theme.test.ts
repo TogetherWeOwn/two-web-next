@@ -37,7 +37,7 @@ describe("member profile base theme", () => {
     expect(html).toContain('<body class="base-theme profile-theme"><a class="skip-link"');
     expect(html).toContain('rel="stylesheet" href="/theme.css"');
     expect(html).toContain('rel="stylesheet" href="/profile-theme.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     expect(Layout({ title: "Leaf" })!.toString()).not.toContain("/profile-theme.css");
     expect(
       Home({

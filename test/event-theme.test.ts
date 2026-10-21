@@ -75,7 +75,7 @@ describe("event detail theme", () => {
     expect(html).toContain('<body class="base-theme event-theme">');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/event-theme.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     expect(html).toContain('class="event-hero"');
     expect(html).toContain('<dl class="event-meta" aria-label="Event details">');
     expect(html).toContain('href="/events" aria-current="location"');
@@ -198,8 +198,8 @@ describe("event detail theme", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
-    // 6150: the four Display stacks each carry the metric-matched
-    // 'Display Fallback' (+80 bytes over the pre-unification 5992); the
+    // 6150: the four display stacks read var(--two-font-display), whose
+    // value carries the metric-matched 'Display Fallback'; the
     // ci/bundle-budget.json ceiling (7168 raw) is unchanged.
     expect(css.length).toBeLessThan(6150);
   });
