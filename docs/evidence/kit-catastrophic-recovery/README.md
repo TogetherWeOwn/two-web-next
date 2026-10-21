@@ -72,3 +72,13 @@ link color in forced colors. Native forced-colors adjustment replaces the page
 colors without a separate media rule. The Hono a11y/Lighthouse/visual gates do
 not exercise this Kit fallback; its own browser suite (16 cases, including an
 axe WCAG AA pass) is the accessibility evidence.
+
+## Decorated-path CSP coverage
+
+The captures above mount the template without response headers. A companion
+spec (`e2e/kit-fallback-csp.spec.ts`) serves the same bytes with the exact
+production Content-Security-Policy: with the dispatch's hash allowlist the
+document computes the branded `rgb(18, 23, 25)` / `rgb(245, 245, 235)` shell,
+and the unwidened control documents the blocked presentation. No new captures
+are needed: the template bytes — and therefore the rendered pixels — are
+unchanged by the allowlist.
