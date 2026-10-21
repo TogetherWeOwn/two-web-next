@@ -339,7 +339,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   // fail closed instead of dumping a raw driver stack. The natural
   // fail-closed rejection still carries the disposition; a crash landing
   // after it settled must not print twice or override success. A crash
-  // landing first settles too, so the later catch skips its identical print.
+  // landing first settles too, so a second stray crash cannot print again.
   let settled = false;
   process.on("uncaughtException", (error) => {
     if (!isDriverConnectionRaceCrash(error)) throw error;
