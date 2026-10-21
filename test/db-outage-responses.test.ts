@@ -360,7 +360,19 @@ describe("profile failures after a successful session and data read", () => {
       expect(store.save).toHaveBeenCalledOnce();
       expect(res.status).toBe(503);
       expect(res.headers.get("content-type")).toContain(accept);
-      expect(await res.text()).not.toContain("private profile fixture");
+      const body = await res.text();
+      // Driver details never leak. The owner's own baseline and submitted
+      // draft do render: a classified outage keeps the editor, not the shell.
+      expect(body).not.toMatch(/ECONNREFUSED|private connection details/);
+      if (accept === "text/html") {
+        expect(body).toContain('data-testid="profile-form"');
+        expect(body).toContain("private profile fixture");
+        expect(body).toContain("new fixture");
+        expect(body).toMatch(/try again/i);
+      } else {
+        expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+        expect(body).not.toContain("new fixture");
+      }
     },
   );
 });
