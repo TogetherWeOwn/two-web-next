@@ -123,10 +123,14 @@ async function expectJson403(res: Response, label: string): Promise<string> {
   expect(res.headers.get("location"), label).toBeNull();
   const text = await res.text();
   const parsed = JSON.parse(text) as Record<string, unknown>;
-  expect(Object.keys(parsed).sort(), label).toEqual(["error", "message"]);
+  // Additive request_id: present with requestLog context, absent without.
+  expect(Object.keys(parsed).sort(), label).toEqual(
+    "request_id" in parsed ? ["error", "message", "request_id"] : ["error", "message"],
+  );
   expect(parsed.error, label).toBe("forbidden");
   expect(typeof parsed.message, label).toBe("string");
   expect((parsed.message as string).length, label).toBeGreaterThan(0);
+  if ("request_id" in parsed) expect(typeof parsed.request_id, label).toBe("string");
   return text;
 }
 

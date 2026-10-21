@@ -153,6 +153,14 @@ export const EventPage: FC<{
             </dd>
           </div>
         ) : null}
+        {e.organizer_name ? (
+          <div>
+            <dt>Hosted by</dt>
+            <dd>
+              <p data-testid="event-organizer">{e.organizer_name}</p>
+            </dd>
+          </div>
+        ) : null}
         <div>
           <dt>The lineup</dt>
           <dd>
@@ -195,6 +203,30 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-accessibility-heading">
               <h2 id="event-accessibility-heading">Accessibility</h2>
               <p>{accessibilityNotes}</p>
+            </section>
+          ) : null}
+          {(e.status === "published" || e.status === "draft") &&
+          (e.join_url || e.join_instructions) ? (
+            <section
+              class="event-description event-join-details"
+              aria-labelledby="event-join-details-heading"
+              data-testid="event-join-details"
+            >
+              <h2 id="event-join-details-heading">How to join</h2>
+              {e.join_url ? (
+                e.status === "published" ? (
+                  <p>
+                    <a href={e.join_url} data-testid="event-public-join-link">
+                      Open the public joining link
+                    </a>
+                  </p>
+                ) : (
+                  <p>Public joining link: {e.join_url}</p>
+                )
+              ) : null}
+              {e.join_instructions ? (
+                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+              ) : null}
             </section>
           ) : null}
           {!session ? (

@@ -40,6 +40,70 @@ describe("admin correction target boundaries", () => {
       expect(html).not.toContain("<a ");
     });
 
+    for (const [key, label, target, message] of [
+      [
+        "organizer_name",
+        "Organizer display name",
+        "f-organizer-name",
+        "Keep the organizer name to 500 characters.",
+      ],
+      [
+        "join_url",
+        "Public joining link",
+        "f-join-url",
+        "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+      ],
+      [
+        "join_instructions",
+        "Public joining instructions",
+        "f-join-instructions",
+        "Keep joining instructions to 5000 characters.",
+      ],
+    ] as const) {
+      it(`targets ${key} errors at the event control`, () => {
+        expect(validationSummary({ [key]: message }, "event", mode)).toEqual([
+          { key, message, label, target },
+        ]);
+      });
+
+      it(`renders the ${key} correction link with the supplied message`, () => {
+        const html = String(
+          jsx(ValidationSummary, { errors: { [key]: message }, kind: "event", mode }),
+        );
+        expect(html).toContain(`<a href="#${target}">${label}: ${message}</a>`);
+      });
+    }
+
+    it("keeps host and join errors untargeted in the featured editor", () => {
+      const errors = {
+        organizer_name: "This field does not belong to featured content.",
+        join_url: "This field does not belong to featured content.",
+        join_instructions: "This field does not belong to featured content.",
+      };
+      expect(validationSummary(errors, "featured", mode)).toEqual([
+        {
+          key: "organizer_name",
+          message: "This field does not belong to featured content.",
+          label: null,
+          target: null,
+        },
+        {
+          key: "join_url",
+          message: "This field does not belong to featured content.",
+          label: null,
+          target: null,
+        },
+        {
+          key: "join_instructions",
+          message: "This field does not belong to featured content.",
+          label: null,
+          target: null,
+        },
+      ]);
+      const html = String(jsx(ValidationSummary, { errors, kind: "featured", mode }));
+      expect(html).not.toContain("<a ");
+    });
+
     it("keeps global and unknown event errors visible without correction links", () => {
       const errors = { _global: "Try again later.", future_field: "Unrecognized field." };
       expect(validationSummary(errors, "event", mode)).toEqual([

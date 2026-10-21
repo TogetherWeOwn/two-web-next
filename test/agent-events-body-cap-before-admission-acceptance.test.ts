@@ -215,7 +215,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, true);
       const res = await app.request(request, undefined, env, executionCtx);
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual(ERROR_413);
+      expect(await res.json()).toMatchObject(ERROR_413);
       expect(counter.statements).toBe(0);
       expect(counter.begins).toBe(0);
       expect(fake.hits).toEqual([]);
@@ -232,7 +232,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, false);
       const res = await app.request(request, undefined, env, executionCtx);
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual(ERROR_413);
+      expect(await res.json()).toMatchObject(ERROR_413);
       expect(counter.statements).toBe(0);
       expect(counter.begins).toBe(0);
       expect(fake.hits).toEqual([]);
@@ -246,7 +246,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
     const { fake, counter, env } = await fakeEnv();
     const { res, json } = await postJson(env, {}, "x".repeat(CAP + 1));
     expect(res.status).toBe(413);
-    expect(json).toEqual(ERROR_413);
+    expect(json).toMatchObject(ERROR_413);
     expect(counter.statements).toBe(0);
     expect(counter.begins).toBe(0);
     expect(fake.hits).toEqual([]);
@@ -264,7 +264,7 @@ describe("body cap before admission: over-cap refusals spend nothing (fake store
       "x".repeat(CAP + 1),
     );
     expect(res.status).toBe(413);
-    expect(json).toEqual(ERROR_413);
+    expect(json).toMatchObject(ERROR_413);
     expect(counter.statements).toBe(0);
     expect(fake.hits).toHaveLength(prespent);
     expect(fake.audits).toEqual([]);
@@ -279,7 +279,7 @@ describe("body cap before admission: over-cap refusals open no client (Hyperdriv
       const { request } = overCapRequest({ authorization: `Bearer ${credential}` }, true);
       const res = await app.request(request, undefined, hyperdriveEnv, executionCtx);
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual(ERROR_413);
+      expect(await res.json()).toMatchObject(ERROR_413);
       expect(pgFixture.connects).toBe(0);
       expect(pgFixture.queries).toEqual([]);
       expect(pgFixture.hits).toBe(0);
@@ -293,7 +293,7 @@ describe("body cap before admission: over-cap refusals open no client (Hyperdriv
     const { request } = overCapRequest({ authorization: `Bearer ${CRED}` }, false);
     const res = await app.request(request, undefined, hyperdriveEnv, executionCtx);
     expect(res.status).toBe(413);
-    expect(await res.json()).toEqual(ERROR_413);
+    expect(await res.json()).toMatchObject(ERROR_413);
     expect(pgFixture.connects).toBe(0);
     expect(pgFixture.queries).toEqual([]);
     expect(pgFixture.ends).toBe(0);
