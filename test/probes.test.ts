@@ -495,12 +495,18 @@ describe("internal-action-smoke CLI", () => {
 
   it("exit 2 when the bot is not configured", () => {
     const r = run(
-      ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
+      [
+        "--discord-id=900000000000009999",
+        "--role-key=rocketleague",
+        "--channel-key=qa-throwaway",
+        "--apply",
+      ],
       {
         BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
         BOT_PRODUCTION_URL: "https://bot.internal.example",
       },
     );
     expect(r.code).toBe(2);
+    expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });
 });

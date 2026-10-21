@@ -44,7 +44,14 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 
-const OPTIONAL_TEXT_FIELDS = ["game", "description", "location"] as const;
+const OPTIONAL_TEXT_FIELDS = [
+  "game",
+  "description",
+  "location",
+  "organizer_name",
+  "join_url",
+  "join_instructions",
+] as const;
 type OptionalTextField = (typeof OPTIONAL_TEXT_FIELDS)[number];
 
 const WRONG_TYPES: ReadonlyArray<{ label: string; value: unknown }> = [
@@ -162,7 +169,14 @@ const baseEnv: Env = {
   SESSION_SECRET,
 };
 
-const POPULATED = { game: "Chess", description: "Bring a board", location: "Voice" } as const;
+const POPULATED = {
+  game: "Chess",
+  description: "Bring a board",
+  location: "Voice",
+  organizer_name: "Riley",
+  join_url: "https://meet.example.test/room-9",
+  join_instructions: "Use the public lobby.",
+} as const;
 
 describe.skipIf(!process.env.DATABASE_URL)(
   "event JSON writes: wrong-type optional text (agent-testdb)",
@@ -394,6 +408,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(row.game).toBe(POPULATED.game);
       expect(row.description).toBe(POPULATED.description);
       expect(row.location).toBe(POPULATED.location);
+      expect(row.organizer_name).toBe(POPULATED.organizer_name);
+      expect(row.join_url).toBe(POPULATED.join_url);
+      expect(row.join_instructions).toBe(POPULATED.join_instructions);
     });
 
     it("form edits keep working with string values", async () => {

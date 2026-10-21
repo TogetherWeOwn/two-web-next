@@ -308,11 +308,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
           updated_at: new Date(event.updated_at),
         })),
       );
-      // 1020's sync_revision/synced_revision ride along with 1019 in this
-      // fixture's migrate(); they only add, so exclude them like 1019's own
-      // columns when proving human rows are untouched.
+      // 1020's sync_revision/synced_revision, 1031's accessibility notes, and
+      // 1032's public host/join columns ride along with 1019 in this fixture's
+      // migrate(); they only add, so exclude them like 1019's own columns when
+      // proving human rows are untouched.
       const humanRows = await sql<{ row: Record<string, unknown> }[]>`SELECT
-      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' - 'accessibility_notes' AS row
+      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' - 'accessibility_notes' - 'organizer_name' - 'join_url' - 'join_instructions' AS row
       FROM events e WHERE agent_grant_id IS NULL ORDER BY event_key`;
       expect(humanRows.map(({ row }) => row)).toEqual(humansBefore);
       expect(

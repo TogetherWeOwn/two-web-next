@@ -64,6 +64,7 @@ const siteGraph = $derived(siteJsonLd(appUrl));
   description="We spent most of our life private. Now you can just turn up."
   theme="home"
   activeNav="home"
+  member={session?.member ?? false}
   accountChrome={session ? memberChrome : guestChrome}
 >
   {#if joinResult}
