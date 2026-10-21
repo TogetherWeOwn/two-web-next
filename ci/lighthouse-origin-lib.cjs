@@ -253,6 +253,99 @@ const METRICS = [
   ["first-contentful-paint", "FCP ms"],
 ];
 
+// Marginal-breach retry band for the staging-quality mobile LCP gate
+// (measurement-variance hardening). When the origin collect is complete and
+// the ONLY error-level assertion is `/` largest-contentful-paint within a
+// narrow band over budget, the runner retries the whole collect once and
+// gates on the retry, preserving both tables. A systematic regression fails
+// twice and stays red. The band derives from the budget in
+// ci/lighthouserc.cjs (single source; never copied here): strictly between
+// the budget and budget * (1 + MARGINAL_BAND_RATIO) — currently (2000, 2200).
+// Budgets themselves are untouched.
+const MARGINAL_BAND_RATIO = 0.1;
+const MARGINAL_AUDIT = "largest-contentful-paint";
+const MARGINAL_PATH = "/";
+
+function lcpBudget() {
+  const max = base.ci.assert.assertions?.[MARGINAL_AUDIT]?.[1]?.maxNumericValue;
+  if (!Number.isFinite(max) || max <= 0) {
+    throw new Error("ci/lighthouserc.cjs must define a positive largest-contentful-paint budget.");
+  }
+  return max;
+}
+
+function marginalBandMax(budget = lcpBudget()) {
+  return budget * (1 + MARGINAL_BAND_RATIO);
+}
+
+/**
+ * True when a full-evidence breach qualifies for one bounded retry: the only
+ * error-level failure is `/` LCP strictly inside (budget, bandMax) and every
+ * other route is pass/warn-only (the skipped event row excepted). Complete
+ * evidence is a precondition the caller checks via the sample matrix. Any
+ * read error, incomplete run, non-LCP error (including a dragged-down
+ * categories:performance error on `/`), far-over LCP, or unattributed error
+ * fails closed to "not marginal" — the gate stays red without a retry.
+ */
+function isMarginalLcpBreach({ rows, assertions, budget = lcpBudget() }) {
+  const bandMax = budget * (1 + MARGINAL_BAND_RATIO);
+  const no = (reason) => ({ marginal: false, reason, budget, bandMax, actual: null });
+  if (!Array.isArray(rows) || !Array.isArray(assertions)) {
+    return no("missing rows or assertions");
+  }
+  if (assertions.some((failure) => failure?.readError)) {
+    return no("unreadable assertion evidence");
+  }
+  const errors = assertions.filter((failure) => failure?.level === "error");
+  if (errors.length === 0) return no("no error-level assertion to retry");
+  const home = rows.find((row) => row.path === MARGINAL_PATH);
+  if (!home) return no("no / row");
+  if (home.verdict !== "fail") return no("/ did not fail");
+  if (home.runs < 1 || /incomplete collection|no Lighthouse run completed/.test(home.note ?? "")) {
+    return no("/ has incomplete runs");
+  }
+  const homeErrors = (home.failed ?? []).filter((failure) => failure.level === "error");
+  if (homeErrors.length === 0) return no("/ has no error-level failure");
+  if (homeErrors.some((failure) => failure.audit !== MARGINAL_AUDIT)) {
+    return no("/ has a non-LCP error");
+  }
+  for (const failure of homeErrors) {
+    if (!Number.isFinite(failure.actual) || failure.actual <= budget || failure.actual >= bandMax) {
+      return no(
+        `/ LCP ${String(failure.actual)} outside the marginal band (${budget}, ${bandMax})`,
+      );
+    }
+  }
+  for (const row of rows) {
+    if (row.path === MARGINAL_PATH) continue;
+    if (row.verdict === "skipped") {
+      if (row.path !== "/e/<key>") return no(`unexpected skipped row ${row.path}`);
+      continue;
+    }
+    if (row.verdict !== "pass" && row.verdict !== "warn") {
+      return no(`${row.path} is ${row.verdict}, not pass/warn-only`);
+    }
+    if ((row.failed ?? []).some((failure) => failure.level === "error")) {
+      return no(`${row.path} has an error-level failure`);
+    }
+  }
+  // No hidden errors: every raw error-level assertion must surface in the
+  // rows (a fan-out duplicate would only add rows, which are already
+  // constrained above; fewer row errors than raw errors means one hid).
+  const rowErrors = rows
+    .flatMap((row) => row.failed ?? [])
+    .filter((failure) => failure.level === "error").length;
+  if (rowErrors < errors.length) return no("unattributed error-level assertion");
+  const actual = homeErrors[0].actual;
+  return {
+    marginal: true,
+    reason: `only error is / LCP ${actual} within (${budget}, ${bandMax})`,
+    budget,
+    bandMax,
+    actual,
+  };
+}
+
 function median(values) {
   const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
   if (sorted.length === 0) return null;
@@ -278,6 +371,13 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
     const medians = Object.fromEntries(
       METRICS.map(([id]) => [id, median(runs.map((lhr) => lhr.audits?.[id]?.numericValue))]),
     );
+    // Every per-run value, for every route — including passes. LHCI logs `all
+    // values` only for warn/fail assertions and the desktop step clears the
+    // mobile per-run LHRs, so without this the next variance investigation is
+    // blind on pass runs. Collection order; null where an audit is missing.
+    const samples = Object.fromEntries(
+      METRICS.map(([id]) => [id, runs.map((lhr) => lhr.audits?.[id]?.numericValue ?? null)]),
+    );
     const redirected = runs.find((lhr) => lhr.finalUrl && lhr.finalUrl !== url);
     const verdict =
       runs.length < quota ? "fail" : errors.length ? "fail" : failures.length ? "warn" : "pass";
@@ -287,6 +387,7 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
       verdict,
       runs: runs.length,
       medians,
+      samples,
       failed: failures.map((failure) => ({
         audit: failure.auditId,
         level: failure.level,
@@ -309,6 +410,7 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
       verdict: "skipped",
       runs: 0,
       medians: {},
+      samples: {},
       failed: [],
       note: skipReason ?? "no event discovered",
     });
@@ -319,21 +421,40 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
 const cell = (value) =>
   value == null ? "-" : String(value >= 10 ? Math.round(value) : Number(value.toFixed(3)));
 
-function renderSummary({ origin, eventPath, eventSource, rows }) {
+function renderSummary({ origin, eventPath, eventSource, rows, notice }) {
   const lines = [
     "## Lighthouse watch run",
     "",
     `Origin: ${origin}`,
     `Event route: ${eventPath ? `${eventPath} (from ${eventSource})` : "skipped, see the table"}`,
     "",
+  ];
+  if (notice) lines.push(notice, "");
+  lines.push(
     `| Route | Verdict | Runs | ${METRICS.map(([, label]) => label).join(" | ")} | Note |`,
     `| --- | --- | --- | ${METRICS.map(() => "---").join(" | ")} | --- |`,
-  ];
+  );
   for (const row of rows) {
     const failed = row.failed.map((f) => `${f.audit} ${f.level} ${cell(f.actual)} > ${f.expected}`);
     const note = [row.note, ...failed].filter(Boolean).join("; ");
     lines.push(
       `| ${row.path} | ${row.verdict} | ${row.runs} | ${METRICS.map(([id]) => cell(row.medians[id])).join(" | ")} | ${note} |`,
+    );
+  }
+  lines.push(
+    "",
+    "### Per-sample values (all routes, collection order)",
+    "",
+    `| Route | ${METRICS.map(([, label]) => label).join(" | ")} |`,
+    `| --- | ${METRICS.map(() => "---").join(" | ")} |`,
+  );
+  for (const row of rows) {
+    lines.push(
+      `| ${row.path} | ${METRICS.map(([id]) => {
+        const values = row.samples?.[id];
+        if (!Array.isArray(values) || values.length === 0) return "-";
+        return values.map(cell).join(", ");
+      }).join(" | ")} |`,
     );
   }
   lines.push("");
@@ -343,6 +464,9 @@ function renderSummary({ origin, eventPath, eventSource, rows }) {
 module.exports = {
   ALLOWED_ORIGINS,
   EVENT_PATH,
+  MARGINAL_AUDIT,
+  MARGINAL_BAND_RATIO,
+  MARGINAL_PATH,
   SERVER_KEYS,
   STAGING_FIXTURE_TITLE_PREFIX,
   buildConfig,
@@ -350,7 +474,10 @@ module.exports = {
   configuredPaths,
   discoverEventPath,
   eventItemsFromRss,
+  isMarginalLcpBreach,
   isStagingFixtureTitle,
+  lcpBudget,
+  marginalBandMax,
   plannedPaths,
   renderSummary,
   requireAllowedOrigin,

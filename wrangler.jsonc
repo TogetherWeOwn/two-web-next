@@ -28,7 +28,8 @@
   // and crons live on two-web-jobs (wrangler.jobs.jsonc): the web
   // Worker only produces after the handoff, so a queue keeps exactly one
   // consumer and a cron exactly one owner. test/jobs-worker-config.test.ts
-  // pins the split. env.production below keeps its own cutover template.
+  // pins the split. env.production below is produce-only: its consumers and
+  // crons live on two-web-jobs-production (wrangler.jobs.jsonc env.production).
   "triggers": { "crons": [] },
   "queues": {
     "producers": [
@@ -81,26 +82,18 @@
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
       // Cutover target only, NOT a DNS change or authorization to claim the apex.
       "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
-      "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
-      // Provision these separate queues at cutover; never reuse staging queues.
+      // Produce-only after the production jobs transfer
+      // (docs/production-jobs-handoff.md): both production crons and both
+      // production consumers live on two-web-jobs-production
+      // (wrangler.jobs.jsonc env.production), mirroring the staging split so
+      // a queue keeps exactly one consumer and a cron exactly one owner.
+      // test/jobs-worker-config.test.ts pins the split.
+      "triggers": { "crons": [] },
+      // Separate production queues; never reuse staging queues.
       "queues": {
         "producers": [
           { "queue": "two-web-next-production-sync-event", "binding": "SYNC_EVENT_QUEUE" },
           { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
-        ],
-        "consumers": [
-          {
-            "queue": "two-web-next-production-sync-event",
-            "max_retries": 10,
-            "max_batch_size": 10,
-            "max_batch_timeout": 5
-          },
-          {
-            "queue": "two-web-next-production-internal-action",
-            "max_retries": 10,
-            "max_batch_size": 10,
-            "max_batch_timeout": 5
-          }
         ]
       },
       // Production Hyperdrive for the separately named two-web-next-production

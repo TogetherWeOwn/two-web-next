@@ -1,6 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
-import { alertRequestError } from "../alerts";
+import { alertRequestError, exceptionClass } from "../alerts";
 import { warnInvalidConfigOnce } from "../config-warn";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -109,7 +109,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     c.set("agentEventHandler", admitted.handle);
     await next();
   } catch (err) {
-    console.error("agent-events failed", (err as Error).name);
+    console.error("agent-events failed", { exception: exceptionClass(err) });
     alertRequestError(err, {
       method: "POST",
       route: "/api/agent-events",
@@ -148,7 +148,7 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
     const a = await c.get("agentEventHandler")(body);
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
-    console.error("agent-events failed", (err as Error).name);
+    console.error("agent-events failed", { exception: exceptionClass(err) });
     alertRequestError(err, {
       method: "POST",
       route: "/api/agent-events",
