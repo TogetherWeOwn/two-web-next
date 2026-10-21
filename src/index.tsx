@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -213,7 +213,11 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
@@ -229,6 +233,8 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
   if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
   if (!url) return { sql: null };
+  // Bare options: this client feeds upsertRosterUser only, whose
+  // transaction already installs a tighter 500 ms SET LOCAL bound.
   const client = postgres(url, databaseOptions);
   return {
     sql: client as unknown as Sql,
@@ -254,8 +260,9 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
 const freshLoginChains = new Map<string, Promise<void>>();
 
 /** Bound on waiting for the previous same-user issuance (see
- * withFreshLoginUserLock): a holder that never settles its tail — a hung
- * store query (no statement timeout is configured) or a disconnect-cancelled
+ * withFreshLoginUserLock): a holder that never settles its tail — a store
+ * query stalled on transport (the per-request statement timeout cancels
+ * server-side execution, not a dead socket) or a disconnect-cancelled
  * callback — would otherwise hang that user's future logins on the isolate
  * indefinitely. Normal insert+sweep work is millisecond-scale and the
  * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only
@@ -638,6 +645,7 @@ registerJoinRoutes(
           source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
+          notice={props.notice}
         />,
       );
     },

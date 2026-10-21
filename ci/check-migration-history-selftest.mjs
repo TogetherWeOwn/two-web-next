@@ -435,3 +435,25 @@ test("CLI guard and regeneration cannot bless a historical edit", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /historical SQL is immutable/);
 });
+
+test("CLI usage errors exit 2 with a usage line", (t) => {
+  const f = fixture(t);
+  const env = { ...process.env, GITHUB_ACTIONS: "false" };
+  for (const args of [
+    ["--bogus"],
+    ["positional"],
+    ["--write-lock", "extra"],
+    ["--write-lock", "--write-lock"],
+  ]) {
+    const result = spawnSync(process.execPath, ["ci/check-migration-history.mjs", ...args], {
+      cwd: f.root,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 2, `argv ${JSON.stringify(args)} must exit 2 (usage error)`);
+    assert.match(result.stderr, /usage/i);
+    assert.match(result.stderr, /check-migration-history/);
+    assert.match(result.stderr, /--write-lock/);
+    assert.equal(result.stdout, "");
+  }
+});

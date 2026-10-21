@@ -875,7 +875,7 @@ describe("join callback with a never-settling analytics INSERT", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("7");
     const html = await res.text();
-    expect(html).toContain("Discord is unreachable");
+    expect(html).toContain("Discord throttled the approval");
     expect(sessionCookies(res)).toEqual([]);
     expect(fake.attemptInsertTries).toBe(1);
     expectStatementBounded(fake);
@@ -919,10 +919,10 @@ describe("join callback with a never-settling analytics INSERT", () => {
     const { state, cookie } = await startJoin(e);
     vi.useFakeTimers();
     const res = await driveBounded(finishJoinCb(e, state!, cookie), fake);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("9");
     const html = await res.text();
-    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain("Discord throttled the automatic add");
     expect(sessionCookies(res)).toEqual([]);
     expect(botAdds(calls)).toBe(1);
     expect(fake.attemptInsertTries).toBe(1);
@@ -1300,13 +1300,14 @@ describe("positive controls (green before the build)", () => {
     ]);
   });
 
-  it("healthy store: a rate-limited bot add records its row and keeps Retry-After", async () => {
+  it("healthy store: a rate-limited bot add records its row and keeps 503 + Retry-After", async () => {
     const { fake, env: e } = isolated("healthy");
     mockDiscord({ joinStatus: 429, retryAfterSeconds: 9 });
     const { state, cookie } = await startJoin(e);
     const res = await finishJoinCb(e, state!, cookie);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("9");
+    expect(await res.text()).toContain("Discord throttled the automatic add");
     expect(fake.attempts).toMatchObject([{ outcome: "rate_limited", discordId: "42" }]);
   });
 
