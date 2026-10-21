@@ -2,6 +2,7 @@ import type { Sql } from "postgres";
 import { sha256Hex } from "../bot/signer";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
+import { retireApiPublicEventCache } from "../public-data/cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
 import {
@@ -410,6 +411,7 @@ async function processAgentEvent(
       (committed.status === 200 || committed.status === 201)
     ) {
       retireAnonEventCaches();
+      retireApiPublicEventCache();
       await retireHomeGuestCache();
     }
     return { status: committed.status, body: committed.body };

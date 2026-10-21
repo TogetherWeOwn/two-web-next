@@ -21,6 +21,16 @@ export interface ApiPublicCacheEntry {
 
 const entries = new Map<string, ApiPublicCacheEntry>();
 
+// Retire generation: bumped on every event retirement so a collection/detail
+// read that started before the retire can refuse to settle its pre-retire
+// bytes after it. Same shape as src/events/anon-cache.ts.
+let generation = 0;
+
+/** The current retire generation; event reads capture it before their first read. */
+export function apiPublicCacheGeneration(): number {
+  return generation;
+}
+
 /**
  * Canonical key: method + path + the clamped paging the response was built
  * from. Unknown query params are dropped so junk queries cannot fragment or
@@ -44,7 +54,13 @@ export function writeApiPublicCache(
   key: string,
   value: Omit<ApiPublicCacheEntry, "expiresAt">,
   now = Date.now(),
+  expectedGeneration?: number,
 ): void {
+  // Generation fence: a read that captured the generation before a retire
+  // landed must not settle its pre-retire bytes afterwards. The compare runs
+  // synchronously inside the write, so it is atomic within the isolate.
+  // Callers without a read (community/join, probes) omit the fence.
+  if (expectedGeneration !== undefined && expectedGeneration !== generation) return;
   if (!entries.has(key) && entries.size >= MAX_ENTRIES) {
     const oldest = entries.keys().next();
     if (!oldest.done) entries.delete(oldest.value);
@@ -52,7 +68,34 @@ export function writeApiPublicCache(
   entries.set(key, { ...value, expiresAt: now + API_PUBLIC_CACHE_TTL_MS });
 }
 
-/** Test seam only: clears every entry, mirroring __resetAnonEventCacheForTests. */
+function isEventEntry(key: string): boolean {
+  // Collection keys carry `?limit=&page=`; detail keys carry `/<key>`.
+  return (
+    key === "GET /api/public/events" ||
+    key.startsWith("GET /api/public/events?") ||
+    key.startsWith("GET /api/public/events/")
+  );
+}
+
+/**
+ * Retire every cached event collection/detail entry in this isolate. Called
+ * after a committed moderator or agent create/update/publish/cancel (never on
+ * a refusal or a rollback), so the next fetch re-reads instead of serving
+ * pre-mutation bytes. Community/join entries are untouched: their payloads do
+ * not read event rows. The generation bump is unconditional — even with
+ * nothing cached — so an in-flight pre-retire read still refuses to settle.
+ * Same-isolate only, like retireAnonEventCaches: every other isolate
+ * converges on TTL expiry.
+ */
+export function retireApiPublicEventCache(): void {
+  for (const key of entries.keys()) {
+    if (isEventEntry(key)) entries.delete(key);
+  }
+  generation++;
+}
+
+/** Test seam only: clears every entry and restarts the generation. */
 export function __resetApiPublicCacheForTests(): void {
   entries.clear();
+  generation = 0;
 }

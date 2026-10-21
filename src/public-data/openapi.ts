@@ -129,7 +129,13 @@ export function getOpenApiDocument(appUrl: string) {
         "attendee identities, no model-training permission. Collections cap at 20 rows and " +
         "32 KiB; errors use { error: { code, message } } with code internal, " +
         "invalid_request, not_found, rate_limited or unavailable. On internal, " +
-        "retry the read; the envelope never carries exception text.",
+        "retry the read; the envelope never carries exception text. Freshness: a cache " +
+        "hit carries only the remaining freshness of the original 60s window — a hit " +
+        "just before expiry answers max-age=1, never a fresh full window — and a " +
+        "fresh miss re-arms the full 60s bound. Committed event mutations retire " +
+        "collection and detail entries in the mutating isolate at once; same-isolate " +
+        "retirement is not a global edge purge, so every other isolate converges " +
+        "on TTL expiry.",
     },
     servers: [{ url: appUrl }],
     paths: {
