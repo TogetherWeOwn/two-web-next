@@ -4,6 +4,7 @@ const eventFields = {
   title: "Title",
   game: "Game",
   description: "Description",
+  accessibility_notes: "Accessibility notes",
   starts_at: "Starts",
   ends_at: "Ends",
   timezone: "Timezone",
@@ -26,21 +27,29 @@ const featuredFields = {
   ends_at: "Show until",
 };
 
-export function validationSummary(
-  errors: Record<string, string>,
-  kind: "event" | "featured",
-  mode: "new" | "edit",
-) {
-  const fields: Record<string, string> =
-    kind === "featured"
-      ? featuredFields
-      : mode === "new"
-        ? { ...eventFields, ...recurrenceFields }
-        : eventFields;
+function summarizeFields(errors: Record<string, string>, fields: Record<string, string>) {
   return Object.entries(errors).map(([key, message]) => ({
     key,
     message,
     label: Object.hasOwn(fields, key) ? fields[key] : null,
     target: Object.hasOwn(fields, key) ? `f-${key.replace(/[^a-z0-9]+/gi, "-")}` : null,
   }));
+}
+
+// Event-only clients do not need the featured editor's field metadata.
+export function eventValidationSummary(errors: Record<string, string>, mode: "new" | "edit") {
+  return summarizeFields(
+    errors,
+    mode === "new" ? { ...eventFields, ...recurrenceFields } : eventFields,
+  );
+}
+
+export function validationSummary(
+  errors: Record<string, string>,
+  kind: "event" | "featured",
+  mode: "new" | "edit",
+) {
+  return kind === "featured"
+    ? summarizeFields(errors, featuredFields)
+    : eventValidationSummary(errors, mode);
 }

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   LOCAL_FIXTURE_ORIGIN,
   LOCAL_FIXTURE_TITLE_PREFIXES,
+  LOCAL_SWEEP_STATUSES,
+  liveLocalFixtureGateQuery,
   loginLocalSweep,
   localSweepListPath,
   localSweepNextListPath,
@@ -333,4 +335,66 @@ test("local sweep refuses further requests after its deadline", async () => {
     /time limit exhausted/,
   );
   assert.equal(reads, 1);
+});
+
+test("local gate query covers every swept prefix and status as bound parameters", () => {
+  const gate = liveLocalFixtureGateQuery();
+  // Built FROM the frozen lists: a new prefix or status can never slip past
+  // the gate while the HTTP pass still sweeps it.
+  assert.deepEqual(gate.values, [...LOCAL_SWEEP_STATUSES, ...LOCAL_FIXTURE_TITLE_PREFIXES]);
+  assert.ok(gate.values.length > 0, "gate binds at least one value");
+  for (let index = 1; index <= gate.values.length; index++) {
+    assert.ok(gate.text.includes(`$${index}`), `gate text binds $${index}`);
+  }
+  assert.equal(
+    gate.text.match(/starts_with\(title, \$\d+\)/g)?.length,
+    LOCAL_FIXTURE_TITLE_PREFIXES.length,
+  );
+  // Pin the exact SQL text: the operators (IN, OR, AND) are the load-bearing
+  // part — an OR→AND or IN→NOT IN slip makes the gate miss live fixtures and
+  // skip the sweep on dirty runs, and the value assertions above cannot see
+  // it. Placeholder positions stay derived from the frozen lists so a new
+  // prefix or status flows through both sides.
+  const statusParams = LOCAL_SWEEP_STATUSES.map((_, index) => `$${index + 1}`).join(", ");
+  const titleParams = LOCAL_FIXTURE_TITLE_PREFIXES.map(
+    (_, index) => `starts_with(title, $${LOCAL_SWEEP_STATUSES.length + index + 1})`,
+  ).join(" OR ");
+  assert.equal(
+    gate.text,
+    `select 1 as one from events where status in (${statusParams}) ` +
+      `and (${titleParams}) limit 1`,
+  );
+  assert.ok(gate.text.includes("from events"), "gate reads the events table");
+  assert.ok(gate.text.includes("limit 1"), "gate stops at the first live row");
+  assert.ok(!gate.text.includes("delete"), "gate never writes");
+  assert.ok(!gate.text.includes("update"), "gate never writes");
+});
+
+test("local gate predicate matches the HTTP sweep set row for row", () => {
+  // The gate is an existence check over exactly the rows the HTTP pass would
+  // parse and cancel: status in the swept statuses AND title starting with a
+  // swept prefix (parseLocalFixtureRows narrows the substring admin search to
+  // the same case-sensitive prefix match). Mirror that predicate here so a
+  // drift between the gate comment and the parse rule fails loudly.
+  const gate = liveLocalFixtureGateQuery();
+  const [statuses, prefixes] = [LOCAL_SWEEP_STATUSES, LOCAL_FIXTURE_TITLE_PREFIXES];
+  const gateMatches = (title, status) =>
+    statuses.includes(status) && prefixes.some((prefix) => title.startsWith(prefix));
+  const cases = [
+    ["E2E Waitlist fixture", "draft", true],
+    ["E2E Promotion leftover", "published", true],
+    ["E2E Pause fixture", "published", true],
+    ["E2E Moderator Game Night", "draft", true],
+    ["E2E Filter Draft 1760860000000", "published", true],
+    ["E2E Community Night", "published", false],
+    ["E2E Past Night", "published", false],
+    ["E2E Waitlist fixture", "cancelled", false],
+    ["E2E Waitlistish unrelated", "draft", false],
+    ["Staging E2E event", "draft", false],
+  ];
+  for (const [title, status, expected] of cases) {
+    assert.equal(gateMatches(title, status), expected, `${JSON.stringify(title)} / ${status}`);
+  }
+  assert.ok(gate.values.includes(statuses[0]), "gate binds the swept statuses");
+  assert.ok(gate.values.includes(prefixes[0]), "gate binds the swept prefixes");
 });

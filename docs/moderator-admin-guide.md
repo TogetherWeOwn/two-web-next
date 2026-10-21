@@ -289,6 +289,7 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Title | Required, at most 100 characters. |
    | Game | Optional, at most 100 characters. |
    | Description | Optional, at most 1000 characters. |
+   | Accessibility notes | Optional, at most 1000 characters. Confirmed access details only; shown on the event page under Accessibility. |
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
@@ -300,8 +301,8 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description and location reject control/invisible characters; ordinary emoji
-   sequences are allowed.
+   description, accessibility notes and location reject control/invisible
+   characters; ordinary emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement
