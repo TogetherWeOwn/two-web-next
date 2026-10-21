@@ -617,8 +617,10 @@ PY
   cmp "$T/manifest-before" "$STUB_R2/$MANIFEST" || fail "mixture partial JSON apply rewrote the manifest"
   ok "mixture partial JSON apply leaves the manifest unchanged"
   # Generic probe-GET failure must fail the apply (archive branch).
+  # Legacy seed: daily 2 has no registered receipt, so no receipt branch runs
+  # and the archive pin cannot be masked by the receipt branch.
   reset_store
-  seed_store 9 4 "" ""
+  seed_store 9 4 "2" ""
   cp "$STUB_R2/$MANIFEST" "$T/manifest-before"
   local gd1 gd2
   gd1="$(daily_key 1)"; gd2="$(daily_key 2)"
