@@ -16,6 +16,8 @@ import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import type { DiscordEventsSource } from "../src/events/discord-transients";
 import { calendarMonthLabel } from "../src/islands/contracts";
+import { loadEventsPage } from "../src/kit-events";
+import { renderEventsHtml } from "../src/kit-events-html";
 
 const APP_URL = "https://calendar.example.test";
 const INVITE = "https://discord.gg/example";
@@ -140,12 +142,17 @@ function calendarFixture(args: {
     transaction: async (fn: (tx: Db) => Promise<void>) =>
       fn({ execute: async () => {} } as unknown as Db),
   });
+  const adminDb = db as unknown as Db;
   const env = {
     ...baseEnv,
-    ADMIN_DB: db as unknown as Db,
+    ADMIN_DB: adminDb,
     DISCORD_EVENTS: source,
   } as unknown as Env;
-  return { env, request: (path: string, init?: RequestInit) => app.request(path, init, env) };
+  return {
+    db: adminDb,
+    env,
+    request: (path: string, init?: RequestInit) => app.request(path, init, env),
+  };
 }
 
 function blockFor(html: string, testid: string): string | null {
@@ -344,5 +351,62 @@ describe("month-empty past completeness", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
+  });
+
+  it("suppresses the claim on the Kit render when a PG-finite JS-overflow row would consume a drawer slot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T12:00:00Z"));
+    // Same 21-row overflow shape as the Hono case, fed through the Kit
+    // load+render: the overflow row passes SQL isfinite(), occupies a limit
+    // slot, and drops in JS — so only the threaded pre-filter flag (never
+    // the post-filter past.length fallback) may judge completeness here.
+    const overflowRow = eventRow({
+      eventKey: "overflow-import-kit",
+      title: "Overflow import",
+      startsAt: new Date(NaN),
+      endsAt: new Date("2020-01-01T20:00:00Z"),
+      timezone: "UTC",
+    });
+    (overflowRow as unknown as Record<string, unknown>).__pgFiniteOverflow = true;
+    const sepRows = Array.from({ length: 19 }, (_, i) =>
+      eventRow({
+        eventKey: `sep-kit-${i + 1}`,
+        title: `September raid ${i + 1}`,
+        startsAt: new Date(Date.UTC(2026, 8, i + 1, 20)),
+        endsAt: new Date(Date.UTC(2026, 8, i + 1, 22)),
+        timezone: "UTC",
+      }),
+    );
+    const augHold = eventRow({
+      eventKey: "aug-hold-kit",
+      title: "August raid",
+      startsAt: new Date("2026-08-15T20:00:00Z"),
+      endsAt: new Date("2026-08-15T22:00:00Z"),
+      timezone: "UTC",
+    });
+    const src = calendarFixture({
+      upcoming: [decKeep()],
+      monthRows: [],
+      past: [overflowRow, ...sepRows, augHold],
+    });
+    const collected: Record<string, string> = {};
+    const url = new URL("/events?view=calendar&month=2026-08&past=1", APP_URL);
+    const data = await loadEventsPage({
+      env: { APP_URL, DISCORD_INVITE_URL: INVITE } as never,
+      url,
+      method: "GET",
+      island: false,
+      request: new Request(url),
+      setHeaders: (headers) => Object.assign(collected, headers),
+      deleteJoinCookie: () => {},
+      dbForFn: async () => src.db,
+      sessionForFn: async () => null,
+      journeyForFn: async () => null,
+      discordForFn: () => discordSource(),
+      now: new Date("2026-10-31T12:00:00Z"),
+    });
+    const rendered = await renderEventsHtml(data as never, collected);
+    expect(rendered.status).toBe(200);
+    expect(rendered.body).not.toContain(`data-testid="${MONTH_EMPTY_TESTID}"`);
   });
 });
