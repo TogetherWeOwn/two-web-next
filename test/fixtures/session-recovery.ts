@@ -15,8 +15,9 @@ export const SECRET = "local-fixture-secret-at-least-32-bytes-long";
 export function recoveryFixture(
   origin = "https://next.example.test",
   extra: Record<string, string> = {},
+  clock: () => number = Date.now,
 ) {
-  const sessions = createMemorySessionStore();
+  const sessions = createMemorySessionStore(clock);
   const profiles = createMemoryProfileStore([
     {
       id: MEMBER,
