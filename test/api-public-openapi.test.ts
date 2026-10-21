@@ -163,3 +163,47 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: openapi.json", () =
     expect(names.has("GET /openapi.json")).toBe(true);
   });
 });
+
+// Paging is an agent-facing contract, so these consistency checks must run
+// without a database. The served OpenAPI text is the paging source of truth.
+describe("public read API: OpenAPI paging consistency (offline)", () => {
+  const operation = () => getOpenApiDocument(APP_URL).paths["/api/public/events"].get;
+  const parameter = (name: string) => {
+    const found = operation().parameters.find((p) => p.name === name);
+    expect(found, `Missing paging parameter ${name}`).toBeDefined();
+    return found!;
+  };
+
+  it("advertises both per_page and its limit alias with the same bounds and precedence", () => {
+    const primary = parameter("per_page");
+    const alias = parameter("limit");
+    expect(primary.in).toBe("query");
+    expect(alias.in).toBe("query");
+    expect(primary.schema).toMatchObject({ type: "integer", minimum: 1, maximum: 20, default: 20 });
+    expect(alias.schema).toEqual(primary.schema);
+    expect(alias.description).toMatch(/alias/i);
+    expect(alias.description).toContain("per_page");
+    const wording = `${primary.description} ${alias.description}`;
+    expect(wording).toMatch(/preced|priority|takes\s+prefer|wins|overrid/i);
+  });
+
+  it("documents a finite raw-page ceiling", () => {
+    const page = parameter("page");
+    const schema = page.schema as { maximum?: number };
+    expect(page.schema).toMatchObject({ type: "integer", minimum: 1, default: 1 });
+    expect(Number.isSafeInteger(schema.maximum)).toBe(true);
+    expect(schema.maximum).toBeGreaterThan(1);
+    expect(page.description).toMatch(/cap|maximum|ceiling/i);
+  });
+
+  it("explains invalid defaults, range coercion, and clamp-to-last-page instead of 422", () => {
+    for (const name of ["page", "per_page", "limit"]) {
+      const text = parameter(name).description;
+      expect(text, name).toMatch(/invalid|malformed|non.?integer/i);
+      expect(text, name).toMatch(/default|fall.?back/i);
+      expect(text, name).toMatch(/clamp|coerc/i);
+    }
+    expect(parameter("page").description).toMatch(/last\s+page/i);
+    expect(operation().responses).not.toHaveProperty("422");
+  });
+});
