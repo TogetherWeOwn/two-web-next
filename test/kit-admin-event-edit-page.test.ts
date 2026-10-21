@@ -11,10 +11,22 @@
 // event delete anywhere on this resource, and the Svelte port adds none.
 //
 // Source-text by design: the root Vitest suite cannot compile .svelte, and
-// these pins are the exact selectors the admin edit E2E suite drives.
+// these pins are the exact selectors the admin edit E2E suite drives. The
+// accessibility-notes field is the exception: it renders through the shared
+// EventNotesField SSR component (like the host/join fields), so this suite
+// pins the Svelte slot plus the executed shared output, not an inline template.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { EVENT_BASELINE_FIELD } from "../src/admin/event-baseline";
+import {
+  resolveKitEventEdit,
+  type KitEventEditDeps,
+  type KitEventEditRosterRow,
+  type KitEventEditRow,
+} from "../src/admin/kit-event-edit";
+import { EventNotesField } from "../src/admin/pages/event-host-join-fields";
+import type { Db } from "../src/db/index";
 
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
@@ -40,16 +52,19 @@ describe("Kit event-edit page contract", () => {
     // The Hono-owned update refuses a save without the current baseline, so
     // the ported form carries the view's mint under the shared carrier name.
     expect(source).toContain('type="hidden"');
-    expect(source).toContain("EVENT_BASELINE_FIELD");
+    expect(source).toContain('name="saved_baseline"');
+    expect(EVENT_BASELINE_FIELD).toBe("saved_baseline");
     expect(source).toContain("view.baseline");
   });
 
   it("keeps every Hono field name, id and label the E2E suite drives", () => {
+    // Accessibility notes are not inline here: they render through the shared
+    // EventNotesField SSR slot pinned below (like the host/join fields), so
+    // the E2E selectors for notes bind the executed shared output instead.
     for (const name of [
       "title",
       "game",
       "description",
-      "accessibility_notes",
       "starts_at",
       "ends_at",
       "timezone",
@@ -62,7 +77,6 @@ describe("Kit event-edit page contract", () => {
       "f-title",
       "f-game",
       "f-description",
-      "f-accessibility-notes",
       "f-starts-at",
       "f-ends-at",
       "f-timezone",
@@ -71,10 +85,6 @@ describe("Kit event-edit page contract", () => {
     ]) {
       expect(source).toContain(id);
     }
-    expect(source).toContain("Accessibility notes");
-    expect(source).toContain(
-      "Optional; include only confirmed details, not personal contact information.",
-    );
     expect(source).toContain("Starts (local wall time, YYYY-MM-DD HH:mm)");
     expect(source).toContain("Ends (local wall time, YYYY-MM-DD HH:mm)");
     expect(source).toContain("The IANA zone the wall time above is typed in. Storage is UTC.");
@@ -95,7 +105,7 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('data-testid="form-errors"');
     expect(source).toContain("Check the highlighted fields and try again.");
     expect(source).toContain("error-title");
-    expect(source).toContain("error-accessibility_notes");
+    // Notes errors render through the shared slot pinned below, not inline.
     expect(source).toContain("error-starts_at");
     expect(source).toContain("error-timezone");
     expect(source).toContain("error-location");
@@ -103,6 +113,88 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('role="alert"');
     expect(source).toContain("aria-invalid=");
     expect(source).toContain("aria-describedby=");
+  });
+
+  it("renders accessibility notes through the shared SSR slot with the Hono contract", () => {
+    // The page places the resolver's pre-rendered field; no inline duplicate
+    // template ships in the client bundle.
+    expect(source).toContain("{@html view.notesHtml}");
+    expect(source).not.toContain('name="accessibility_notes"');
+    expect(source).not.toContain("f-accessibility-notes");
+
+    // The shared renderer owns the exact Hono contract: label, hint, limit,
+    // control and error wiring. A dropped control or renamed field fails here.
+    const html = EventNotesField({
+      values: { accessibility_notes: "Step-free access confirmed." },
+      errors: {},
+    }).toString();
+    expect(html).toContain('name="accessibility_notes"');
+    expect(html).toContain('id="f-accessibility-notes"');
+    expect(html).toContain("Accessibility notes");
+    expect(html).toContain(
+      "Optional; include only confirmed details, not personal contact information.",
+    );
+    expect(html).toContain('data-event-text-limit="1000"');
+    expect(html).toContain("Step-free access confirmed.");
+    expect(html).toContain('aria-describedby="f-accessibility-notes-hint"');
+    expect(html).not.toContain('data-testid="error-accessibility_notes"');
+
+    // Hostile values serialize escaped, never as markup.
+    const hostile = EventNotesField({
+      values: { accessibility_notes: '<b>&"notes"' },
+      errors: {},
+    }).toString();
+    expect(hostile).not.toContain("<b>");
+    expect(hostile).toContain("&lt;b&gt;");
+    expect(hostile).toContain("&amp;");
+
+    // Error state wires the Hono alert shape the E2E suite drives.
+    const errored = EventNotesField({
+      values: { accessibility_notes: "draft kept" },
+      errors: { accessibility_notes: "Too long" },
+    }).toString();
+    expect(errored).toContain('data-testid="error-accessibility_notes"');
+    expect(errored).toContain('role="alert"');
+    expect(errored).toContain('aria-invalid="true"');
+    expect(errored).toContain("f-accessibility-notes-error");
+    expect(errored).toContain("Too long");
+    expect(errored).toContain("draft kept");
+  });
+
+  it("mints notesHtml from the stored row through the shared renderer", async () => {
+    const db = {} as Db;
+    const row: KitEventEditRow = {
+      eventKey: "EVTNOTES01",
+      title: "Game night",
+      game: "Chess",
+      description: "Casual play",
+      accessibilityNotes: "Step-free access confirmed.",
+      organizer_name: null,
+      join_url: null,
+      join_instructions: null,
+      startsAt: new Date("2026-07-01T19:00:00.000Z"),
+      endsAt: new Date("2026-07-01T21:00:00.000Z"),
+      timezone: "Europe/London",
+      location: "Hall",
+      capacity: 8,
+      status: "draft",
+      rsvpOpen: true,
+      recurrenceFrequency: null,
+    };
+    const deps: KitEventEditDeps = {
+      db,
+      get: async () => ({ ...row }),
+      list: async () => ({ rows: [] as KitEventEditRosterRow[], total: 0 }),
+      now: new Date("2026-06-15T12:00:00.000Z"),
+    };
+    const outcome = await resolveKitEventEdit(row.eventKey, {}, deps);
+    if (outcome.kind !== "ok") throw new Error(`expected ok, got ${outcome.kind}`);
+    // The slot's data source carries the stored notes through the shared
+    // renderer: dropping the mint empties the placed field.
+    expect(outcome.view.notesHtml).toContain('name="accessibility_notes"');
+    expect(outcome.view.notesHtml).toContain("Step-free access confirmed.");
+    expect(outcome.view.notesHtml).toContain("Accessibility notes");
+    expect(outcome.view.values.accessibility_notes).toBe("Step-free access confirmed.");
   });
 
   it("keeps the Hono status actions posting to the unchanged transition endpoints", () => {
