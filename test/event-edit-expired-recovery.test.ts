@@ -254,6 +254,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const page = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
         expect(page.status).toBe(200);
         expect(await page.text()).not.toContain('data-testid="auth-error"');
+        jar = mergeCookies(jar, page);
+        const reload = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
+        expect(reload.status).toBe(200);
+        expect(await reload.text()).not.toContain('data-testid="auth-error"');
       } finally {
         vi.unstubAllGlobals();
       }
