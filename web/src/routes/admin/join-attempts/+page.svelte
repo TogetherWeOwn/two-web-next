@@ -18,10 +18,6 @@ let { data }: PageProps = $props();
 const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $derived(data);
 </script>
 
-<svelte:head>
-  <title>Join attempts — TWO admin</title>
-</svelte:head>
-
 <AdminShell title="Join attempts">
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
