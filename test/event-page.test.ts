@@ -15,15 +15,21 @@ const PATH = `/e/${KEY}`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Real Drizzle queries and Hono/session rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Error) {
+type AccessibilityNotesFixture = { accessibilityNotes?: string | null };
+
+function fixture(
+  over: Partial<typeof events.$inferSelect> & AccessibilityNotesFixture = {},
+  queryError?: Error,
+) {
   const start = new Date("2030-01-10T20:00:00Z");
-  const row: typeof events.$inferSelect = {
+  const row: typeof events.$inferSelect & AccessibilityNotesFixture = {
     id: 1,
     icsSequence: 1n,
     eventKey: KEY,
     title: "Chess night",
     game: "Chess",
     description: "Bring a friend & a board.",
+    accessibilityNotes: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",
@@ -267,6 +273,29 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).not.toContain("<script> & friends");
     expect(html).not.toContain("og:image");
   });
+
+  it("renders escaped accessibility notes for guests and members without changing the description", async () => {
+    const notes = 'Step-free access & a quiet room. <script>alert("not markup")</script>';
+    const source = fixture({ accessibilityNotes: notes });
+    const guest = await source.request();
+    const member = await source.request(await source.cookie());
+
+    for (const html of [await guest.text(), await member.text()]) {
+      expect(html).toMatch(/>\s*Accessibility(?: notes)?\s*</i);
+      expect(html).toContain(esc(notes));
+      expect(html).not.toContain(notes);
+      expect(html).toContain("Bring a friend &amp; a board.");
+    }
+  });
+
+  it.each([null, "", "   "])(
+    "omits Accessibility for blank historical notes (%j)",
+    async (accessibilityNotes) => {
+      const html = await (await fixture({ accessibilityNotes }).request()).text();
+
+      expect(html).not.toMatch(/>\s*Accessibility(?: notes)?\s*</i);
+    },
+  );
 
   it("omits empty venue and uses the legacy share-description fallback", async () => {
     const html = await (await fixture({ location: null, description: "" }).request()).text();
