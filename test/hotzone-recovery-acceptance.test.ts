@@ -566,7 +566,7 @@ describe("hotzone shared signal vocabulary", () => {
   it("reuses the shared vocabulary in the Kit signal binding instead of a forked list", () => {
     const source = readSource("web/src/routes/hotzones/[signal]/+page.server.ts");
     expect(source).toMatch(
-      /from\s+["'][^"']*hotzones\/aggregates["'][^;]*\b(HOTZONE_SIGNALS|isHotzoneSignal)\b/,
+      /\b(HOTZONE_SIGNALS|isHotzoneSignal)\b[^;]*from\s+["'][^"']*hotzones\/aggregates["']/,
     );
     expect(source).not.toContain('["joins", "voice", "games"]');
     expect(source).not.toContain("['joins', 'voice', 'games']");
