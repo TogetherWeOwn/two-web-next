@@ -129,12 +129,17 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     expect(response.status).toBe(200);
     expect(deps.resolve).toHaveBeenCalledOnce();
     expect(deps.honoFetch).not.toHaveBeenCalled();
-    expect(recordBoardViewFn).toHaveBeenCalledExactlyOnceWith(db, {
-      boardKey: "hotzones",
-      scope: "overall",
-      season: "all",
-      resultCount: 3,
-    });
+    expect(recordBoardViewFn).toHaveBeenCalledExactlyOnceWith(
+      db,
+      {
+        boardKey: "hotzones",
+        scope: "overall",
+        season: "all",
+        resultCount: 3,
+      },
+      undefined,
+      undefined,
+    );
     expect(sessionFor).not.toHaveBeenCalled();
     expect(accessSink).not.toHaveBeenCalled();
   });
