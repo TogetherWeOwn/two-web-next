@@ -69,6 +69,24 @@ describe("connection-helper argv acceptance", () => {
     },
   );
 
+  it.each([["not-a-url"], [null]])(
+    "refuses flag-shaped path before credential validation (DATABASE_URL=%s)",
+    (databaseUrl: string | null) => {
+      const { root, workdir, callLog, ...paths } = setup();
+      try {
+        const result = run({ ...paths, workdir, callLog }, ["--help"], databaseUrl);
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stderr).toContain("flag-shaped path");
+        expect(result.stdout).toBe("");
+        expect(calls(callLog)).toBe("");
+        expect(existsSync(join(workdir, "--help"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("control: a valid output path still dumps through pg_dump", () => {
     const { root, workdir, callLog, ...paths } = setup();
     try {

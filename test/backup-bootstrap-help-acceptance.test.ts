@@ -72,14 +72,14 @@ describe("backup-bootstrap help and argv acceptance", () => {
     },
   );
 
-  it.each([["bogus-arg"], ["--dry-run"], ["-x"], ["backup"]])(
+  it.each([[""], ["bogus-arg"], ["--dry-run"], ["-x"], ["backup"]])(
     "refuses %s before sudo, network or temp work",
     (...args: string[]) => {
       const { root, fakebin, callLog } = setup();
       try {
         const result = run(fakebin, callLog, root, args);
         expect(result.error).toBeUndefined();
-        expect(result.status).not.toBe(0);
+        expect(result.status, result.stderr).toBe(2);
         expect(`${result.stdout}\n${result.stderr}`).toMatch(/usage|refus|unknown|invalid/i);
         expect(calls(callLog)).toBe("");
       } finally {
@@ -87,6 +87,19 @@ describe("backup-bootstrap help and argv acceptance", () => {
       }
     },
   );
+
+  it("refuses multiple arguments before sudo, network or temp work", () => {
+    const { root, fakebin, callLog } = setup();
+    try {
+      const result = run(fakebin, callLog, root, ["--help", "bogus"]);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(2);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/usage|refus/i);
+      expect(calls(callLog)).toBe("");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("control: a no-arg run reaches temp and privilege setup (spies are wired)", () => {
     const { root, fakebin, callLog } = setup();

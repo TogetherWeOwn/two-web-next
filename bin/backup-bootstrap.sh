@@ -20,6 +20,11 @@ if [ "$#" -gt 1 ]; then
   print_usage >&2
   exit 2
 fi
+if [ "$#" -eq 1 ] && [ -z "$1" ]; then
+  echo "backup-bootstrap: refusing: takes no arguments (got an empty argument)" >&2
+  print_usage >&2
+  exit 2
+fi
 case "${1:-}" in
   "") ;;
   --help|-h) print_usage; exit 0 ;;
