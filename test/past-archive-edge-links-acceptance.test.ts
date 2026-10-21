@@ -97,7 +97,7 @@ const noticeOf = (html: string): string => {
 };
 
 const navOf = (html: string): { attrs: string; inner: string } => {
-  const m = html.match(/<nav\b([^>]*)>([\s\S]*?)<\/nav>/);
+  const m = /<nav\b([^>]*data-archive-pager[^>]*)>([\s\S]*?)<\/nav>/.exec(html);
   expect(m, "pager nav renders").not.toBeNull();
   return { attrs: m![1]!, inner: m![2]! };
 };
