@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 // resolve or reject deferred Clipboard.writeText promises in any order.
 const binder = readFileSync(new NodeURL("../public/islands/copy-link.js", import.meta.url), "utf8");
 const canonical = "https://next.example.test/e/01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const feedCanonical = "https://next.example.test/events.ics";
 const copiedText = "Event link copied.";
 const failedText = "That link didn't copy — copy it from the address bar.";
 
@@ -28,7 +29,7 @@ async function settle() {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
-function browser(opts: { copied?: boolean } = {}) {
+function browser(opts: { copied?: boolean; feed?: boolean; clipboard?: boolean } = {}) {
   const toast = { textContent: "" };
   const active = { focus: vi.fn() };
   const selection = {
@@ -45,7 +46,8 @@ function browser(opts: { copied?: boolean } = {}) {
     select: vi.fn(),
     remove: vi.fn(),
   };
-  const attributes = new Map([["data-copy-link", canonical]]);
+  const attributes = new Map([["data-copy-link", opts.feed ? feedCanonical : canonical]]);
+  if (opts.feed) attributes.set("data-copy-feed", "");
   let click: (e: Click) => void = () => {};
   const link = {
     getAttribute: (key: string) => attributes.get(key),
@@ -79,7 +81,7 @@ function browser(opts: { copied?: boolean } = {}) {
       execCommand: exec,
     },
     window: { getSelection: () => selection },
-    navigator: { clipboard: { writeText } },
+    navigator: opts.clipboard === false ? {} : { clipboard: { writeText } },
     setTimeout,
     clearTimeout,
   });
@@ -307,5 +309,44 @@ describe("Copy-link pending attempts", () => {
 
     b.runTimer(reset);
     expect(b.toast.textContent).toBe("");
+  });
+});
+
+describe("Copy-link feed copies", () => {
+  const feedManualText = "Select the feed URL and copy it manually in your calendar app.";
+
+  it("announces feed manual guidance at the deadline while the write is still pending", async () => {
+    const b = browser({ feed: true });
+    b.click();
+    const deadlineMs = b.setTimeout.mock.calls[0]?.[1];
+    expect(deadlineMs).toBeGreaterThan(0);
+    expect(deadlineMs).toBeLessThanOrEqual(10_000);
+
+    b.runTimer(0); // writeText is still pending when the deadline elapses
+    expect(b.toast.textContent).toBe(feedManualText);
+    expect(b.writeText).toHaveBeenCalledTimes(1);
+    expect(b.writeText).toHaveBeenCalledWith(feedCanonical);
+    expect(b.exec).not.toHaveBeenCalled();
+  });
+
+  it("never runs the execCommand fallback for a rejected feed write", async () => {
+    const b = browser({ feed: true, copied: true }); // execCommand would claim success
+    b.click();
+    b.writes[0]!.reject(new Error("denied"));
+    await settle();
+    expect(b.exec).not.toHaveBeenCalled();
+    expect(b.field.remove).not.toHaveBeenCalled();
+    expect(b.toast.textContent).toBe(feedManualText);
+    expect(b.timers.size).toBe(1);
+  });
+
+  it("never runs the execCommand fallback for a feed copy without a Clipboard API", async () => {
+    const b = browser({ feed: true, copied: true, clipboard: false });
+    b.click();
+    await settle();
+    expect(b.exec).not.toHaveBeenCalled();
+    expect(b.field.remove).not.toHaveBeenCalled();
+    expect(b.toast.textContent).toBe(feedManualText);
+    expect(b.timers.size).toBe(1);
   });
 });

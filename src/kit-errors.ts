@@ -41,7 +41,7 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   403: {
     code: "403",
     title: "You do not have access to this",
-    lead: "This page is for members or moderators. If you should see it, sign in again.",
+    lead: "This page needs membership to unlock it — join to get in. Moderator-only areas stay locked otherwise.",
   },
   410: {
     code: "410",

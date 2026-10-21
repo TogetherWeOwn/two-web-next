@@ -19,7 +19,7 @@ export const csr = false;
 // each pinned by source tests in test/kit-past-events.test.ts — only
 // error(503) proves what Kit sends, since SvelteKit ignores the helper's
 // status:503 Error property.
-export const load: PageServerLoad = async ({ url, setHeaders }) => {
+export const load: PageServerLoad = async ({ url, request, setHeaders }) => {
   // Admission stays outside the outage catch: 422 is not a database failure.
   if ([...(url.searchParams.get("q") ?? "")].length > MAX_QUERY_LENGTH) {
     setHeaders({ "cache-control": "private, no-store" });
@@ -33,6 +33,9 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
       setHeaders,
       dbForFn: dbFor,
       listPastFn: listPast,
+      // Same correlation source as the Hono request log: the validated
+      // cf-ray (safeRequestId inside the alert drops anything else).
+      requestId: request.headers.get("cf-ray") ?? undefined,
     });
   } catch {
     error(503, "Events temporarily unavailable");

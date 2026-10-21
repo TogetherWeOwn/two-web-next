@@ -84,11 +84,19 @@ describe("logout revocation failure stays authoritative and offers browser recov
     expect(body).not.toContain('href="/auth/discord"');
   });
 
-  it("JSON sign-out failure preserves its existing plaintext bytes and does not clear cookies", async () => {
+  // Intentional pin update: refusal correlation replaces the legacy
+  // plaintext bytes with the shared correlated JSON envelope. Status,
+  // no-cookie-clear and no-driver-detail are unchanged.
+  it("JSON sign-out failure gets the correlated JSON 503 and does not clear cookies", async () => {
     const { response, revoke } = await logout("application/json");
     expect(response.status).toBe(503);
-    expect(response.headers.get("content-type")).toContain("text/plain");
-    expect(await response.text()).toBe("Sign-out temporarily unavailable");
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.headers.get("x-request-id")).toBe(RAY);
+    const text = await response.text();
+    const body = JSON.parse(text) as Record<string, unknown>;
+    expect(body).toMatchObject({ error: "db_unavailable" });
+    expect(body.request_id).toBe(RAY);
+    expect(text).not.toContain(PRIVATE);
     expect(revoke).toHaveBeenCalledOnce();
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(response.headers.get("location")).toBeNull();
