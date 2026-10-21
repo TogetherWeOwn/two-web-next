@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
+import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -237,12 +238,15 @@ export function migrationClient(config, hooks = {}) {
     // postgres.js merges `connection` into the startup packet (see StartupMessage
     // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
     // here: a hostile role/database `search_path` or `DateStyle` must not
-    // misroute DDL or skew the PITR receipt. Never ALTER ROLE/DATABASE defaults.
+    // misroute DDL or skew the PITR receipt, and `standard_conforming_strings`
+    // must stay on because the runtime-rights guard lexes plain strings
+    // without backslash escapes. Never ALTER ROLE/DATABASE defaults.
     connection: {
       statement_timeout: 120000,
       lock_timeout: 10000,
       search_path: "public",
       datestyle: "ISO, YMD",
+      standard_conforming_strings: "on",
     },
     onnotice: () => {},
     onclose: () => hooks.onclose?.(),
@@ -265,6 +269,17 @@ export async function runMigration(mode, env = process.env, options = {}) {
     },
   });
   const plan = async (connection) => {
+    // Surface only intentional refusals as MigrationError so the operator CLI
+    // names the offending default ACL instead of masking it as withheld
+    // driver details. The refusal names grantees and privileges only, never
+    // credentials. Any other error is a driver failure: re-throw it unchanged
+    // so safeMigrationError masks it instead of echoing driver text.
+    try {
+      await assertRuntimeDefaultAcl(connection);
+    } catch (error) {
+      if (error instanceof DefaultAclRefusal) refuse(error.message);
+      throw error;
+    }
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
     await summary(
@@ -290,6 +305,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
       // defaults to prove the pin.
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
+      await transaction.unsafe("SET LOCAL standard_conforming_strings = on");
       const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
       if (!lock.acquired)
         refuse("Another web migration holds the database lock; retry only after it finishes.");
@@ -313,6 +329,10 @@ export async function runMigration(mode, env = process.env, options = {}) {
       // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
       // include ledger setup and history validation in the same locked transaction.
       // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
+      // The serial ledger sequence is runner-owned infrastructure in the drizzle
+      // schema, not a migration-created public object: both this runner and the
+      // canonical drizzle-kit migrator insert (hash, created_at) through its
+      // default, so explicit ids or an integer ledger would break the other writer.
       await transaction`create schema if not exists drizzle`;
       await transaction`create table if not exists drizzle.__drizzle_migrations (
         id serial primary key, hash text not null, created_at bigint

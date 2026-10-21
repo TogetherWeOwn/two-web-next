@@ -21,6 +21,7 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
+import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
@@ -367,6 +368,12 @@ test("fresh database: plan is read-only, apply includes bootstraps, zero-pending
     await assert.rejects(run("verify"), /remain pending/);
     await run("apply");
     assert.equal((await run("verify")).length, 0);
+    assert.notEqual(
+      (await client`select to_regclass('drizzle.__drizzle_migrations_id_seq') as sequence`)[0]
+        .sequence,
+      null,
+      "fresh runner ledger keeps the canonical serial sequence both writers insert through",
+    );
     await run("apply");
     // The canonical Drizzle migrator must recognize this runner's exact ledger.
     await migrate(drizzle(client), { migrationsFolder: source });
@@ -401,6 +408,156 @@ test("partial journal prefix: remaining web SQL applies through the enabled prod
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test("canonical Drizzle migrator applies a pending migration after the runner", async () => {
+  const scratch = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "web-migrate-canonical-after-runner-"),
+  );
+  try {
+    mkdirSync(join(scratch, "meta"));
+    const extraTag = "1999_canonical-after-runner";
+    const entries = [
+      ...journal.entries,
+      {
+        idx: journal.entries.length,
+        version: journal.version,
+        when: journal.entries.at(-1).when + 1,
+        tag: extraTag,
+        breakpoints: true,
+      },
+    ];
+    writeFileSync(
+      join(scratch, "meta/_journal.json"),
+      JSON.stringify({ version: journal.version, dialect: journal.dialect, entries }),
+    );
+    for (const entry of journal.entries)
+      copyFileSync(join(source, `${entry.tag}.sql`), join(scratch, `${entry.tag}.sql`));
+    writeFileSync(
+      join(scratch, `${extraTag}.sql`),
+      "CREATE TABLE canonical_after_runner (id integer);\n--> statement-breakpoint\n",
+    );
+    await fixture(async ({ client, run }) => {
+      await run("apply");
+      await migrate(drizzle(client), { migrationsFolder: scratch });
+      const rows =
+        await client`select id, hash, created_at from drizzle.__drizzle_migrations order by id`;
+      assert.equal(rows.length, journal.entries.length + 1);
+      assert.ok(rows.every((row) => Number.isInteger(row.id)));
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("unreviewed default ACL refuses plan and apply with the offending reason", async () => {
+  for (const grant of [
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT UPDATE ON SEQUENCES TO PUBLIC",
+  ]) {
+    await fixture(async ({ client, run }) => {
+      await client.unsafe(grant);
+      for (const mode of ["plan", "apply"]) {
+        let failure;
+        try {
+          await run(mode);
+        } catch (error) {
+          failure = error;
+        }
+        assert.ok(failure, `${grant} must refuse ${mode}`);
+        assert.match(safeMigrationError(failure), /default-ACL guard refused/, `${grant} ${mode}`);
+      }
+      assert.equal(
+        (await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger,
+        null,
+        "a refused apply must not create the ledger",
+      );
+    });
+  }
+});
+
+test("another role's default ACL does not block this migration", async () => {
+  await fixture(async ({ client, run }) => {
+    const other = `preflight_other_${randomUUID().replaceAll("-", "")}`;
+    await client.unsafe(`CREATE ROLE "${other}" NOLOGIN`);
+    try {
+      await client.unsafe(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE "${other}" IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC`,
+      );
+      assert.equal((await run("plan")).length, journal.entries.length);
+    } finally {
+      await client.unsafe(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE "${other}" IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC`,
+      );
+      await client.unsafe(`DROP ROLE "${other}"`);
+    }
+  });
+});
+
+test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
+  await fixture(async ({ client, run }) => {
+    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
+    if (existing) {
+      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
+      return;
+    }
+    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    try {
+      await client.unsafe(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
+      );
+      await client.unsafe(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO two_web_app",
+      );
+      assert.equal((await run("plan")).length, journal.entries.length);
+      await client.unsafe(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
+      );
+      await client.unsafe("SET ROLE two_web_app");
+      try {
+        await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+          assert.ok(error instanceof DefaultAclRefusal);
+          assert.match(error.message, /must not run as the runtime role/);
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+    } finally {
+      await client
+        .unsafe(
+          "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
+        )
+        .catch(() => {});
+      await client.unsafe("DROP ROLE two_web_app");
+    }
+  });
+});
+
+test("preflight driver failures propagate for masking instead of surfacing driver text", async () => {
+  await fixture(async ({ client, run }) => {
+    const [db] = await client`select current_database() as name`;
+    // PostgreSQL refuses to disallow connections from inside the database
+    // itself, so flip the switch from the admin database instead.
+    const admin = postgres(testAdminUrl().href, { max: 1, onnotice: () => {} });
+    try {
+      await admin.unsafe(`alter database "${db.name}" with allow_connections false`);
+      try {
+        // A catch-all that wraps preflight errors as MigrationError would echo
+        // the driver message to the operator; only intentional refusals may
+        // surface, so the raw failure must reach the masked branch instead.
+        await assert.rejects(run("plan"), (error) => {
+          assert.match(safeMigrationError(error), /database details withheld/);
+          assert.doesNotMatch(error.message, /database details withheld/);
+          return true;
+        });
+      } finally {
+        await admin.unsafe(`alter database "${db.name}" with allow_connections true`);
+      }
+    } finally {
+      await admin.end();
+    }
+  });
 });
 
 test("gapped/newer history and concurrent migration lock are refused", async () => {
@@ -855,6 +1012,24 @@ test("hostile database DateStyle cannot skew the PITR receipt", async () => {
       Math.abs(reported / 1000 - Number(now.epoch)) < 300,
       "PITR receipt must match the server clock within five minutes",
     );
+    assert.equal((await run("verify")).length, 0);
+  });
+});
+
+test("hostile database standard_conforming_strings cannot change migration string lexing", async () => {
+  await fixture(async ({ client, run, env }) => {
+    const [db] = await client`select current_database() as name`;
+    // The runtime-rights guard lexes plain strings without backslash escapes;
+    // a hostile database default must not reopen escapes for applied SQL.
+    await client.unsafe(`alter database "${db.name}" set standard_conforming_strings = off`);
+    const pinned = migrationClient(migrationConfig(env, { testDatabase: true }));
+    try {
+      const [row] = await pinned`show standard_conforming_strings`;
+      assert.equal(row.standard_conforming_strings, "on");
+    } finally {
+      await pinned.end();
+    }
+    await run("apply");
     assert.equal((await run("verify")).length, 0);
   });
 });
