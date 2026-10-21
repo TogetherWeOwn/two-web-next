@@ -126,7 +126,7 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
     const [parent] = await fixture.db
       .insert(events)
       .values({
-        eventKey: "lock-series-parent",
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
         title: FORM.title,
         game: FORM.game,
         description: FORM.description,
@@ -143,9 +143,9 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
       .returning();
     const children: EventRow[] = [];
     for (const [index, child] of [
-      { eventKey: "lock-series-near", startsAt: START, endsAt: new Date(nearEnd) },
+      { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", startsAt: START, endsAt: new Date(nearEnd) },
       {
-        eventKey: "lock-series-later",
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
         startsAt: new Date("2099-11-11T20:00:00Z"),
         endsAt: new Date(laterEnd),
       },
@@ -316,7 +316,7 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
     return sent
       .filter((message) => message.kind === "sync-event")
       .map((message) => message.eventKey)
-      .filter((key) => key !== "lock-series-parent")
+      .filter((key) => key !== "01ARZ3NDEKTSV4RRFFQ69G5FAA")
       .sort();
   }
   async function unchanged(row: EventRow) {

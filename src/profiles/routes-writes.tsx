@@ -129,6 +129,7 @@ export function registerWriteRoutes(
           isOwner
           isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
+          statsDraftWarning
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",

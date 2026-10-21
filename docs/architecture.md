@@ -97,7 +97,11 @@ probe sends to the internal-action queue) with the same
 (`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) owns both
 staging consumers and both crons after the handoff; a queue has exactly one
 consumer. The handoff sequence, secrets and rollback are in
-[jobs-handoff.md](./jobs-handoff.md).
+[jobs-handoff.md](./jobs-handoff.md). Production mirrors the split:
+(`two-web-jobs-production`, `env.production` in the same file) owns both
+production consumers and both production crons after the one-time transfer,
+and the web production env only produces; see
+[production-jobs-handoff.md](./production-jobs-handoff.md).
 
 Cron triggers in [wrangler.jobs.jsonc](../wrangler.jobs.jsonc) are
 `*/10 * * * *` and `0 0 * * *`, pinned to `RECONCILE_CRON` and `PRUNE_CRON` in
@@ -118,8 +122,8 @@ Read from: [tail/worker.ts](../tail/worker.ts),
 
 The Tail Worker in [tail/](../tail/) is the pager and uptime prober. It has
 no public route, no database, and no queues of its own. It tails only the
-exact app script names `two-web-next`, `two-web-next-production` and
-`two-web-jobs`
+exact app script names `two-web-next`, `two-web-next-production`,
+`two-web-jobs` and `two-web-jobs-production`
 ([tail/worker.ts](../tail/worker.ts), `APP_SCRIPT_NAMES`), wired via
 `tail_consumers` in [wrangler.jsonc](../wrangler.jsonc) and
 [wrangler.jobs.jsonc](../wrangler.jobs.jsonc). It accepts only
@@ -228,9 +232,12 @@ Read from: [web/package.json](../web/package.json),
   JSON smoke ([bin/json-smoke.mjs](../bin/json-smoke.mjs)). Status: active;
   never production test commands.
 
-Not verified: production-environment behavior (the `env.production` block in
-[wrangler.jsonc](../wrangler.jsonc) is a disabled cutover template, not live
-evidence), any future SvelteKit cutover plan, and line-level internals of
+Not verified: production-environment behavior beyond the cited release
+receipts (the `env.production` blocks are live configuration; this page
+proves nothing about their runtime behavior — see
+[production-jobs-handoff.md](./production-jobs-handoff.md) for the jobs
+transfer evidence), any future SvelteKit cutover plan, and line-level
+internals of
 the reconcile/prune job implementations beyond the entry wiring cited above.
 
 ## 8. Module map
