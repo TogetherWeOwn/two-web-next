@@ -254,7 +254,7 @@ const GONE_HEADERS = {
 };
 
 describe("wired Kit detail legs classify-and-alert (pins)", () => {
-  it("dbForFn throwing TypeError alerts once and still answers unavailable", async () => {
+  it("dbForFn throwing TypeError alerts once with the validated cf-ray and still answers unavailable", async () => {
     const { outcome, setHeaders } = await resolveDetail(
       KEY,
       detailStore({
@@ -262,11 +262,13 @@ describe("wired Kit detail legs classify-and-alert (pins)", () => {
           throw codeBug();
         },
       }),
+      GUEST,
+      RAY,
     );
     expect(outcome).toEqual({ kind: "unavailable", status: 503, headers: OUTAGE_HEADERS });
     expect(setHeaders).toHaveBeenCalledTimes(1);
     expect(setHeaders).toHaveBeenCalledWith(OUTAGE_HEADERS);
-    expectExactlyOneAlert("/e/:key");
+    expectExactlyOneAlert("/e/:key", RAY);
   });
 
   it("getEventFn throwing TypeError alerts once and still answers unavailable", async () => {
@@ -381,9 +383,35 @@ describe("request_id threading (pins)", () => {
     expectExactlyOneAlert("/events", RAY);
   });
 
+  it("events page-model alert carries the validated cf-ray", async () => {
+    // Second events leg: the modelForFn call-site argument into the shared
+    // helper is independent of the database leg's, so it needs its own pin.
+    const { args } = eventsArgs({
+      modelForFn: async () => {
+        throw codeBug();
+      },
+      requestId: RAY,
+    });
+    await expect(loadEventsPage(args)).rejects.toMatchObject({ status: 503 });
+    expectExactlyOneAlert("/events", RAY);
+  });
+
   it("past-archive alert carries the validated cf-ray", async () => {
     const { args } = pastArgs({
       listPastFn: async () => {
+        throw codeBug();
+      },
+      requestId: RAY,
+    });
+    await expect(loadPastArchivePage(args)).rejects.toMatchObject({ status: 503 });
+    expectExactlyOneAlert("/events/past", RAY);
+  });
+
+  it("past-archive database-leg alert carries the validated cf-ray", async () => {
+    // Second archive leg: the dbForFn call-site argument is independent of
+    // the lookup leg's, so it needs its own pin.
+    const { args } = pastArgs({
+      dbForFn: async () => {
         throw codeBug();
       },
       requestId: RAY,
@@ -397,6 +425,21 @@ describe("request_id threading (pins)", () => {
       KEY,
       stateStore({
         getEventFn: async () => {
+          throw codeBug();
+        },
+      }),
+      RAY,
+    );
+    expectExactlyOneAlert("/e/:key", RAY);
+  });
+
+  it("event-states database-leg alert carries the validated cf-ray", async () => {
+    // Second states leg: an independent inline alertRequestError call, so it
+    // needs its own pin (same per-leg grain as its branded guard).
+    await resolveState(
+      KEY,
+      stateStore({
+        dbForFn: async () => {
           throw codeBug();
         },
       }),
