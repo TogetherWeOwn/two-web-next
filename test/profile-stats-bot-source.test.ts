@@ -58,7 +58,9 @@ const baseEnv = {
   DISCORD_INVITE_URL: "https://discord.gg/fixture",
 } as Env;
 
-const ctx = (env: Env) => ({ env }) as never;
+// statsFor reads the request ID off the Hono context for its warn line; the
+// source-selection pins below carry none, so the fake context returns undefined.
+const ctx = (env: Env) => ({ env, get: () => undefined }) as never;
 
 beforeEach(() => {
   state.urls = [];
