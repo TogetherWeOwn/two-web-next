@@ -3,6 +3,7 @@
 // required == field list` is asserted in test/api-public-openapi.test.ts —
 // the spec cannot drift from the code it documents.
 import {
+  API_PUBLIC_BOUNDS,
   COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
@@ -92,18 +93,50 @@ function error(status: number, description: string) {
   };
 }
 
+/**
+ * Paging is documented here and only here: these descriptions are the single
+ * source for the coercion rules the route implements (invalid falls back to
+ * the default, out-of-range is coerced/clamped, past-the-end clamps to the
+ * last page, never a 422). The consistency test pins the alias, the ceiling
+ * and this wording.
+ */
 const PAGING_PARAMETERS = [
   {
     name: "page",
     in: "query",
-    schema: { type: "integer", minimum: 1, default: 1 },
-    description: "Past-the-end pages clamp to the last page.",
+    schema: { type: "integer", minimum: 1, maximum: API_PUBLIC_BOUNDS.maxPage, default: 1 },
+    description:
+      "1-based page. Invalid or malformed values fall back to the default 1; " +
+      "out-of-range values are coerced: capped at the maximum 1000 pages, then " +
+      "clamped to the last page. Never a 422.",
   },
   {
     name: "per_page",
     in: "query",
-    schema: { type: "integer", minimum: 1, maximum: 20, default: 20 },
-    description: "Collection cap: at most 20 rows per response.",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Rows per page. Invalid or malformed values fall back to the default 20; " +
+      "out-of-range values are clamped and coerced to 1..20. Takes precedence " +
+      "over the limit alias when both are present.",
+  },
+  {
+    name: "limit",
+    in: "query",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Alias for per_page with identical bounds and defaults. Invalid or " +
+      "malformed values fall back to the default 20; out-of-range values are " +
+      "clamped and coerced to 1..20. Ignored when per_page is present.",
   },
 ];
 

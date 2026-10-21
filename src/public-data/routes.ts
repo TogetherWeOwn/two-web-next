@@ -36,6 +36,7 @@ import {
 import {
   apiPublicCacheGeneration,
   apiPublicCacheKey,
+  findCachedClampTarget,
   readApiPublicCache,
   writeApiPublicCache,
   type ApiPublicCacheEntry,
@@ -293,15 +294,37 @@ function parseLimit(raw: string): number {
     : API_PUBLIC_BOUNDS.defaultPageSize;
 }
 
+/**
+ * Raw page with the documented ceiling applied before any key or offset is
+ * built. Missing, malformed and sub-1 values fall back to 1 (never a 422);
+ * huge or unsafe integers cap at maxPage so the offset stays a safe integer.
+ * Lenient `parseInt` prefix parsing is preserved: "2abc" still reads as 2.
+ */
+function parsePage(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n < 1) return 1;
+  if (!Number.isSafeInteger(n) || n > API_PUBLIC_BOUNDS.maxPage) return API_PUBLIC_BOUNDS.maxPage;
+  return n;
+}
+
 export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get("/api/public/events", async (c) => {
     const refused = await admitted(c);
     if (refused) return refused;
     const limit = parseLimit(c.req.query("per_page") ?? c.req.query("limit") ?? "");
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const page = parsePage(c.req.query("page") ?? "1");
     const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Out-of-range replay: a cached same-limit entry proves the clamp target,
+    // so the alias shares the clamped entry instead of costing a count query.
+    const clampTarget = findCachedClampTarget(limit, page);
+    if (clampTarget !== null && clampTarget !== page) {
+      const clampedHit = readApiPublicCache(
+        apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${clampTarget}`),
+      );
+      if (clampedHit) return cachedEntry(c, clampedHit);
+    }
     // Fence: a retire that lands while this read is in flight refuses the
     // settle below, so pre-retire bytes never refill the retired entry.
     const generation = apiPublicCacheGeneration();
@@ -310,13 +333,15 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
+    let clamped: number = page;
     try {
       const listed = await listPublicApiEvents(db, {
         limit,
         offset: (page - 1) * limit,
       });
       if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-      const { rows, total, page: clamped } = listed;
+      clamped = listed.page;
+      const { rows, total } = listed;
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
         body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
@@ -336,7 +361,14 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body, generation);
+    // Store under the clamped page the database answered, never the raw alias:
+    // N past-the-end pages occupy one entry and cannot evict page 1.
+    const storeKey = apiPublicCacheKey(
+      "GET",
+      "/api/public/events",
+      `?limit=${limit}&page=${clamped}`,
+    );
+    return servePublicJson(c, storeKey, body, generation);
   });
 
   app.get("/api/public/events/:key", async (c) => {
