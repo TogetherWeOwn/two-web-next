@@ -108,6 +108,12 @@ export interface KitEventDetailModel {
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
   location: string | null;
+  /** Verified host display name; null when unset. */
+  organizerName: string | null;
+  /** Public joining link; null when unset. */
+  joinUrl: string | null;
+  /** Joining instructions; null when unset. */
+  joinInstructions: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
@@ -489,6 +495,9 @@ export async function resolveKitEventDetail(
           description: event.description,
           shareDescription: event.description || "An event at Together We Own.",
           location: event.location,
+          organizerName: event.organizer_name ?? null,
+          joinUrl: event.join_url ?? null,
+          joinInstructions: event.join_instructions ?? null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",

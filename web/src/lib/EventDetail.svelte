@@ -150,6 +150,14 @@ const lineup = $derived(
         </dd>
       </div>
     {/if}
+    {#if model.organizerName}
+      <div>
+        <dt>Hosted by</dt>
+        <dd>
+          <p data-testid="event-organizer">{model.organizerName}</p>
+        </dd>
+      </div>
+    {/if}
     <div>
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
@@ -216,6 +224,29 @@ const lineup = $derived(
         <section class="event-description" aria-labelledby="event-description-heading">
           <h2 id="event-description-heading">About this event</h2>
           <p>{model.description}</p>
+        </section>
+      {/if}
+      {#if (model.status === "published" || model.status === "draft") && (model.joinUrl || model.joinInstructions)}
+        <section
+          class="event-description event-join-details"
+          aria-labelledby="event-join-details-heading"
+          data-testid="event-join-details"
+        >
+          <h2 id="event-join-details-heading">How to join</h2>
+          {#if model.joinUrl}
+            {#if model.status === "published"}
+              <p>
+                <a href={model.joinUrl} data-testid="event-public-join-link">
+                  Open the public joining link
+                </a>
+              </p>
+            {:else}
+              <p>Public joining link: {model.joinUrl}</p>
+            {/if}
+          {/if}
+          {#if model.joinInstructions}
+            <p data-testid="event-join-instructions">{model.joinInstructions}</p>
+          {/if}
         </section>
       {/if}
       {#if model.showJoinPitch}
