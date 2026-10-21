@@ -8,7 +8,6 @@ import {
   cardTimeLabel,
   goingCountText,
   isValidZone,
-  spotsLeftText,
 } from "../../../src/islands/contracts";
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
@@ -183,45 +182,34 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
         {#each upcomingEvents as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
-          {#if event.source === "discord"}
-            <li class="card" data-source="discord">
-              <a class="home-event-link" href={inviteUrl} data-testid="home-event-discord">
-                <p>
-                  <time datetime={event.startsAt.toISOString()}>
-                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
-                      ? event.timezone
-                      : "UTC"})
-                  </time>
-                </p>
-                <h3>{event.title}</h3>
-                {#if event.location}<p>{event.location}</p>{/if}
+          <li class="card" data-source={event.source}>
+            <a
+              class="home-event-link"
+              href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
+              data-testid={event.source === "discord" ? "home-event-discord" : undefined}
+            >
+              <p>
+                <time datetime={event.startsAt.toISOString()}>
+                  {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
+                    ? event.timezone
+                    : "UTC"})
+                </time>
+              </p>
+              <h3>{event.title}</h3>
+              {#if event.location}<p>{event.location}</p>{/if}
+              {#if event.source === "discord"}
                 <p>RSVP in Discord</p>
-              </a>
-            </li>
-          {:else}
-            <li class="card" data-source="canonical">
-              <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                <p>
-                  <time datetime={event.startsAt.toISOString()}>
-                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
-                      ? event.timezone
-                      : "UTC"})
-                  </time>
-                </p>
-                <h3>{event.title}</h3>
-                {#if event.location}<p>{event.location}</p>{/if}
+              {:else}
                 <p>
                   {goingCountText(event.goingCount, event.capacity)}
                   {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
                     {" · "}
-                    <span data-testid={SPOTS_LEFT_TESTID}>
-                      {spotsLeftText(event.goingOccupancy ?? event.goingCount, event.capacity)}
-                    </span>
+                    <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
                   {/if}
                 </p>
-              </a>
-            </li>
-          {/if}
+              {/if}
+            </a>
+          </li>
         {/each}
       </ul>
       <p>
