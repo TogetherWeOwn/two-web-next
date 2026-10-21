@@ -120,7 +120,7 @@ jobs:
           if [ "$(date -u +%u)" = 7 ]; then
             ./bin/db-backup.sh promote-weekly "$BRANCH"
           fi
-          ./bin/db-backup.sh rotate "$BRANCH"
+          ./bin/db-backup.sh rotate "$BRANCH" --apply
 
       - name: Verify all keys
         if: steps.probe.outputs.ready == 'true'

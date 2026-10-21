@@ -20,6 +20,7 @@ export const PAST_EVENTS_TESTID = "past-events";
 export const PAST_EVENTS_LIST_TESTID = "past-events-list";
 export const PAST_EVENTS_EMPTY_TESTID = "past-events-empty";
 export const PAST_EVENTS_OUT_OF_RANGE_TESTID = "past-events-out-of-range";
+export const PAST_EVENTS_SEARCH_MISS_TESTID = "past-events-search-miss";
 export const PAST_EVENTS_COPY = {
   empty: "No past events yet.",
   join: "Join the community and help make the next one happen.",

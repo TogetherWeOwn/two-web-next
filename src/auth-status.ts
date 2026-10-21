@@ -1,5 +1,7 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
+import { exceptionClass } from "./alerts";
+import { safeRequestId } from "./request-log";
 import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 import { SESSION_COOKIE } from "./session-cookie";
 
@@ -67,8 +69,13 @@ export async function authStatus(c: Ctx, storeFor: () => Promise<SessionStore>):
     return c.json({
       authenticated: valid ? !!(await (await storeFor()).get(await hashToken(token))) : false,
     });
-  } catch {
+  } catch (err) {
     // An outage is not a logout. Clients must ignore non-success responses.
+    // One class-only warn joins the 503 for triage.
+    console.warn("auth status store unavailable", {
+      exception: exceptionClass(err),
+      request_id: safeRequestId(c.get("requestId")),
+    });
     return c.json({ authenticated: false }, 503);
   }
 }
