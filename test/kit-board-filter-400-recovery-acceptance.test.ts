@@ -89,7 +89,7 @@ const BAD_FILTERS: BadFilter[] = [
   },
   {
     label: "activity",
-    overrides: { activityParam: "chess!" },
+    overrides: { activityParam: "chess\u0000" },
     problem: /Unknown activity/,
     problemText: "Unknown activity",
   },
@@ -411,7 +411,7 @@ describe("Kit board binding (400 + message reach the boundary)", () => {
     ["season", "?season=bogus", /Unknown season/],
     ["scope", "?scope=bogus", /Unknown scope/],
     ["scope friends", "?scope=friends", /deferred|friend graph/],
-    ["activity", "?activity=chess!", /Unknown activity/],
+    ["activity", "?activity=chess%00", /Unknown activity/],
   ] as const)(
     "bad %s throws 400 carrying the parse message (%s)",
     async (_label, params, problem) => {
@@ -485,7 +485,7 @@ describe("Kit board gating and grammar unchanged", () => {
     expect(parseScopeParam("friends")).toMatchObject({ ok: false });
     expect(parseActivityParam(null)).toEqual({ ok: true, game: null });
     expect(parseActivityParam("  Valheim ")).toEqual({ ok: true, game: "valheim" });
-    expect(parseActivityParam("chess!").ok).toBe(false);
+    expect(parseActivityParam("chess\u0000").ok).toBe(false);
   });
 
   it("still serves the valid board with rows, queue and private no-store", async () => {
