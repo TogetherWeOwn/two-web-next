@@ -563,12 +563,14 @@ describe("hooks.server route ownership wiring", () => {
     // Same pin on the other half of the wiring: the members load binding
     // hands the queue to locals. Deleting that line queues nothing, so the
     // hook above records nothing and every Kit board view is dropped.
+    // Dropping the requestId argument keeps the queue but loses the
+    // request join, so the exact forward must fail too.
     const membersLoad = readFileSync(
       new URL("../web/src/routes/leaderboards/members/+page.server.ts", import.meta.url),
       "utf8",
     );
     expect(membersLoad).toContain(
-      "queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry)",
+      "queueBoardViewFn: (db, entry, requestId) =>\n        queueMembersBoardView(locals, db, entry, requestId)",
     );
     // The list binding carries the same shape plus its read-only session and
     // flash peeks: deleting any of these lines must fail, and the hook still

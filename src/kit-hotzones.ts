@@ -30,6 +30,8 @@ export type LoadJoinsGrid = (db: Db | null, window: SeasonWindow) => Promise<Hot
 export type RecordBoardView = (
   db: Db | null,
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
+  deadlineMs?: number,
+  requestId?: unknown,
 ) => Promise<void>;
 
 export interface HotzonesLoadArgs {
@@ -39,8 +41,10 @@ export interface HotzonesLoadArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadJoinsGridFn?: LoadJoinsGrid;
   recordBoardViewFn?: RecordBoardView;
-  /** Validated dispatch id for error.alert correlation; absent in legacy calls. */
-  requestId?: string;
+  /** Validated dispatch id: the failure alert and the board-view record
+   * both carry it (the record re-validates and omits it when invalid);
+   * absent in legacy calls. */
+  requestId?: string | null;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -76,7 +80,7 @@ function seasonOrThrow(seasonParam: string | null): { window: SeasonWindow; labe
 function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string): never {
   const status = (err as { status?: unknown })?.status;
   if (typeof status === "number") throw err;
-  alertRequestError(err, { method: "GET", route, requestId: args.requestId });
+  alertRequestError(err, { method: "GET", route, requestId: args.requestId ?? undefined });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw hotzonesUnavailable();
 }
@@ -108,8 +112,11 @@ async function record(
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
 ): Promise<void> {
   // Fail-open, exactly as on the Hono handlers: a logging failure never
-  // blocks or breaks the board.
-  await (args.recordBoardViewFn ?? recordBoardView)(db, opts).catch(() => {});
+  // blocks or breaks the board. A caller-supplied request id rides along to
+  // the record call; none supplied means none carried (no new read to mint one).
+  await (args.recordBoardViewFn ?? recordBoardView)(db, opts, undefined, args.requestId).catch(
+    () => {},
+  );
 }
 
 export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{

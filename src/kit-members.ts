@@ -63,9 +63,14 @@ export type LoadRanking = (
 
 export type { BoardViewEntry, QueueBoardView, RecordBoardView };
 
-/** Queue the anonymous board view for the post-release record (src/hotzones/board-log.ts). */
-export function queueMembersBoardView(locals: unknown, db: Db | null, entry: BoardViewEntry): void {
-  queueBoardView(locals, db, entry);
+/** Queue the anonymous board view for the post-release record (src/hotzones/board-log.ts). An optional request id rides along to the record call; nothing queued means nothing carried. */
+export function queueMembersBoardView(
+  locals: unknown,
+  db: Db | null,
+  entry: BoardViewEntry,
+  requestId?: unknown,
+): void {
+  queueBoardView(locals, db, entry, requestId);
 }
 
 /** Record the queued board view after a released 200 (src/hotzones/board-log.ts). */
@@ -91,8 +96,10 @@ export interface MembersBoardArgs {
    * its pathname+search as the signed return destination. Optional: a legacy
    * call without it resolves the plain branded 302. */
   url?: string;
-  /** Validated dispatch id for error.alert correlation; absent in legacy calls. */
-  requestId?: string;
+  /** Validated dispatch id: the failure alert and the queued board view
+   * both carry it (the record re-validates and omits it when invalid);
+   * absent in legacy calls. */
+  requestId?: string | null;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -205,7 +212,7 @@ function reportBoardFailure(err: unknown, args: MembersBoardArgs): never {
   alertRequestError(err, {
     method: "GET",
     route: "/leaderboards/members",
-    requestId: args.requestId,
+    requestId: args.requestId ?? undefined,
   });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw membersBoardUnavailable();
@@ -272,12 +279,16 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   // boundary releases this board, outside its capture. Only a served (200)
   // board records a view, and queueing is fail-open like the Hono write.
   try {
-    args.queueBoardViewFn?.(db, {
-      boardKey: "members",
-      scope: scope.scope,
-      season: season.label,
-      resultCount: rows.length,
-    });
+    args.queueBoardViewFn?.(
+      db,
+      {
+        boardKey: "members",
+        scope: scope.scope,
+        season: season.label,
+        resultCount: rows.length,
+      },
+      args.requestId,
+    );
   } catch {
     // A logging failure never blocks or breaks the board.
   }

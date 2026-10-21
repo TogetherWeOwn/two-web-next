@@ -259,7 +259,10 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("normalized_query");
     expect(section).toContain("normalized_board_key");
     expect(section).toContain("carry no member identity");
-    expect(section).toContain("Neither line carries a `request_id`");
+    expect(section).toContain("warning to its `http.request` by ID, not by time window");
+    expect(section).toContain(
+      "Kit-served hotzones and members-board lines carry the validated dispatch id",
+    );
   });
 
   it("gives a read-only aggregate check on the analytics tables", () => {
@@ -270,7 +273,7 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("read-only");
   });
 
-  it("sources still emit the warnings with only the exception field", () => {
+  it("sources emit the warnings with the exception field plus the validated request id only", () => {
     const cases = [
       { file: "src/events/search-log.ts", message: SEARCH_WARNING },
       { file: "src/hotzones/board-log.ts", message: BOARD_WARNING },
@@ -280,11 +283,11 @@ describe("analytics write-degradation warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class only: no request id,
-      // query, board key, or member identity travels with the line.
+      // The warn payload carries the exception class plus the validated
+      // request id only: no query, board key, or member identity travels.
       const payload = source.slice(start, source.indexOf("});", start));
       expect(payload).toContain("exception");
-      expect(payload).not.toContain("request_id");
+      expect(payload).toContain("request_id");
       expect(payload).not.toContain("normalized");
       expect(source).toContain('warn("LogWriteDeadline")');
       expect(source).toContain("err.constructor.name");

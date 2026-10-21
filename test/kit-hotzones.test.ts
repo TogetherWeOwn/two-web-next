@@ -3,6 +3,7 @@ import {
   dispatchHotzonesRequest,
   loadHotzoneSignalData,
   loadHotzonesIndexData,
+  type RecordBoardView,
 } from "../src/kit-hotzones";
 import { emptyGrid } from "../src/hotzones/aggregates";
 
@@ -26,12 +27,17 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
     expect(data.season).toBe("all");
     expect(data.joins.total).toBe(3);
     expect(data.voice.cells).toHaveLength(7);
-    expect(recordBoardViewFn).toHaveBeenCalledWith(db, {
-      boardKey: "hotzones",
-      scope: "overall",
-      season: "all",
-      resultCount: 3,
-    });
+    expect(recordBoardViewFn).toHaveBeenCalledWith(
+      db,
+      {
+        boardKey: "hotzones",
+        scope: "overall",
+        season: "all",
+        resultCount: 3,
+      },
+      undefined,
+      undefined,
+    );
     expect(setHeaders).toHaveBeenCalledTimes(1);
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
   });
@@ -70,12 +76,17 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
       recordBoardViewFn,
     });
     expect(joins).toMatchObject({ signal: "joins", total: 3, estimated: false });
-    expect(recordBoardViewFn).toHaveBeenCalledWith(db, {
-      boardKey: "hotzones/joins",
-      scope: "overall",
-      season: "all",
-      resultCount: 3,
-    });
+    expect(recordBoardViewFn).toHaveBeenCalledWith(
+      db,
+      {
+        boardKey: "hotzones/joins",
+        scope: "overall",
+        season: "all",
+        resultCount: 3,
+      },
+      undefined,
+      undefined,
+    );
 
     recordBoardViewFn.mockClear();
     const voice = await loadHotzoneSignalData({
@@ -92,6 +103,8 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
     expect(recordBoardViewFn).toHaveBeenCalledWith(
       db,
       expect.objectContaining({ boardKey: "hotzones/voice", scope: "overall", season: "all" }),
+      undefined,
+      undefined,
     );
   });
 
@@ -242,5 +255,44 @@ describe("hot-zone read admission (Kit dispatch)", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("cache-control")).toBe("no-store, private");
     expect(render).not.toHaveBeenCalled();
+  });
+});
+
+describe("Kit hot-zone board-view request id", () => {
+  const VALID_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+  it("forwards a caller-supplied request id to the record call", async () => {
+    const db = {} as never;
+    const recordBoardViewFn = vi.fn(async () => {});
+    await loadHotzonesIndexData({
+      env,
+      seasonParam: null,
+      setHeaders: headers(),
+      dbForFn: async () => db,
+      loadJoinsGridFn: async () => grid(),
+      recordBoardViewFn,
+      requestId: VALID_ID,
+    });
+    expect(recordBoardViewFn).toHaveBeenCalledWith(
+      db,
+      { boardKey: "hotzones", scope: "overall", season: "all", resultCount: 3 },
+      undefined,
+      VALID_ID,
+    );
+  });
+
+  it("omits the request id the caller does not supply", async () => {
+    const db = {} as never;
+    const recordBoardViewFn = vi.fn<RecordBoardView>(async () => {});
+    await loadHotzonesIndexData({
+      env,
+      seasonParam: null,
+      setHeaders: headers(),
+      dbForFn: async () => db,
+      loadJoinsGridFn: async () => grid(),
+      recordBoardViewFn,
+    });
+    expect(recordBoardViewFn).toHaveBeenCalledTimes(1);
+    expect(recordBoardViewFn.mock.calls[0]![3]).toBeUndefined();
   });
 });

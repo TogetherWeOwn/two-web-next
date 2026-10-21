@@ -266,12 +266,17 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     );
     expect(res.status).toBe(200);
     expect(recordFn).toHaveBeenCalledTimes(1);
-    expect(recordFn).toHaveBeenCalledWith(db, {
-      boardKey: "members",
-      scope: "overall",
-      season: "all",
-      resultCount: 2,
-    });
+    expect(recordFn).toHaveBeenCalledWith(
+      db,
+      {
+        boardKey: "members",
+        scope: "overall",
+        season: "all",
+        resultCount: 2,
+      },
+      undefined,
+      undefined,
+    );
   });
 });
 

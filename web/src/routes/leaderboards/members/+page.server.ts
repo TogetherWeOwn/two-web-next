@@ -37,7 +37,8 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
       activityParam: url.searchParams.get("activity"),
       setHeaders,
       dbForFn: dbFor,
-      queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry),
+      queueBoardViewFn: (db, entry, requestId) =>
+        queueMembersBoardView(locals, db, entry, requestId),
       url: url.href,
       requestId: locals.requestId,
     });

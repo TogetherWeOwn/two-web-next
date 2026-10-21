@@ -139,7 +139,9 @@ beforeAll(async () => {
       if (globalThis.__membersBoardImpl) return globalThis.__membersBoardImpl(args);
       return { board: [] };
     }
-    export function queueMembersBoardView() { /* never called by the double */ }`,
+    export function queueMembersBoardView(locals, db, entry, requestId) {
+      globalThis.__queueMembersBoardCalls.push({ locals, db, entry, requestId });
+    }`,
   });
 });
 
@@ -148,6 +150,7 @@ beforeEach(() => {
   globalThis.__hotzonesIndexCalls = [];
   globalThis.__hotzoneSignalCalls = [];
   globalThis.__membersBoardCalls = [];
+  globalThis.__queueMembersBoardCalls = [];
   delete globalThis.__hotzonesIndexImpl;
   delete globalThis.__hotzoneSignalImpl;
   delete globalThis.__membersBoardImpl;
@@ -257,6 +260,14 @@ describe("members-board binding: requestId forwarding", () => {
     await membersBoardLoad({ url: url(), locals: authedLocals(undefined), cookies, setHeaders });
     expect(globalThis.__membersBoardCalls).toHaveLength(1);
     expect(globalThis.__membersBoardCalls[0].requestId).toBeUndefined();
+  });
+
+  it("forwards the helper's request id into the queued board view", async () => {
+    await membersBoardLoad({ url: url(), locals: authedLocals(RAY), cookies, setHeaders });
+    const queue = globalThis.__membersBoardCalls[0].queueBoardViewFn;
+    queue(null, { boardKey: "members", scope: "overall", season: "all", resultCount: 1 }, RAY);
+    expect(globalThis.__queueMembersBoardCalls).toHaveLength(1);
+    expect(globalThis.__queueMembersBoardCalls[0].requestId).toBe(RAY);
   });
 
   it("alerts an unseen failure with the binding id and answers 503", async () => {

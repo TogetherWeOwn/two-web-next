@@ -393,9 +393,22 @@ export async function resolveKitEventDetail(
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
+      // Decorative reads fail open like the served twin: a throwing
+      // neighbors/related store settles to its empty shape instead of
+      // rejecting the whole model. Both reads stay nonSensitive
+      // published-only, so no audit row is skipped; viewer reads below stay
+      // closed and their throws still reject.
+      const neighborsSettled = store.neighborsFn(db, event).then(
+        (neighbors) => neighbors,
+        (): EventNeighbors => ({ previous: null, next: null }),
+      );
+      const relatedSettled = store.relatedFn(db, event).then(
+        (related) => related,
+        (): EventLink[] => [],
+      );
       const [neighbors, related, attendeeRows, position, answer] = await Promise.all([
-        store.neighborsFn(db, event),
-        store.relatedFn(db, event),
+        neighborsSettled,
+        relatedSettled,
         member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
