@@ -400,3 +400,18 @@ test("CLI usage errors exit 2 with a usage line; --selftest stays valid", () => 
   assert.equal(selftest.status, 0);
   assert.match(selftest.stdout, /selftest: PASS/);
 });
+
+test("CLI genuine preflight failure exits 1, distinct from the usage code", () => {
+  // No argv and no secret: the run refuses before any DB is touched, so this
+  // is DB-free. It pins the check-ran-and-failed code against the usage code.
+  const env = { ...process.env };
+  delete env.PLANETSCALE_STAGING_DATABASE_URL;
+  const child = spawnSync(process.execPath, ["ci/staging-catalog-preflight.mjs"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(child.status, 1, "a genuine preflight failure must exit 1, not the usage code 2");
+  assert.match(child.stderr, /Missing PLANETSCALE_STAGING_DATABASE_URL/);
+  assert.equal(child.stdout, "");
+});
