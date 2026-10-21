@@ -362,22 +362,23 @@ describe("W15 auth/join in Miniflare", () => {
     expect(html).not.toContain(boundarySecret);
   });
 
-  it("renders the generic expired recovery for an unadmitted consent denial", async () => {
+  it("renders the cancelled recovery for an unadmitted consent denial", async () => {
     // No state and no journey cookies: this hit cannot be admitted to any
-    // journey, so it must not claim a cancellation, echo the provider
-    // detail, spend upstream work, or clear a pending journey's cookies.
+    // journey, but a Cancel is still a Cancel, so it renders the
+    // cancelled-consent copy — still without echoing the provider detail,
+    // spending upstream work, or clearing a pending journey's cookies.
     const res = await request("/join/callback?error=access_denied&error_description=never-echo");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Join link expired");
-    expect(html).not.toContain("Join cancelled");
+    expect(html).toContain("Join cancelled");
+    expect(html).not.toContain("Join link expired");
     expect(html).not.toContain("never-echo");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().filter((c) => c.startsWith("__Host-two_join_"))).toEqual([]);
     expect(calls).toHaveLength(0);
   });
 
-  it("renders consent-denial recovery for an admitted denial exactly once", async () => {
+  it("renders consent-denial recovery for an admitted denial; the replay consumes nothing new", async () => {
     const start = await request("/join/discord?source=web-homepage&next=%2Fevents");
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
     const jar = cookie(start);
@@ -396,16 +397,16 @@ describe("W15 auth/join in Miniflare", () => {
     expect(calls).toHaveLength(0);
 
     // One-use control: the same denial (or a success-shaped replay) is now
-    // a spent, unadmitted hit — generic expired recovery, still no upstream
-    // work and no session.
+    // a spent, unadmitted hit — it keeps the cancelled copy without
+    // consuming anything new, still no upstream work and no session.
     const replay = await request(
       `/join/callback?error=access_denied&error_description=never-echo&state=${state}`,
       { headers: { cookie: jar } },
     );
     expect(replay.status).toBe(200);
     const replayHtml = await replay.text();
-    expect(replayHtml).toContain("Join link expired");
-    expect(replayHtml).not.toContain("Join cancelled");
+    expect(replayHtml).toContain("Join cancelled");
+    expect(replayHtml).not.toContain("Join link expired");
     expect(replayHtml).not.toContain("never-echo");
     expect(replay.headers.getSetCookie().filter((c) => c.startsWith("__Host-two_join_"))).toEqual(
       [],

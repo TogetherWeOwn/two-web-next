@@ -231,10 +231,11 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
         // The first hit is admitted: it consumes the journey, so it owns the
         // denial copy and the journey-cookie cleanup. The second hit replays
         // a spent journey and is unadmitted: it must not clear whatever
-        // journey cookies the jar now holds. Join falls back to the generic
-        // expired recovery; auth keeps its presented-state denial copy (a
-        // matching state cookie with an acquirable store), which keys off
-        // presentation rather than admission.
+        // journey cookies the jar now holds. Join keeps the cancelled copy
+        // on the replay (a Cancel is still a Cancel); auth keeps its
+        // presented-state denial copy (a matching state cookie with an
+        // acquirable store), which keys off presentation rather than
+        // admission.
         const journeyCookies =
           flow === "join"
             ? ["__Host-two_join_state", "__Host-two_join_source", "__Host-two_join_next"]
@@ -258,8 +259,8 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
             expect(text).not.toContain("Join link expired");
           } else {
             const text = await denied.text();
-            expect(text).toContain("Join link expired");
-            expect(text).not.toContain("Join cancelled");
+            expect(text).toContain("Join cancelled");
+            expect(text).not.toContain("Join link expired");
           }
           if (admitted) expect(journeyDeletions(denied).length).toBeGreaterThan(0);
           else expect(journeyHeaders(denied)).toEqual([]);
@@ -413,7 +414,7 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
         const result = await app.request(startPath(flow), {}, f.env);
         expect(result.status).toBe(302);
         expect(result.headers.get("location")).toBe(
-          flow === "join" ? "/join" : "/?n=signin_failed",
+          flow === "join" ? "/join?notice=start-failed" : "/?n=signin_failed",
         );
         expect(result.headers.getSetCookie()).toHaveLength(0);
         expect(fetch).not.toHaveBeenCalled();

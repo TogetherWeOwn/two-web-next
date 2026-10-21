@@ -63,14 +63,18 @@ export function checkSnapshotChain(root) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../", import.meta.url));
-  try {
-    if (process.argv.length !== 2) throw new Error("usage: node ci/check-snapshot-chain.mjs");
-    const result = checkSnapshotChain(root);
-    console.log(
-      `snapshot-chain: ok (${result.entries} journal entries; ${result.snapshots} linked snapshots)`,
-    );
-  } catch (error) {
-    console.error(`snapshot-chain: ${error.message}`);
-    process.exitCode = 1;
+  if (process.argv.length !== 2) {
+    console.error("snapshot-chain: usage: node ci/check-snapshot-chain.mjs");
+    process.exitCode = 2;
+  } else {
+    try {
+      const result = checkSnapshotChain(root);
+      console.log(
+        `snapshot-chain: ok (${result.entries} journal entries; ${result.snapshots} linked snapshots)`,
+      );
+    } catch (error) {
+      console.error(`snapshot-chain: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }

@@ -27,8 +27,17 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => (
       <h2>
         <a href={`/e/${e.eventKey}`}>{e.title}</a>
       </h2>
+      {/* Upcoming-card shape (time · zone · location): the zone always
+          renders, the location only when the row has one. */}
       <p>
-        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
+        <span>{e.timezone}</span>
+        {e.location ? (
+          <>
+            {" · "}
+            <span>{e.location}</span>
+          </>
+        ) : null}
       </p>
       {e.game ? <p>{e.game}</p> : null}
     </div>
