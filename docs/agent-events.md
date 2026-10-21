@@ -50,6 +50,10 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
 
 Event text follows the human event form exactly: `title`, `description` and `location` are trimmed before the required and length checks (so a whitespace-only `title` or `location` is missing), and control and invisible/bidi characters are refused with a 422 field error via the same shared predicate. Tab, LF and CR in `description`, and genuine emoji ZWJ sequences, stay accepted; `game` stays optional, is trimmed (blank becomes null), and control and invisible/bidi characters are refused with a 422 field error, as in the human form.
 
+## Grant provisioning
+
+Grant provisioning is deliberately manual and owned by the repository maintainers; this repository ships no mint, rotate, or disable tooling. Minting stores only the SHA-256 hex of a fresh random credential in `agent_event_grants` (`src/db/schema.ts`); rotation replaces `verifier_hash` on the existing grant row, so the grant keeps its event, idempotency receipts and one-event quota and the old credential stops working at once (a newly minted successor row is a different grant: it cannot act on the predecessor's event, does not replay its idempotency keys, and may create its own proof event); disabling sets `disabled_at`, which ingress rejects immediately (`src/agent-events/grants.ts`). Request a grant through the private channel in [SECURITY.md](../SECURITY.md). Credential material never appears in the repository, logs, or chat.
+
 ## Publication and write-back
 
 Publishing exposes the shared row through `/events`, `/e/:key`, and the sitemap. Cancelled detail pages
