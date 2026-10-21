@@ -29,7 +29,7 @@ import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
 import { databaseUnavailable, forbidden, notFoundHandler } from "../errors";
-import { databaseOptions, databaseUrl } from "../db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import { prepareAuthStatus } from "../auth-status";
 import {
@@ -61,7 +61,10 @@ export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | n
   const url = databaseUrl(c.env);
   if (!url) return null;
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Same per-request statement bound as the site builder above: a stuck
+  // admin session lookup cancels into databaseUnavailable instead of
+  // wedging the panel.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 /** No store at all (unit tests without the seam): sessions cannot resolve. */

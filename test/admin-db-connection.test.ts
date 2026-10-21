@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dbFor } from "../src/admin/db";
+import { sessionStoreFor } from "../src/admin/guard";
 import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -90,5 +91,39 @@ describe("dbFor connection wiring", () => {
     expect(makeSql).toHaveBeenCalledTimes(1);
     expect(makeSql.mock.calls[0]?.[0]).toBe("postgres://explicit.test/db");
     expect(makeDb).not.toHaveBeenCalled();
+  });
+});
+
+describe("admin session store wiring", () => {
+  it("bounds the mirror client's statements like the site builder", async () => {
+    // sessionStoreFor mirrors storeForEnv's construction, including the
+    // per-request statement bound: every statement runs in a short
+    // transaction starting with SET LOCAL statement_timeout.
+    const queries: string[] = [];
+    const txSql = Object.assign(
+      async (strings: TemplateStringsArray) => {
+        queries.push(strings.join("?"));
+        return [];
+      },
+      { unsafe: txUnsafe },
+    );
+    const client = Object.assign(txSql, {
+      begin: async (run: (tx: unknown) => Promise<unknown>) => run(txSql),
+    });
+    makeSql.mockReturnValueOnce(client);
+    const store = await sessionStoreFor({
+      env: { DB: { connectionString: "postgres://hyperdrive.test/db" } } as Env,
+    });
+    expect(store).not.toBeNull();
+    expect(makeSql).toHaveBeenCalledExactlyOnceWith("postgres://hyperdrive.test/db", {
+      max: 1,
+      idle_timeout: 10,
+      connect_timeout: 10,
+      prepare: false,
+      fetch_types: false,
+    });
+    await expect(store!.statusHash("nope")).resolves.toBeNull();
+    expect(txUnsafe).toHaveBeenNthCalledWith(1, PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
+    expect(queries).toHaveLength(1);
   });
 });

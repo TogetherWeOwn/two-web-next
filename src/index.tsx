@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -213,7 +213,11 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
