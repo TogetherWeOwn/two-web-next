@@ -69,7 +69,12 @@ export const FeaturedFormPage: FC<{
               </textarea>
             )}
           </Field>
-          <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
+          <Field
+            name="url"
+            label="Link (full http(s) URL, or empty)"
+            errors={errors}
+            hint="Full http(s) URL, or empty. Not accepted: credentials before the host (user@ or user:pass@), backslashes, spaces or other whitespace, and control characters. An explicit port is fine."
+          >
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
           <Field
