@@ -118,11 +118,16 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     expect(html).toContain('href="#profile-bio"');
     expect(html).toContain('href="#profile-games-text"');
     expect(html).toContain('href="#profile-timezone"');
-    // Field errors beside the controls, wired for assistive tech.
+    // Field errors beside the controls, wired for assistive tech. Timezone
+    // keeps its help text associated alongside the error.
     for (const field of ["profile-bio", "profile-games-text", "profile-timezone"]) {
       expect(html).toContain(`id="${field}-error"`);
       expect(html).toContain('aria-invalid="true"');
-      expect(html).toContain(`aria-describedby="${field}-error"`);
+      expect(html).toContain(
+        field === "profile-timezone"
+          ? `aria-describedby="profile-timezone-help ${field}-error"`
+          : `aria-describedby="${field}-error"`,
+      );
     }
     expect(html).toContain("Keep your bio to 1000 characters or fewer.");
     expect(html).toContain("Add no more than 20 games.");
