@@ -3,7 +3,7 @@
 // route-inventory: POST /api/agent-events
 // route-inventory: GET /events.rss
 // route-inventory: GET /events.ics
-// route-inventory: GET /events/:file.ics
+// route-inventory: GET /events/:file{.+\.ics}
 // route-inventory: POST /mcp
 // route-inventory: GET /openapi.json
 // Acceptance (failing-first, Test Author owned): one machine error vocabulary
