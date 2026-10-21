@@ -97,21 +97,18 @@ export const HotzonesIndexPage: FC<{
   const joinsPeak = available ? peakCell(joins) : null;
   const voicePeak = peakCell(voice);
   const gamesPeak = peakCell(games);
+  // Every signal link keeps the selected season; absent/all stays canonical
+  // with no query, matching the canonical URL and login return-to.
+  const qs = season === "all" ? "" : `?season=${season}`;
   return (
     <Layout
       title="Hot zones — Together We Own"
-      canonical={canonicalUrl(
-        appUrl,
-        season === "all" ? "/hotzones" : `/hotzones?season=${season}`,
-      )}
+      canonical={canonicalUrl(appUrl, `/hotzones${qs}`)}
       shareDescription="When the community is most active, by hour and weekday."
       robots="noindex, follow"
       theme="schedule"
     >
-      <SiteHeader
-        active="events"
-        loginReturnTo={season === "all" ? "/hotzones" : `/hotzones?season=${season}`}
-      >
+      <SiteHeader active="events" loginReturnTo={`/hotzones${qs}`}>
         <a class="btn" href="/discord">
           Open Discord
         </a>
@@ -135,19 +132,19 @@ export const HotzonesIndexPage: FC<{
         <nav aria-label="Signals">
           <ul>
             <li>
-              <a href="/hotzones/joins">Joins heatmap</a>
+              <a href={`/hotzones/joins${qs}`}>Joins heatmap</a>
             </li>
             <li>
-              <a href="/hotzones/voice">Voice heatmap</a>
+              <a href={`/hotzones/voice${qs}`}>Voice heatmap</a>
             </li>
             <li>
-              <a href="/hotzones/games">Games heatmap</a>
+              <a href={`/hotzones/games${qs}`}>Games heatmap</a>
             </li>
           </ul>
         </nav>
         <section aria-labelledby="hotzones-joins-heading">
           <h2 id="hotzones-joins-heading">
-            <a href="/hotzones/joins">Joins</a>
+            <a href={`/hotzones/joins${qs}`}>Joins</a>
           </h2>
           {!available ? (
             <JoinsOutageLine />
@@ -160,19 +157,23 @@ export const HotzonesIndexPage: FC<{
         </section>
         <section aria-labelledby="hotzones-voice-heading">
           <h2 id="hotzones-voice-heading">
-            <a href="/hotzones/voice">Voice</a>
+            <a href={`/hotzones/voice${qs}`}>Voice</a>
           </h2>
-          <p>Estimated voice activity (estimates until calibration).</p>
+          <p>
+            Season-independent seeded estimates of voice activity (estimates until calibration).
+          </p>
           {voicePeak ? <PeakLine peak={voicePeak} estimated /> : null}
-          <Grid cells={voice} caption={`Estimated voice activity for season ${season}`} />
+          <Grid cells={voice} caption="Season-independent seeded estimate of voice activity" />
         </section>
         <section aria-labelledby="hotzones-games-heading">
           <h2 id="hotzones-games-heading">
-            <a href="/hotzones/games">Games</a>
+            <a href={`/hotzones/games${qs}`}>Games</a>
           </h2>
-          <p>Estimated games activity (estimates until calibration).</p>
+          <p>
+            Season-independent seeded estimates of games activity (estimates until calibration).
+          </p>
           {gamesPeak ? <PeakLine peak={gamesPeak} estimated /> : null}
-          <Grid cells={games} caption={`Estimated games activity for season ${season}`} />
+          <Grid cells={games} caption="Season-independent seeded estimate of games activity" />
         </section>
       </main>
       <SiteFooter />
@@ -192,7 +193,8 @@ export const HotzoneSignalPage: FC<{
       the joins signal reads the database, so only it renders the outage. */
   available?: boolean;
 }> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote, available = true }) => {
-  const path = season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`;
+  const qs = season === "all" ? "" : `?season=${season}`;
+  const path = `/hotzones/${signal}${qs}`;
   const estimated = signal !== "joins";
   const unavailable = !available && !estimated;
   const peak = unavailable ? null : peakCell(cells);
@@ -214,8 +216,8 @@ export const HotzoneSignalPage: FC<{
         <h1>{signal} hot zone</h1>
         {estimated ? (
           <p>
-            Estimated {signal} activity for season {season} (estimates until bot event-store
-            calibration). Total estimate: {total}.
+            Season-independent seeded estimates of {signal} activity (estimates until bot
+            event-store calibration). Total estimate: {total}.
           </p>
         ) : (
           <>
@@ -235,8 +237,8 @@ export const HotzoneSignalPage: FC<{
           </>
         )}
         <p>
-          <a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> ·{" "}
-          <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a>
+          <a href={`/hotzones${qs}`}>All hot zones</a> · <a href={`/hotzones/joins${qs}`}>joins</a>{" "}
+          · <a href={`/hotzones/voice${qs}`}>voice</a> · <a href={`/hotzones/games${qs}`}>games</a>
         </p>
         {unavailable ? (
           <JoinsOutageLine />
@@ -249,7 +251,7 @@ export const HotzoneSignalPage: FC<{
               cells={cells}
               caption={
                 estimated
-                  ? `Estimated ${signal} activity for season ${season}`
+                  ? `Season-independent seeded estimate of ${signal} activity`
                   : `Join activity for season ${season}`
               }
             />

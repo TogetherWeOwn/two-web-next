@@ -42,9 +42,11 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   // the gate expects, and foreign origins are still never translated.
   //
   // POST /auth/qa/:identity shares the `qa-login` throttle (10/min per runner
-  // IP, src/throttle.ts) across the whole sequential run — 10 logins today
-  // (waitlist/pause/profile 2 each, activity-log/admin/events/featured 1
-  // each). The
+  // IP, src/throttle.ts) across the whole sequential run — 9 logins today
+  // (waitlist/pause 2 each, activity-log/admin/events/featured/profile 1
+  // each; the teardown sweep is DB-direct and spends none). Later steps run
+  // behind 70 s workflow sleeps so each 60 s window holds only its own
+  // logins. The
   // suite must stay at or under the budget: a Retry-After wait long enough to
   // cross the window boundary does not fit the 30 s test timeout, so a 429
   // here is a hard failure naming the budget, and the fix is fewer logins,

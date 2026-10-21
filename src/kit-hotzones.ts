@@ -32,6 +32,8 @@ export type LoadJoinsGrid = (db: Db | null, window: SeasonWindow) => Promise<Hot
 export type RecordBoardView = (
   db: Db | null,
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
+  deadlineMs?: number,
+  requestId?: unknown,
 ) => Promise<void>;
 
 export interface HotzonesLoadArgs {
@@ -41,6 +43,8 @@ export interface HotzonesLoadArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadJoinsGridFn?: LoadJoinsGrid;
   recordBoardViewFn?: RecordBoardView;
+  /** Optional correlation id for the board-view record; omitted when the caller has none (see the runbook's Kit-omission caveat). */
+  requestId?: string | null;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -108,8 +112,11 @@ async function record(
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
 ): Promise<void> {
   // Fail-open, exactly as on the Hono handlers: a logging failure never
-  // blocks or breaks the board.
-  await (args.recordBoardViewFn ?? recordBoardView)(db, opts).catch(() => {});
+  // blocks or breaks the board. A caller-supplied request id rides along to
+  // the record call; none supplied means none carried (no new read to mint one).
+  await (args.recordBoardViewFn ?? recordBoardView)(db, opts, undefined, args.requestId).catch(
+    () => {},
+  );
 }
 
 export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{

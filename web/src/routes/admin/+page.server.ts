@@ -6,6 +6,7 @@ import { resolveDashboardWidgets } from "../../../../src/admin/kit-dashboard";
 import { JOIN_RETENTION_DAYS } from "../../../../src/admin/reads";
 import { databaseUrl } from "../../../../src/db/connection";
 import { topZeroResultSearches } from "../../../../src/events/search-log";
+import { safeRequestId } from "../../../../src/request-log";
 import type { PageServerLoad } from "./$types";
 
 // Same reads and failure posture as the Hono dashboard
@@ -21,7 +22,7 @@ import type { PageServerLoad } from "./$types";
 // Authorization stays in the layout guard; the member-read boundary around
 // resolve() owns classification and the audit. No new queries: both widgets
 // are the shared bounded helpers, outcomes only, no member subjects.
-export const load: PageServerLoad = async ({ parent }) => {
+export const load: PageServerLoad = async ({ parent, request, locals }) => {
   const { actor } = await parent();
   const db = await dbFor({ env });
   // Match dbFor's precedence: an injected ADMIN_DB overrides either URL, so
@@ -41,6 +42,25 @@ export const load: PageServerLoad = async ({ parent }) => {
   ]);
   const widgets = resolveDashboardWidgets(funnelSettled, zeroSettled);
   if (widgets.outage) error(503, "Admin temporarily unavailable");
+  // One correlated line per degraded widget, same contract as the Hono twin:
+  // with a db present, a settled value of undefined is exactly the degraded
+  // signal for both helpers. Outages threw above. Request may be absent in
+  // unit tests that call load({ parent }); tolerate that. Each id candidate
+  // is validated before fallback selection, so an invalid cf-ray never
+  // shadows a valid x-request-id or locals id.
+  const requestId =
+    safeRequestId((request as Request | undefined)?.headers?.get("cf-ray")) ??
+    safeRequestId((request as Request | undefined)?.headers?.get("x-request-id")) ??
+    safeRequestId((locals as { requestId?: unknown } | undefined)?.requestId);
+  if (funnelSettled.status !== "fulfilled" || funnelSettled.value === undefined) {
+    console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
+  }
+  if (zeroSettled.status !== "fulfilled" || zeroSettled.value === undefined) {
+    console.warn("dashboard widget degraded", {
+      widget: "zero_searches",
+      request_id: requestId,
+    });
+  }
   const { funnel, zeroSearches } = widgets;
   return {
     actor,

@@ -12,18 +12,15 @@
 // deadline cannot change the response, replay the write, or surface as an
 // unhandled rejection. Audit failure must never fail open.
 //
-// Both audit await sites are covered: the shared boundary behind
-// memberReadResponse (Kit) / memberReadBoundary, and the Hono
-// memberAccessLog middleware.
-import { Hono } from "hono";
+// The audit await site is covered: the shared boundary behind
+// memberReadResponse (Kit) / memberReadBoundary. (The old Hono
+// declare-subjects middleware was retired; production never used it.)
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as accessLog from "../src/access-log";
 import type { AccessEntry, AccessSink } from "../src/access-log";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
-import type { Env } from "../src/env";
 import * as memberReads from "../src/member-reads";
 import { declareMemberResult, keyedMemberRead, memberQueryPermit } from "../src/member-reads";
-import { env, MEMBER, PERSONAL_STRINGS, SUBJECT as HONO_SUBJECT } from "./helpers/member-data";
 
 const OUTER_BOUND_MS = 60_000;
 const READ_REFUSAL = "Member data is temporarily unavailable.";
@@ -250,128 +247,5 @@ describe("memberReadResponse audit deadline (Kit boundary)", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(SUBJECT);
     expect(audit.calls).toHaveLength(0);
-  });
-});
-
-describe("memberAccessLog audit deadline (Hono middleware)", () => {
-  const PERSONAL = PERSONAL_STRINGS[1]!;
-
-  function router(sink: AccessSink) {
-    type Vars = { viewerId: string; access: accessLog.AccessDecl };
-    const app = new Hono<{ Bindings: Env; Variables: Vars }>();
-    app.use("*", async (c, next) => {
-      c.set("viewerId", MEMBER.userId);
-      await next();
-    });
-    app.use(
-      "*",
-      accessLog.memberAccessLog(async () => sink),
-    );
-    app.get("/read", (c) => {
-      c.set("access", {
-        resource: "member",
-        action: "view",
-        route: "test.member",
-        subjects: [HONO_SUBJECT.userId],
-      });
-      return c.text(PERSONAL, 200, {
-        "set-cookie": "__Host-leak=1; Path=/; Secure",
-      });
-    });
-    return app;
-  }
-
-  // Hono cookie parity: the existing audit-failure path replaces c.res, and
-  // Hono carries the session cookie onto the replacement response. The
-  // deadline refusal must preserve those session-cookie semantics (unlike
-  // the Kit boundary, which builds a fresh response and drops cookies).
-  const expectHonoRefused = async (res: Response) => {
-    expect(res.status).toBe(503);
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(res.headers.getSetCookie()).toEqual(["__Host-leak=1; Path=/; Secure"]);
-    const body = await res.text();
-    expect(body).not.toContain(PERSONAL);
-    expect(body).not.toContain(HONO_SUBJECT.userId);
-  };
-
-  it("refuses with the sanitized 503 when the audit write never settles", async () => {
-    const audit = deferredSink();
-    const pending = tracked(Promise.resolve(router(audit.sink).request("/read", {}, env)));
-    try {
-      await audit.enteredPromise;
-      expect(pending.isSettled()).toBe(false);
-      await vi.advanceTimersByTimeAsync(OUTER_BOUND_MS);
-      expect(pending.isSettled()).toBe(true);
-      await expectHonoRefused(await pending.promise);
-      expect(audit.calls).toHaveLength(1);
-      expect(audit.calls[0]?.[0]).toMatchObject({
-        viewerDiscordId: MEMBER.userId,
-        subjectUserIds: [HONO_SUBJECT.userId],
-        route: "test.member",
-      });
-    } finally {
-      audit.resolve(true);
-      await pending.promise.catch(() => undefined);
-    }
-  });
-
-  it("releases the response when the audit succeeds before the deadline", async () => {
-    const audit = deferredSink();
-    const pending = tracked(Promise.resolve(router(audit.sink).request("/read", {}, env)));
-    await audit.enteredPromise;
-    audit.resolve(true);
-    const res = await pending.promise;
-    expect(res.status).toBe(200);
-    expect(res.headers.getSetCookie()).toEqual(["__Host-leak=1; Path=/; Secure"]);
-    expect(await res.text()).toBe(PERSONAL);
-    expect(audit.calls).toHaveLength(1);
-  });
-
-  it("a late audit success cannot alter the refused response or replay the write", async () => {
-    const audit = deferredSink();
-    const collector = unhandledRejectionCollector();
-    const pending = tracked(Promise.resolve(router(audit.sink).request("/read", {}, env)));
-    try {
-      await audit.enteredPromise;
-      await vi.advanceTimersByTimeAsync(OUTER_BOUND_MS);
-      expect(pending.isSettled()).toBe(true);
-      const res = await pending.promise;
-      await expectHonoRefused(res);
-      audit.resolve(true);
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(OUTER_BOUND_MS);
-      expect(audit.calls).toHaveLength(1);
-      expect(res.status).toBe(503);
-      expect(collector.seen).toEqual([]);
-    } finally {
-      audit.resolve(true);
-      await pending.promise.catch(() => undefined);
-      collector.stop();
-    }
-  });
-
-  it("a late audit rejection cannot alter the refused response or escape unhandled", async () => {
-    const audit = deferredSink();
-    const collector = unhandledRejectionCollector();
-    const pending = tracked(Promise.resolve(router(audit.sink).request("/read", {}, env)));
-    try {
-      await audit.enteredPromise;
-      await vi.advanceTimersByTimeAsync(OUTER_BOUND_MS);
-      expect(pending.isSettled()).toBe(true);
-      const res = await pending.promise;
-      await expectHonoRefused(res);
-      audit.reject(new Error(`insert failed for ${HONO_SUBJECT.userId}`));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(OUTER_BOUND_MS);
-      expect(audit.calls).toHaveLength(1);
-      expect(res.status).toBe(503);
-      expect(collector.seen).toEqual([]);
-      const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
-      expect(logged).not.toContain(HONO_SUBJECT.userId);
-    } finally {
-      audit.resolve(true);
-      await pending.promise.catch(() => undefined);
-      collector.stop();
-    }
   });
 });

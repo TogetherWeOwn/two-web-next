@@ -59,11 +59,20 @@ function unknownQueue(detail: string | null): QueuePayload {
  * Build the response body. `measure` is the ledger read (`pgQueueDepth`); a
  * missing backend means uncountable depth, and a throwing measure is a reported
  * `unknown` — never a throw to the route.
+ *
+ * Decided: top-level `degraded` on unknown, keeping HTTP 200 (never a 500).
+ * Unknown joins the existing queue-only degraded family (`pending >= 20`
+ * already returns degraded + 200), so dashboards polling top-level status see
+ * blindness instead of health. HTTP stays 200 because readiness (db,
+ * migrations, config) is independent of queue observability; the uptime prober
+ * (200 + x-two-origin) stays green, so this does not double with the direct
+ * `scheduled.failing` page. The queue slice, 20/100 thresholds and the
+ * class-only warn shape stay exactly as before.
  */
 export async function queueBody(measure: (() => Promise<QueueDepth>) | null): Promise<QueueHealth> {
   // Legacy: `queue driver 'x' has no countable depth.` — here: no ledger to read.
   if (!measure)
-    return { status: "healthy", queue: unknownQueue("queue ledger is not configured.") };
+    return { status: "degraded", queue: unknownQueue("queue ledger is not configured.") };
 
   let depth: QueueDepth;
   try {
@@ -75,7 +84,7 @@ export async function queueBody(measure: (() => Promise<QueueDepth>) | null): Pr
     console.warn("Health check could not read the queue depth; reporting unknown.", {
       exception: err instanceof Error ? err.name : typeof err,
     });
-    return { status: "healthy", queue: unknownQueue(null) };
+    return { status: "degraded", queue: unknownQueue(null) };
   }
 
   const queue: QueuePayload = {

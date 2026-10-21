@@ -72,6 +72,7 @@ import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
+import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
@@ -273,6 +274,22 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (result.status === "rejected" && !isDatabaseQueryCancellation(result.reason)) {
           throw result.reason;
         }
+      }
+      // One correlated line per degraded widget: with a db present, a settled
+      // value of undefined is exactly the degraded signal for both helpers
+      // (they resolve undefined on cancellations, ordinary failures and
+      // deadline timeouts), so the log distinguishes degraded from healthy.
+      // Outages threw above; rejected cancellations fall through to the same
+      // line.
+      const requestId = safeRequestId(c.get("requestId"));
+      if (funnelResult.status !== "fulfilled" || funnelResult.value === undefined) {
+        console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
+      }
+      if (zeroSearchesResult.status !== "fulfilled" || zeroSearchesResult.value === undefined) {
+        console.warn("dashboard widget degraded", {
+          widget: "zero_searches",
+          request_id: requestId,
+        });
       }
       funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
       zeroSearches =
@@ -728,11 +745,15 @@ function eventValues(row: EventRow): Record<string, unknown> {
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
+    accessibility_notes: row.accessibilityNotes ?? "",
     // Wall text in the row's zone — what the moderator typed is what they see.
     starts_at: utcToWall(row.startsAt, row.timezone),
     ends_at: utcToWall(row.endsAt, row.timezone),
     timezone: row.timezone,
     location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
     capacity: row.capacity === null ? "" : String(row.capacity),
   };
 }

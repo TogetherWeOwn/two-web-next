@@ -19,7 +19,7 @@ import { events } from "../db/admin-schema";
 import { joinAttempts, profiles } from "../db/schema";
 import type { Db } from "../db/index";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
-import type { SeasonWindow } from "./season";
+import { pgSeasonBound, type SeasonWindow } from "./season";
 import { WEEKDAY_NAMES as WEEKDAY_NAMES_SOURCE } from "./weekday-names";
 
 export const HOTZONE_SIGNALS = ["joins", "voice", "games"] as const;
@@ -90,7 +90,12 @@ export async function loadJoinsGrid(
 ): Promise<{ cells: HeatGrid; total: number; eventCount: number }> {
   const cells = emptyGrid();
   if (!db) return { cells, total: 0, eventCount: 0 };
-  const inWindow = window.kind === "all" ? null : { start: window.start, end: window.end };
+  // Year-0 bounds cannot bind (Postgres has no year 0): clamp them to the
+  // empty range at 0001-01-01, leaving every other bound untouched.
+  const inWindow =
+    window.kind === "all"
+      ? null
+      : { start: pgSeasonBound(window.start), end: pgSeasonBound(window.end) };
   // Bound both aggregate statements server-side inside one transaction, like
   // recordBoardView's write deadline: SET LOCAL is transaction-local, so the
   // timeout cannot leak to the pooled session. The grouped joins count emits

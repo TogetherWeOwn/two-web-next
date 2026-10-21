@@ -407,12 +407,18 @@ describe("public session failure boundaries", () => {
         bindings,
       );
       // Main #239: a failed revocation must not clear this browser's cookie
-      // as if the server row were gone. The body carries no driver details.
+      // as if the server row were gone. No Accept header keeps the legacy
+      // text bytes (main #1491 pins the body byte-exact); explicit JSON gets
+      // the correlated envelope and explicit HTML the branded page.
       expect(res.status).toBe(503);
       expect(res.headers.get("location")).toBeNull();
       expect(store.revoke).toHaveBeenCalledOnce();
       expect(res.headers.getSetCookie()).toEqual([]);
-      expect(await res.text()).toBe("Sign-out temporarily unavailable");
+      expect(res.headers.get("content-type")).toContain("text/plain");
+      expect(res.headers.get("x-request-id")).toBeTruthy();
+      const text = await res.text();
+      expect(text).toBe("Sign-out temporarily unavailable");
+      expect(text).not.toMatch(/ECONNREFUSED|private revocation bug/i);
     },
   );
   it.each([

@@ -78,7 +78,16 @@ describe("RSS wire timestamp responses", () => {
         expect(body).toContain(`<guid isPermaLink="true">${APP_URL}/e/${key}</guid>`);
       expect(body).toContain("<lastBuildDate>Wed, 01 Jul 2026 12:00:00 +0000</lastBuildDate>");
       expect(body).not.toMatch(/NaN|infinity|010000|-000001/);
-      expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+      // DB-free env: the events-read throttle fails open with a null-store
+      // line before the feed's own diagnostic.
+      expect(console.warn).toHaveBeenCalledTimes(2);
+      expect(console.warn).toHaveBeenNthCalledWith(
+        1,
+        "Throttle store unavailable; allowing the request.",
+        { throttle: "events-read" },
+      );
+      expect(console.warn).toHaveBeenNthCalledWith(
+        2,
         "eventsRss excluded non-wire updatedAt from lastBuildDate.",
         { skipped: 1 },
       );
@@ -114,6 +123,11 @@ describe("RSS wire timestamp responses", () => {
     expect(body.match(/<item>/g)).toHaveLength(1);
     expect(body).toContain("<pubDate>Sat, 02 Jan 0500 03:04:05 +0000</pubDate>");
     expect(body).toContain("<lastBuildDate>Sat, 02 Jan 0500 03:04:05 +0000</lastBuildDate>");
-    expect(console.warn).not.toHaveBeenCalled();
+    // The feed itself stays quiet; the only line is the DB-free null-store
+    // throttle allow.
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+      "Throttle store unavailable; allowing the request.",
+      { throttle: "events-read" },
+    );
   });
 });
