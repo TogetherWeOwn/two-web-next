@@ -24,15 +24,119 @@
   // so they never resolve into a discarded document. A page restored from the
   // back-forward cache does not re-run this island, so register() below runs
   // again on a persisted pageshow with fresh controllers.
+  // Per-call bounds (C3): every tool invocation owns a finite deadline
+  // covering fetch plus body consumption, a bounded body mirroring
+  // API_PUBLIC_BOUNDS.maxBodyBytes (src/public-data/contracts.ts), and
+  // cleanup that settles even when abort is ignored. Failures reject with an
+  // Error carrying a stable .code, a safe .message naming the next step, and
+  // .retryAfter seconds for rate limits only; late completions are fenced and
+  // pagehide settles in-flight reads instead of stranding them. Unknown
+  // statuses (including 404) read as unavailable: the read cannot be served
+  // right now, so the caller tries again rather than trusting a guess.
+  var READ_DEADLINE_MS = 10000;
+  var MAX_BODY_BYTES = 32768;
+  var MAX_RETRY_AFTER_S = 86400;
+  // Partial harnesses get pre-deadline behavior (mirrors the canTimeout guard
+  // in going-count.js): without timers there is no owned deadline, and
+  // without TextEncoder the cap falls back to string length. A missing or
+  // broken AbortController degrades through the construction try/catch below
+  // instead. Real browsers provide all three.
+  var canTimeout = typeof setTimeout === "function" && typeof clearTimeout === "function";
+  var canEncode = typeof TextEncoder !== "undefined";
+  var pendingReads = [];
   var pageFetches = null;
   var registrations = [];
 
+  function toolError(code, message, retryAfter) {
+    var err = new Error(message);
+    err.code = code;
+    if (retryAfter) err.retryAfter = retryAfter;
+    return err;
+  }
+
+  // Bounded Retry-After guidance: whole seconds, 1s..24h. Malformed values
+  // yield undefined and absurd values cap at 24h; never reflects raw text.
+  function retryAfterSeconds(res) {
+    var headers = res && res.headers;
+    var raw = headers && headers.get && headers.get("retry-after");
+    if (typeof raw !== "string" || !raw.trim()) return undefined;
+    var seconds = Math.floor(+raw);
+    if (Number.isNaN(seconds)) return undefined;
+    return seconds < 1 ? 1 : seconds > MAX_RETRY_AFTER_S ? MAX_RETRY_AFTER_S : seconds;
+  }
+
   function readJson(url) {
-    var init = { headers: { accept: "application/json" } };
-    if (pageFetches) init.signal = pageFetches.signal;
-    return fetch(url, init).then((res) => {
-      if (!res.ok) throw new Error("Public read failed with status " + res.status + ".");
-      return res.json();
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = 0;
+      function settle(ok, value) {
+        if (settled) return;
+        settled = true;
+        if (canTimeout) clearTimeout(timer);
+        if (ok) resolve(value);
+        else reject(value);
+      }
+      function fail(code, retryAfter) {
+        settle(false, toolError(code, "Read failed (" + code + "); try again.", retryAfter));
+      }
+      function failGone() {
+        fail("unavailable");
+      }
+      function failBad() {
+        fail("invalid_response");
+      }
+      if (canTimeout) {
+        timer = setTimeout(function () {
+          fail("timeout");
+        }, READ_DEADLINE_MS);
+      }
+      var ctrl = null;
+      try {
+        ctrl = new AbortController();
+      } catch (_readAbortConstructIgnored) {
+        // ctrl stays null; the read still issues and the deadline guards it.
+      }
+      if (ctrl) {
+        // Pagehide aborts every per-call controller created since register(),
+        // settled or not, so no live signal leaks into a discarded document;
+        // settled calls fence the late rejection.
+        pageFetches.signal.addEventListener("abort", function () {
+          try {
+            ctrl.abort();
+          } catch (_forwardAbortIgnored) {
+            // Already aborted; the settled fence drops what follows.
+          }
+        });
+      }
+      // Settled entries stay queued: the fence makes removal unnecessary and
+      // teardown drains the whole list, so abandon is just failGone.
+      pendingReads.push(failGone);
+      var init = { headers: { accept: "application/json" }, redirect: "manual" };
+      if (ctrl) init.signal = ctrl.signal;
+      fetch(url, init).then(function (res) {
+        if (res && res.type === "opaqueredirect") {
+          failBad();
+          return;
+        }
+        if (!res || !res.ok) {
+          var status = (res && res.status) || 0;
+          if (status === 429) fail("rate_limited", retryAfterSeconds(res));
+          else failGone();
+          return;
+        }
+        res.text().then(function (text) {
+          var bytes = canEncode ? new TextEncoder().encode(text).length : text.length;
+          if (bytes > MAX_BODY_BYTES) {
+            failBad();
+            return;
+          }
+          try {
+            settle(true, JSON.parse(text));
+          } catch {
+            failBad();
+          }
+        }, failGone);
+      }, failGone);
     });
   }
 
@@ -60,7 +164,7 @@
   // T2: one published event by key.
   function getEvent(input) {
     var key = input && typeof input.event_key === "string" ? input.event_key : "";
-    if (!EVENT_KEY.test(key)) throw new Error("That event key is not valid.");
+    if (!EVENT_KEY.test(key)) throw toolError("invalid_request", "That event key is not valid.");
     return readJson("/api/public/events/" + encodeURIComponent(key));
   }
 
@@ -145,6 +249,10 @@
         // Aborting twice is harmless; never break navigation cleanup.
       }
     }
+    // Settle in-flight reads even when their fetch ignores abort: the page is
+    // going away, so every pending call fails closed with a stable code while
+    // the settled fence drops whatever the stranded fetch does next.
+    while (pendingReads.length) pendingReads.pop()();
     if (pageFetches) {
       try {
         pageFetches.abort();

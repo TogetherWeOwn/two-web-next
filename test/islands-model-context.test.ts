@@ -205,6 +205,7 @@ describe("model-context island stub contract", () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({
       ok: true,
       status: 200,
+      text: async () => "{}",
       json: async () => ({}),
     }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
@@ -240,7 +241,12 @@ describe("model-context island stub contract", () => {
   });
 
   it("get_event fetches the valid key and rejects junk without a request", async () => {
-    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "{}",
+      json: async () => ({}),
+    }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
     runInNewContext(binder, {
       AbortController,
@@ -267,6 +273,7 @@ describe("model-context island stub contract", () => {
     const fetchImpl = vi.fn(async (url: string) => ({
       ok: true,
       status: 200,
+      text: async () => JSON.stringify({ url }),
       json: async () => ({ url }),
     }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
@@ -342,6 +349,7 @@ describe("model-context island stub contract", () => {
       return {
         ok: true,
         status: 200,
+        text: async () => "{}",
         json: async () => ({}),
       };
     });
@@ -428,6 +436,15 @@ describe("model-context island stub contract", () => {
     const tool = (ctx.registerTool.mock.calls as Array<[Registered]>)
       .map(([t]) => t)
       .find((t) => t.name === "two_get_community")!;
-    await expect(tool.execute({})).rejects.toThrow(/503/);
+    const error = (await tool.execute({}).then(
+      () => null,
+      (failure: unknown) => failure,
+    )) as (Error & { code?: unknown }) | null;
+    // The island constructs the failure inside its vm realm, so pin the shape
+    // rather than the outer Error identity.
+    expect(typeof error?.message).toBe("string");
+    expect(error?.code).toBe("unavailable");
+    expect(error?.message).toMatch(/try again/);
+    expect(error?.message).not.toMatch(/503/);
   });
 });
