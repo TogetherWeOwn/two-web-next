@@ -5,9 +5,11 @@ import { kitErrorCopy, type KitErrorStatus } from "../../../src/kit-errors";
 let {
   code,
   inviteUrl,
+  adminBack,
 }: {
   code: KitErrorStatus;
   inviteUrl: string;
+  adminBack?: { href: string; label: string } | null;
 } = $props();
 
 const copy = $derived(kitErrorCopy(code));
@@ -41,7 +43,21 @@ const copy = $derived(kitErrorCopy(code));
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
-    {:else if code === 403 || code === 429 || code === 500}
+    {:else if code === 429}
+      <!-- 429: a throttled admin write names the refused form; other 429s keep invite recovery only. -->
+      {#if adminBack}
+        <p class="admin-back-note">Your submission was not saved. Reopen the form and try again.</p>
+      {/if}
+      <p class="recovery-actions">
+        {#if adminBack}
+          <a href={adminBack.href} data-testid="error-admin-back">{adminBack.label}</a>
+        {/if}
+        <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+          Use the Discord invite instead
+        </a>
+        <a href="/" data-testid="error-home">Back to the homepage</a>
+      </p>
+    {:else if code === 403 || code === 500}
       <!-- These statuses share invite recovery, not their headings or lead copy. -->
       <p class="recovery-actions">
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">

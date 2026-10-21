@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import ErrorShell from "#lib/ErrorShell.svelte";
+import { adminWayBack } from "../../../src/admin-wayback";
 import { FALLBACK_INVITE } from "../../../src/invite";
 import { isKitErrorStatus } from "../../../src/kit-errors";
 
@@ -11,11 +12,16 @@ import { isKitErrorStatus } from "../../../src/kit-errors";
 // Unknown statuses fall back to the 500 shell; data requests (__data.json)
 // are answered by SvelteKit itself, so JSON/feed contracts are never
 // swallowed here. noindex travels via the Shell robots prop.
+// A throttled admin write additionally gets a way back to the refused form:
+// path-derived from page.url, so the link survives the outage it reports.
 const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);
+const adminBack = $derived(
+  status === 429 && page.url.pathname.startsWith("/admin") ? adminWayBack(page.url.pathname) : null,
+);
 </script>
 
 <svelte:head>
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />
+<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />
