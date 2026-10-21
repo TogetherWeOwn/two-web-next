@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
+import {
+  QA_MEMBER_DISCORD_ID,
+  QA_MODERATOR_DISCORD_ID,
+  STAGING_ORIGIN,
+} from "../ci/operator-constants.mjs";
 
 export const SEED_OWNER = "seed-staging-calendar-v1";
-// Keep the two snowflakes aligned with src/qa.ts; usernames are fixture-only.
+// Snowflake source of truth: ci/operator-constants.mjs (usernames are fixture-only).
 export const SEED_USERS = [
-  { id: "900000000000001396", username: "seed-qa-member" },
-  { id: "900000000000001397", username: "seed-qa-moderator" },
+  { id: QA_MEMBER_DISCORD_ID, username: "seed-qa-member" },
+  { id: QA_MODERATOR_DISCORD_ID, username: "seed-qa-moderator" },
   { id: "seed-qa-waitlisted", username: "seed-qa-waitlisted" },
 ];
 const ZONES = [
@@ -173,7 +178,7 @@ export function buildSeed(now = new Date()) {
   const featured = events.slice(0, 3).map((e, i) => ({
     title: `seed-featured-${i + 1}`,
     body: `Synthetic staging calendar: ${e.title}`,
-    url: `https://next.togetherweown.com/e/${e.event_key}`,
+    url: `${STAGING_ORIGIN}/e/${e.event_key}`,
     is_published: true,
     position: i,
     starts_at: new Date(base - DAY),

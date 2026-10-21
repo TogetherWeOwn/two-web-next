@@ -93,9 +93,13 @@ can add extra occurrences; those aren't automatically deleted by this tool.
 - A four-occurrence weekly series: parent `seed-calendar-05`, children 06–08;
   existing numeric IDs and parent links remain stable.
 - Three fixture users with `seed-` usernames, null avatars, and no PII. The first
-  two retain `src/qa.ts`'s reserved synthetic IDs (`900000000000001396` and
+  two retain the reserved synthetic IDs (`900000000000001396` and
   `900000000000001397`) so QA login sees the same RSVP answers. The third is
-  `seed-qa-waitlisted`. Existing `QA Member`/`QA Moderator` names on those exact
+  `seed-qa-waitlisted`. The single source of truth for these IDs is
+  `ci/operator-constants.mjs`, which the seed script imports; `src/qa.ts` keeps
+  its own literals as a fail-closed guard and the parity suite
+  (`test/operator-constants-parity.mjs`, wired into `npm run test:smoke`) fails
+  on drift. Existing `QA Member`/`QA Moderator` names on those exact
   reserved IDs are accepted as synthetic QA fixtures; other usernames fail closed.
   QA sign-in may restore its own `QA Member`/`QA Moderator` display names later.
 - **12** fixture RSVPs: two going plus one waitlisted for each of four capacity-2
