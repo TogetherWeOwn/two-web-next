@@ -231,7 +231,7 @@ describe.each(archiveTwins)("%s searchable past page", (twin) => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(eventKeys(html)).toEqual([]);
-    expect(html).toContain("No past events match your search.");
+    expect(html).toContain("No past events match “no such meeting”.");
     expect(html).not.toContain(PAST_EVENTS_OUT_OF_RANGE_TESTID);
     expect(html).not.toContain(PAST_EVENTS_COPY.empty);
     expect(pagerNav(html)).not.toMatch(/Page \d+ of/);
