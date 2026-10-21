@@ -1,6 +1,6 @@
 // Acceptance: truthful RSVP prompts for guests and non-members (Hono twin).
 //
-// V1 (TOG-34319 roadmap M194): guests see paused/full truth instead of a bare
+// V1 roadmap M194: guests see paused/full truth instead of a bare
 // login link, signed-in non-members get the join path instead of a login loop.
 // The Builder (paired build card) implements on this branch and never edits
 // this file. Fail-first against d8fe53590; hermetic throughout (pg-proxy fakes,
