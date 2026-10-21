@@ -56,12 +56,17 @@ const NEW_TESTIDS = {
   PAST_EVENTS_BACK_TESTID: "past-events-back",
 } as const;
 
-const textOf = (markup: string): string =>
-  markup
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<[^>]*>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+// Token walk, no rewritten copy of the markup: keep the text between
+// comment/tag tokens so no tag fragment can survive a partial strip.
+const textOf = (markup: string): string => {
+  let text = "";
+  let last = 0;
+  for (const token of markup.matchAll(/<!--[\s\S]*?-->|<[^>]*>/g)) {
+    text += markup.slice(last, token.index);
+    last = token.index + token[0].length;
+  }
+  return (text + markup.slice(last)).replace(/\s+/g, " ").trim();
+};
 
 function anchorsIn(html: string): {
   href: string;
