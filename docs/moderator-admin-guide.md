@@ -122,7 +122,9 @@ QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-
 ```
 
 It spends two QA-login hits and stays inside the admin-write throttle budget.
-Live runs belong to the authorized cutover procedure, not CI.
+Live runs belong to the authorized cutover procedure, not CI. The queue
+operator legs (preview, redispatch, source-evidence) have their own drill in
+[the redrive runbook](queue-redrive-runbook.md#auth-wall-drill-staging-only).
 
 ## Busy writes and retrying
 
