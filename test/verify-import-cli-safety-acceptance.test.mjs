@@ -216,8 +216,8 @@ describe("smoke machine verdict", () => {
     expect(supportedVerdictModes().length).toBeGreaterThan(0);
   });
 
-  it("--json verdict shape tracks the probe result", (ctx) => {
-    if (!supportedVerdictModes().includes("json")) ctx.skip();
+  it("--json verdict shape tracks the probe result", () => {
+    expect(supportedVerdictModes()).toContain("json");
     const plain = run(SMOKE, [REFUSED_BASE]);
     const result = run(SMOKE, [REFUSED_BASE, "--json"]);
     expect(result.status).toBe(plain.status);
@@ -228,8 +228,8 @@ describe("smoke machine verdict", () => {
     expect(verdict?.failed).toBeGreaterThan(0);
   });
 
-  it("--ledger verdict shape mirrors json-smoke", (ctx) => {
-    if (!supportedVerdictModes().includes("ledger")) ctx.skip();
+  it("--ledger verdict shape mirrors json-smoke", () => {
+    expect(supportedVerdictModes()).toContain("ledger");
     const dir = mkdtempSync(join(tmpdir(), "cli-safety-"));
     const ledgerPath = join(dir, "smoke-ledger.json");
     const plain = run(SMOKE, [REFUSED_BASE]);
@@ -245,8 +245,8 @@ describe("smoke machine verdict", () => {
     expect(ledger.summary.failed).toBeGreaterThan(0);
   });
 
-  it("unwritable --ledger keeps the probe result", (ctx) => {
-    if (!supportedVerdictModes().includes("ledger")) ctx.skip();
+  it("unwritable --ledger keeps the probe result", () => {
+    expect(supportedVerdictModes()).toContain("ledger");
     const dir = mkdtempSync(join(tmpdir(), "cli-safety-"));
     const result = run(SMOKE, [REFUSED_BASE, "--ledger", join(dir, "missing", "ledger.json")]);
     expect(result.status).toBe(1);
