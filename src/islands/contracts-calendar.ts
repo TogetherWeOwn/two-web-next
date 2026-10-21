@@ -319,19 +319,22 @@ export function gridTitle(title: string): string {
 /** Badge word shared by cancelled list cards and month-grid entries. */
 export const GRID_CANCELLED_COPY = "Cancelled";
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
+/** Month-grid names lead with visible words (WCAG 2.5.3), retaining full title + day. */
 export function gridAccessibleName(
   title: string,
   startsAt: Date,
   zone: string,
   cancelled = false,
 ): string {
-  const lead = `${wallTimeHm(startsAt, zone)} ${title}`;
-  // Cancelled entries carry the same badge word visibly, so the name leads
-  // with it too: speech users hear the status in the same position they see it.
-  return cancelled
-    ? `${lead} ${GRID_CANCELLED_COPY}, ${cardDayLabel(startsAt, zone)}`
-    : `${lead}, ${cardDayLabel(startsAt, zone)}`;
+  const time = wallTimeHm(startsAt, zone);
+  if (cancelled) {
+    const visibleTitle = gridTitle(title);
+    // The badge follows the truncated title, so keep that exact visible prefix
+    // before restoring the full title for same-prefix event disambiguation.
+    const fullTitle = visibleTitle === title ? "" : `, ${title}`;
+    return `${time} ${visibleTitle} ${GRID_CANCELLED_COPY}${fullTitle}, ${cardDayLabel(startsAt, zone)}`;
+  }
+  return `${time} ${title}, ${cardDayLabel(startsAt, zone)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

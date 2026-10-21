@@ -1,6 +1,8 @@
 // Builder-owned pins for the schedule cancellation presentation chosen by this
 // slice: the acceptance suite allows omission-or-description, and these pin the
 // description variant plus the grid name/visible relationship.
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { CalCard } from "../src/events/pages-calendar-card";
@@ -66,15 +68,74 @@ describe("cancelled schedule copy", () => {
     expect(html).toContain(`<span class="schedule-badge">${GRID_CANCELLED_COPY}</span>`);
   });
 
-  it("leads the cancelled grid name with its visible label", () => {
-    const e = cancellationEvent();
+  it.each([
+    "Chess night",
+    "Cancelled event: A",
+    "Game night spectacular raid evening alpha Hobbiton",
+    "Game night spectacular raid evening beta Rivendell",
+    '🎲 Raid <script> & "quoted" 猟師 evening',
+  ])("leads the cancelled grid name with its visible label: %s", async (title) => {
+    const e = cancellationEvent({ title });
     const visible = `${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)} ${GRID_CANCELLED_COPY}`;
     const name = gridAccessibleName(e.title, e.startsAt, ZONE, true);
     expect(name.startsWith(visible)).toBe(true);
+    expect(name).toContain(e.title);
     expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
+    const html = await jsx(MonthGrid, {
+      state: cancellationState,
+      weeks: [[{ iso: "2099-01-15", day: 15, inMonth: true, isToday: false, events: [e] }]],
+      zone: ZONE,
+    }).toString();
+    const link = /<a[^>]*data-cal-jump[^>]*aria-label="([^"]*)"[^>]*>([\s\S]*?)<\/a>/.exec(html);
+    expect(link).not.toBeNull();
+    // Compare rendered text as well as the helper, including escaped title bytes.
+    expect(renderedText(link![1]!).startsWith(renderedText(link![2]!))).toBe(true);
+    expect(html).not.toContain("<script>");
     // The published shape is untouched by the new flag default.
     expect(gridAccessibleName(e.title, e.startsAt, ZONE)).toBe(
       `${wallTimeHm(e.startsAt, ZONE)} ${e.title}, ${cardDayLabel(e.startsAt, ZONE)}`,
     );
+  });
+
+  it("keeps truncated same-prefix cancelled titles distinguishable", () => {
+    const titles = [
+      "Game night spectacular raid evening alpha Hobbiton",
+      "Game night spectacular raid evening beta Rivendell",
+    ];
+    expect(gridTitle(titles[0]!)).toBe(gridTitle(titles[1]!));
+    const e = cancellationEvent();
+    const names = titles.map((title) => gridAccessibleName(title, e.startsAt, ZONE, true));
+    expect(names[0]).not.toBe(names[1]);
+  });
+
+  it("pins the cancelled hook and both badge-stacking rules", async () => {
+    const html = await jsx(MonthGrid, {
+      state: cancellationState,
+      weeks: [
+        [
+          {
+            iso: "2099-01-15",
+            day: 15,
+            inMonth: true,
+            isToday: false,
+            events: [cancellationEvent(), cancellationEvent({ status: "published" })],
+          },
+        ],
+      ],
+      zone: ZONE,
+    }).toString();
+    const links = [...html.matchAll(/<a[^>]*data-cal-jump[^>]*>/g)].map((m) => m[0]);
+    expect(links).toHaveLength(2);
+    expect(links[0]).toContain('data-cancelled="true"');
+    expect(links[1]).not.toContain("data-cancelled");
+
+    const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
+    const stack = css.match(/\.events-page \[data-cal-jump\]\[data-cancelled\]\s*\{([^{}]*)\}/);
+    expect(stack, "cancelled grid link stacks its badge below its label").not.toBeNull();
+    expect(stack![1]).toMatch(/flex-direction:\s*column\s*;/);
+    expect(stack![1]).toMatch(/align-items:\s*flex-start\s*;/);
+    const badge = css.match(/\.events-page \[data-cal-jump\] \.schedule-badge\s*\{([^{}]*)\}/);
+    expect(badge, "grid badge keeps its compact top margin").not.toBeNull();
+    expect(badge![1]).toMatch(/margin:\s*\.25rem 0 0\s*;/);
   });
 });
