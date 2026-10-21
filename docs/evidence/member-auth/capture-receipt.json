@@ -1,0 +1,227 @@
+{
+  "base": "1ac4be794887e97a185003b204836c122ca58b00",
+  "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+  "scope": "Real Kit Svelte SSR and dispatcher, memory fixtures, native compiled CSS ordering; not full adapter Worker or staging proof. Held profiles remain held.",
+  "results": [
+    {
+      "filename": "before-board-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 0,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "before-board",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-board-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "after-board",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "board-logout-refused-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "board-logout-refused",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "board-logout-unconfirmed-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "board-logout-unconfirmed",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "before-self-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 0,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "before-self",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-self-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "after-self",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-logout-refused-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-logout-refused",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-logout-unconfirmed-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-logout-unconfirmed",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-expired-draft-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-expired-draft",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-other-1280.png",
+      "width": 1280,
+      "height": 800,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "other",
+      "state": "after-other",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "before-board-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 0,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "before-board",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-board-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "after-board",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "board-logout-refused-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "board-logout-refused",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "board-logout-unconfirmed-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "board",
+      "state": "board-logout-unconfirmed",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "before-self-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 0,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "before-self",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-self-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "after-self",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-logout-refused-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-logout-refused",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-logout-unconfirmed-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-logout-unconfirmed",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "self-expired-draft-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "self",
+      "state": "self-expired-draft",
+      "errors": [],
+      "outbound": []
+    },
+    {
+      "filename": "after-other-390.png",
+      "width": 390,
+      "height": 844,
+      "controllers": 1,
+      "rootCss": "_app/immutable/assets/0.B5UzpxCz.css",
+      "document": "other",
+      "state": "after-other",
+      "errors": [],
+      "outbound": []
+    }
+  ]
+}
