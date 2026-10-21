@@ -1,7 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import ErrorShell from "#lib/ErrorShell.svelte";
-import { FALLBACK_INVITE } from "../../../src/invite";
+import { FALLBACK_INVITE } from "../../../src/invite-fallback";
 import { isKitErrorStatus } from "../../../src/kit-errors";
 
 // Branded Kit error boundary: every Kit 400/404/403/410/429/500/503

@@ -3,13 +3,12 @@
 // Split out of the app module so the join journey (which the app module mounts)
 // can sanitize its recovery-page invite link with the same rule as /discord.
 // Ports two-web DiscordInviteController::FALLBACK_INVITE.
-import { createRateLimitedWarn } from "./log-budget";
+import { FALLBACK_INVITE } from "./invite-fallback";
+import { createRateLimitedWarn, type RateLimitedWarn } from "./log-budget";
 
-// The last resort, hardcoded on purpose (ports two-web DiscordInviteController::FALLBACK_INVITE).
-// The WEB-HOMEPAGE campaign code: never expires, unlimited uses, so the join button has an invite
-// that cannot rot and web arrivals attribute to the website. An invite code is not a secret: it is
-// a public join link that grants nothing but membership of a server anyone can ask to join.
-export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";
+// Re-exported from the import-free leaf: Kit error shells bundle the fallback
+// without pulling this module's telemetry into client JavaScript.
+export { FALLBACK_INVITE };
 
 // Fixed class for the unusable-config warn and the /discord request-error
 // alert. The message never carries the configured value.
@@ -23,8 +22,14 @@ export class InviteConfigError extends Error {
 // One bucket for the whole invite leg: a broken config warns bounded (at
 // most burst warns, then one shed per window) instead of once per call, so a
 // bad deploy pages via /discord instead of flooding. Usable configs stay
-// silent and spend nothing.
-const inviteLog = createRateLimitedWarn({ shedLine: "invite.config.shed" });
+// silent and spend nothing. Created lazily on first refusal (not at import
+// time) so importing this module has no side effects: client chunks that
+// reach it through a shared barrel never pay for the bucket.
+let inviteLog: RateLimitedWarn | null = null;
+function log(): RateLimitedWarn {
+  if (!inviteLog) inviteLog = createRateLimitedWarn({ shedLine: "invite.config.shed" });
+  return inviteLog;
+}
 
 function discordInvite(url: string): string | null {
   // Require a real HTTPS authority, not missing or extra slashes repaired by URL parsing.
@@ -63,6 +68,6 @@ export function isInviteConfigUsable(configured: string): boolean {
 export function inviteDestination(configured: string): string {
   const destination = discordInvite(configured);
   if (destination) return destination;
-  inviteLog.warn("invite.config.unusable", { exception: InviteConfigError.name });
+  log().warn("invite.config.unusable", { exception: InviteConfigError.name });
   return FALLBACK_INVITE;
 }

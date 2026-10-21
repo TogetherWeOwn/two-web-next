@@ -286,6 +286,7 @@ exactly once.
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
+| `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
