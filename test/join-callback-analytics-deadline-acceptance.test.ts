@@ -639,9 +639,9 @@ const sessionCookies = (res: Response) =>
   res.headers.getSetCookie().filter((c) => /__Host-two_session=[^;]/.test(c));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
 });
 
 describe("join callback with a never-settling analytics INSERT", () => {
@@ -1123,5 +1123,18 @@ describe("positive controls (green before the build)", () => {
     ).resolves.toBeUndefined();
     expect(throwing.attemptInsertTries).toBe(1);
     expectNoLeak(lines, "");
+  });
+});
+
+describe("real timer restoration control", () => {
+  it("restores working real timers after the analytics lifecycle", async () => {
+    expect(vi.isFakeTimers()).toBe(false);
+    const winner = await Promise.race([
+      new Promise<string>((resolve) => {
+        globalThis.setTimeout(() => resolve("timer"), 5);
+      }),
+      realSleep(300).then(() => "never"),
+    ]);
+    expect(winner).toBe("timer");
   });
 });
