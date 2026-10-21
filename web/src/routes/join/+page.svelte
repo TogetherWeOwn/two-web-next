@@ -58,7 +58,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       {#if widgetSnapshot}
         <section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">
           <h2 id="discord-presence-heading">
-            {#if widgetSnapshot.stale}In {widgetSnapshot.name} as of the last update{:else}In {widgetSnapshot.name} now{/if}
+            In {widgetSnapshot.name} {widgetSnapshot.stale ? "as of the last update" : "now"}
           </h2>
           <p data-testid="join-widget-online">
             <strong>{widgetSnapshot.presenceCount}</strong>{" "}
@@ -76,7 +76,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
             </ul>
           {:else}
             <p>
-              {#if widgetSnapshot.stale}No voice channels open as of the last update.{:else}No voice channels open right now.{/if}
+              No voice channels open {widgetSnapshot.stale ? "as of the last update." : "right now."}
             </p>
           {/if}
           <!-- Public page: aggregate presence only (count + channels). Member

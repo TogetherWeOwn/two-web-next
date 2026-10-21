@@ -156,7 +156,9 @@ export type DiscordWidgetHealthDeps = { fetch?: typeof fetch; now?: () => number
 export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): DiscordWidgetHealth {
   const now = deps.now ?? Date.now;
   const ttlMs = deps.ttlMs ?? DISCORD_WIDGET_VERDICT_TTL_MS;
-  const maxAgeMs = 3 * ttlMs;
+  // The multiplier lives in DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS alone; derive
+  // the instance bound from its ratio so injected TTLs scale the same way.
+  const maxAgeMs = (DISCORD_WIDGET_SNAPSHOT_MAX_AGE_MS / DISCORD_WIDGET_VERDICT_TTL_MS) * ttlMs;
   let verdict: {
     guildId: string;
     available: boolean;
