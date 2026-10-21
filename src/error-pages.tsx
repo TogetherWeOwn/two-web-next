@@ -184,8 +184,11 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
 
 // 403. Branded form of the bare "Forbidden" refusals: the viewer
 // is signed in but lacks membership or the moderator bit, so there is no login
-// loop and no OAuth start — only the way back home and the invite URL that
-// works during an outage. No session or DB reads.
+// loop and no OAuth start — re-signing in cannot mint the member bit. The
+// primary recovery names the join-to-unlock path (/join); the invite URL that
+// works during an outage and the way back home stay. Moderator-only areas
+// stay locked by design, and the lead says so. The Support reference
+// correlates the refusal for incident follow-up. No session or DB reads.
 export const ForbiddenPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
   inviteUrl,
   supportReference,
@@ -196,11 +199,14 @@ export const ForbiddenPage: FC<{ inviteUrl: string; supportReference?: string }>
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
     <p class="lead">
-      This page is for members or moderators. If you should see it, sign in again — otherwise the
-      lobby is still open.
+      This page needs membership to unlock it — join to get in. Moderator-only areas stay locked
+      otherwise; the lobby is still open.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+      <a class="btn" href="/join" data-testid="error-join-unlock">
+        Join to unlock member pages
+      </a>{" "}
+      <a href={inviteUrl} data-testid="error-invite" rel="noopener">
         Use the Discord invite instead
       </a>{" "}
       <a href="/" data-testid="error-home">

@@ -192,7 +192,7 @@ function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
   }) as unknown as NegotiatedErrorSelection;
 }
 
-function outageRepresentation(c: Context): string {
+export function outageRepresentation(c: Context): string {
   return negotiatedErrorSelection(c).type;
 }
 

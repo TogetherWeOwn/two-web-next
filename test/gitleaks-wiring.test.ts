@@ -63,6 +63,23 @@ regexes = ['''^0123456789abcdef-IP-secret$''']
 paths = ['''^test/kit-error-request-correlation\.test\.ts$''']`,
     ]);
   });
+
+  it("keeps the Discord-marker fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic Discord snowflake leak-marker"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic Discord snowflake leak-marker in the queue/agent structured-fields acceptance test; patterned digits, not a real client or credential"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
+regexes = ['''^777666555444333222$''']`,
+    ]);
+  });
 });
 
 describe("gitleaks job wiring", () => {

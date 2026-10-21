@@ -407,20 +407,17 @@ describe("public session failure boundaries", () => {
         bindings,
       );
       // Main #239: a failed revocation must not clear this browser's cookie
-      // as if the server row were gone. No Accept header is not an HTML
-      // opt-in, so the negotiated 503 is the correlated JSON envelope with
-      // no driver details (the branded page needs an explicit HTML
-      // preference; corrected from the page this branch first pinned).
+      // as if the server row were gone. No Accept header keeps the legacy
+      // text bytes (main #1491 pins the body byte-exact); explicit JSON gets
+      // the correlated envelope and explicit HTML the branded page.
       expect(res.status).toBe(503);
       expect(res.headers.get("location")).toBeNull();
       expect(store.revoke).toHaveBeenCalledOnce();
       expect(res.headers.getSetCookie()).toEqual([]);
-      expect(res.headers.get("content-type")).toContain("application/json");
-      const requestId = res.headers.get("x-request-id");
-      expect(requestId).toBeTruthy();
+      expect(res.headers.get("content-type")).toContain("text/plain");
+      expect(res.headers.get("x-request-id")).toBeTruthy();
       const text = await res.text();
-      const body = JSON.parse(text) as Record<string, unknown>;
-      expect(body).toMatchObject({ error: "db_unavailable", request_id: requestId });
+      expect(text).toBe("Sign-out temporarily unavailable");
       expect(text).not.toMatch(/ECONNREFUSED|private revocation bug/i);
     },
   );

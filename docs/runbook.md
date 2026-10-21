@@ -47,7 +47,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
 | Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
-| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
+| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `degraded + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
 | `error.spike` alert (aggregate 5xx/error-rate or crash spike) | [Aggregate spike alarm](runbook-alerts.md#aggregate-spike-alarm-errorspike) | Read `script`, `build_sha`, `errors`/`crashes` and `error_rate` in the page; open the `logs` dashboard path for that script at the page timestamp and compare against the deploy that produced `build_sha`; crashes with no matching `error.alert` line mean unhandled exceptions or CPU/memory limit kills, so search by outcome, not fingerprint | DevOps & Reliability Engineer |
 | `uptime.down` alert (`/up` red for over two minutes) | [Scheduled `/up` prober: `uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) | Read status in alert; the prober has no corresponding app critical-log line; status zero means transport/timeout, not proof of a database failure; status 200 with missing or wrong `x-two-origin` means `/up` was not served by two-web-next (check DNS and routes), 3xx means a redirect; identify which Tail Worker sent the page (`two-web-next-alerts` vs `two-web-next-alerts-production`) or which webhook channel received it to verify staging vs production target first, then `curl -sS -D - -o /dev/null --max-time 10 https://next.togetherweown.com/up` for staging or apex for production and check `x-two-origin: two-web-next` | DevOps & Reliability Engineer |
@@ -1356,8 +1356,8 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | --- | --- | --- |
 | Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
 | `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
-| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
-| No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+| Read rejects or reaches a server/response limit | `degraded` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
+| No usable queue client/configuration | `degraded` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
 The staging deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`**
 and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
@@ -1388,8 +1388,16 @@ matches main [`eed3c8b`](https://github.com/TogetherWeOwn/two-web-next/tree/eed3
 
 `warn_at: 20` and `critical_at: 100` are reported thresholds; the implementation
 has **no separate critical status**. `failed`, `delayed`, `reserved` or `total`
-alone do not degrade health. `healthy + unknown` is lack of evidence, not DB
+alone do not degrade health. `degraded + unknown` is lack of evidence, not DB
 recovery, zero backlog or a drain gate. There is no last-known-good measurement.
+
+Decided: unknown depth reports top-level `degraded` on HTTP 200 so dashboards
+see blindness instead of health, joining the existing queue-only degraded
+family. HTTP stays 200 because readiness is independent of queue
+observability; the Tail uptime prober (200 + `x-two-origin`) stays green, so
+this does not double with the direct `scheduled.failing` page, which remains
+the paging signal for failed reconcile/prune runs (see
+[runbook-alerts.md](runbook-alerts.md)).
 
 Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
