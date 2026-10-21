@@ -10,6 +10,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { requestBodyLimit } from "../body-limit";
+import { isDatabaseUnavailable } from "../db/errors";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
@@ -154,7 +155,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         ? await hooks.storeFor(c).catch(() => null)
         : null;
     const admitted =
-      store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
+      store &&
+      (await store.journeys.consume(await hashToken(state!), "auth").catch((err: unknown) => {
+        // A classified store outage is not a stray callback. Preserve the
+        // shared outage boundary and the unclassified-failure fallback.
+        if (isDatabaseUnavailable(err)) throw err;
+        return false;
+      }));
     if (!admitted || !store) {
       // Stray hit (bad state, bare hit, OAuth error without a matching
       // state, replay after the journey was spent): not the real hit, so
