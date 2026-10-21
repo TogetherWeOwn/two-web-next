@@ -71,9 +71,12 @@ engineering evidence, not installed as a new visual baseline.
 
 ## Verification boundaries
 
-The protected twin acceptance suite passed unchanged after 13 observed expected
-failures before production edits. Its SHA-256 remains
-`e256ae1bb5d4a6582e594b3cc78f81075f7d2918561c9f7617255eff56d553ef`.
+The protected twin acceptance suite passed after 13 observed expected failures
+before production edits. Its SHA-256 at this head is
+`6f993bec53d19e8494f1302ba282d21ef18969bc6aa53f30c3571186794b66dd`:
+commit 865fab12 rewrote only the `text()` extraction helper as a token walk
+for the CodeQL incomplete-sanitization alert, and the diff touches no
+assertion. All 26 cases pass with the helper.
 The focused guide/dashboard/table/load/dispatch command ran 64 tests, all passing.
 The two builder-owned guide tests also failed against the baseline guide before
 being rerun successfully with both documentation fixes restored.
