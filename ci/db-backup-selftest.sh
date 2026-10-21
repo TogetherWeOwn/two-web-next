@@ -142,8 +142,9 @@ ok "rotate --dry-run prints 3 delete lines"
 "$BIN" check staging >/dev/null || fail "dry-run must delete nothing"
 ok "rotate --dry-run deletes nothing"
 
-# 6. Real rotation enforces newest-7-daily / newest-4-weekly.
-"$BIN" rotate staging >/dev/null
+# 6. Real rotation enforces newest-7-daily / newest-4-weekly. Deletion needs
+#    the explicit --apply plan confirmation; a bare rotate only previews.
+"$BIN" rotate staging --apply >/dev/null
 "$WRANGLER_BIN" r2 object get "test-bucket/$MANIFEST" --file "$T/m2.txt" --remote >/dev/null
 DAILIES="$(grep -E '\.dump$' "$T/m2.txt" | grep -vc '\-weekly\-' || true)"
 WEEKLIES="$(grep -cE '\-weekly\-.*\.dump$' "$T/m2.txt" || true)"

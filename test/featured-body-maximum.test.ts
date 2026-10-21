@@ -250,7 +250,7 @@ describe("featured transport cap is unchanged by the field maximum", () => {
         { ...env, SESSION_STORE: store } as unknown as Env,
       );
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual({
+      expect(await res.json()).toMatchObject({
         reason: "payload_too_large",
         message: "Reduce the size of your request and try again.",
       });

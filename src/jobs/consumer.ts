@@ -124,14 +124,15 @@ export async function consume(
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
           // Single-line sanitized scope: a hostile event key cannot split the log line.
-          console.warn("queue lock release timed out", sanitizeQueueScope(key));
+          console.warn("queue lock release timed out", { scope: sanitizeQueueScope(key) });
           r();
         }, LOCK_TIMEOUT_MS);
       });
       return Promise.race([
         // Class-only: lock errors can carry SQL or connection secrets.
         deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
-          console.warn("queue lock release failed", sanitizeQueueScope(key), {
+          console.warn("queue lock release failed", {
+            scope: sanitizeQueueScope(key),
             exception: queueExceptionClass(e),
           }),
         ),
@@ -205,7 +206,11 @@ export async function consume(
       let t: ReturnType<typeof setTimeout>;
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
-          console.warn("sync terminal claim reopen timed out");
+          // Sanitized unique-key scope, same value as the lock lines for this
+          // event, so the reopen timeout correlates with the rest of the batch.
+          console.warn("sync terminal claim reopen timed out", {
+            scope: sanitizeQueueScope(uniqueKey(eventKey)),
+          });
           r();
         }, LEDGER_TIMEOUT_MS);
       });

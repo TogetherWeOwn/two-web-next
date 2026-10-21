@@ -16,6 +16,7 @@
 // Hono-owned, so this model carries no write.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { alertRequestError } from "../alerts";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
@@ -85,8 +86,11 @@ export async function resolveKitFeaturedEdit(
     // A classified outage answers the shared 503 (the Hono guard's
     // memberReadBoundary turns the read's rethrown outage into the
     // databaseUnavailable envelope; SvelteKit would otherwise render its 500
-    // error page for the uncaught rejection). Anything else still throws.
+    // error page for the uncaught rejection). A code bug emits the leak-free
+    // error.alert diagnostic first so it never looks like a downstream
+    // outage, mirroring src/admin/kit-activity-log.ts, then still throws.
     if (isDatabaseUnavailable(err)) return { kind: "unavailable" };
+    alertRequestError(err, { method: "GET", route: "/admin/featured/:id" });
     throw err;
   }
   if (!row) return { kind: "notFound" };
