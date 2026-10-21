@@ -275,22 +275,26 @@ function fixture(
     if (down) throw new Error("database unavailable");
     if (sql.includes('from "featured_contents"')) {
       featuredQueries += 1;
-      // The fake emulates the table's window semantics (start inclusive, end
-      // exclusive, like currentlyVisible): the SQL-side filter cannot run
-      // against a pg-proxy fake, so scheduled/expired rows are removed here.
-      // ISO instants compare lexicographically, so string bounds work.
+      // The visible read selects the six display columns with the window in
+      // SQL; the published-base read selects all eight and filters per
+      // request. Distinguish the legs by the SELECT list — both queries
+      // mention the bounds elsewhere — and emulate the SQL-side window ONLY
+      // for the direct leg. The base leg returns the raw published base so
+      // production's per-request currentlyVisible is what excludes rows.
+      const projection = sql.slice(0, sql.indexOf('from "featured_contents"'));
+      const sixColumn = !projection.includes('"starts_at"');
+      if (!sixColumn) return { rows: featuredRows };
+      // The SQL-side filter cannot run against a pg-proxy fake, so the direct
+      // leg removes scheduled/expired rows here (start inclusive, end
+      // exclusive, like currentlyVisible). ISO instants compare
+      // lexicographically, so string bounds work.
       const nowIso = new Date().toISOString();
       const inWindow = featuredRows.filter((row) => {
         const startsAt = row[6] as string | null;
         const endsAt = row[7] as string | null;
         return (startsAt === null || startsAt <= nowIso) && (endsAt === null || endsAt > nowIso);
       });
-      // The visible read selects the six display columns with the window in
-      // SQL; the published-base read selects all eight and filters per
-      // request. Answer the projection the SQL asked for so the same fake
-      // serves the pre-cache load and the cached load.
-      const sixColumn = sql.includes('"starts_at"');
-      return { rows: sixColumn ? inWindow.map((row) => row.slice(0, 6)) : inWindow };
+      return { rows: inWindow.map((row) => row.slice(0, 6)) };
     }
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
@@ -598,20 +602,22 @@ describe("Kit home guest cache: correlation and DTOs", () => {
     f.use();
 
     const data = await load(loadArgs().args);
-    // Window filtering matches the direct visible read exactly. The shared
-    // cache filters the published base without re-projecting (the Hono
-    // homepage already ships that shape), so the pin is display-field
-    // equality: neither renderer may drift the rendered contract.
-    const displayFields = (row: Record<string, unknown>) => ({
-      id: row.id,
-      title: row.title,
-      body: row.body,
-      url: row.url,
-      imageUrl: row.imageUrl,
-      imageAlt: row.imageAlt,
-    });
+    // Window filtering matches the direct visible read exactly, key for key:
+    // the cached path projects the published base back to VisibleFeatured,
+    // so the pin is exact equality plus the six-key shape — neither
+    // renderer may drift the rendered contract.
     const directFeatured = await listVisibleFeatured(f.db);
-    expect(data.featured.map(displayFields)).toEqual(directFeatured.map(displayFields));
+    expect(data.featured).toEqual(directFeatured);
+    for (const row of data.featured) {
+      expect(Object.keys(row).sort()).toEqual([
+        "body",
+        "id",
+        "imageAlt",
+        "imageUrl",
+        "title",
+        "url",
+      ]);
+    }
     expect(data.featured.map((row) => row.title)).toEqual(["Always visible"]);
     const directUpcoming = await loadHomeUpcomingMerged(
       async () => f.db,
