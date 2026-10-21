@@ -1489,9 +1489,10 @@ Shared human throttles and profile throttles fail open on store error; the share
 human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
 and never retries the other source after a connection failure. Optional
 search-log/widget reads fail open but do not protect primary DB reads. Do not
-relax `MEMBER_ACCESS_LOG_ENFORCE` to force a recovery: required logging defaults
-to fail closed. Diagnose from redacted platform errors/config metadata; a code
-rollback may help a code regression, but cannot repair a Neon outage. Escalate
+touch `MEMBER_ACCESS_LOG_ENFORCE` for a recovery: the flag has no production
+effect and required logging always fails closed. Diagnose from redacted
+platform errors/config metadata; a code rollback may help a code regression,
+but cannot repair a Neon outage. Escalate
 binding/DB recovery to the Director and authorized custodian; never credential-hop.
 
 ## Queue containment, drain and failed-job replay
