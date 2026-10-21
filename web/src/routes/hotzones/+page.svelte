@@ -1,7 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
-import { hotzonesTitle } from "../../../../src/discovery-titles";
-import { canonicalUrl } from "../../../../src/seo";
+import { canonicalUrl, hotzonesTitle } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();

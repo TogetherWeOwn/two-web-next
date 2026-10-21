@@ -1,7 +1,6 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
-import { EVENTS_SEARCH_TOO_LONG_TITLE, eventsTitle } from "../discovery-titles";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, EVENTS_SEARCH_TOO_LONG_TITLE, eventsTitle } from "../seo";
 import {
   EVENTS_CAL_FEEDBACK,
   EVENTS_CALENDAR_FETCH_FAILED,

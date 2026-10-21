@@ -275,7 +275,6 @@ exactly once.
 | `src/discord-http.ts` | auth |
 | `src/discord-widget.ts` | join |
 | `src/discord.ts` | auth |
-| `src/discovery-titles.ts` | content |
 | `src/env.ts` | entry |
 | `src/error-pages.tsx` | entry |
 | `src/error-registration.ts` | entry |

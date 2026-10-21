@@ -14,10 +14,9 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
-import { pastEventsTitle } from "../../../../../src/discovery-titles";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
-import { canonicalUrl } from "../../../../../src/seo";
+import { canonicalUrl, pastEventsTitle } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 // Markup contract of PastEventsPage (src/events/pages.tsx): the island

@@ -1,7 +1,6 @@
 // Past events archive screen: paginated list of what already happened.
 import type { FC } from "hono/jsx";
-import { pastEventsTitle } from "../discovery-titles";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, pastEventsTitle } from "../seo";
 import {
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,

@@ -4,9 +4,8 @@
 // timestamps, no discord_id/created_at strings. Voice/games grids always carry
 // an estimate label until bot event-store calibration.
 import type { FC } from "hono/jsx";
-import { hotzonesTitle } from "../discovery-titles";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, hotzonesTitle } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
