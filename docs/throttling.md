@@ -127,12 +127,13 @@ runner IP, and each `qaLogin` in
 is refused with the shared 429. The count lives in the `e2e/qa-login-budget`
 static guard (`e2e/qa-login-budget.test.mjs`, shipped with the local-smoke
 budget fix #665): it totals `qaLogin` call sites across the journey specs and
-pins every login outside them — the teardown sweep's one call site (DB-gated
-to 0 spends on clean runs, at most 1 when orphans exist) plus the parity
-step's one (the renewal session is DB-minted) — with the green-run window
-total pinned at the tightened 11 ceiling. It fails when a run would exceed
-the budget — merge journeys onto
-fewer logins instead of retrying across the window. Bounded retry handling for an
+pins every login outside them — the DB-direct teardown sweep, which holds no
+login call site at all, plus the parity step's one (pinned exactly; the
+renewal session is DB-minted) and the auth-perf step's pair. A 70 s workflow
+pacing sleep stands between the browser suite, the parity step, and the
+auth-perf step, so each 60 s window holds only its own step's logins. It fails
+when a run would exceed the budget — merge journeys onto fewer logins instead
+of retrying across the window. Bounded retry handling for an
 already-throttled staging login lives in
 [`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
 fails hard on the first 429. The public-reads budget has the same CI-sharing
