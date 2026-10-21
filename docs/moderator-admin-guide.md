@@ -33,7 +33,8 @@ Moderator status is copied into the session at sign-in, so removing a Discord
 role does not update existing sessions. First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
-normal browsing can rotate and extend that window. For immediate invalidation,
+normal browsing can rotate and extend that window. Kit-served admin pages renew
+the sliding session exactly like the Hono panel. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
@@ -121,7 +122,9 @@ QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-
 ```
 
 It spends two QA-login hits and stays inside the admin-write throttle budget.
-Live runs belong to the authorized cutover procedure, not CI.
+Live runs belong to the authorized cutover procedure, not CI. The queue
+operator legs (preview, redispatch, source-evidence) have their own drill in
+[the redrive runbook](queue-redrive-runbook.md#auth-wall-drill-staging-only).
 
 ## Busy writes and retrying
 
@@ -289,6 +292,7 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Title | Required, at most 100 characters. |
    | Game | Optional, at most 100 characters. |
    | Description | Optional, at most 1000 characters. |
+   | Accessibility notes | Optional, at most 1000 characters. Confirmed access details only; shown on the event page under Accessibility. |
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional for drafts; required to publish, at most 255 characters. |
@@ -300,8 +304,8 @@ Before publishing, use the [event page content readiness checklist](event-conten
 4. Check details and timezone. Press **Save** for edits. Validation failures
    show **Check the highlighted fields and try again.** with the submitted values
    retained; correct the fields rather than assuming the save happened. Title,
-   description and location reject control/invisible characters; ordinary emoji
-   sequences are allowed.
+   description, accessibility notes and location reject control/invisible
+   characters; ordinary emoji sequences are allowed.
 5. On the list press **Publish**, or use the edit screen's **Publish** button.
    Only drafts offer it. This changes the status to `published` and attempts to
    enqueue Discord synchronization; it does **not** confirm a Discord announcement

@@ -476,7 +476,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       MEMBER_A,
       { dryRun: true },
     );
-    expect(preview).toEqual(before);
+    expect(preview).toEqual({ ...before, passes: 0, deletesPerPass: [] });
     expect(await countsFor(MEMBER_A)).toEqual(before);
     expect(await countsFor(MEMBER_B)).toEqual(before);
   });
@@ -494,6 +494,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      passes: 1,
+      deletesPerPass: [2],
     });
     expect(await countsFor(MEMBER_A)).toEqual({
       users: 0,
@@ -533,6 +535,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      passes: 1,
+      deletesPerPass: [0],
     });
     expect(await countsFor(MEMBER_B)).toEqual({
       users: 1,

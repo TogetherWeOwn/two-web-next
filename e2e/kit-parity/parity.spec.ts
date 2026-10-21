@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
@@ -17,6 +17,8 @@ import {
   scrubSecrets,
   type ParityTarget,
 } from "../kit-parity";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
 // against BOTH the Hono worker and the built Kit Worker in one run, and
@@ -36,6 +38,10 @@ const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
 test.beforeAll(async ({ playwright }) => {
+  // Hook timeout: the config's 30s covers the setup itself; the shared QA
+  // login's bounded 429 waits get their own budget (qa-login-retry.mjs), one
+  // login — a capped 65s wait dies on the bare hook timeout without this raise.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   for (const target of targets) {
     contexts.set(
       target.name,
@@ -84,12 +90,13 @@ test.afterAll(async () => {
     for (const context of contexts.values()) await context.dispose();
   }
   // The shared member journey spends one QA login. Session-renewal coverage
-  // uses one isolated login so a Kit rotation cannot stale the shared bearer.
+  // uses one DB-minted isolated session (no login) so a Kit rotation cannot
+  // stale the shared bearer.
   if (memberCookiePromise !== null) {
     expect(qaLoginCount, "exactly one shared QA login").toBe(1);
   }
-  if (renewalLoginCount > 0) {
-    expect(renewalLoginCount, "exactly one isolated renewal login").toBe(1);
+  if (renewalMintCount > 0) {
+    expect(renewalMintCount, "exactly one isolated renewal session").toBe(1);
   }
 });
 
@@ -118,10 +125,16 @@ function honoMemberCookie(): Promise<string> {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
-    const response = await api(hono).post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
+    // The e2e suite's 10 logins share this window: a 429 honors Retry-After
+    // into a fresh window instead of failing the file (parity-qa-login.mjs).
+    const response = await postParityQaLogin(
+      () =>
+        api(hono).post("/auth/qa/qa-member", {
+          headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+          maxRedirects: 0,
+        }),
+      { identity: "qa-member" },
+    );
     expect(response.status(), "QA login issues a session").toBe(204);
     const setCookie = (await response.headersArray()).find(
       (header) =>
@@ -157,40 +170,47 @@ async function memberCookie(target: ParityTarget): Promise<string> {
   return signCookieForTarget(source, target);
 }
 
-let renewalLoginCount = 0;
-async function isolatedRenewalCookie(
-  target: ParityTarget,
-  newContext: (options: {
-    baseURL: string;
-    ignoreHTTPSErrors: boolean;
-  }) => Promise<APIRequestContext>,
-): Promise<string> {
-  const hono = targets.find((candidate) => candidate.name === "hono")!;
-  const login = await newContext({
-    baseURL: hono.origin,
-    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+// qa-moderator fixture identity (src/qa.ts QA_IDENTITIES): the isolated
+// renewal session belongs to a different user than the shared qa-member
+// bearer, so neither issuance nor rotation can disturb the shared jar.
+const QA_MODERATOR_DISCORD_ID = "900000000000001397";
+const QA_MODERATOR_USERNAME = "QA Moderator";
+
+let renewalMintCount = 0;
+async function isolatedRenewalCookie(target: ParityTarget): Promise<string> {
+  // DB-minted renewal session (QA-LOGIN BUDGET FIX): the renewal test needs
+  // an isolated session — never the shared member bearer, which a Kit
+  // rotation would stale — but the login itself is not under test, so the
+  // row is minted directly in the shared CI Postgres instead of POSTing
+  // /auth/qa and spending the throttled qa-login budget. The row mirrors
+  // what the Hono worker's issueSession writes (src/index.tsx): a fresh
+  // `two_`-prefixed bearer (src/sessions.ts newSessionToken shape), a full
+  // 120-minute sliding expiry, and the fresh-login same-user sweep
+  // (src/sessions.ts revokeUserSessions), so a dirty-run teardown session is
+  // revoked exactly as a fresh issuance would. No roster write: the login's
+  // roster upsert feeds profile reads, while the detail page touches users
+  // rows only for RSVP holders — and the minted identity holds no RSVP.
+  // The cookie is signed with the Kit fixture secret
+  // and presented to the Kit target only — the Hono secret is never needed.
+  renewalMintCount += 1;
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const tokenHash = createHash("sha256").update(bearer).digest("hex");
+  const expiresAt = new Date(Date.now() + 120 * 60 * 1000);
+  await withSessionDb(async (sql) => {
+    await sql`
+      insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+      values (${tokenHash}, ${tokenHash}, ${QA_MODERATOR_DISCORD_ID}, ${QA_MODERATOR_USERNAME}, null, true, true, ${expiresAt})`;
+    await sql`
+      update web_sessions set revoked_at = now()
+      where user_id = ${QA_MODERATOR_DISCORD_ID} and token_hash != ${tokenHash}
+        and revoked_at is null and expires_at > clock_timestamp()`;
+    await sql`
+      delete from web_session_grace
+      where user_id = ${QA_MODERATOR_DISCORD_ID}
+        and predecessor_hash != ${tokenHash} and successor_hash != ${tokenHash}`;
   });
-  try {
-    renewalLoginCount += 1;
-    const token = process.env.E2E_QA_TOKEN;
-    if (!token) throw new Error("Missing ephemeral CI QA token");
-    // Use a separate QA account: issuing a fresh session revokes other live
-    // sessions for the same user and would invalidate the shared member jar.
-    const response = await login.post("/auth/qa/qa-moderator", {
-      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
-      maxRedirects: 0,
-    });
-    expect(response.status(), "isolated QA login issues a session").toBe(204);
-    const setCookie = (await response.headersArray()).find(
-      (header) =>
-        header.name.toLowerCase() === "set-cookie" &&
-        header.value.startsWith("__Host-two_session="),
-    );
-    if (!setCookie) throw new Error("Isolated QA login set no session cookie");
-    return signCookieForTarget(setCookie.value.split(";")[0]!, target);
-  } finally {
-    await login.dispose();
-  }
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  return signCookieForTarget(`__Host-two_session=${bearer}.${signature}`, target);
 }
 
 function bearerFromCookie(cookie: string): string {
@@ -507,8 +527,17 @@ for (const target of targets) {
       expect(indexBody).toContain('href="/hotzones/joins"');
       expect(indexBody).toContain('href="/hotzones/voice"');
       expect(indexBody).toContain('href="/hotzones/games"');
-      expect(indexBody).toContain("Estimated voice activity (estimates until calibration).");
-      expect(indexBody).toContain("Estimated games activity (estimates until calibration).");
+      expect(indexBody).toContain(
+        "Season-independent seeded estimates of voice activity (estimates until calibration).",
+      );
+      expect(indexBody).toContain(
+        "Season-independent seeded estimates of games activity (estimates until calibration).",
+      );
+      // The singular captions pin the real index loaders through rendering
+      // on both targets: a reworded season claim on either loader line (not
+      // just the exact old string) fails here.
+      expect(indexBody).toContain("Season-independent seeded estimate of voice activity");
+      expect(indexBody).toContain("Season-independent seeded estimate of games activity");
       const joinsBody = await (await api(target).get("/hotzones/joins")).text();
       expect(joinsBody).toMatch(/across [1-9]\d* scheduled gatherings/);
       expect(joinsBody).toContain("joins hot zone");
@@ -517,11 +546,11 @@ for (const target of targets) {
       expect(joinsBody).toContain('href="/hotzones"');
       const voiceBody = await (await api(target).get("/hotzones/voice")).text();
       expect(voiceBody).toContain("voice hot zone");
-      expect(voiceBody).toContain("Estimated voice activity for season");
+      expect(voiceBody).toContain("Season-independent seeded estimate of voice activity");
       expect(voiceBody).toContain("estimates until bot event-store calibration");
       const gamesBody = await (await api(target).get("/hotzones/games")).text();
       expect(gamesBody).toContain("games hot zone");
-      expect(gamesBody).toContain("Estimated games activity for season");
+      expect(gamesBody).toContain("Season-independent seeded estimate of games activity");
       expect(gamesBody).toContain("estimates until bot event-store calibration");
     });
 
@@ -755,6 +784,11 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
+      // Test timeout: the config's 30s also bounds this test; keep the
+      // one-login retry budget as headroom for the Kit path's DB mint plus
+      // the renewal renders. The Hono path replays the memoized login, so
+      // the budget is idle there.
+      test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
@@ -762,9 +796,7 @@ for (const target of targets) {
       // request. Both detail handlers must rotate the bearer and re-stamp the
       // full 120-minute sliding window, rather than merely refreshing cookie age.
       const cookie =
-        target.name === "kit"
-          ? await isolatedRenewalCookie(target, (options) => playwright.request.newContext(options))
-          : await memberCookie(target);
+        target.name === "kit" ? await isolatedRenewalCookie(target) : await memberCookie(target);
       const prior = await ageSessionNearExpiry(cookie);
       let response: APIResponse | undefined;
       let body = "";

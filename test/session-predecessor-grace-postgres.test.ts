@@ -192,9 +192,17 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       web_session_grace: 1,
       join_attempts: 0,
     });
-    expect(await eraseMember(sql, USER, { dryRun: true })).toEqual(before);
+    expect(await eraseMember(sql, USER, { dryRun: true })).toEqual({
+      ...before,
+      passes: 0,
+      deletesPerPass: [],
+    });
     expect(await store.get("erase-source")).not.toBeNull();
-    expect(await eraseMember(sql, USER, { dryRun: false })).toEqual(before);
+    expect(await eraseMember(sql, USER, { dryRun: false })).toEqual({
+      ...before,
+      passes: 1,
+      deletesPerPass: [1],
+    });
     expect(await countMemberRows(sql, USER)).toEqual({
       users: 0,
       profiles: 0,
@@ -217,6 +225,8 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      passes: 1,
+      deletesPerPass: [0],
     });
   });
 

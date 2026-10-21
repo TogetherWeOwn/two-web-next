@@ -184,8 +184,10 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
 
 // 403. Branded form of the bare "Forbidden" refusals: the viewer
 // is signed in but lacks membership or the moderator bit, so there is no login
-// loop and no OAuth start — only the way back home and the invite URL that
-// works during an outage. No session or DB reads.
+// loop and no OAuth start — re-signing in cannot mint the member bit. The
+// primary recovery names the join-to-unlock path (/join); the invite URL that
+// works during an outage and the way back home stay. Moderator-only areas
+// stay locked by design, and the lead says so. No session or DB reads.
 export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   <ErrorShell
     code="403"
@@ -193,11 +195,14 @@ export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
     <p class="lead">
-      This page is for members or moderators. If you should see it, sign in again — otherwise the
-      lobby is still open.
+      This page needs membership to unlock it — join to get in. Moderator-only areas stay locked
+      otherwise; the lobby is still open.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+      <a class="btn" href="/join" data-testid="error-join-unlock">
+        Join to unlock member pages
+      </a>{" "}
+      <a href={inviteUrl} data-testid="error-invite" rel="noopener">
         Use the Discord invite instead
       </a>{" "}
       <a href="/" data-testid="error-home">
@@ -224,11 +229,24 @@ export const GonePage: FC = () => (
   </ErrorShell>
 );
 
-export const PayloadTooLargePage: FC = () => (
+// 413. The refused body is gone, so the copy says nothing was saved and the
+// primary action only recovers the place, never the draft: member-write
+// surfaces return to their form (via returnHref/returnLabel), unknown and
+// admin paths keep the homepage return.
+export const PayloadTooLargePage: FC<{ returnHref?: string; returnLabel?: string }> = ({
+  returnHref = "/",
+  returnLabel = "Continue to the homepage",
+}) => (
   <ErrorShell code="413" title="That request is too large">
     <p class="lead">Reduce the size of your request and try again.</p>
-    <p>
-      <a href="/">Back to the homepage</a>
+    <p>The refused request was not saved, so you will need to enter it again.</p>
+    <p class="recovery-actions">
+      <a class="btn" href={returnHref} data-testid="error-return">
+        {returnLabel}
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
     </p>
   </ErrorShell>
 );
