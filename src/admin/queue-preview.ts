@@ -17,6 +17,13 @@ export type QueuePreviewVars = {
   };
 };
 
+/** Join key for the audit-failure line: the preview's id, else the validated selector. */
+function previewFailureId(c: Context<QueuePreviewVars>): number | null {
+  const preview = c.get("queuePreviewAudit");
+  if (preview) return preview.failure.id;
+  return parseFailureId(c.req.param("id") ?? "");
+}
+
 /** Operational reads use the existing activity trail, not invented member subjects. */
 export async function recordQueuePreviewAccess(
   env: Env,
@@ -80,8 +87,12 @@ export async function queuePreviewAdmission(c: Context<QueuePreviewVars>, next: 
     if (!preview || !actor || actor.id !== configuredOperator(c.env))
       throw new Error("missing preview audit context");
     await recordQueuePreviewAccess(c.env, actor.id, preview);
-  } catch {
-    // No raw exception message, SQL bindings or diagnostic payload in logs.
+  } catch (err) {
+    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
+    console.error("queue preview audit failed; refusing preview.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      failureId: previewFailureId(c),
+    });
     c.res = c.json({ error: "preview_unavailable" }, 503);
   }
   c.header("cache-control", "private, no-store");
@@ -107,7 +118,12 @@ export async function queuePreviewHandler(c: Context<QueuePreviewVars>) {
     if (!preview) return bufferedMemberJson(c, { error: "failure_not_found" }, 404);
     c.set("queuePreviewAudit", preview);
     return bufferedMemberJson(c, { previewOnly: true, ...preview });
-  } catch {
+  } catch (err) {
+    // Exception class + failure id only: no message, SQL, bindings, URI or payload.
+    console.error("queue preview source read failed; refusing preview.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      failureId: id,
+    });
     return bufferedMemberJson(c, { error: "preview_unavailable" }, 503);
   }
 }

@@ -114,18 +114,20 @@ export default {
       } as JobsEnv,
       ctx,
     );
-    // Complete the virtual-origin translation on the way back for the one
-    // route whose browser island validates it: the past-events island
-    // (assets/islands/past-events.js) requires the fetched page's canonical
-    // and og:url on window.location's origin. Deployed, APP_URL is that
-    // origin (TrustHosts refuses any other Host), so the check holds; here
-    // the browser origin is localhost while APP_URL stays the staging URL
-    // above, so every island page turn would be rejected as an invalid
-    // archive page. Translating the archive HTML's absolute staging URLs
-    // back to the local origin restores the deployed invariant for the
-    // browser. Other responses keep pinning the staging APP_URL, and the
-    // app worker's own bytes (and its anonymous cache) are untouched.
-    if (request.method !== "GET" || url.pathname !== "/events/past") return response;
+    // Complete the virtual-origin translation on the way back for the two
+    // routes whose browser islands validate it: the past-events island
+    // (assets/islands/past-events.js) and the events-calendar island
+    // (assets/islands/events-calendar.js) require the fetched page's
+    // canonical and og:url on window.location's origin. Deployed, APP_URL is
+    // that origin (TrustHosts refuses any other Host), so the checks hold;
+    // here the browser origin is localhost while APP_URL stays the staging
+    // URL above, so every island page turn would be rejected as an invalid
+    // page. Translating the island HTML's absolute staging URLs back to the
+    // local origin restores the deployed invariant for the browser. Other
+    // responses keep pinning the staging APP_URL, and the app worker's own
+    // bytes (and its anonymous cache) are untouched.
+    if (request.method !== "GET") return response;
+    if (url.pathname !== "/events/past" && url.pathname !== "/events") return response;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("text/html")) return response;
     const body = (await response.text()).replaceAll(STAGING_APP_URL, localOrigin);

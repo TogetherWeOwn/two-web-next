@@ -50,14 +50,14 @@ describe("hot-zone grid scroll region", () => {
     expect(regionsOf(html)).toHaveLength(3);
     expect(html.match(/<table>/g)).toHaveLength(3);
     expectContainedGrid(html, "Join activity for season all");
-    expectContainedGrid(html, "Estimated voice activity for season all");
-    expectContainedGrid(html, "Estimated games activity for season all");
+    expectContainedGrid(html, "Season-independent seeded estimate of voice activity");
+    expectContainedGrid(html, "Season-independent seeded estimate of games activity");
   });
 
   it.each([
     ["joins", "Join activity for season all"],
-    ["voice", "Estimated voice activity for season all"],
-    ["games", "Estimated games activity for season all"],
+    ["voice", "Season-independent seeded estimate of voice activity"],
+    ["games", "Season-independent seeded estimate of games activity"],
   ] as const)("%s signal page wraps its grid", (signal, caption) => {
     const html = String(
       HotzoneSignalPage({
