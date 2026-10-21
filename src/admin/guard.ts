@@ -229,7 +229,21 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     } else {
       await next();
     }
-    // Never let the edge cache an authenticated panel response.
-    c.header("cache-control", "private, no-store");
+    // Never let the edge cache an authenticated panel response. A downstream
+    // refusal that already set a no-store cache-control (throttle 429,
+    // body-cap 413, malformed 400, unavailable 503) keeps its own spelling,
+    // so the shared refusal shapes survive the panel. Anything else —
+    // including a cacheable downstream value — is overwritten: the guard is
+    // the single enforcement point, not every downstream handler.
+    const downstream = c.res.headers.get("cache-control");
+    const keepsNoStore =
+      !!downstream &&
+      downstream
+        .toLowerCase()
+        .split(",")
+        .some((part) => part.trim() === "no-store");
+    if (!keepsNoStore) {
+      c.header("cache-control", "private, no-store");
+    }
   };
 }
