@@ -29,6 +29,9 @@ author.
 - Required states: past (new box), live (byte-identical box). Cancelled
   keeps its 410 page with no share box; draft keeps the live box for
   moderators (both covered by branch-stability tests, not by new pixels).
+  The past box triggers on status-past or an elapsed published row,
+  matching the RSVP closed verdict; elapsed rows render the same pixels
+  as the past captures below, so no extra captures.
 - Non-goals: archive page, ICS feed mechanics, cancelled-page behavior.
 
 ## Before / after

@@ -79,6 +79,12 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  // One render instant for the RSVP verdict and the share box: an elapsed
+  // published row (the */10 reconcile hasn't flipped it yet) already reads
+  // "This one has been and gone", so the share box follows that verdict
+  // instead of the persisted status alone. Drafts keep the live box.
+  const now = new Date();
+  const shareAsPast = e.status === "past" || (e.status === "published" && e.endsAt <= now);
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -172,6 +178,7 @@ export const EventPage: FC<{
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
           attendeePage={attendeePage}
+          now={now}
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
@@ -212,7 +219,7 @@ export const EventPage: FC<{
             </section>
           ) : null}
         </div>
-        {e.status === "past" ? (
+        {shareAsPast ? (
           <section class="event-share" aria-labelledby="event-share-heading">
             <h2 id="event-share-heading">Share this event</h2>
             <p>

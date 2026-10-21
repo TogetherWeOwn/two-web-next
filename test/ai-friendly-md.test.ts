@@ -150,6 +150,16 @@ describe("md builders (pure, DB-free)", () => {
     expect(past).not.toContain("scheduled");
   });
 
+  it("past detail swaps the calendar footer for the past archive", () => {
+    const live = mdEvent(APP_URL, mdRow());
+    expect(live).toContain("[Add to calendar (.ics)]");
+    expect(live).toContain("[See upcoming events]");
+    const past = mdEvent(APP_URL, mdRow({ status: "past" }));
+    expect(past).not.toContain("Add to calendar");
+    expect(past).not.toContain("See upcoming events");
+    expect(past).toContain(`[Browse past events](${APP_URL}/events/past)`);
+  });
+
   it("event detail carries public fields only", () => {
     const body = mdEvent(APP_URL, mdRow());
     for (const phrase of [
@@ -560,6 +570,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
     const body = await res.text();
     expect(body).toContain("- Status: past");
     expect(body).not.toContain("scheduled");
+    expect(body).not.toContain("Add to calendar");
+    expect(body).toContain("[Browse past events]");
+    expect(body).toContain("/events/past");
   });
 
   it("moderator draft HTML omits the alternate that would 403", async () => {

@@ -457,6 +457,35 @@ describe("event-detail guest reads", () => {
     expect(outcome.model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
   });
 
+  it("renders the honest past share box for an elapsed published event", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            status: "published",
+            startsAt: new Date("2020-01-10T20:00:00Z"),
+            endsAt: new Date("2020-01-10T22:00:00Z"),
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    // The server verdict already reads past for the elapsed row; the Svelte
+    // share branch reuses it instead of the persisted status alone.
+    expect(outcome.model.rsvpClosed).toBe("past");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    const share = html.match(/<section class="event-share"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(share).toContain("Share this event");
+    expect(share).not.toContain("Save the date");
+    expect(share).not.toContain("Add to calendar");
+    expect(share).not.toContain('data-testid="event-ics"');
+    expect(share).toContain('href="/events/past">Browse past events</a>');
+  });
+
   it("nulls the Google Calendar model link for non-wire years but keeps the Kit page contract", async () => {
     const { outcome } = await resolve(
       KEY,

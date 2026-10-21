@@ -251,7 +251,13 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",
-    `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,
+    ...(e.status === "past"
+      ? [
+          `[View this event](${canonicalUrl(appUrl, `/e/${e.eventKey}`)}) · [Browse past events](${canonicalUrl(appUrl, "/events/past")})`,
+        ]
+      : [
+          `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,
+        ]),
     "",
   ].join("\n");
 }

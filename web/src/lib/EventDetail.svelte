@@ -236,7 +236,7 @@ const lineup = $derived(
         </section>
       {/if}
     </div>
-    {#if model.isPast}
+    {#if model.isPast || model.rsvpClosed === "past"}
       <section class="event-share" aria-labelledby="event-share-heading">
         <h2 id="event-share-heading">Share this event</h2>
         <p>
