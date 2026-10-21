@@ -46,6 +46,23 @@ regexes = [
 ]`,
     ]);
   });
+
+  it("keeps the Kit-error fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic hostile request-id fixture in the Kit error"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic hostile request-id fixture in the Kit error correlation tests, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^0123456789abcdef-IP-secret$''']
+paths = ['''^test/kit-error-request-correlation\.test\.ts$''']`,
+    ]);
+  });
 });
 
 describe("gitleaks job wiring", () => {

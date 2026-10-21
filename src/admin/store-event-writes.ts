@@ -36,7 +36,10 @@ import {
   type Actor,
 } from "./store-shared";
 
-export type EventRow = typeof events.$inferSelect;
+export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
+};
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
@@ -74,6 +77,7 @@ export async function createEvent(
         title: input.title,
         game: input.game,
         description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
@@ -160,6 +164,7 @@ export async function materializeMissingInstances(
         title: parent.title,
         game: parent.game,
         description: parent.description,
+        accessibilityNotes: parent.accessibilityNotes,
         startsAt: when.startsAt,
         endsAt: when.endsAt,
         timezone: parent.timezone,
@@ -265,7 +270,15 @@ export async function updateEventIfBaselineMatches(
 
 export type PatchBase = Pick<
   EventRow,
-  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+  | "title"
+  | "game"
+  | "description"
+  | "accessibilityNotes"
+  | "timezone"
+  | "location"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
 >;
 
 /**
@@ -281,6 +294,7 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
     title: base.title,
     game: base.game,
     description: base.description,
+    accessibility_notes: base.accessibilityNotes,
     timezone: base.timezone,
     location: base.location,
     capacity: base.capacity,
@@ -358,6 +372,7 @@ async function commitLockedUpdate(
       title: input.title,
       game: input.game,
       description: input.description,
+      accessibilityNotes: input.accessibilityNotes,
       startsAt: input.startsAtUtc,
       endsAt: input.endsAtUtc,
       timezone: input.timezone,
