@@ -98,7 +98,7 @@ describe("adminWayBackForStatus", () => {
   );
 
   it("resolves nothing off /admin even on 429", () => {
-    for (const path of ["/", "/events", "/join"]) {
+    for (const path of ["/", "/events", "/join", ""]) {
       expect(adminWayBackForStatus(429, path)).toBeNull();
     }
   });
@@ -108,6 +108,6 @@ describe("+error.svelte delegates the Kit way back to the status gate", () => {
   it("calls adminWayBackForStatus with the status and page path", () => {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const page = readFileSync(resolve(root, "web/src/routes/+error.svelte"), "utf8");
-    expect(page).toContain("adminWayBackForStatus(status, page.url.pathname)");
+    expect(page).toContain('adminWayBackForStatus(status, page.url?.pathname ?? "")');
   });
 });
