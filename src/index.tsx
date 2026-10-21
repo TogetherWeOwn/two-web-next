@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseUrl, perRequestDatabaseOptions } from "./db/connection";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -212,7 +212,7 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   if (!url) return createMemorySessionStore();
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
-  const sql = postgres(url, perRequestDatabaseOptions()) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   return createPostgresSessionStore(sql);
 }
 
@@ -229,7 +229,9 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
   if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
   if (!url) return { sql: null };
-  const client = postgres(url, perRequestDatabaseOptions());
+  // Bare options: this client feeds upsertRosterUser only, whose
+  // transaction already installs a tighter 500 ms SET LOCAL bound.
+  const client = postgres(url, databaseOptions);
   return {
     sql: client as unknown as Sql,
     close: () => client.end({ timeout: 0 }),

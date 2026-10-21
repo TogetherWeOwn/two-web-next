@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
+import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -268,5 +269,46 @@ describe.skipIf(!url)("postgres", () => {
     const found = await sql<{ token_hash: string }[]>`select token_hash from web_sessions`;
     expect(found.map((r) => r.token_hash)).toContain(hash);
     expect(found.map((r) => r.token_hash).join(" ")).not.toContain(token.slice(4, 12));
+  });
+});
+
+describe("postgres session store statement bound (offline)", () => {
+  const boundDouble = () => {
+    const calls: string[] = [];
+    const tx = Object.assign(
+      async (strings: TemplateStringsArray, ..._values: unknown[]) => {
+        calls.push(`query:${strings.join("?").slice(0, 12)}`);
+        return [];
+      },
+      {
+        unsafe: async (query: string) => {
+          calls.push(`unsafe:${query}`);
+          return [];
+        },
+      },
+    );
+    const sql = Object.assign(tx, {
+      begin: <T>(run: (tx: unknown) => Promise<T>): Promise<T> => run(tx),
+    });
+    return { sql: sql as unknown as Sql, calls };
+  };
+
+  it("starts every statement's transaction with SET LOCAL statement_timeout", async () => {
+    // Both production builders (site storeForEnv, admin sessionStoreFor)
+    // funnel through createPostgresSessionStore, so the bound lives here.
+    const { sql, calls } = boundDouble();
+    const store = createPostgresSessionStore(sql);
+    expect(await store.statusHash("nope")).toBeNull();
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe(`unsafe:${PER_REQUEST_STATEMENT_TIMEOUT_LOCAL}`);
+    expect(calls[1]).toMatch(/^query:/);
+    calls.length = 0;
+    // A two-statement read bounds each statement in its own transaction,
+    // keeping each statement's snapshot exactly as today.
+    expect(await store.get("nope")).toBeNull();
+    expect(calls.filter((c) => c === `unsafe:${PER_REQUEST_STATEMENT_TIMEOUT_LOCAL}`)).toHaveLength(
+      2,
+    );
+    expect(calls.filter((c) => c.startsWith("query:"))).toHaveLength(2);
   });
 });

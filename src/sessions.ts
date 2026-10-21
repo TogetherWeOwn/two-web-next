@@ -11,6 +11,7 @@
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
+import { withPerRequestStatementBound } from "./db/connection";
 import {
   createMemoryOAuthJourneyStore,
   createPostgresOAuthJourneyStore,
@@ -139,7 +140,12 @@ function toRow(r: Record<string, unknown>): DbSessionRow {
   };
 }
 
-export function createPostgresSessionStore(sql: Sql): SessionStore {
+export function createPostgresSessionStore(client: Sql): SessionStore {
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  const sql = withPerRequestStatementBound(client);
   return {
     journeys: createPostgresOAuthJourneyStore(sql),
     async replace(oldTokenHash, replacement) {

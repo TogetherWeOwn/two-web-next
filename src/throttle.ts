@@ -6,7 +6,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import { rateLimitExceeded } from "./errors";
 import type { Env } from "./env";
-import { databaseUrl, perRequestDatabaseOptions } from "./db/connection";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { checkJoinThrottle } from "./join/service";
 import type { Sql } from "./sessions";
 
@@ -28,7 +28,7 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   if (injected) return injected();
   const url = databaseUrl(c.env);
   if (!url) return null;
-  return postgres(url, perRequestDatabaseOptions()) as unknown as Sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 export const MAX_CLIENT_KEY_SEGMENT = 64;

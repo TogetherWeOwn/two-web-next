@@ -3,7 +3,10 @@ import type { Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { PER_REQUEST_STATEMENT_TIMEOUT_LOCAL } from "../src/db/connection";
 import type { Env } from "../src/env";
+import { checkJoinThrottle } from "../src/join/service";
+import type { Sql } from "../src/sessions";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { throttleStore, type EnvWithThrottle } from "../src/throttle";
 
@@ -48,8 +51,19 @@ describe("throttle runtime connection wiring", () => {
       connect_timeout: 10,
       prepare: false,
       fetch_types: false,
-      connection: { statement_timeout: 5000 },
     });
+  });
+
+  it("installs the statement bound inside the admission transaction", async () => {
+    // Every throttle builder (throttleStore, joinStore, profile admission)
+    // funnels through checkJoinThrottle, so the bound lives here, not on
+    // the client options: lock waits still refuse first (2 s), executing
+    // statements cancel at the shared 5 s bound.
+    expect(await checkJoinThrottle(sql as unknown as Sql, "probe:anon", 10)).toEqual({
+      limited: false,
+    });
+    expect(sql.unsafe).toHaveBeenNthCalledWith(1, "SET LOCAL lock_timeout = '2000ms'");
+    expect(sql.unsafe).toHaveBeenNthCalledWith(2, PER_REQUEST_STATEMENT_TIMEOUT_LOCAL);
   });
 
   it("keeps the injected store ahead of either runtime URL", async () => {
