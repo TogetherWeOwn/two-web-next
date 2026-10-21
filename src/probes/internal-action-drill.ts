@@ -29,7 +29,7 @@ import type { BotClient, QueueMessage } from "../jobs/types";
 import { BotTerminalError } from "../jobs/types";
 import type { Outcome } from "../jobs/sync-event";
 import { stagingEndpoint } from "./bot-smoke";
-import { deriveUuid, validateRunId } from "./run-identity";
+import { derivePayloadAt, deriveUuid, validateRunId } from "./run-identity";
 
 export type DrillArgs = { discordId: string; roleKey: string; channelKey: string; runId?: string };
 
@@ -124,10 +124,14 @@ type PreparedDrillRun = {
  * would attempt. Throws BotTerminalError on an invalid input.
  */
 function prepareDrillRun(args: DrillArgs, now: () => Date): PreparedDrillRun {
+  // Like the smoke: a named run stamps the identity-derived instant, so a
+  // repeated apply replays a byte-identical body. Unnamed runs keep the wall.
+  const runId = args.runId;
+  const at = runId === undefined ? now() : derivePayloadAt(runId);
   const roleAssignment = { userId: args.discordId, roleKey: args.roleKey };
   const announcement = {
     channelKey: args.channelKey,
-    body: `TOG-11706 drill run. Ignore. ${now().toISOString()}`,
+    body: `TOG-11706 drill run. Ignore. ${at.toISOString()}`,
   };
   validateRoleAssign(roleAssignment);
   validateAnnouncement(announcement);
@@ -165,9 +169,10 @@ export function planInternalActionDrill(
  * and never carries raw exception text — throws are class-only.
  *
  * With `args.runId`, the captured announcement carrier is replaced by the
- * run-derived one before handling, so a repeated apply of the same plan
- * replays the same carrier (and, with the same payload clock, a byte-identical
- * body). The producers are untouched: direct dispatches still mint fresh keys.
+ * run-derived one before handling, and the body stamp derives from the same
+ * identity, so a repeated apply of the same plan replays the same carrier
+ * with a byte-identical body. The producers are untouched: direct dispatches
+ * still mint fresh keys.
  */
 export async function runInternalActionDrill(
   bot: BotClient,
@@ -191,8 +196,11 @@ export async function runInternalActionDrill(
       // { failed }, and the CLI's assertConfigured owns the exit-2 path
       // before the drill starts. Class-only: the exception message can carry
       // tokens or personal data, so the report withholds the text.
-      failures.push(
-        `${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: details withheld (transport error; see the bot logs)`,
+      check(
+        id,
+        label,
+        false,
+        `threw ${e instanceof Error ? e.constructor.name : typeof e}: details withheld (transport error; see the bot logs)`,
       );
       return;
     }

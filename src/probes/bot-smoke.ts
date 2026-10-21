@@ -27,7 +27,7 @@ import type {
   EventUpsertResult,
   RoleAssignResult,
 } from "../bot/client";
-import { deriveUuid, validateRunId } from "./run-identity";
+import { derivePayloadAt, deriveUuid, validateRunId } from "./run-identity";
 
 export type SmokeArgs =
   | {
@@ -144,9 +144,14 @@ type PreparedSmokeRun = {
  * apply would attempt. Throws BotTerminalError on an invalid input.
  */
 function prepareSmokeRun(args: SmokeArgs, now: () => Date): PreparedSmokeRun {
+  // A named run replays byte-identical payloads: the stamp derives from the
+  // identity instead of the wall clock, so two applies a minute apart sign
+  // the same bytes under the same carriers. Unnamed runs keep the wall clock.
+  const runId = args.runId;
+  const at = runId === undefined ? now() : derivePayloadAt(runId);
   const announcement = {
     channelKey: args.channelKey,
-    body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}`,
+    body: `TOG-10112 smoke run. Ignore. ${at.toISOString()}`,
   };
   const roleAssignment = args.announcementOnly
     ? null
@@ -156,8 +161,8 @@ function prepareSmokeRun(args: SmokeArgs, now: () => Date): PreparedSmokeRun {
     : {
         eventKey: args.eventKey,
         name: "TOG-10112 smoke event",
-        startsAt: new Date(now().getTime() + 86_400_000).toISOString(),
-        endsAt: new Date(now().getTime() + 90_000_000).toISOString(),
+        startsAt: new Date(at.getTime() + 86_400_000).toISOString(),
+        endsAt: new Date(at.getTime() + 90_000_000).toISOString(),
         location: "Smoke run - ignore",
         description: "Created by the two-web-next internal-action staging smoke",
       };
@@ -207,10 +212,10 @@ const threwDetail = (what: string, errorClass: string): string =>
  * request bodies — the announcement text in particular stays out of logs —
  * and never carries raw exception text — throws are class-only.
  *
- * With `args.runId`, both idempotency carriers derive from the identity, so a
- * repeated apply of the same plan replays the same announcement and event
- * carriers (and, with the same payload clock, byte-identical payloads).
- * Without one, each run mints fresh carriers.
+ * With `args.runId`, both idempotency carriers and the payload stamp derive
+ * from the identity, so a repeated apply of the same plan replays the same
+ * announcement and event carriers with byte-identical payloads. Without one,
+ * each run mints fresh carriers and stamps the wall clock.
  */
 export async function runBotSmoke(
   client: SmokeClient,

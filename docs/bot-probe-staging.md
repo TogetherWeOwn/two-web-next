@@ -33,10 +33,11 @@ apex, and never follow redirects.
 Pass `--run-id=<id>` (1-64 chars: letters, digits, `_` and `-`) to name the
 run. A repeated apply of the same plan under the same run identity reuses
 exactly the same announcement/event idempotency carriers, the same generated
-event key, and — with the same payload clock — byte-identical payloads, so a
-resume replays the original operation instead of posting twice. Distinct
-identities stay distinct. Role assignment keeps its natural idempotency (no
-key). Runs without `--run-id` mint fresh carriers, as before.
+event key, and byte-identical payloads — the payload stamp derives from the
+identity, so a resume needs no extra flag to replay the original operation
+instead of posting twice. Distinct identities stay distinct. Role assignment
+keeps its natural idempotency (no key). Runs without `--run-id` mint fresh
+carriers and stamp the wall clock, as before.
 
 ## Live-proof boundary
 

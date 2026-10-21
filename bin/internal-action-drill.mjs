@@ -13,9 +13,9 @@
 // Modes: without flags the tool prints an effect-free plan and exits 0 — no
 // secrets needed, no fetch attempted, no queue carriers sent. The bare
 // `--apply` flag runs the existing staging effects. `--run-id=<id>` names the
-// run identity a repeated apply resumes under (same announcement carrier);
-// `--json` renders the plan, report or error as one versioned JSON document.
-// See docs/bot-probe-staging.md for the staging procedure.
+// run identity a repeated apply resumes under (same announcement carrier
+// and body); `--json` renders the plan, report or error as one versioned
+// JSON document. See docs/bot-probe-staging.md for the staging procedure.
 //
 // Safety: an apply posts a REAL announcement to a throwaway channel and
 // performs a REAL staging role.assign — --channel-key must name a throwaway
@@ -125,6 +125,8 @@ const bot = createBotClient({
   url: targets.botUrl,
   secret: process.env.BOT_SHARED_SECRET,
   keyId: process.env.BOT_KEY_ID,
+  // --json owns stdout: transport diagnostics go to stderr.
+  stderrDiagnostics: wantsJson,
 });
 try {
   bot.assertConfigured();

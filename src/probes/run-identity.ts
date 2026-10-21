@@ -51,3 +51,22 @@ export function deriveUuid(runId: string, purpose: string): string {
 export function deriveEventKey(runId: string): string {
   return `tog10112-${hash(runId, "smoke:event-key").toString("hex").slice(0, 12)}`;
 }
+
+// The payload clock for a named run: a fixed base plus a per-identity spread
+// over one leap year, so the same identity replays the same instant and
+// distinct identities spread across windows instead of sharing one.
+const PAYLOAD_CLOCK_BASE_MS = Date.UTC(2030, 0, 1);
+const PAYLOAD_CLOCK_SPAN_MS = 366 * 86_400_000;
+
+/**
+ * Derive the stable payload instant for a run identity. The probes stamp
+ * announcement bodies and event windows with this instead of the wall clock
+ * when a run identity is present, so a repeated apply signs byte-identical
+ * payloads under the same carriers. Pure derivation, like deriveUuid.
+ */
+export function derivePayloadAt(runId: string): Date {
+  const spread = Number(
+    hash(runId, "probe:payload-clock").readBigUInt64BE() % BigInt(PAYLOAD_CLOCK_SPAN_MS),
+  );
+  return new Date(PAYLOAD_CLOCK_BASE_MS + spread);
+}

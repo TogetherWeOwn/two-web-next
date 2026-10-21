@@ -8,7 +8,12 @@ import {
   runInternalActionDrill,
 } from "../src/probes/internal-action-drill";
 import { SMOKE_CHECK_IDS, planBotSmoke, runBotSmoke } from "../src/probes/bot-smoke";
-import { deriveEventKey, deriveUuid, validateRunId } from "../src/probes/run-identity";
+import {
+  deriveEventKey,
+  derivePayloadAt,
+  deriveUuid,
+  validateRunId,
+} from "../src/probes/run-identity";
 
 // Builder-owned contract for run identities and probe plans: validation,
 // carrier/event-key derivation, and plan/report check-ID correspondence.
@@ -91,6 +96,15 @@ describe("deriveEventKey", () => {
     expect(a1).toMatch(/^tog10112-[0-9a-f]{12}$/);
     expect(deriveEventKey("run-a")).toBe(a1);
     expect(deriveEventKey("run-b")).not.toBe(a1);
+  });
+});
+
+describe("derivePayloadAt", () => {
+  it("is a stable valid instant per identity, distinct otherwise", () => {
+    const a1 = derivePayloadAt("run-a");
+    expect(Number.isFinite(a1.getTime())).toBe(true);
+    expect(derivePayloadAt("run-a").toISOString()).toBe(a1.toISOString());
+    expect(derivePayloadAt("run-b").toISOString()).not.toBe(a1.toISOString());
   });
 });
 
