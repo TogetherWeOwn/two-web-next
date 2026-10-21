@@ -2,7 +2,8 @@
 // (test/kit-restored-write-banner-acceptance.test.ts, owned by the Test
 // Author and never edited here) pins the bridge discipline and the hook
 // consumption journeys; this suite pins the builder's own seams: the shared
-// render/consume eligibility gates, the hook's uncacheable-banner headers,
+// render/consume eligibility gates, the root layout's gate-read-forward
+// composition (the only feed of the notice into Kit pages), the hook's uncacheable-banner headers,
 // the read-only oracle's call discipline, the twin banner bytes in every Kit
 // shell, and the SSR placement (first inside <main>, ahead of the join
 // banner) through the real Svelte views.
@@ -13,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { serializeSigned } from "hono/utils/cookie";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { aboutPageData } from "../src/about-content";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { isRestoredBannerEligible, type KitLocals } from "../src/kit-session";
@@ -495,5 +496,134 @@ export function renderProfileView(props) {
 
     expect(html).not.toContain('data-testid="auth-error"');
     expect(html).toContain('data-testid="join-result"');
+  });
+});
+
+declare global {
+  var __kitRestoredLayout:
+    | {
+        eligible: (request: Request) => boolean;
+        journey: (
+          request: Request,
+          secret: string,
+        ) => Promise<{
+          returnTo: null;
+          joinResult: null;
+          expiredWrite: string | null;
+          restoredWrite: string | null;
+        }>;
+      }
+    | undefined;
+}
+
+// Root layout composition: the real +layout.server.ts load is the only feed
+// of restoredWrite into every Kit page's data, and the hook core consumes the
+// one-shot cookie independently of that data — so a layout that returns null
+// (or the expired field) would spend the member's only notice unseen while
+// every other banner test stays green. Bundle the real load like the
+// admin-layout and events-endpoint tests do: only the framework env and the
+// kit-session seams are virtual (the real kit-session module imports the Hono
+// app graph, which is why the endpoint test virtualizes it too), while the
+// seams' own behavior stays pinned where it lives — the eligibility gates
+// above and the readReturnJourney bridge discipline in the paired acceptance.
+describe("root layout restored-write composition", () => {
+  let load: (event: { request: Request }) => Promise<{ restoredWrite: unknown }>;
+
+  const seams = {
+    eligible: vi.fn(() => true),
+    journey: vi.fn(async () => ({
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: "/events",
+      restoredWrite: "/profile",
+    })),
+  };
+
+  beforeAll(async () => {
+    globalThis.__kitRestoredLayout = seams;
+    const virtualModules = new Map([
+      ["workers", `export const env = { SESSION_SECRET: ${JSON.stringify(SECRET)} };`],
+      [
+        "session",
+        `export const isRestoredBannerEligible = (...args) => globalThis.__kitRestoredLayout.eligible(...args);
+         export const readReturnJourney = (...args) => globalThis.__kitRestoredLayout.journey(...args);`,
+      ],
+    ]);
+    const { outputFiles } = await build({
+      entryPoints: [join(root, "web/src/routes/+layout.server.ts")],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      logLevel: "warning",
+      tsconfigRaw: { compilerOptions: {} },
+      plugins: [
+        {
+          name: "kit-restored-layout-fixture",
+          setup(plugin) {
+            const replacements: Array<[RegExp, string]> = [
+              [/^cloudflare:workers$/, "workers"],
+              [/src\/kit-session$/, "session"],
+            ];
+            for (const [filter, path] of replacements) {
+              plugin.onResolve({ filter }, () => ({
+                path,
+                namespace: "kit-restored-layout-fixture",
+              }));
+            }
+            plugin.onLoad(
+              { filter: /.*/, namespace: "kit-restored-layout-fixture" },
+              ({ path }) => ({
+                contents: virtualModules.get(path),
+                loader: "js",
+              }),
+            );
+          },
+        },
+      ],
+    });
+    ({ load } = await import(
+      `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`
+    ));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seams.eligible.mockReturnValue(true);
+    seams.journey.mockResolvedValue({
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: "/events",
+      restoredWrite: "/profile",
+    });
+  });
+
+  afterAll(() => {
+    globalThis.__kitRestoredLayout = undefined;
+  });
+
+  it("forwards the journey's restored destination through the exact field", async () => {
+    const request = new Request(new URL("/about", APP_URL).href);
+
+    await expect(load({ request })).resolves.toEqual({ restoredWrite: "/profile" });
+    expect(seams.eligible).toHaveBeenCalledExactlyOnceWith(request);
+    expect(seams.journey).toHaveBeenCalledExactlyOnceWith(request, SECRET);
+  });
+
+  it("returns null without reading the journey when the request is excluded", async () => {
+    seams.eligible.mockReturnValue(false);
+    const request = new Request(new URL("/auth/recover", APP_URL).href);
+
+    await expect(load({ request })).resolves.toEqual({ restoredWrite: null });
+    expect(seams.eligible).toHaveBeenCalledExactlyOnceWith(request);
+    expect(seams.journey).not.toHaveBeenCalled();
+  });
+
+  it("keeps importing the pinned seams, never an inline copy", () => {
+    const layout = read("web/src/routes/+layout.server.ts");
+    expect(layout).toContain("../../../src/kit-session");
+    expect(layout).toContain("isRestoredBannerEligible");
+    expect(layout).toContain("readReturnJourney");
+    expect(layout).toContain("journey.restoredWrite");
   });
 });
