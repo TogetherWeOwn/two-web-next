@@ -1147,7 +1147,7 @@ for (const target of targets) {
         await expect(page).toHaveURL(/\/hotzones\/joins/);
         await page.waitForLoadState("load");
         await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
-        await expect(page.getByText(/Join activity for season/)).toBeVisible();
+        await expect(page.locator("p", { hasText: /Join activity for season/ })).toBeVisible();
         await expect(page.getByText("Successful joins only")).toBeVisible();
         await expect(page.getByText(/Total estimate:/)).toHaveCount(0);
         await expect(page.getByText(/estimates until bot event-store calibration/)).toHaveCount(0);
