@@ -3,9 +3,11 @@
 // route-inventory: GET /join/discord
 // Acceptance: when the journey store fails transiently, GET /join/discord
 // degrades to /join (never a 500, never a minted state) — and the fallback
-// target must carry the already-sanitized ?next= return target and ?source=
-// attribution the request arrived with, so a retry keeps both. Hostile or
-// absent values keep the bare /join target and are never echoed.
+// target must carry the fixed start-failed notice (rendered as a visible
+// explanation, never a silent bounce) plus the already-sanitized ?next=
+// return target and ?source= attribution the request arrived with, so a
+// retry keeps both. Hostile or absent intent values keep the bare notice
+// target and are never echoed.
 //
 // Hermetic: mounted app with an in-memory session store whose journey leg is
 // broken per test, plus a fake journey Sql double. No database, no network.
@@ -100,21 +102,24 @@ async function expectFallback(
   const location = res.headers.get("location");
   expect(location).not.toBeNull();
   if (expected.next === null && expected.source === null) {
-    expect(location).toBe("/join");
+    expect(location).toBe("/join?notice=start-failed");
     return location!;
   }
   const parsed = new URL(location!, "https://next.example.test");
   expect(parsed.origin).toBe("https://next.example.test");
   expect(parsed.pathname).toBe("/join");
-  // Exactly the expected parameters ride along — no dropped intent, and
-  // nothing extra leaks into the retry target either. Parameter order is
-  // deliberately not pinned.
+  // Exactly the expected parameters ride along — the fixed start-failed
+  // notice plus the surviving intent, no dropped intent, and nothing extra
+  // leaks into the retry target either. Parameter order is deliberately
+  // not pinned.
   const keys = [...parsed.searchParams.keys()].sort();
   const want = [
+    "notice",
     ...(expected.next === null ? [] : ["next"]),
     ...(expected.source === null ? [] : ["source"]),
   ].sort();
   expect(keys).toEqual(want);
+  expect(parsed.searchParams.get("notice")).toBe("start-failed");
   expect(parsed.searchParams.get("next")).toBe(expected.next);
   expect(parsed.searchParams.get("source")).toBe(expected.source);
   return location!;
@@ -158,7 +163,7 @@ describe("join start fallback preserves sanitized intent", () => {
     await expectFallback(res, { next: null, source: SAFE_SOURCE });
   });
 
-  it("sweep-rejects fallback keeps the bare target when neither value was carried", async () => {
+  it("sweep-rejects fallback keeps the bare notice target when neither value was carried", async () => {
     const { store, env: e } = isolated();
     breakJourneys(store, "sweep-rejects");
     const res = await app.request(startQuery(), {}, e);

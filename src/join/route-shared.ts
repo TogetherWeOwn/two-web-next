@@ -25,6 +25,12 @@ export const JOIN_NEXT_COOKIE = "__Host-two_join_next";
 export const STATE_TTL_SECONDS = 600;
 export const JOURNEY_TTL_SECONDS = 600;
 
+// The fixed ?notice= value the store-down start bounce carries so the
+// journey page renders a visible explanation instead of a silent bounce
+// (E1). Fixed server-side, never member input; the page allowlists this
+// exact value and renders the plain page for anything else.
+export const JOIN_START_FAILED_NOTICE = "start-failed";
+
 /** Injectable at the call site (`{...env, JOIN_STORE: …}`), like SESSION_STORE. */
 export type JoinRouteDeps = {
   store?: () => Promise<Sql | null>;
@@ -115,6 +121,10 @@ export type JoinPageProps = {
   // attribution, the same as a request that arrived without ?source=.
   source?: string | null;
   appUrl: string;
+  // The validated store-down notice (JOIN_START_FAILED_NOTICE) when the
+  // request carried exactly that ?notice= value; otherwise null and the
+  // page renders plain. Display-only: never echoed into the one-click href.
+  notice?: typeof JOIN_START_FAILED_NOTICE | null;
 };
 export type RecoveryProps = {
   title: string;

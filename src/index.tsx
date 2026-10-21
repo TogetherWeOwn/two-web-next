@@ -632,6 +632,7 @@ registerJoinRoutes(
           source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
+          notice={props.notice}
         />,
       );
     },
