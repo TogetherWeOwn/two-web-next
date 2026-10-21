@@ -227,9 +227,9 @@ export const MUTANTS = [
     id: "R5-fetch-failure-admits",
     file: "src/roles.ts",
     note: "failed role lookup fails closed: the failure fabricates full membership",
-    find: "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);",
+    find: "        guild_id: opts.guildId,\n      });\n      return null;",
     replace:
-      "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => ({ roles: opts.moderatorRoleIds, joinedAt: null }));",
+      "        guild_id: opts.guildId,\n      });\n      return { roles: opts.moderatorRoleIds, joinedAt: null };",
   },
   {
     id: "R6-lookup-failure-admits",

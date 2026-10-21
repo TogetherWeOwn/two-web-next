@@ -26,7 +26,15 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
   `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
-  deliveries execute once and all get the original answer (`replayed: true`). Rate budgets are rows in
+  deliveries execute once and all get the original answer (`replayed: true`). A pre-found replay revalidates
+  grant liveness after the idempotency wait under a grant lock (no operation lock): a grant disabled, removed
+  or expired during the wait is refused `403 grant_disabled`/`grant_expired` instead of replaying. Caller next
+  action per outcome (stable reason codes plus `request_id`; answers carry no credential material):
+  `grant_disabled`/`grant_expired` hold until the provisioning owner restores or reissues the grant — a
+  restored grant answers the same key with the original replay, and a new grant starts every key string
+  clean (keys are namespaced per grant, so no fresh key is needed for the same payload);
+  `operation_busy` is retryable — retry the same key after a short backoff; `idempotency_conflict` needs a
+  new key for the corrected payload. Rate budgets are rows in
   `agent_event_hits` (per grant 10 mutating / 30 read per minute, service 60 / 300), also lock-serialised. No KV.
 - The outer per-credential route shield (`AGENT_EVENTS_ROUTE_PER_MINUTE`, default 60/min) counts every hit
   per credential hash (anonymous per IP) before auth and the audit write; refused hits write no hit row.

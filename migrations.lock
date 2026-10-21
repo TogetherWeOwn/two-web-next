@@ -128,6 +128,10 @@
     {
       "path": "drizzle/1031_event-accessibility-notes.sql",
       "sha256": "ecf6da1edcf7f15b499315319d57ef5ea329f356b20ce16ea53b08b942977f36"
+    },
+    {
+      "path": "drizzle/1032_event-public-join-details.sql",
+      "sha256": "221bcc30d0b183ccc1e4b7b72d9bb90cd97a4dd323ec829c7ca92151567a69fd"
     }
   ]
 }

@@ -15,9 +15,10 @@ import { isKitErrorStatus } from "../../../src/kit-errors";
 // A throttled admin write additionally gets a way back to the refused form:
 // derived from the status plus page.url, so the link survives the outage it
 // reports. Only /admin paths on a 429 resolve; anything else renders the
-// plain shell with no way back.
+// plain shell with no way back. The boundary never throws on a missing path:
+// a harness-mocked page without url simply yields no way back.
 const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);
-const adminBack = $derived(adminWayBackForStatus(status, page.url.pathname));
+const adminBack = $derived(adminWayBackForStatus(status, page.url?.pathname ?? ""));
 </script>
 
 <svelte:head>

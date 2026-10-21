@@ -194,7 +194,7 @@ function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
   }) as unknown as NegotiatedErrorSelection;
 }
 
-function outageRepresentation(c: Context): string {
+export function outageRepresentation(c: Context): string {
   return negotiatedErrorSelection(c).type;
 }
 
@@ -210,12 +210,37 @@ export function prefersHtmlError(c: Context): boolean {
   return selection.htmlExact && selection.htmlQ > 0 && selection.type === "text/html";
 }
 
+// Static upload-refusal messages, shared by the generic envelopes and the
+// /mcp transport errors so the surfaces cannot drift.
+const BAD_REQUEST_MESSAGE = "Check your request and try again.";
+const PAYLOAD_TOO_LARGE_MESSAGE = "Reduce the size of your request and try again.";
+
+// JSON-RPC "Invalid Request": the one static transport code for early /mcp
+// upload refusals (over-cap 413, broken-stream 400), matching the documented
+// batch refusal in mcp/routes.ts. Uploads fail before any id is known, so the
+// id is always null.
+const MCP_TRANSPORT_ERROR_CODE = -32600;
+
+function isMcpTransport(c: Context): boolean {
+  return c.req.method.toUpperCase() === "POST" && c.req.path === "/mcp";
+}
+
+function mcpTransportError(c: Context, message: string): Response {
+  return c.json({
+    jsonrpc: "2.0",
+    id: null,
+    error: { code: MCP_TRANSPORT_ERROR_CODE, message },
+  });
+}
+
 // Malformed input shares the established 403/413 negotiation, while feed
-// readers retain the original plaintext upload refusal.
+// readers retain the original plaintext upload refusal. /mcp uploads answer
+// the documented JSON-RPC error whatever Accept says.
 export function badRequest(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(400);
+  if (isMcpTransport(c)) return mcpTransportError(c, BAD_REQUEST_MESSAGE);
   if (isFeedErrorPath(c.req.path)) {
     return memberReadActive()
       ? bufferedMemberText(c, "Bad request", 400)
@@ -226,7 +251,7 @@ export function badRequest(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
-    const body = { error: "bad_request", message: "Check your request and try again." };
+    const body = { error: "bad_request", message: BAD_REQUEST_MESSAGE };
     return memberReadActive() ? bufferedMemberJson(c, body, 400) : c.json(body);
   }
   const page = <BadRequestPage />;
@@ -279,23 +304,33 @@ function payloadTooLargeReturn(path: string): { href: string; label: string } {
 // machine-only contracts (return JSON even if Accept prefers HTML or is
 // absent); otherwise delegates to the quality selector so that q=0,
 // specificity, case and wildcards match the outage contract. Always sets
-// private no-store + Vary: Accept (merged).
+// private no-store + Vary: Accept (merged). /mcp uploads answer the
+// documented JSON-RPC error whatever Accept says.
 export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(413);
+  if (isMcpTransport(c)) return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE);
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     return c.json({
       reason: "payload_too_large",
-      message: "Reduce the size of your request and try again.",
+      message: PAYLOAD_TOO_LARGE_MESSAGE,
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
   const back = payloadTooLargeReturn(c.req.path);
-  return c.html(<PayloadTooLargePage returnHref={back.href} returnLabel={back.label} />);
+  return c.html(
+    <PayloadTooLargePage
+      returnHref={back.href}
+      returnLabel={back.label}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Feed contracts stay non-HTML: a calendar/RSS/Markdown caller never receives
@@ -321,13 +356,20 @@ export function forbidden(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       error: "forbidden",
       message: "You do not have access to this.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 403) : c.json(body);
   }
-  const page = <ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />;
+  const page = (
+    <ForbiddenPage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />
+  );
   return memberReadActive() ? bufferedMemberHtml(c, page, 403) : c.html(page);
 }
 
@@ -348,13 +390,15 @@ export function gone(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       reason: "gone",
       message: "This page is gone.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 410) : c.json(body);
   }
-  const page = <GonePage />;
+  const page = <GonePage supportReference={supportReference(c)} />;
   return memberReadActive() ? bufferedMemberHtml(c, page, 410) : c.html(page);
 }
 
