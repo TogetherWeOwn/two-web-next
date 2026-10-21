@@ -87,6 +87,20 @@ repeat apply and preservation of another member's live session and grace.
 
 A second apply is a no-op: every count returns 0.
 
+### Provisional: profile rows (not yet enforced)
+
+These rows land with the profiles schema change for per-field visibility,
+handles and linked accounts (Steam first). Until that change merges,
+`eraseMember` does not delete them — today there is nothing to delete,
+because the table, the new `profiles` columns and the banner store do not
+exist yet.
+
+| Table or store | Key | End of life |
+| --- | --- | --- |
+| `linked_accounts` | `user_id` | Unlink deletes the member's rows immediately; erasure deletes them in the same transaction. |
+| `profiles` new columns (handle, visibility map, index opt-in, accent, banner key, links, featured games) | `user_id` | Ride the existing `profiles` row delete; no new key. |
+| Banner image object (R2) | `profiles.banner_key` | Deleted with erasure. |
+
 ## Concurrent rotations
 
 A rotation that is already in flight when erasure reaches its session
