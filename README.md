@@ -192,12 +192,12 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 
 ### Browser regressions
 
-These suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
-named suite passed and at least the minimum ran. The RSVP `node --test` suite
-writes a TAP report and runs `ci/rsvp-focus-require-executed.mjs` the same way.
+named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
+write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
@@ -215,6 +215,7 @@ to execute the same Chromium proof.
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
