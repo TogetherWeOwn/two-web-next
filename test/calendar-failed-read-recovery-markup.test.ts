@@ -161,8 +161,8 @@ describe.each([
     // handler. Hidden until the binder observes a failed read.
     expect(retry.startsWith("<button") || retry.startsWith("<a ")).toBe(true);
     expect(clear.startsWith("<button") || clear.startsWith("<a ")).toBe(true);
-    expect(retry).toMatch(/\shidden(\s|>|\/)/);
-    expect(clear).toMatch(/\shidden(\s|>|\/)/);
+    expect(retry).toMatch(/\shidden(=""|\s|>|\/)/);
+    expect(clear).toMatch(/\shidden(=""|\s|>|\/)/);
     expect(retry).not.toContain('tabindex="-1"');
     expect(clear).not.toContain('tabindex="-1"');
     // The status announces politely and starts empty: the binder names the
