@@ -29,10 +29,25 @@ import type { BotClient, QueueMessage } from "../jobs/types";
 import { BotTerminalError } from "../jobs/types";
 import type { Outcome } from "../jobs/sync-event";
 import { stagingEndpoint } from "./bot-smoke";
+import { deriveUuid, validateRunId } from "./run-identity";
 
-export type DrillArgs = { discordId: string; roleKey: string; channelKey: string };
+export type DrillArgs = { discordId: string; roleKey: string; channelKey: string; runId?: string };
 
-export type DrillCheck = { label: string; ok: boolean; detail: string };
+/**
+ * Stable machine IDs for the drill checks, shared by the plan the CLI prints
+ * and the report the run produces. Labels are human text and may be reworded;
+ * IDs are the contract agent callers match on.
+ */
+export const DRILL_CHECK_IDS = {
+  roleCarrier: "role-assign-null-carrier",
+  announcementCarrier: "announcement-uuid-carrier",
+  roleHandled: "role-assign-handled",
+  announcementHandled: "announcement-post-handled",
+} as const;
+
+export type DrillCheck = { id: string; label: string; ok: boolean; detail: string };
+
+export type DrillPlanCheck = { id: string; label: string };
 
 export type DrillReport = { checks: DrillCheck[]; failures: string[]; ok: boolean };
 
@@ -98,13 +113,61 @@ export function resolveDrillTarget(env: DrillEnv): { botUrl: string; webOrigin: 
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+type PreparedDrillRun = {
+  roleAssignment: { userId: string; roleKey: string };
+  announcement: { channelKey: string; body: string };
+};
+
+/**
+ * Preflight both payloads before dispatching either carrier. Both the plan
+ * and the run go through here, so a plan the CLI prints is a run the apply
+ * would attempt. Throws BotTerminalError on an invalid input.
+ */
+function prepareDrillRun(args: DrillArgs, now: () => Date): PreparedDrillRun {
+  const roleAssignment = { userId: args.discordId, roleKey: args.roleKey };
+  const announcement = {
+    channelKey: args.channelKey,
+    body: `TOG-11706 drill run. Ignore. ${now().toISOString()}`,
+  };
+  validateRoleAssign(roleAssignment);
+  validateAnnouncement(announcement);
+  return { roleAssignment, announcement };
+}
+
+/**
+ * The checks an apply of these args would run, with the same stable IDs the
+ * report carries. No dispatches, no client calls. Throws BotTerminalError on
+ * an invalid input, like the run itself.
+ */
+export function planInternalActionDrill(
+  args: DrillArgs,
+  now: () => Date = () => new Date(),
+): DrillPlanCheck[] {
+  prepareDrillRun(args, now);
+  return [
+    { id: DRILL_CHECK_IDS.roleCarrier, label: "role.assign dispatched with a null carrier" },
+    {
+      id: DRILL_CHECK_IDS.announcementCarrier,
+      label: "announcement.post dispatched with a UUID carrier",
+    },
+    { id: DRILL_CHECK_IDS.roleHandled, label: "role.assign handled" },
+    { id: DRILL_CHECK_IDS.announcementHandled, label: "announcement.post handled" },
+  ];
+}
+
 /**
  * Dispatch one role.assign and one announcement.post through the real
  * producers, then handle each captured message once (attempts=1) with the
  * real consumer against the caller's bot client. A transport throw inside a
  * call becomes a failed check (exit 1), never a crash; producer-shape and
  * target misconfiguration throw before any check (exit 2 at the CLI).
- * Never logs request bodies — the announcement text in particular stays out.
+ * Never logs request bodies — the announcement text in particular stays out —
+ * and never carries raw exception text — throws are class-only.
+ *
+ * With `args.runId`, the captured announcement carrier is replaced by the
+ * run-derived one before handling, so a repeated apply of the same plan
+ * replays the same carrier (and, with the same payload clock, a byte-identical
+ * body). The producers are untouched: direct dispatches still mint fresh keys.
  */
 export async function runInternalActionDrill(
   bot: BotClient,
@@ -113,11 +176,11 @@ export async function runInternalActionDrill(
 ): Promise<DrillReport> {
   const checks: DrillCheck[] = [];
   const failures: string[] = [];
-  const check = (label: string, passed: boolean, detail: string) => {
-    checks.push({ label, ok: passed, detail });
+  const check = (id: string, label: string, passed: boolean, detail: string) => {
+    checks.push({ id, label, ok: passed, detail });
     if (!passed) failures.push(`${label}: ${detail}`);
   };
-  const handle = async (label: string, run: () => Promise<Outcome>): Promise<void> => {
+  const handle = async (id: string, label: string, run: () => Promise<Outcome>): Promise<void> => {
     let outcome: Outcome;
     try {
       outcome = await run();
@@ -126,33 +189,29 @@ export async function runInternalActionDrill(
       // check, never a crash — the same contract as runBotSmoke. Terminal
       // answers never reach here: handleCallInternalAction converts them to
       // { failed }, and the CLI's assertConfigured owns the exit-2 path
-      // before the drill starts.
+      // before the drill starts. Class-only: the exception message can carry
+      // tokens or personal data, so the report withholds the text.
       failures.push(
-        `${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`,
+        `${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: details withheld (transport error; see the bot logs)`,
       );
       return;
     }
     if ("done" in outcome) {
-      check(label, true, "handled: done");
+      check(id, label, true, "handled: done");
     } else if ("retryInSeconds" in outcome) {
       check(
+        id,
         label,
         false,
         `retry requested in ${outcome.retryInSeconds}s after attempt 1: the queue would redeliver; the drill takes a single pass`,
       );
     } else {
-      check(label, false, outcome.failed);
+      check(id, label, false, outcome.failed);
     }
   };
 
-  // Preflight both payloads before dispatching either carrier.
-  const roleAssignment = { userId: args.discordId, roleKey: args.roleKey };
-  const announcement = {
-    channelKey: args.channelKey,
-    body: `TOG-11706 drill run. Ignore. ${now().toISOString()}`,
-  };
-  validateRoleAssign(roleAssignment);
-  validateAnnouncement(announcement);
+  if (args.runId !== undefined) validateRunId(args.runId);
+  const { roleAssignment, announcement } = prepareDrillRun(args, now);
 
   // Dispatch through the real producers into a capturing queue: the carriers
   // below are exactly what the queue would deliver to the consumer.
@@ -167,12 +226,19 @@ export async function runInternalActionDrill(
       "internal-action drill: producers did not capture one role-assign and one announcement",
     );
   }
+  if (args.runId !== undefined) {
+    // Resume the same carrier: the drill replays the run-derived key instead
+    // of the freshly minted one. This overwrite is drill-local — the global
+    // producer still mints a fresh key on every direct dispatch.
+    annMsg.idempotencyKey = deriveUuid(args.runId, "drill:announcement");
+  }
 
   // `unknown` on purpose: the member types idempotencyKey as literal null,
   // so reading it in the `!== null` branch would narrow to `never`. The
   // runtime value is what the guard is about.
   const roleCarrier: unknown = roleMsg.idempotencyKey;
   check(
+    DRILL_CHECK_IDS.roleCarrier,
     "role.assign dispatched with a null carrier",
     roleCarrier === null,
     roleCarrier === null
@@ -181,6 +247,7 @@ export async function runInternalActionDrill(
   );
   const carrier = annMsg.idempotencyKey;
   check(
+    DRILL_CHECK_IDS.announcementCarrier,
     "announcement.post dispatched with a UUID carrier",
     UUID_RE.test(carrier),
     UUID_RE.test(carrier)
@@ -188,8 +255,12 @@ export async function runInternalActionDrill(
       : "carrier is not a UUID (a retry would post twice)",
   );
 
-  await handle("role.assign handled", () => handleCallInternalAction(roleMsg, 1, bot));
-  await handle("announcement.post handled", () => handleCallInternalAction(annMsg, 1, bot));
+  await handle(DRILL_CHECK_IDS.roleHandled, "role.assign handled", () =>
+    handleCallInternalAction(roleMsg, 1, bot),
+  );
+  await handle(DRILL_CHECK_IDS.announcementHandled, "announcement.post handled", () =>
+    handleCallInternalAction(annMsg, 1, bot),
+  );
 
   return { checks, failures, ok: failures.length === 0 };
 }
