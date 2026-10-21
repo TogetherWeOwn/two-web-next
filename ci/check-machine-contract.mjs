@@ -86,7 +86,103 @@ const typeShapeText = (schema) => {
   return `${shape.types.join("|") || "?"}${shape.nullable ? "|null" : ""}`;
 };
 
-/** Every canonical field is advertised with the OpenAPI property type, nullability and enum. */
+/** Every canonical field is advertised with the OpenAPI property type, nullability, enum and runtime constraints. */
+const SAFE_INT_MIN = Number.MIN_SAFE_INTEGER;
+const SAFE_INT_MAX = Number.MAX_SAFE_INTEGER;
+
+// Bounds, lengths, patterns and formats that can false-reject a real
+// payload when the advertised schema is stricter than OpenAPI. Fixture
+// safeParse alone cannot catch these: a title.max(25) mutant keeps a
+// 20-char fixture green while the SDK rejects a real 33-char title, so
+// the advertised tools/list schema must carry no constraint absent from
+// or stricter than the OpenAPI property. additionalProperties and
+// descriptions are ignored: they never false-reject exact-key payloads.
+const LOWER_BOUNDS = ["minimum", "minLength", "minItems", "minProperties", "minContains"];
+const UPPER_BOUNDS = ["maximum", "maxLength", "maxItems", "maxProperties", "maxContains"];
+const EXCLUSIVE_LOWER = ["exclusiveMinimum"];
+const EXCLUSIVE_UPPER = ["exclusiveMaximum"];
+const EXACT_CONSTRAINTS = ["multipleOf", "pattern", "format", "uniqueItems"];
+const CONSTRAINT_KEYS = [
+  ...LOWER_BOUNDS,
+  ...UPPER_BOUNDS,
+  ...EXCLUSIVE_LOWER,
+  ...EXCLUSIVE_UPPER,
+  ...EXACT_CONSTRAINTS,
+];
+
+const pickConstraints = (schema) => {
+  const out = {};
+  for (const key of CONSTRAINT_KEYS) {
+    if (schema?.[key] !== undefined) out[key] = schema[key];
+  }
+  return out;
+};
+
+const isNullBranch = (branch) => {
+  const type = branch?.type;
+  if (type === "null") return true;
+  return Array.isArray(type) && type.length === 1 && type[0] === "null";
+};
+
+// Non-null constraint carriers: zod spells a constrained nullable as
+// anyOf:[{...constraints},{type:"null"}] but a plain nullable as a type
+// array, so collect the wrapper plus every non-null union branch.
+const constraintCarriers = (schema) => {
+  if (!schema || typeof schema !== "object") return [];
+  const branches = [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].filter(
+    (branch) => !isNullBranch(branch),
+  );
+  if (branches.length === 0) return [pickConstraints(schema)];
+  const out = [];
+  const top = pickConstraints(schema);
+  if (Object.keys(top).length > 0) out.push(top);
+  for (const branch of branches) out.push(...constraintCarriers(branch));
+  return out;
+};
+
+// Loosest possible values: equivalent to the constraint being absent.
+const isLoosest = (key, value) => {
+  if (key === "minimum") return value === SAFE_INT_MIN;
+  if (key === "maximum") return value === SAFE_INT_MAX;
+  if (key === "minLength" || key === "minItems" || key === "minProperties" || key === "minContains")
+    return value === 0;
+  if (key === "uniqueItems") return value === false;
+  return false;
+};
+
+const pinConstraints = (label, field, advertised, openapi) => {
+  // OpenAPI properties in this repo never use anyOf/oneOf: the top-level
+  // constraints are the whole reference. A looser advertised schema passes;
+  // only absent-from-OpenAPI or stricter fails.
+  const reference = pickConstraints(openapi);
+  for (const carrier of constraintCarriers(advertised)) {
+    for (const [key, value] of Object.entries(carrier)) {
+      const openapiValue = reference[key];
+      if (openapiValue === undefined) {
+        if (isLoosest(key, value)) continue;
+        check(
+          `${label}.${field} ${key} ${JSON.stringify(value)} is absent from OpenAPI (advertised constraint would reject real payloads)`,
+          false,
+        );
+        continue;
+      }
+      let stricter;
+      if (typeof value === "number" && typeof openapiValue === "number") {
+        if ([...LOWER_BOUNDS, ...EXCLUSIVE_LOWER].includes(key)) stricter = value > openapiValue;
+        else if ([...UPPER_BOUNDS, ...EXCLUSIVE_UPPER].includes(key))
+          stricter = value < openapiValue;
+        else stricter = value !== openapiValue;
+      } else {
+        stricter = JSON.stringify(value) !== JSON.stringify(openapiValue);
+      }
+      check(
+        `${label}.${field} ${key} ${JSON.stringify(value)} is not stricter than OpenAPI ${JSON.stringify(openapiValue)}`,
+        !stricter,
+      );
+    }
+  }
+};
+
 const pinProperties = (label, advertisedProps, openapiProps, fields) => {
   check(
     `${label} advertises exactly the canonical keys`,
@@ -108,6 +204,7 @@ const pinProperties = (label, advertisedProps, openapiProps, fields) => {
           JSON.stringify([...openapi.enum].sort()),
       );
     }
+    pinConstraints(label, field, advertised, openapi);
   }
 };
 
