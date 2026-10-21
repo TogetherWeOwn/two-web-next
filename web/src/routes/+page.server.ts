@@ -3,8 +3,7 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../src/admin/db";
 import { readCounts } from "../../../src/counts";
 import { discordEventsSource } from "../../../src/events/discord-transients-source";
-import { loadHomeUpcomingMerged } from "../../../src/events/reads";
-import { listVisibleFeatured } from "../../../src/featured";
+import { cachedFeatured, cachedHomeUpcoming } from "../../../src/home-cache";
 import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
@@ -44,18 +43,30 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
   // The counts read degrades to hidden when the bot DB is down — never a 500
   // on the funnel top (the legacy CountsReader never-throw contract).
   const counts = await readCounts(env);
+  // Guest-invariant panels ride the shared isolate-local guest cache (the same
+  // module the Hono handler uses): same TTL, in-flight-retire guard and
+  // never-store rules, retired by the committed featured/event mutations.
+  // Each read opens its own web-DB client, like the Hono cached path.
   const [homeUpcoming, featured] = await Promise.all([
-    loadHomeUpcomingMerged(
+    cachedHomeUpcoming(
+      env,
       () => dbFor({ env }),
       () => discordEventsSource(env),
+      new Date(),
       undefined,
       // Same correlation source as the Hono request log: the validated
       // cf-ray (safeRequestId inside the reader drops anything else).
       request.headers.get("cf-ray") ?? undefined,
     ),
-    dbFor({ env })
-      .then((db) => (db ? listVisibleFeatured(db) : []))
-      .catch(() => []),
+    cachedFeatured(
+      env,
+      () => dbFor({ env }),
+      new Date(),
+      undefined,
+      // Same validated cf-ray correlation as the upcoming leg (safeRequestId
+      // inside the reader drops anything else), mirroring Hono's requestId.
+      request.headers.get("cf-ray") ?? undefined,
+    ),
   ]);
   return {
     session,
