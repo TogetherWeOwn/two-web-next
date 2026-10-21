@@ -30,6 +30,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -39,6 +40,7 @@ import { STAGING_URL as ADMIN_PROBE_STAGING_URL } from "../bin/admin-authwall-pr
 import { STAGING_URL as ALERT_PROBE_STAGING_URL } from "../bin/alert-probe.mjs";
 import { STAGING_ORIGIN as JSON_SMOKE_STAGING_ORIGIN } from "../bin/json-smoke.mjs";
 import { isAllowlistedHost } from "../ci/kit-parity-gates.mjs";
+import { PRODUCTION_ORIGIN } from "../ci/production-deploy-gate.mjs";
 import { SEED_USERS, buildSeed, validateEnvironment } from "../bin/seed-staging.mjs";
 import { parseArgs as shadowParseArgs } from "../ci/shadow-compare.mjs";
 import { STAGING_URL as QUEUE_PROBE_STAGING_URL } from "../bin/queue-authwall-probe.mjs";
@@ -46,6 +48,7 @@ import { EXPLORE_ORIGIN, crawlablePath, landedOffOrigin } from "../e2e/explore/c
 import { requireStagingOrigin } from "../e2e/staging-guard.mjs";
 import { WATCH_ORIGINS, requireWatchOrigin } from "../e2e/watch-guard.mjs";
 
+const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CANONICAL_FILE = "ci/operator-constants.mjs";
 const CANONICAL_SPEC = "../ci/operator-constants.mjs";
@@ -158,6 +161,7 @@ const IMPORTERS = [
   ["ci/kit-parity-gates.mjs", "./operator-constants.mjs"],
   ["ci/kit-parity-origin.mjs", "./operator-constants.mjs"],
   ["ci/lighthouse-origin-run.mjs", "./operator-constants.mjs"],
+  ["ci/production-deploy-gate.mjs", "./operator-constants.mjs"],
   ["e2e/explore/crawl-utils.mjs", "../../ci/operator-constants.mjs"],
 ];
 
@@ -299,6 +303,57 @@ test("shadow-compare carries no origin literal of its own", () => {
     countOccurrences(source, `"${PIN_APEX_ORIGIN}"`),
     0,
     `ci/shadow-compare.mjs must import ${CANONICAL_FILE} instead of repeating the apex literal`,
+  );
+});
+
+test("kit-parity runtime carries no staging host literal of its own", () => {
+  const source = read("ci/kit-parity-gates.mjs");
+  // The runtime section ends where the unit-mode fixtures begin; fixture HTML
+  // keeps byte-equal literals on purpose.
+  const fixturesAt = source.indexOf("function goodFixture()");
+  assert.ok(
+    fixturesAt > 0,
+    "ci/kit-parity-gates.mjs must keep goodFixture() as the start of the unit-mode fixtures",
+  );
+  assert.equal(
+    countOccurrences(source.slice(0, fixturesAt), new URL(PIN_STAGING_ORIGIN).hostname),
+    0,
+    `ci/kit-parity-gates.mjs runtime must derive the staging host from ${CANONICAL_FILE} instead of repeating the literal`,
+  );
+});
+
+test("seed carries no QA snowflake literal of its own", () => {
+  const source = read("bin/seed-staging.mjs");
+  for (const id of [PIN_QA_MEMBER_ID, PIN_QA_MODERATOR_ID]) {
+    assert.equal(
+      countOccurrences(source, id),
+      0,
+      `bin/seed-staging.mjs must import QA snowflake ${id} from ${CANONICAL_FILE} instead of repeating it`,
+    );
+  }
+});
+
+test("lighthouse origin allowlist keeps the canonical origins as fail-closed literals", async () => {
+  const constants = await canonical();
+  const { ALLOWED_ORIGINS } = require("../ci/lighthouse-origin-lib.cjs");
+  assert.deepEqual(
+    [...ALLOWED_ORIGINS],
+    [constants.STAGING_ORIGIN, constants.APEX_ORIGIN, constants.WWW_ORIGIN],
+    `ci/lighthouse-origin-lib.cjs is a fail-closed CJS allowlist: its literals drifted from ${CANONICAL_FILE}`,
+  );
+});
+
+test("production deploy gate origin is the canonical apex, not a literal", async () => {
+  const constants = await canonical();
+  assert.equal(
+    PRODUCTION_ORIGIN,
+    constants.APEX_ORIGIN,
+    `ci/production-deploy-gate.mjs drifted from ${CANONICAL_FILE}: gate=${PRODUCTION_ORIGIN} canonical=${constants.APEX_ORIGIN}`,
+  );
+  assert.equal(
+    countOccurrences(read("ci/production-deploy-gate.mjs"), `"${PIN_APEX_ORIGIN}"`),
+    0,
+    `ci/production-deploy-gate.mjs must alias ${CANONICAL_FILE} instead of repeating the apex literal`,
   );
 });
 
@@ -463,31 +518,35 @@ test("staging census QA target tracks the canonical member snowflake", async () 
   const hits = [...workflow.matchAll(/user_id\s*=\s*'([^']+)'/g)].map((match) => match[1]);
   assert.ok(hits.length >= 1, "staging census must still target a QA user id");
   for (const hit of hits) {
-    assert.ok(
-      hit === constants.QA_MEMBER_DISCORD_ID || hit === constants.QA_MODERATOR_DISCORD_ID,
-      `staging census user id ${hit} drifted from ${CANONICAL_FILE}`,
+    assert.equal(
+      hit,
+      constants.QA_MEMBER_DISCORD_ID,
+      `staging census user id ${hit} drifted from ${CANONICAL_FILE} (member snowflake)`,
     );
   }
 });
 
+// Per-site exact QA identity: each site names the canonical export it must
+// track, so a member/moderator swap at any one site fails.
 const E2E_QA_FIXTURES = [
-  "e2e/staging/fixtures.ts",
-  "e2e/kit-parity/parity.spec.ts",
-  "e2e/profile.spec.ts",
-  "e2e/staging/profile.spec.ts",
-  "e2e/activity-log.spec.ts",
+  ["e2e/staging/fixtures.ts", "QA_MEMBER_DISCORD_ID"],
+  ["e2e/profile.spec.ts", "QA_MEMBER_DISCORD_ID"],
+  ["e2e/staging/profile.spec.ts", "QA_MEMBER_DISCORD_ID"],
+  ["e2e/kit-parity/parity.spec.ts", "QA_MODERATOR_DISCORD_ID"],
+  ["e2e/activity-log.spec.ts", "QA_MODERATOR_DISCORD_ID"],
 ];
 
-for (const rel of E2E_QA_FIXTURES) {
-  test(`${rel} shares or pins the canonical QA snowflakes`, async () => {
+for (const [rel, exportName] of E2E_QA_FIXTURES) {
+  test(`${rel} shares or pins the canonical ${exportName}`, async () => {
     const constants = await canonical();
     const source = read(rel);
     const ids = source.match(/90000000000000139[67]/g) ?? [];
     if (ids.length > 0) {
       for (const id of ids) {
-        assert.ok(
-          id === constants.QA_MEMBER_DISCORD_ID || id === constants.QA_MODERATOR_DISCORD_ID,
-          `${rel} QA snowflake ${id} drifted from ${CANONICAL_FILE}`,
+        assert.equal(
+          id,
+          constants[exportName],
+          `${rel} QA snowflake ${id} drifted from ${CANONICAL_FILE} ${exportName}`,
         );
       }
     } else {
@@ -539,20 +598,39 @@ test("smoke routes keep probing the public and detail contracts", () => {
   );
 });
 
-test("smoke fixtures import the probe key instead of copying it", () => {
-  const source = read("test/smoke.test.mjs");
-  assert.ok(
-    source.includes("SMOKE_PROBE_KEY"),
-    "test/smoke.test.mjs must import SMOKE_PROBE_KEY from ../bin/smoke.mjs",
-  );
-  assert.match(
-    source,
-    /from\s+["']\.\.\/bin\/smoke\.mjs["']/,
-    "test/smoke.test.mjs must import SMOKE_PROBE_KEY from ../bin/smoke.mjs",
-  );
-  assert.equal(
-    countOccurrences(source, PIN_PROBE_VALUE),
-    0,
-    "test/smoke.test.mjs must carry no probe literal copies; refer to SMOKE_PROBE_KEY by name, even in comments",
+const SMOKE_FIXTURES_IMPORTING_PROBE_KEY = [
+  "test/smoke.test.mjs",
+  "test/smoke-public-api-acceptance.test.mjs",
+  "test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
+  "test/promotion-smoke-identity-acceptance.test.mjs",
+  "ci/gradual-promote-gate-acceptance.test.mjs",
+];
+
+for (const rel of SMOKE_FIXTURES_IMPORTING_PROBE_KEY) {
+  test(`${rel} imports the probe key instead of copying it`, () => {
+    const source = read(rel);
+    assert.match(
+      source,
+      /import\s*\{[^}]*\bSMOKE_PROBE_KEY\b[^}]*\}\s*from\s+["']\.\.\/bin\/smoke\.mjs["']/,
+      `${rel} must import SMOKE_PROBE_KEY from ../bin/smoke.mjs`,
+    );
+    assert.equal(
+      countOccurrences(source, PIN_PROBE_VALUE),
+      0,
+      `${rel} must carry no probe literal copies; refer to SMOKE_PROBE_KEY by name, even in comments`,
+    );
+  });
+}
+
+test("gradual-promote proof fixture keeps its pinned probe route byte-equal to SMOKE_PROBE_KEY", async () => {
+  // The fixture is a standalone Worker ("no imports"), so it cannot import the
+  // key; this pin is the single-source check instead.
+  const { SMOKE_PROBE_KEY } = await import("../bin/smoke.mjs");
+  const source = read("ci/gradual-promote-proof/fixture.mjs");
+  const routes = source.match(/"\/api\/public\/events\/[^"]*"/g) ?? [];
+  assert.deepEqual(
+    routes,
+    [`"/api/public/events/${SMOKE_PROBE_KEY}"`],
+    `ci/gradual-promote-proof/fixture.mjs probe route drifted from SMOKE_PROBE_KEY in bin/smoke.mjs: found ${JSON.stringify(routes)}`,
   );
 });
