@@ -17,6 +17,8 @@ describe("negotiateKitError quality and specificity", () => {
     expect(negotiateKitError(req("/gone", accept("text/html;q=0.9, application/json;q=0.5")))).toBe(
       "html",
     );
+    // Quality beats specificity across keys: q=1 range outranks q=0.5 exact.
+    expect(negotiateKitError(req("/gone", accept("text/html;q=0.5, application/*")))).toBe("json");
     // Exact beats range beats star on a quality tie.
     expect(negotiateKitError(req("/gone", accept("text/*, application/json")))).toBe("json");
     expect(negotiateKitError(req("/gone", accept("text/html, application/*")))).toBe("html");
@@ -26,6 +28,7 @@ describe("negotiateKitError quality and specificity", () => {
   it("keeps declaration order as the final tie-break and matches case-insensitively", () => {
     expect(negotiateKitError(req("/gone", accept("APPLICATION/JSON")))).toBe("json");
     expect(negotiateKitError(req("/gone", accept("Text/Html, Application/Json")))).toBe("html");
+    expect(negotiateKitError(req("/gone", accept("Application/Json, Text/Html")))).toBe("json");
   });
 
   it("treats malformed q values as q=1 and double q=0 as no preference", () => {
