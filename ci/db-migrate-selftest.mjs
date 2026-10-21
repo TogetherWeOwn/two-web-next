@@ -697,9 +697,15 @@ function controlledDriver(_url, options) {
       state.afterLoss.push(text);
       throw new Error("statement attempted after connection loss");
     }
-    if (text === "SET LOCAL search_path = public" || text === "SET LOCAL datestyle = 'ISO, YMD'")
+    if (
+      text === "SET LOCAL search_path = public" ||
+      text === "SET LOCAL datestyle = 'ISO, YMD'" ||
+      text === "SET LOCAL standard_conforming_strings = on"
+    )
       return [];
     if (text.includes("pg_try_advisory_xact_lock")) return [{ acquired: true }];
+    if (text === "select current_user as current_user") return [{ current_user: "agent_test" }];
+    if (text.includes("FROM pg_default_acl AS d")) return [];
     if (text.includes("to_regclass")) return [{ ledger: null }];
     if (text.includes("clock_timestamp")) return [{ timestamp: "2026-10-21T00:00:00.000000Z" }];
     throw new Error(`unexpected fixture statement: ${text}`);
@@ -799,7 +805,24 @@ assert.equal(state.ended, true, "the client is still closed in finally");
 assert.deepEqual(state.statements, [
   "SET LOCAL search_path = public",
   "SET LOCAL datestyle = 'ISO, YMD'",
+  "SET LOCAL standard_conforming_strings = on",
   "select pg_try_advisory_xact_lock(?) as acquired",
+  "select current_user as current_user",
+  ${JSON.stringify(`
+  SELECT d.defaclobjtype AS object_type,
+         CASE WHEN d.defaclnamespace = 0 THEN '(global)' ELSE n.nspname END AS schema_name,
+         CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END AS grantee,
+         pg_get_userbyid(acl.grantor) AS grantor,
+         acl.privilege_type,
+         acl.is_grantable
+    FROM pg_default_acl AS d
+    LEFT JOIN pg_namespace AS n ON n.oid = d.defaclnamespace
+    CROSS JOIN LATERAL aclexplode(d.defaclacl) AS acl
+   WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+     AND d.defaclobjtype IN ('r', 'S')
+     AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+   ORDER BY 1, 2, 3, 4, 5, 6
+`)},
   "select to_regclass(?) as ledger",
   ${JSON.stringify("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') as timestamp")},
 ]);
