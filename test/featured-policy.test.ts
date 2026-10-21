@@ -301,6 +301,13 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       "deleted featured content Policy slot",
     ]);
     expect(new Set(audits.map((a) => a.causerId))).toEqual(new Set([MODERATOR.userId]));
+    const deleted = audits.find((a) => a.description === "deleted featured content Policy slot");
+    expect(deleted!.properties).toMatchObject({
+      title: { before: "Policy slot", after: null },
+      body: { before: "Hello", after: null },
+      isPublished: { before: true, after: null },
+      position: { before: 0, after: null },
+    });
   });
 
   it("public reads return exactly the currentlyVisible rows, start-inclusive end-exclusive", async () => {
@@ -359,6 +366,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       "created featured content Doomed slot",
       "deleted featured content Doomed slot",
     ]);
+    const deleted = audits.find((a) => a.description === "deleted featured content Doomed slot");
+    expect(deleted!.properties).toMatchObject({
+      title: { before: "Doomed slot", after: null },
+      isPublished: { before: false, after: null },
+      position: { before: 0, after: null },
+    });
 
     const second = await admin().request(
       `/featured/${id}/delete`,
