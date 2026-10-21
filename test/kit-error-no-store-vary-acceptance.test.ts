@@ -636,7 +636,7 @@ describe("Kit member-board headers", () => {
         session: memberBoardSession(true),
         seasonParam: null,
         scopeParam: null,
-        activityParam: "!!!",
+        activityParam: "x".repeat(101),
         setHeaders: (headers) => seen.push(headers),
         dbForFn: noRead as () => Promise<Db | null>,
       }),
