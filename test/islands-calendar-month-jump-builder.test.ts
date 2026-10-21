@@ -345,8 +345,7 @@ function browser(entry = ENTRY) {
           // the card sign-in links the island validates) matches nothing, as in a DOM.
           return {
             dataset: { view, month, past },
-            querySelectorAll: (selector: string) =>
-              selector === "[data-cal-zone]" ? sources : [],
+            querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? sources : []),
           };
         }
         if (selector.startsWith("link")) return { href: ORIGIN + path };
