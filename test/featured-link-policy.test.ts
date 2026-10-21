@@ -30,4 +30,21 @@ describe("featured link policy", () => {
   ])("is not a safe absolute http(s) link: %s", (raw) => {
     expect(isSafeFeaturedLink(raw)).toBe(false);
   });
+
+  // Noncanonical scheme slashes parse as https with userinfo yet hide it from
+  // the raw "://" authority check, so the canonical shape + parsed-credential
+  // recheck in isSafeFeaturedLink must refuse them (save surfaces the generic
+  // full-URL copy; render nulls the stored link).
+  it.each([
+    "https:///trusted.example@evil.example/",
+    "https:trusted.example@evil.example",
+    "https:/trusted.example@evil.example",
+    "https:///trusted.example@evil.example/path",
+    "HTTPS:trusted.example@evil.example",
+    "https:///user:pass@evil.example/",
+    "https:@evil.example",
+    "https:///evil.example/path",
+  ])("refuses noncanonical userinfo smuggling: %s", (raw) => {
+    expect(isSafeFeaturedLink(raw)).toBe(false);
+  });
 });

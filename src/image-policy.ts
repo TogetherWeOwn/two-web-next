@@ -72,9 +72,15 @@ export function featuredLinkRefusal(raw: string): FeaturedLinkRefusal | null {
 /** True for a plain, non-deceptive absolute http(s) link (any explicit port). */
 export function isSafeFeaturedLink(raw: string): boolean {
   if (featuredLinkRefusal(raw) !== null) return false;
+  // Noncanonical scheme slashes ("https:///a@b", "https:a@b", "https:/a@b")
+  // parse as https with userinfo yet hide it from the raw "://" authority
+  // check above, so require the canonical shape and recheck the parsed
+  // credentials (the image path already does the second half). The raw checks
+  // stay: they catch empty userinfo ("https://@host") that new URL() drops.
+  if (!/^https?:\/\/[^/]/i.test(raw)) return false;
   try {
     const u = new URL(raw);
-    return u.protocol === "http:" || u.protocol === "https:";
+    return (u.protocol === "http:" || u.protocol === "https:") && !u.username && !u.password;
   } catch {
     return false;
   }
