@@ -351,13 +351,13 @@ describe("internal-action-drill CLI rejects ambiguous arguments before fetching"
 
 describe("CLI controls that already hold and must keep holding", () => {
   it("smoke admits the documented full argument set (reaches configuration, not usage)", () => {
-    const r = runCli(SMOKE, SMOKE_VALID, {}, ["BOT_SHARED_SECRET"]);
+    const r = runCli(SMOKE, [...SMOKE_VALID, "--apply"], {}, ["BOT_SHARED_SECRET"]);
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });
 
   it("smoke admits a run without --event-key (the key is generated)", () => {
-    const r = runCli(SMOKE, SMOKE_VALID_NO_EVENT, {}, ["BOT_SHARED_SECRET"]);
+    const r = runCli(SMOKE, [...SMOKE_VALID_NO_EVENT, "--apply"], {}, ["BOT_SHARED_SECRET"]);
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });
@@ -365,7 +365,7 @@ describe("CLI controls that already hold and must keep holding", () => {
   it("smoke announcement-only still needs only --channel-key", () => {
     const r = runCli(
       SMOKE,
-      ["--announcement-only", `--channel-key=${VALID_SMOKE.channelKey}`],
+      ["--announcement-only", `--channel-key=${VALID_SMOKE.channelKey}`, "--apply"],
       {},
       ["BOT_SHARED_SECRET"],
     );
@@ -389,7 +389,7 @@ describe("CLI controls that already hold and must keep holding", () => {
   });
 
   it("drill admits the documented argument set (reaches configuration, not usage)", () => {
-    const r = runCli(DRILL, DRILL_VALID, {}, ["BOT_SHARED_SECRET"]);
+    const r = runCli(DRILL, [...DRILL_VALID, "--apply"], {}, ["BOT_SHARED_SECRET"]);
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });

@@ -21,6 +21,8 @@ const limits = [
   { field: "description", max: 1000 },
   { field: "accessibility_notes", max: 1000 },
   { field: "location", max: 255 },
+  { field: "organizer_name", max: 500 },
+  { field: "join_instructions", max: 5000 },
 ] as const;
 const patterns = [
   { label: "ASCII", characters: ["x"] },
@@ -94,7 +96,11 @@ describe("admin event code-point contract", () => {
         const serverMessage =
           field === "accessibility_notes"
             ? "Keep accessibility notes to 1000 characters."
-            : message;
+            : field === "organizer_name"
+              ? "Keep the organizer name to 500 characters."
+              : field === "join_instructions"
+                ? "Keep joining instructions to 5000 characters."
+                : message;
         expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         try {
           parseEventForm({ ...base, [field]: value + "x" });
@@ -141,7 +147,7 @@ describe("admin event code-point contract", () => {
     expect(serverMessage(under)).toBe("");
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the five scoped %s controls and retains native POST",
+    "enhances only the seven scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
@@ -155,7 +161,7 @@ describe("admin event code-point contract", () => {
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(5);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(7);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
@@ -312,7 +318,17 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
               const value = text(characters, max);
               await input.fill("");
               if (method === "typing") {
-                await input.pressSequentially(value);
+                // Bulk-fill very long values: typing 5000 keystrokes pays
+                // per-keystroke layout per char and exceeds the test timeout on
+                // mixed-script text. The N/N+1 boundary below is still crossed
+                // with real key events, and every assertion is unchanged.
+                const codePoints = [...value];
+                if (codePoints.length > 1000) {
+                  await input.fill(codePoints.slice(0, -8).join(""));
+                  await input.pressSequentially(codePoints.slice(-8).join(""));
+                } else {
+                  await input.pressSequentially(value);
+                }
               } else {
                 await page.evaluate(`navigator.clipboard.writeText(${JSON.stringify(value)})`);
                 await input.focus();

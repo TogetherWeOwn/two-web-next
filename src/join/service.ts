@@ -148,7 +148,18 @@ export async function checkJoinThrottle(
   bucket: string,
   max: number,
 ): Promise<ThrottleVerdict> {
-  if (!sql) return { limited: false };
+  if (!sql) {
+    // Fail open with a throttle-naming line so the generic middleware and the
+    // join funnel report a missing store. (Profile writes never reach this
+    // branch: no URL admits without calling here, and a URL always builds a
+    // client.) Only the route/throttle name is logged: the client segment is
+    // a member IP (or Discord ID on profile/RSVP-shaped buckets) and must
+    // never be logged. Names never contain a colon while IPv6 clients do, so
+    // the name is the segment before the first colon.
+    const throttle = bucket.split(":", 1)[0] ?? bucket;
+    console.warn("Throttle store unavailable; allowing the request.", { throttle });
+    return { limited: false };
+  }
   // The native postgres.js store supports transactions; the session SQL seam
   // deliberately exposes only the statements needed by session stores.
   const store = sql as Sql & {
