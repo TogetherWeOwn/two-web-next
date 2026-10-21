@@ -144,6 +144,44 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `events calendar could not resolve the session; refusing.` | The events calendar session rotation threw (`src/events/routes-calendar.tsx`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/events`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
 | `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name), validated `request_id` |
 
+### Kit admin read code-bug alerts
+
+Five `error.alert` diagnostics, one per Kit admin read leg. Each fires when a
+non-outage error (a code bug) escapes that leg's read, before the error
+rethrows — mirroring the activity-log sibling (`reportLoadFailure` in
+`src/admin/kit-activity-log.ts`). A classified `isDatabaseUnavailable` failure
+keeps the silent `{ kind: "unavailable" }` on every leg, and a null database
+answers `unavailable` with zero alert lines, so these rows never fire for a
+downstream outage. Rollout: only the join-attempts pair is Kit-served today
+(`enabled: true`); the featured and event-edit legs fire once their manifest
+entries flip (`src/route-ownership.ts`).
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `error.alert` with `route` `/admin/featured` | A non-outage error escaped the Kit featured-list read (`resolveKitFeaturedList` in `src/admin/kit-featured.ts`). | Fails closed: SvelteKit renders the branded 500 error shell (static copy; the failure is never echoed), which the hook's member-read boundary releases only after its audit decision — `memberReadResponse` in `src/member-reads.ts` refuses only when `resolve()` itself rejects or the audit write fails. | Search logs message-contains `"error.alert"` with `"route":"/admin/featured"` over the window; the `"fingerprint":"<Class>@/admin/featured"` value groups repeats (muted per isolate for 5 minutes). These lines carry no `request_id` — the resolvers have no request context — so join to `http.request` by time window, and triage the exception class as a code bug, not database health (an outage would have stayed silent). | `fingerprint` (`<Class>@/admin/featured`), `exception`/`error_class` (class only), `method: GET`, `route`, `build_sha`/`release`; no `request_id`, subject, cookie or row content |
+| `error.alert` with `route` `/admin/featured/:id` | A non-outage error escaped the Kit featured-edit read (`resolveKitFeaturedEdit` in `src/admin/kit-featured-edit.ts`). | Fails closed: same branded-500 release as the featured-list row. | Same search with `"route":"/admin/featured/:id"`; same time-window join and code-bug triage. | `fingerprint` (`<Class>@/admin/featured/:id`), `exception`/`error_class` (class only), `method: GET`, `route`, `build_sha`/`release`; no `request_id`, subject, cookie or row content |
+| `error.alert` with `route` `/admin/events/:key` (event `get` leg) | A non-outage error escaped the Kit event-edit event read (`resolveKitEventEdit` in `src/admin/kit-event-edit.ts`). | Fails closed: same branded-500 release as the featured-list row. | Same search with `"route":"/admin/events/:key"`; the get and roster legs share one fingerprint, so the 5-minute mute dedupes repeats across both legs. Same time-window join and code-bug triage. | `fingerprint` (`<Class>@/admin/events/:key`), `exception`/`error_class` (class only), `method: GET`, `route`, `build_sha`/`release`; no `request_id`, subject, cookie or row content |
+| `error.alert` with `route` `/admin/events/:key` (roster `list` leg) | A non-outage error escaped the Kit event-edit roster read, after the event row itself loaded (`resolveKitEventEdit` in `src/admin/kit-event-edit.ts`). | Fails closed: same branded-500 release as the featured-list row. | Same search with `"route":"/admin/events/:key"`; shares its fingerprint with the get leg above, so one mute covers both. Same time-window join and code-bug triage. | `fingerprint` (`<Class>@/admin/events/:key`), `exception`/`error_class` (class only), `method: GET`, `route`, `build_sha`/`release`; no `request_id`, subject, cookie or row content |
+| `error.alert` with `route` `/admin/join-attempts/:id` | A non-outage error escaped the Kit join-attempt detail read (`resolveKitJoinAttemptDetail` in `src/admin/kit-join-attempt-detail.ts`). | Fails closed: same branded-500 release as the featured-list row. | Same search with `"route":"/admin/join-attempts/:id"`; same time-window join and code-bug triage. | `fingerprint` (`<Class>@/admin/join-attempts/:id`), `exception`/`error_class` (class only), `method: GET`, `route`, `build_sha`/`release`; no `request_id`, subject, cookie or row content |
+
+The resolver line stands alone. The hook's member-read boundary alerts only
+when `resolve()` itself rejects or the audit write fails
+(`memberReadResponse` in `src/member-reads.ts`); a load rejection is
+converted to the branded 500 shell inside `resolve()`, so no second line
+follows for the same rethrow absent a simultaneous audit failure, which
+carries its own fingerprint.
+
+Agent-runnable fire/silent proof per leg (fixtures only, no `DATABASE_URL`):
+
+```sh
+npx vitest run test/kit-admin-read-code-bug-alerts-acceptance.test.ts
+```
+
+Expected: 13 passed — each leg's `TypeError` emits exactly one `error.alert`
+and rethrows the same error, while transport (`ECONNREFUSED`) and
+server-unavailable (`PostgresError` `57P03`) failures resolve
+`{ kind: "unavailable" }` with no new alert line.
+
 ### Queue ledger, lock and malformed-carrier warnings
 
 These `console.warn` lines come from the queue consumer
