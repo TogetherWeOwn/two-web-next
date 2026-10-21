@@ -12,6 +12,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { llmsTxt } from "../src/ai-friendly/md";
 import { MCP_TOOL_NAMES, createPublicMcpServer } from "../src/mcp/server";
 import {
+  COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
   PUBLIC_API_COLLECTION_FIELDS,
@@ -42,6 +43,186 @@ const allowsNull = (schema) => {
   if (types.includes("null")) return true;
   return [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].some(allowsNull);
 };
+
+// Property-type pinning: zod spells nullable strings as {type:["string",
+// "null"]} but nullable integers as {anyOf:[{type:"integer"...},
+// {type:"null"}]}, while OpenAPI spells both as type arrays. Normalize
+// both sides to base types plus a null flag, so a drifted property type
+// (or a dropped null) fails by name. Formats, descriptions and integer
+// bounds stay unchecked: they describe the same values and must never
+// false-reject a real payload.
+const collectTypes = (schema, into) => {
+  if (!schema) return;
+  for (const t of Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : []) {
+    into.add(t);
+  }
+  for (const branch of [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
+    collectTypes(branch, into);
+  }
+};
+
+const normalizeType = (schema) => {
+  const found = new Set();
+  collectTypes(schema, found);
+  const nullable = found.delete("null");
+  return { types: [...found].sort(), nullable };
+};
+
+const sameTypeShape = (a, b) => {
+  const left = normalizeType(a);
+  const right = normalizeType(b);
+  return (
+    JSON.stringify(left.types) === JSON.stringify(right.types) && left.nullable === right.nullable
+  );
+};
+
+const typeShapeText = (schema) => {
+  const shape = normalizeType(schema);
+  return `${shape.types.join("|") || "?"}${shape.nullable ? "|null" : ""}`;
+};
+
+/** Every canonical field is advertised with the OpenAPI property type, nullability and enum. */
+const pinProperties = (label, advertisedProps, openapiProps, fields) => {
+  check(
+    `${label} advertises exactly the canonical keys`,
+    sameKeys(Object.keys(advertisedProps ?? {}), [...fields]),
+  );
+  for (const field of fields) {
+    const advertised = advertisedProps?.[field];
+    const openapi = openapiProps?.[field];
+    check(`${label}.${field} is advertised`, advertised !== undefined);
+    if (!advertised || !openapi) continue;
+    check(
+      `${label}.${field} type matches OpenAPI (advertised ${typeShapeText(advertised)} vs openapi ${typeShapeText(openapi)})`,
+      sameTypeShape(advertised, openapi),
+    );
+    if (openapi.enum) {
+      check(
+        `${label}.${field} enum matches OpenAPI`,
+        JSON.stringify([...(advertised.enum ?? [])].sort()) ===
+          JSON.stringify([...openapi.enum].sort()),
+      );
+    }
+  }
+};
+
+const resolveRef = (doc, schema) => {
+  const ref = schema?.$ref;
+  if (!ref) return schema;
+  let node = doc;
+  for (const part of ref.replace(/^#\//, "").split("/")) node = node?.[part];
+  return node;
+};
+
+// Minimal JSON Schema conformance check (type, required, properties,
+// items, enum, const, anyOf, oneOf), mirroring the acceptance suite's
+// validator so realistic payloads prove the advertised schemas accept
+// real serializer shapes. Unknown keywords are ignored.
+const matchesJsonType = (value, type) => {
+  switch (type) {
+    case "object":
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+    case "array":
+      return Array.isArray(value);
+    case "string":
+      return typeof value === "string";
+    case "integer":
+      return typeof value === "number" && Number.isInteger(value);
+    case "number":
+      return typeof value === "number";
+    case "boolean":
+      return typeof value === "boolean";
+    case "null":
+      return value === null;
+    default:
+      return false;
+  }
+};
+
+const validateJson = (value, schema, path = "$") => {
+  const problems = [];
+  if (schema.const !== undefined) {
+    if (JSON.stringify(value) !== JSON.stringify(schema.const))
+      problems.push(`${path} is not the const`);
+    return problems;
+  }
+  if (schema.enum) {
+    if (!schema.enum.some((option) => JSON.stringify(option) === JSON.stringify(value)))
+      problems.push(`${path} not in enum`);
+    return problems;
+  }
+  for (const key of ["anyOf", "oneOf"]) {
+    const branches = schema[key];
+    if (branches) {
+      if (!branches.some((branch) => validateJson(value, branch, path).length === 0))
+        problems.push(`${path} matches no ${key} branch`);
+      return problems;
+    }
+  }
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (types.length > 0 && !types.some((type) => matchesJsonType(value, type))) {
+    problems.push(`${path} is not ${types.join("|")}`);
+    return problems;
+  }
+  const isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+  if ((types.includes("object") || (!schema.type && schema.properties)) && isRecord(value)) {
+    for (const name of schema.required ?? []) {
+      if (!(name in value)) problems.push(`${path}.${name} is missing`);
+    }
+    for (const [name, property] of Object.entries(schema.properties ?? {})) {
+      if (name in value) problems.push(...validateJson(value[name], property, `${path}.${name}`));
+    }
+  }
+  if (types.includes("array") && Array.isArray(value) && schema.items) {
+    value.forEach((item, index) =>
+      problems.push(...validateJson(item, schema.items, `${path}[${index}]`)),
+    );
+  }
+  return problems;
+};
+
+// Serializer-shaped payloads exercising every type branch the fixtures
+// miss: non-null game/location/capacity, live community counts and a
+// ranks-bearing snapshot including a null rank count.
+const REALISTIC_EVENT = {
+  event_key: "00000000000000000000000001",
+  title: "Friday Night Bracket",
+  game: "Melee",
+  description: "Weekly bracket, all skill levels.",
+  starts_at: "2099-01-02T20:00:00.000Z",
+  ends_at: "2099-01-02T22:00:00.000Z",
+  starts_at_local: "2099-01-02 20:00",
+  ends_at_local: "2099-01-02 22:00",
+  timezone: "America/New_York",
+  location: "The Loft",
+  capacity: 50,
+  going_count: 12,
+  going_occupancy: 12,
+  status: "published",
+  rsvp_open: true,
+  synced_to_discord: false,
+};
+
+const NULLISH_EVENT = {
+  ...REALISTIC_EVENT,
+  game: null,
+  description: null,
+  location: null,
+  capacity: null,
+  going_count: null,
+  going_occupancy: null,
+};
+
+const REALISTIC_COMMUNITY = {
+  member_count: 1234,
+  online_count: 56,
+  ranks: [
+    { key: "member", label: "Member", member_count: null },
+    { key: "moderator", label: "Moderator", member_count: 3 },
+  ],
+};
+
+const NULLISH_COMMUNITY = { member_count: null, online_count: null, ranks: [] };
 
 const guidePath = `${repoRoot}docs/machine-interface.md`;
 check("guide docs/machine-interface.md exists", existsSync(guidePath));
@@ -144,7 +325,8 @@ const rpc = async () => {
         [...MCP_TOOL_NAMES],
       ),
     );
-    const schemas = getOpenApiDocument(APP_URL).components.schemas;
+    const openapiDoc = getOpenApiDocument(APP_URL);
+    const schemas = openapiDoc.components.schemas;
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
     for (const name of MCP_TOOL_NAMES) {
       check(`tools/list advertises ${name}`, byName[name] !== undefined);
@@ -229,6 +411,85 @@ const rpc = async () => {
       check(
         "get_join required matches OpenAPI",
         sameKeys(joinSchema.required, schemas.JoinHandoff.required),
+      );
+    }
+    // Deep type pinning: every advertised property — including the nested
+    // collection rows, paging meta and community ranks — matches the
+    // OpenAPI property type, nullability and enum. Required-key checks
+    // alone let a drifted type through while the SDK rejects real
+    // payloads, so each property fails by name here.
+    const expectValid = (label, value, schema) => {
+      const problems = schema ? validateJson(value, schema) : ["missing schema"];
+      check(
+        `${label} validates against the advertised schema${problems.length ? `: ${problems.join("; ")}` : ""}`,
+        problems.length === 0,
+      );
+    };
+    if (listSchema) {
+      const collectionProps = schemas.PublicApiEventCollection.properties;
+      pinProperties("list_events", listSchema.properties, collectionProps, [
+        ...PUBLIC_API_COLLECTION_FIELDS,
+      ]);
+      const rows = listSchema.properties?.data;
+      check("list_events.data is an array", rows?.type === "array");
+      const rowOpenapi = resolveRef(openapiDoc, collectionProps?.data?.items);
+      pinProperties("list_events.data[]", rows?.items?.properties, rowOpenapi?.properties, [
+        ...PUBLIC_API_EVENT_FIELDS,
+      ]);
+      pinProperties(
+        "list_events.meta",
+        listSchema.properties?.meta?.properties,
+        collectionProps?.meta?.properties,
+        [...PUBLIC_API_META_FIELDS],
+      );
+      expectValid(
+        "realistic collection vs list_events",
+        {
+          data: [REALISTIC_EVENT],
+          page: 1,
+          limit: 20,
+          meta: { current_page: 1, per_page: 20, total: 1, last_page: 1 },
+        },
+        listSchema,
+      );
+    }
+    if (eventSchema) {
+      pinProperties("get_event", eventSchema.properties, schemas.PublicApiEvent.properties, [
+        ...PUBLIC_API_EVENT_FIELDS,
+      ]);
+      expectValid("realistic non-null event vs get_event", REALISTIC_EVENT, eventSchema);
+      expectValid("all-null event vs get_event", NULLISH_EVENT, eventSchema);
+    }
+    if (communitySchema) {
+      const snapshotProps = schemas.CommunitySnapshot.properties;
+      pinProperties("get_community", communitySchema.properties, snapshotProps, [
+        ...COMMUNITY_SNAPSHOT_FIELDS,
+      ]);
+      const ranks = communitySchema.properties?.ranks;
+      check("get_community.ranks is an array", ranks?.type === "array");
+      const rankOpenapi = resolveRef(openapiDoc, snapshotProps?.ranks?.items);
+      check(
+        "get_community.ranks[] required matches OpenAPI",
+        sameKeys(ranks?.items?.required, rankOpenapi?.required),
+      );
+      check(
+        "get_community.ranks[] required matches the canonical rank fields",
+        sameKeys(ranks?.items?.required, [...COMMUNITY_RANK_FIELDS]),
+      );
+      pinProperties("get_community.ranks[]", ranks?.items?.properties, rankOpenapi?.properties, [
+        ...COMMUNITY_RANK_FIELDS,
+      ]);
+      expectValid("ranks-bearing community vs get_community", REALISTIC_COMMUNITY, communitySchema);
+      expectValid("all-null community vs get_community", NULLISH_COMMUNITY, communitySchema);
+    }
+    if (joinSchema) {
+      pinProperties("get_join", joinSchema.properties, schemas.JoinHandoff.properties, [
+        ...JOIN_HANDOFF_FIELDS,
+      ]);
+      expectValid(
+        "join handoff vs get_join",
+        { intro: "Join us.", invite_url: "https://discord.gg/machine-contract-check" },
+        joinSchema,
       );
     }
   } finally {
