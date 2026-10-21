@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
+import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -174,6 +175,56 @@ export function safeMigrationError(error) {
   return "Migration failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
 }
 
+// postgres.js surfaces kill-backend timing as an uncaught driver-internal
+// crash when a write is scheduled after the socket closed: `closed()` nulls
+// the socket, a later `write()` buffers and queues `nextWrite`, and the
+// immediate throws `TypeError: Cannot read properties of null (reading
+// 'write')` instead of rejecting the query. Inside `client.begin` the
+// automatic rollback is the write that loses this race, so the migration
+// itself still rejects fail-closed while the stray crash would kill the
+// process with a raw driver stack. Recognize that exact signature so the
+// CLI and the selftest can fail closed on it; anything else rethrows.
+export function isDriverConnectionRaceCrash(error) {
+  return (
+    error instanceof TypeError &&
+    /Cannot read propert\w+ of null \(reading 'write'\)/.test(error.message) &&
+    (error.stack ?? "").includes("nextWrite") &&
+    (error.stack ?? "").includes("postgres/src/connection.js")
+  );
+}
+
+// Capture the driver race crash for a bounded window. Returns the captured
+// crashes and a release function; the caller must release in a finally so a
+// late crash cannot leak into unrelated work, and must yield to the event
+// loop before releasing so a pending crash lands inside the window.
+// Merely adding a listener is not enough under `node --test`: the runner
+// attributes every emitted uncaughtException to the running test through its
+// own plain listener, so the capture temporarily replaces the listener set
+// (Node 22/24 use a plain listener, not a capture callback) and restores it
+// on release. Anything that does not match the exact driver race signature
+// restores the listeners and rethrows to crash loudly.
+export function captureDriverRaceCrashes() {
+  const crashes = [];
+  const saved = process.rawListeners("uncaughtException");
+  let released = false;
+  const restore = () => {
+    if (released) return;
+    released = true;
+    process.removeListener("uncaughtException", onCrash);
+    for (const listener of saved) process.on("uncaughtException", listener);
+  };
+  const onCrash = (error) => {
+    if (!isDriverConnectionRaceCrash(error)) {
+      restore();
+      throw error;
+    }
+    crashes.push(error);
+  };
+  process.removeAllListeners("uncaughtException");
+  process.on("uncaughtException", onCrash);
+  return { crashes, release: restore };
+}
+
 export function migrationClient(config) {
   return postgres(config.url.href, {
     port: 5432,
@@ -187,12 +238,15 @@ export function migrationClient(config) {
     // postgres.js merges `connection` into the startup packet (see StartupMessage
     // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
     // here: a hostile role/database `search_path` or `DateStyle` must not
-    // misroute DDL or skew the PITR receipt. Never ALTER ROLE/DATABASE defaults.
+    // misroute DDL or skew the PITR receipt, and `standard_conforming_strings`
+    // must stay on because the runtime-rights guard lexes plain strings
+    // without backslash escapes. Never ALTER ROLE/DATABASE defaults.
     connection: {
       statement_timeout: 120000,
       lock_timeout: 10000,
       search_path: "public",
       datestyle: "ISO, YMD",
+      standard_conforming_strings: "on",
     },
     onnotice: () => {},
   });
@@ -209,6 +263,17 @@ export async function runMigration(mode, env = process.env, options = {}) {
   };
   const client = migrationClient(config);
   const plan = async (connection) => {
+    // Surface only intentional refusals as MigrationError so the operator CLI
+    // names the offending default ACL instead of masking it as withheld
+    // driver details. The refusal names grantees and privileges only, never
+    // credentials. Any other error is a driver failure: re-throw it unchanged
+    // so safeMigrationError masks it instead of echoing driver text.
+    try {
+      await assertRuntimeDefaultAcl(connection);
+    } catch (error) {
+      if (error instanceof DefaultAclRefusal) refuse(error.message);
+      throw error;
+    }
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
     await summary(
@@ -234,6 +299,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
       // defaults to prove the pin.
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
+      await transaction.unsafe("SET LOCAL standard_conforming_strings = on");
       const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
       if (!lock.acquired)
         refuse("Another web migration holds the database lock; retry only after it finishes.");
@@ -250,6 +316,10 @@ export async function runMigration(mode, env = process.env, options = {}) {
       // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
       // include ledger setup and history validation in the same locked transaction.
       // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
+      // The serial ledger sequence is runner-owned infrastructure in the drizzle
+      // schema, not a migration-created public object: both this runner and the
+      // canonical drizzle-kit migrator insert (hash, created_at) through its
+      // default, so explicit ids or an integer ledger would break the other writer.
       await transaction`create schema if not exists drizzle`;
       await transaction`create table if not exists drizzle.__drizzle_migrations (
         id serial primary key, hash text not null, created_at bigint
@@ -271,10 +341,26 @@ export async function runMigration(mode, env = process.env, options = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // A connection lost mid-migration can additionally surface the driver race
+  // crash after the runner already rejected: swallow only that signature and
+  // fail closed instead of dumping a raw driver stack. The natural
+  // fail-closed rejection still carries the disposition; a crash landing
+  // after it settled must not print twice or override success. A crash
+  // landing first settles too, so a second stray crash cannot print again.
+  let settled = false;
+  process.on("uncaughtException", (error) => {
+    if (!isDriverConnectionRaceCrash(error)) throw error;
+    if (settled) return;
+    console.error(safeMigrationError(error));
+    process.exitCode = 1;
+    settled = true;
+  });
   try {
     await runMigration(process.argv[2]);
   } catch (error) {
     console.error(safeMigrationError(error));
     process.exitCode = 1;
+  } finally {
+    settled = true;
   }
 }
