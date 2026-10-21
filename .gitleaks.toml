@@ -125,3 +125,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
 regexes = ['''^777666555444333222$''']
+
+[[allowlists]]
+description = "Synthetic unknown-event ULID in the cancelled-event alternatives acceptance fixture, used only for an in-memory 404 lookup, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/event-gone-alternatives-acceptance\.test\.ts$''']
+regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FA9$''']

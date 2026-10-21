@@ -199,10 +199,23 @@ export async function cachedFeatured(
   requestId?: string,
 ): Promise<VisibleFeatured[]> {
   void ctx;
+  // Filter the published base to the live window, then project back to the
+  // six VisibleFeatured display fields: the Kit load serializes this return
+  // value (served at __data.json even with csr=false), so the scheduling
+  // bounds must stay in the cached base and never reach the load data.
   const visibleAt = (rows: PublishedFeatured[]): VisibleFeatured[] =>
-    rows.filter((row) =>
-      currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
-    );
+    rows
+      .filter((row) =>
+        currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
+      )
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        url: row.url,
+        imageUrl: row.imageUrl,
+        imageAlt: row.imageAlt,
+      }));
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {

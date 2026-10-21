@@ -368,10 +368,13 @@ describe("Kit GET /auth/recover markup contract (Recovery shell parity)", () => 
       "Welcome, guest",
       'class="account-caption"',
       'theme="home"',
-      "Together We Own",
     ]) {
       expect(lib, `missing ${needle}`).toContain(needle);
     }
+    // The tab-title site suffix rides SiteMetadata's derivation: a bare model
+    // title through Shell, suffixed once like the Hono RecoveryShell — never
+    // a pre-suffixed title prop (which double-suffixed).
+    expect(lib).toContain("title={title}");
     expect(lib).toContain("Shell");
     expect(lib).not.toContain("{@html");
     expect(lib).not.toContain("<script src");
