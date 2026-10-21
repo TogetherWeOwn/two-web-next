@@ -75,10 +75,10 @@ function cssRules(css: string): CssRule[] {
 }
 
 const findRule = (rules: CssRule[], selector: string): CssRule | undefined =>
-  rules.find((r) => r.selectors.includes(selector));
+  [...rules].reverse().find((r) => r.selectors.includes(selector));
 
 const findBareHintRule = (rules: CssRule[]): CssRule | undefined =>
-  rules.find((r) => r.selectors.some((s) => s === ".hint" || s === "p.hint"));
+  [...rules].reverse().find((r) => r.selectors.some((s) => s === ".hint" || s === "p.hint"));
 
 // --- Kit SSR harness ---------------------------------------------------------
 // One esbuild bundle SSR-renders the five Kit admin pages through web's
@@ -391,20 +391,22 @@ describe("E8 stylesheet: bare hints and fieldset/legend in source and built outp
     it(`${name} de-emphasizes bare hints: smaller and muted`, () => {
       const rule = findBareHintRule(load());
       expect(rule, `${name} must add a bare .hint rule first`).toBeDefined();
-      expect(rule!.block).toMatch(/font-size\s*:/);
-      expect(rule!.block).toMatch(/color\s*:/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])font-size\s*:\s*\.85rem\s*(?:;|$)/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])color\s*:\s*#6b6257\s*(?:;|$)/);
     });
 
     it(`${name} styles the Repeat fieldset away from the groove default`, () => {
       const rule = findRule(load(), "fieldset");
       expect(rule, `${name} must add a fieldset rule`).toBeDefined();
-      expect(rule!.block).toMatch(/border/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])border\s*:\s*1px solid #d8cfc0\s*(?:;|$)/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])background\s*:\s*#fffdf8\s*(?:;|$)/);
     });
 
     it(`${name} styles the Repeat legend to match admin chrome`, () => {
       const rule = findRule(load(), "legend");
       expect(rule, `${name} must add a legend rule`).toBeDefined();
-      expect(rule!.block).toMatch(/.+:.+/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])font-weight\s*:\s*700\s*(?:;|$)/);
+      expect(rule!.block).toMatch(/(?:^|[;\s])padding\s*:\s*0 \.5rem\s*(?:;|$)/);
     });
   }
 
