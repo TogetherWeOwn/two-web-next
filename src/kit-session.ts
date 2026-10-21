@@ -9,10 +9,10 @@
 // several readers are wired). The bridge never rotates, revokes, or issues
 // a session; the one cookie this module writes is the signed auth-status
 // probe below, attached by the hook only to successful moderator admin
-// documents. Renewal stays route-specific: Hono's readSession rotates its
-// page views (no blanket rotating layout load; fragments and JSON keep
-// nonrotating reads), the Kit event detail renews through
-// kitEventDetailRotationFor, and Kit admin reads slide through
+// responses or audited full member documents. Renewal stays route-specific:
+// Hono's readSession rotates its page views (no blanket rotating layout load;
+// fragments and JSON keep nonrotating reads), the Kit event detail renews
+// through kitEventDetailRotationFor, and Kit admin reads slide through
 // kitAdminRenewalFor, which the hook core calls only after the
 // member-read boundary releases a successful GET. Logout stays the
 // authoritative Hono POST /logout. This module only peeks flashes. Profile
@@ -425,15 +425,18 @@ const AUTH_STATUS_OPTIONS = {
   maxAge: SESSION_TTL_SECONDS,
 };
 
-/** Signs the read-only probe only for a successful moderator admin document. */
-export function kitAuthStatusCookieFor(env: Env): (event: HookEventLike) => Promise<string | null> {
-  return async (event) => {
+/** The hook alone supplies the proof of an audited, full member document. */
+export function kitAuthStatusCookieFor(
+  env: Env,
+): (event: HookEventLike, releasedMemberDocument?: boolean) => Promise<string | null> {
+  return async (event, releasedMemberDocument = false) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
+    const admin = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals?.session?.moderator;
+    const member = releasedMemberDocument && locals?.session?.member === true;
     if (
       event.request.method !== "GET" ||
-      !/^\/admin(?:\/|$)/.test(event.url.pathname) ||
       locals?.status !== "authenticated" ||
-      !locals.session?.moderator ||
+      (!admin && !member) ||
       !env.SESSION_SECRET
     )
       return null;
