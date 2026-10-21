@@ -244,8 +244,13 @@ export const EventsCalendarPage: FC<{
   );
 };
 
-/** No-JS over-limit search: a notice with site chrome. It never echoes the query back. */
-export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
+/** No-JS over-limit search: a notice with site chrome. It never echoes the query back.
+ * Served for both the upcoming schedule and the past archive; the archive
+ * turn keeps archive searchers in context instead of ejecting them. */
+export const EventsSearchTooLongPage: FC<{ appUrl: string; archive?: boolean }> = ({
+  appUrl,
+  archive = false,
+}) => (
   <ScheduleShell
     title="Events"
     canonical={canonicalUrl(appUrl, "/events")}
@@ -257,7 +262,11 @@ export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
     </div>
     <p role="alert">{EVENTS_SEARCH_TOO_LONG_COPY}</p>
     <p>
-      <a href="/events">Back to events</a>
+      {archive ? (
+        <a href="/events/past">Back to past events</a>
+      ) : (
+        <a href="/events">Back to events</a>
+      )}
     </p>
   </ScheduleShell>
 );
