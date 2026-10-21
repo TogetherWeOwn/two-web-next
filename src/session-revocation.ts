@@ -6,8 +6,9 @@ export type SessionRevocationCounts = { web_sessions: number };
 /**
  * Revocation result: the stamped count plus chase forensics. `passes` is the
  * number of chase passes executed and `stampsPerPass` the sessions each pass
- * stamped, in order; `passes === stampsPerPass.length` and
- * `web_sessions === sum(stampsPerPass)` always hold. Numbers only, never ids.
+ * stamped, in order. On apply results `passes === stampsPerPass.length` and
+ * `web_sessions === sum(stampsPerPass)` hold; dry-run returns `passes: 0`
+ * with an empty array next to the counted `web_sessions`. Numbers only, never ids.
  */
 export type SessionRevocationResult = SessionRevocationCounts & {
   passes: number;

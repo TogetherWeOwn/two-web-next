@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
 import { createPostgresSessionStore, type Sql } from "../src/sessions";
 import { countActiveMemberSessions, revokeMemberSessions } from "../src/session-revocation";
@@ -266,6 +266,24 @@ describe("revoke-sessions CLI safety", () => {
         local,
       );
     }
+  });
+
+  it("checks the live process environment for the TLS override, not only the env argument", () => {
+    // The port is closed: if the gate is missing, the run fails with exit 1, never a live connection.
+    const code = `import(${JSON.stringify(pathToFileURL(script).href)}).then((m) => m.main(["--discord-id=${MEMBER_A}"], { DATABASE_URL: "postgres://fixture@127.0.0.1:1/neondb" })).then((code) => { process.exitCode = code; });`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./bin/ts-hook.mjs", "--input-type=module", "-e", code],
+      {
+        env: { PATH: process.env.PATH ?? "", NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        cwd: fileURLToPath(new URL("..", import.meta.url).href),
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("NODE_TLS_REJECT_UNAUTHORIZED=0");
+    expect(result.stdout + result.stderr).not.toContain("127.0.0.1:1");
   });
 });
 

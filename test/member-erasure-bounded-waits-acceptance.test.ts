@@ -302,6 +302,11 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     expect(result.elapsedMs).toBeLessThan(CLI_DEADLINE_MS);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("operation failed; changes rolled back");
+    // The lock-timeout rollback maps to its distinct retry message, not the
+    // generic failure text: both share the prefix above, so pin the 55P03
+    // marker and the retry instruction explicitly.
+    expect(result.stderr).toContain("55P03");
+    expect(result.stderr).toContain("Retry once the lock clears");
     expect(result.stdout).not.toContain('"mode"');
     expectRedacted(result);
   };

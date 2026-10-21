@@ -38,8 +38,10 @@ export type ErasureCounts = {
 /**
  * Erasure result: per-table counts plus session-chase forensics. `passes` is
  * the number of chase passes executed and `deletesPerPass` the session rows
- * each pass deleted, in order; `passes === deletesPerPass.length` and
- * `web_sessions === sum(deletesPerPass)` always hold. Numbers only, never ids.
+ * each pass deleted, in order. On apply results `passes ===
+ * deletesPerPass.length` and `web_sessions === sum(deletesPerPass)` hold;
+ * dry-run returns `passes: 0` with an empty array next to the counted
+ * `web_sessions`. Numbers only, never ids.
  */
 export type ErasureResult = ErasureCounts & {
   passes: number;

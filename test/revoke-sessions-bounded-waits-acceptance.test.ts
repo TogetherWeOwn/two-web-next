@@ -316,6 +316,10 @@ describe.skipIf(!ambientUrl)(
       expect(result!.timedOut).toBe(false);
       expect(result!.status).toBe(1);
       expect(result!.stdout).not.toContain('"mode":"apply"');
+      // The lock-timeout rollback maps to its distinct retry message, not the
+      // generic failure text: pin the 55P03 marker and the retry instruction.
+      expect(result!.stderr).toContain("55P03");
+      expect(result!.stderr).toContain("Retry once the lock clears");
       expectRedacted(result!);
       // All-or-nothing: the unlocked sibling session was not revoked either.
       expect(await activeCount(MEMBER_A)).toBe(2);
@@ -333,6 +337,10 @@ describe.skipIf(!ambientUrl)(
       expect(result!.timedOut).toBe(false);
       expect(result!.status).toBe(1);
       expect(result!.stdout).not.toContain('"mode":"dry-run"');
+      // The lock-timeout rollback maps to its distinct retry message, not the
+      // generic failure text: pin the 55P03 marker and the retry instruction.
+      expect(result!.stderr).toContain("55P03");
+      expect(result!.stderr).toContain("Retry once the lock clears");
       expectRedacted(result!);
       expect(await activeCount(MEMBER_A)).toBe(1);
       expect(await activeCount(MEMBER_B)).toBe(1);
