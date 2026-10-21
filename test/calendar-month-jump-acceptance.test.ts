@@ -100,10 +100,11 @@ function discordSource(
 }
 
 // pg-proxy fake routing every calendar read by its SQL shape: rsvp aggregates
-// stay empty, the month-grid read (the only one windowing starts_at) answers
-// from monthRows, the past drawer answers from past, and the paged upcoming
-// read answers from upcoming. The Builder must not add reads: the budget test
-// pins the exact query count for the empty-month render below.
+// stay empty, the month-grid read (the only one carrying a bound starts_at
+// upper bound) answers from monthRows, the past drawer answers from past,
+// and the paged upcoming read answers from upcoming. The Builder must not
+// add reads: the budget test pins the exact query count for the empty-month
+// render below.
 function calendarFixture(args: {
   upcoming?: (typeof events.$inferSelect)[];
   monthRows?: (typeof events.$inferSelect)[];
@@ -132,8 +133,9 @@ function calendarFixture(args: {
           .map((r) => [r.discordEventId]),
       };
     }
-    // The month-grid read windows starts_at; the paged upcoming read never does.
-    if (sql.includes('"starts_at" >=')) return { rows: monthRows.map(encode) };
+    // The month-grid read is the only one with a bound starts_at upper bound
+    // (`starts_at < $n`): rank counts compare against a subquery instead.
+    if (sql.includes('"starts_at" < $')) return { rows: monthRows.map(encode) };
     let rows = /"ends_at" </.test(sql) ? past : upcoming;
     const bound = params.find(
       (p): p is string => typeof p === "string" && p.startsWith("%") && p.endsWith("%"),
