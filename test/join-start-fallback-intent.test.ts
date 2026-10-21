@@ -7,7 +7,10 @@
 // explanation, never a silent bounce) plus the already-sanitized ?next=
 // return target and ?source= attribution the request arrived with, so a
 // retry keeps both. Hostile or absent intent values keep the bare notice
-// target and are never echoed.
+// target and are never echoed. The landing itself allowlists the notice:
+// only the exact start-failed value renders the banner, and anything else
+// renders the plain page, so a shared or bookmarked ?notice= can never
+// mislabel a healthy landing as a failed start.
 //
 // Hermetic: mounted app with an in-memory session store whose journey leg is
 // broken per test, plus a fake journey Sql double. No database, no network.
@@ -276,6 +279,36 @@ describe("join start fallback preserves sanitized intent", () => {
     expect(droppedHref.searchParams.get("source")).toBeNull();
     expect(droppedHref.searchParams.get("next")).toBe("/events");
     expect(droppedHtml).not.toContain("a/b");
+  });
+
+  it("the landing renders the banner for the exact start-failed notice", async () => {
+    const { env: e } = isolated();
+    const res = await app.request("/join?notice=start-failed", {}, e);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-start-notice"');
+    expect(html).toContain("failed to start");
+    const plain = await (await app.request("/join", {}, e)).text();
+    expect(plain).not.toContain('data-testid="join-start-notice"');
+    expect(html).not.toBe(plain);
+  });
+
+  it.each([
+    "bogus",
+    "START-FAILED",
+    "start-failed ",
+    "start-failed&next=/evil",
+    "<script>alert(1)</script>",
+  ])("the landing ignores a non-allowlisted notice %s", async (hostile) => {
+    const { env: e } = isolated();
+    const plain = await (await app.request("/join", {}, e)).text();
+    const res = await app.request(`/join?notice=${encodeURIComponent(hostile)}`, {}, e);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).not.toContain('data-testid="join-start-notice"');
+    expect(html).not.toContain("failed to start");
+    expect(html).not.toContain("alert(1)");
+    expect(html).toBe(plain);
   });
 
   it("steady path is unchanged: an admitted journey still mints the same cookies", async () => {
