@@ -134,12 +134,13 @@ export async function materializeMissingInstances(
   parent: EventRow,
   causerId: string | null = null,
 ): Promise<number> {
-  if (parent.recurrenceFrequency !== "weekly") return 0;
+  const frequency = parent.recurrenceFrequency;
+  if (frequency !== "weekly" && frequency !== "monthly") return 0;
   const wanted = occurrences(
     parent.startsAt,
     parent.endsAt,
     parent.timezone,
-    parent.recurrenceFrequency,
+    frequency,
     parent.recurrenceCount,
     parent.recurrenceEndsOn,
   );

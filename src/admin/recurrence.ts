@@ -1,13 +1,16 @@
-// Recurring series (W13). Ports two-web app/Support/RecurrenceSchedule.php and
-// RecurrenceInput.php (legacy main, TOG-8399) as pure functions.
+// Recurring series (W13 weekly, monthly per the series design). Ports two-web
+// app/Support/RecurrenceSchedule.php and RecurrenceInput.php (legacy main,
+// TOG-8399) as pure functions.
 //
 // A series is ordinary event rows: the parent holds the rule and is index 1;
 // every occurrence is a row. `occurrences` answers "which indexes exist and
 // when"; materialisation tops up whatever is missing and never touches an
 // existing row, so cancelling one instance to skip a week is never undone.
 //
-// Weeks step in the host's zone, not in UTC: "20:00 London every Sunday" must
-// stay 20:00 London across the clocks-change weekend.
+// Steps run in the host's zone, not in UTC: "20:00 London every Sunday" must
+// stay 20:00 London across the clocks-change weekend. Monthly steps keep the
+// seed's wall day-of-month and clamp to the last day of short months, so a
+// 31st series still meets in February and recovers in March.
 
 import { parseRecurrenceDate } from "./recurrence-date";
 import { type FieldErrors, isKnownTimezone, ValidationError } from "./validation";
@@ -16,7 +19,7 @@ import { type PreciseWall, preciseWallToUtc, utcToPreciseWall } from "./recurren
 /** A series that never ends is a runaway reconcile pass: 52 weeklies is a year of Sunday Squads. */
 export const MAX_OCCURRENCES = 52;
 
-export const RECURRENCE_FREQUENCIES = ["weekly"] as const;
+export const RECURRENCE_FREQUENCIES = ["weekly", "monthly"] as const;
 export type RecurrenceFrequency = (typeof RECURRENCE_FREQUENCIES)[number];
 
 export type RecurrenceInput = {
@@ -34,6 +37,23 @@ function addDaysToWall(wall: PreciseWall, days: number): PreciseWall {
   const m = WALL_PARTS.exec(wall.minute)!;
   const d = new Date(
     Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days, Number(m[4]), Number(m[5])),
+  );
+  const p = (n: number) => String(n).padStart(2, "0");
+  return {
+    minute: `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`,
+    subMinuteMs: wall.subMinuteMs,
+  };
+}
+
+function addMonthsToWall(wall: PreciseWall, months: number): PreciseWall {
+  const m = WALL_PARTS.exec(wall.minute)!;
+  const target = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1 + months, 1));
+  const daysInTarget = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  const day = Math.min(Number(m[3]), daysInTarget);
+  const d = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), day, Number(m[4]), Number(m[5])),
   );
   const p = (n: number) => String(n).padStart(2, "0");
   return {
@@ -94,13 +114,18 @@ export function occurrences(
   // a zero-length meeting the event parser would reject.
   const durationMs = endsAt.getTime() - startsAt.getTime();
   const out = new Map<number, Occurrence>();
+  const monthly = frequency === "monthly";
   for (let index = 1; index <= limit; index++) {
     const step = index - 1;
-    const days = frequency === "weekly" ? 7 * step : 0;
-    const startWall = addDaysToWall(localStart, days);
+    // Monthly steps anchor to the seed wall, never to the previous clamped
+    // wall: a 31st series meets on Feb 28 and is back on the 31st in March.
+    const startWall = monthly
+      ? addMonthsToWall(localStart, step)
+      : addDaysToWall(localStart, 7 * step);
     if (endDate !== null && startWall.minute.slice(0, 10) > endDate) break;
     const starts = index === 1 ? startsAt : resolveWall(startWall, timezone);
-    let ends = index === 1 ? endsAt : resolveWall(addDaysToWall(localEnd, days), timezone);
+    const endWall = monthly ? addMonthsToWall(localEnd, step) : addDaysToWall(localEnd, 7 * step);
+    let ends = index === 1 ? endsAt : resolveWall(endWall, timezone);
     if (index > 1 && durationMs > 0 && ends.getTime() <= starts.getTime()) {
       ends = new Date(starts.getTime() + durationMs);
     }

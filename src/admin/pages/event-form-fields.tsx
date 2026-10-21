@@ -156,7 +156,7 @@ export const EventFormFields: FC<{
               name="recurrence_frequency"
               label="Repeats"
               errors={errors}
-              hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes."
+              hint="Empty = a one-off event. Repeats keep the same wall time in the zone above across clock changes."
             >
               {(id) => (
                 <select id={id} name="recurrence_frequency">
@@ -168,6 +168,12 @@ export const EventFormFields: FC<{
                     selected={val(values, "recurrence_frequency") === "weekly"}
                   >
                     Weekly
+                  </option>
+                  <option
+                    value="monthly"
+                    selected={val(values, "recurrence_frequency") === "monthly"}
+                  >
+                    Monthly
                   </option>
                 </select>
               )}
