@@ -107,18 +107,25 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     });
   });
 
-  it("answers 204 without logging for malformed and empty bodies", async () => {
+  it("answers 204 with sampled accounting for malformed bodies, silent for empty", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Not JSON, valid JSON that is not a report, and an empty body: the
-    // browser must see 204 in every case (a 4xx makes it retry, and a report
-    // endpoint that retries is a flood amplifier), and nothing is worth a log
-    // row when there is no recognisable report.
+    // Not JSON and valid JSON that is not a report: the browser must see 204
+    // in every case (a 4xx makes it retry, and a report endpoint that retries
+    // is a flood amplifier), and each gets one sampled `csp.report.malformed`
+    // row carrying a byte count only. Empty stays the silent heartbeat.
     for (const body of ["not-json{{{", JSON.stringify({ hello: "world" })]) {
       const res = await post(body);
       expect(res.status).toBe(204);
+      expect(await res.text()).toBe("");
     }
     expect((await post(null)).status).toBe(204);
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(2);
+    for (const call of warn.mock.calls) {
+      expect(call[0]).toBe("csp.report.malformed");
+      expect(call[1]).toEqual({ bytes: expect.any(Number) });
+    }
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("not-json{{{");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("hello");
   });
 
   it("drops oversize bodies before parsing under their own log key", async () => {

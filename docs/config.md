@@ -169,16 +169,19 @@ return an empty, no-store `204`, including suppressed logs; there is no `429` or
 
 One token bucket per Worker isolate permits a burst of 20 warnings and refills
 one token every 3 seconds (20 per minute), capped at 20 stored tokens. Valid
-violation reports and `csp.report.dropped_oversize` warnings share this budget,
-so neither input shape bypasses the cap. Malformed and sampled-out reports do
-not consume tokens. Exhaustion is silent: no per-drop warning or extra summary
-line amplifies a flood. The bucket stores only two numbers, not IPs or report
-contents, and uses no database, network calls or background timers.
+violation reports, sampled-in malformed reports, sink-failure diagnostics and
+`csp.report.dropped_oversize` warnings share this budget, so no input shape
+bypasses the cap. Sampled-out and empty reports do not consume tokens.
+Budget-exhausted drops fold into the bounded `csp.report.shed` signal (at most
+one warn per refill window): no per-drop warning amplifies a flood. The bucket
+stores only two numbers, not IPs or report contents, and uses no database,
+network calls or background timers.
 
-`CSP_REPORT_SAMPLE_RATE` remains an additional gate for valid reports only.
-Lower it to reduce ordinary violation log volume; `1` includes every valid
-report **eligible for the bucket**, not every received report. It cannot bypass
-the cap. Oversize diagnostics do not use the sample rate but are capped too.
+`CSP_REPORT_SAMPLE_RATE` remains an additional gate for valid and malformed
+reports only. Lower it to reduce ordinary violation and malformed log volume;
+`1` includes every valid report **eligible for the bucket**, not every received
+report. It cannot bypass the cap. Oversize and sink-failure diagnostics do not
+use the sample rate but are capped too.
 
 This is best-effort **per-isolate log suppression**, not a request-rate or
 fleet-wide cost guarantee. Isolates refill independently; eviction, restart and
