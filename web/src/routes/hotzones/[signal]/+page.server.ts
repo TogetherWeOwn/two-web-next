@@ -6,7 +6,7 @@ import { alertRequestError } from "../../../../../src/alerts";
 import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
 import type { HotzoneSignal } from "../../../../../src/hotzones/aggregates";
 import { parseSeasonParam } from "../../../../../src/hotzones/season";
-import { renderHotzoneGrid } from "../../../../../src/hotzones/pages";
+import { renderHotzoneGrid, renderPeriodPicker } from "../../../../../src/hotzones/pages";
 
 // Locked signal vocabulary: joins | voice | games exactly. Any other segment
 // 404s at this binding, never a grid; the helper re-checks it for its own
@@ -49,6 +49,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,
+      periodPickerHtml: renderPeriodPicker(`/hotzones/${data.signal}`, data.season),
     };
   } catch (err) {
     const status = (err as { status?: number })?.status;
