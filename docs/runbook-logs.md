@@ -304,6 +304,45 @@ moderator authority and role-removal residuals in the
 Ownership flags, response behavior and the log privacy contract are unchanged
 by this section.
 
+### Kit public-read 503 alerts
+
+Six throw legs across three Kit public-read loads emit the leak-free
+`error.alert` diagnostic before answering the branded 503
+(`src/kit-events.ts` database handle and page-model reads,
+`src/kit-past-events.ts` database handle and list reads,
+`src/kit-event-states.ts` database handle and event lookup). Each leg
+alerts once per distinct `class@route` fingerprint (muted five minutes per
+isolate, like every `error.alert`); the `request_id` joins to the
+`http.request` line when the binding threaded a valid `cf-ray`, and is
+absent otherwise. Response bodies and headers are byte-stable: the binding
+ignores the thrown message. One cancelled-page degrade warns instead of
+alerting. Find an alert with the message **contains** filter from
+[Find a request](#find-a-request) on `"event":"error.alert"` plus the
+route, or the warn by its exact message. Read-only checks only: a Workers
+Logs search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `error.alert` with `route: /events` | A code bug (no branded status) threw from the events-list database handle or page-model read (`loadEventsPage` in `src/kit-events.ts`). | Fails closed with the branded 503 (`Events temporarily unavailable`, `private, no-store`); pages via the existing `error.alert` Tail Worker path, no new paging. | Filter `error.alert` by `route: /events` and split by `exception`; then check database health with the [alert runbook](runbook-alerts.md). | `fingerprint` (`ExceptionClass@/events`), `exception`/`error_class` (class only), `method: GET`, validated `request_id` |
+| `error.alert` with `route: /events/past` | A code bug threw from the past-archive database handle or list read (`loadPastArchivePage` in `src/kit-past-events.ts`). | Fails closed with the branded 503, same paging as above. | Filter `error.alert` by `route: /events/past` and split by `exception`; then check database health. | Same shape with `route: /events/past` |
+| `error.alert` with `route: /e/:key` | A code bug threw from the event-state database handle or event lookup (`resolveEventState` in `src/kit-event-states.ts`). | Fails closed with the unavailable outcome (503, `private, no-store`), same paging. | Filter `error.alert` by `route: /e/:key` and split by `exception`; then check database health. | Same shape with `route: /e/:key` |
+| `Event alternatives unavailable; serving the empty list.` | The cancelled-event alternatives lookup threw (`relatedFn` in `src/kit-event-states.ts`); the 410 page still serves with an empty list. | Degrades to an empty list; does not page. | Filter logs for the exact message over the window and split by `exception`; then check database health. | `exception` (class only, never the message, which can carry SQL or wire detail), validated `request_id` |
+
+Silent by design around these lines: branded throws (any numeric `status`)
+pass through with no new alert; null database handles answer the branded
+503 silently; session/journey fail-open legs serve the anonymous list
+silently; the 404-path suggestions degrade (`suggestionsFn`) stays silent
+because forged and unknown keys already miss, so warning there would fire
+on probe traffic during an outage.
+
+Agent check (fixtures only, proves fire/silent per branch):
+
+```sh
+env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  npx vitest run test/kit-public-read-503-alerts-acceptance.test.ts
+```
+
 ### Auth sign-in warnings
 
 This section documents one auth-scoped `console.warn` line (the oversized
