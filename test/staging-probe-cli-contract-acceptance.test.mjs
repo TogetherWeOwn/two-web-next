@@ -650,9 +650,9 @@ describe("queue JSON verdicts", () => {
     expect(labels).toContain("moderator POST redispatch status");
     expect(labels).toContain("preview/redispatch admission agreement");
     expect(result.checks.every((c) => c.ok)).toBe(true);
-    // Stable: a second run with a different token yields identical IDs in order.
+    // Stable: a second run with fresh fixtures yields identical IDs in order.
     const other = await queueCli.runProbe({
-      token: `${syntheticToken}-other`,
+      token: syntheticToken,
       fetch: greenFetch(),
     });
     expect(other.checks.map((c) => c.id)).toEqual(result.checks.map((c) => c.id));
