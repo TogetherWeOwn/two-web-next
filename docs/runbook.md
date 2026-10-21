@@ -47,7 +47,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
 | Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
-| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
+| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `degraded + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
 | `error.spike` alert (aggregate 5xx/error-rate or crash spike) | [Aggregate spike alarm](runbook-alerts.md#aggregate-spike-alarm-errorspike) | Read `script`, `build_sha`, `errors`/`crashes` and `error_rate` in the page; open the `logs` dashboard path for that script at the page timestamp and compare against the deploy that produced `build_sha`; crashes with no matching `error.alert` line mean unhandled exceptions or CPU/memory limit kills, so search by outcome, not fingerprint | DevOps & Reliability Engineer |
 | `uptime.down` alert (`/up` red for over two minutes) | [Scheduled `/up` prober: `uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) | Read status in alert; the prober has no corresponding app critical-log line; status zero means transport/timeout, not proof of a database failure; status 200 with missing or wrong `x-two-origin` means `/up` was not served by two-web-next (check DNS and routes), 3xx means a redirect; identify which Tail Worker sent the page (`two-web-next-alerts` vs `two-web-next-alerts-production`) or which webhook channel received it to verify staging vs production target first, then `curl -sS -D - -o /dev/null --max-time 10 https://next.togetherweown.com/up` for staging or apex for production and check `x-two-origin: two-web-next` | DevOps & Reliability Engineer |
@@ -288,7 +288,8 @@ The staging target is the reviewed Kit config
 `DB` and `BOT_DB`, Tail consumer and worker-first assets. It is distinct from
 the Kit preview config [`web/wrangler.jsonc`](../web/wrangler.jsonc), which is
 never the staging deploy target. The root [wrangler.jsonc](../wrangler.jsonc)
-remains the Hono config and production cutover template. `two-web-next-staging`
+remains the Hono config and the production config (never the staging target).
+`two-web-next-staging`
 is a Hyperdrive resource description, **not** a Worker name or a Wrangler
 environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
@@ -634,18 +635,23 @@ step.
 
 #### Production trigger reconciliation (manual, domain-safe)
 
-Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
-queue consumers, and neither `wrangler deploy --env production` nor `wrangler
-triggers deploy --env production` may be used to apply them: both re-sync
+Promoting a Worker Version does not apply cron schedules or queue consumers,
+and neither `wrangler deploy --env production` nor `wrangler triggers deploy
+--env production` may be used to apply them on the web Worker: both re-sync
 routes and custom domains, retry provisioning the already-attached apex, and
-fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins the
-literal reviewed `env.production` schedules and consumers, so any change
-fails CI until the test is updated in the same release PR; the authorized
-production principal then reconciles
-only the changed trigger kind below and reads back the result. These endpoints
-manage schedules and consumers only and never touch custom domains or DNS.
-Never delete/recreate the apex DNS record or the custom domain, and never
-remove consumers to hide an incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
+fail with Cloudflare 100117. Both production schedules and both production
+consumers live on `two-web-jobs-production` (`wrangler.jobs.jsonc`
+`env.production`); the web `env.production` only produces.
+`test/probe-workflows.test.ts` and `test/jobs-worker-config.test.ts` pin the
+literal reviewed schedules and consumers, so any change fails CI until the
+tests are updated in the same release PR; the authorized production
+principal then reconciles only the changed trigger kind below and reads back
+the result. `node ci/check-production-triggers.mjs` automates the
+read-and-compare (exit 0 clean, 1 drift, 2 unreadable); the manual steps
+remain the mutation path. These endpoints manage schedules and consumers
+only and never touch custom domains or DNS. Never delete/recreate the apex
+DNS record or the custom domain, and never remove consumers to hide an
+incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
 
 1. Read the live state (metadata reads, no mutation; approved Cloudflare
    credentials must already be injected, never supplied on argv). Resolve
@@ -664,6 +670,7 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
        (async () => {
          for (const p of [
            `/accounts/${acct}/workers/scripts/two-web-next-production/schedules`,
+           `/accounts/${acct}/workers/scripts/two-web-jobs-production/schedules`,
            `/accounts/${acct}/queues`,
          ]) {
            const r = await fetch("https://api.cloudflare.com/client/v4" + p, {
@@ -678,17 +685,19 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
    )
    ```
 
-   Compare the schedules against `wrangler.jsonc`
-   `env.production.triggers.crons`, and each production queue's consumers
-   (`GET .../queues/<queue_id>/consumers`) against
-   `env.production.queues.consumers`. Identical means nothing to do.
-2. On cron drift only, replace the script schedules with the reviewed crons:
-   `PUT .../workers/scripts/two-web-next-production/schedules` with
-   `[{"cron": "<each env.production cron>"}]`, then repeat the GET read-back
-   until it matches.
+   Compare the jobs schedules against `wrangler.jobs.jsonc`
+   `env.production.triggers.crons` (the web script must hold none), and each
+   production queue's consumers (`GET .../queues/<queue_id>/consumers`)
+   against the jobs `env.production.queues.consumers`. Identical means
+   nothing to do.
+2. On cron drift only, replace the owning script's schedules with the
+   reviewed crons: `PUT
+   .../workers/scripts/two-web-jobs-production/schedules` with `[{"cron":
+   "<each reviewed cron>"}]`, then repeat the GET read-back until it
+   matches. Residue on the web script clears the same way with `[]`.
 3. On consumer drift only, reconcile that queue's consumer with the
    reviewed `script_name`, `type: "worker"` and settings, then repeat the
-   list read-back until it matches. Wrangler maps `wrangler.jsonc` keys to
+   list read-back until it matches. Wrangler maps the jobs config keys to
    API fields: `max_batch_size` → `batch_size`, `max_batch_timeout`
    (seconds) → `max_wait_time_ms` (milliseconds, so `5` becomes `5000`;
    copying `5` verbatim would set a 5 ms wait), `max_retries` unchanged.
@@ -701,7 +710,7 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
      script on the queue): create it with `POST
      .../queues/<queue_id>/consumers` and this body (current reviewed
      values): `{"type": "worker", "script_name":
-     "two-web-next-production", "settings": {"batch_size": 10,
+     "two-web-jobs-production", "settings": {"batch_size": 10,
      "max_retries": 10, "max_wait_time_ms": 5000}}`.
    - Consumer exists: replace it with `PUT
      .../queues/<queue_id>/consumers/<consumer_id>` and the same body.
@@ -1356,8 +1365,8 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | --- | --- | --- |
 | Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
 | `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
-| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
-| No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+| Read rejects or reaches a server/response limit | `degraded` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
+| No usable queue client/configuration | `degraded` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
 The staging deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`**
 and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
@@ -1388,8 +1397,16 @@ matches main [`eed3c8b`](https://github.com/TogetherWeOwn/two-web-next/tree/eed3
 
 `warn_at: 20` and `critical_at: 100` are reported thresholds; the implementation
 has **no separate critical status**. `failed`, `delayed`, `reserved` or `total`
-alone do not degrade health. `healthy + unknown` is lack of evidence, not DB
+alone do not degrade health. `degraded + unknown` is lack of evidence, not DB
 recovery, zero backlog or a drain gate. There is no last-known-good measurement.
+
+Decided: unknown depth reports top-level `degraded` on HTTP 200 so dashboards
+see blindness instead of health, joining the existing queue-only degraded
+family. HTTP stays 200 because readiness is independent of queue
+observability; the Tail uptime prober (200 + `x-two-origin`) stays green, so
+this does not double with the direct `scheduled.failing` page, which remains
+the paging signal for failed reconcile/prune runs (see
+[runbook-alerts.md](runbook-alerts.md)).
 
 Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
@@ -1489,9 +1506,10 @@ Shared human throttles and profile throttles fail open on store error; the share
 human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
 and never retries the other source after a connection failure. Optional
 search-log/widget reads fail open but do not protect primary DB reads. Do not
-relax `MEMBER_ACCESS_LOG_ENFORCE` to force a recovery: required logging defaults
-to fail closed. Diagnose from redacted platform errors/config metadata; a code
-rollback may help a code regression, but cannot repair a Neon outage. Escalate
+touch `MEMBER_ACCESS_LOG_ENFORCE` for a recovery: the flag has no production
+effect and required logging always fails closed. Diagnose from redacted
+platform errors/config metadata; a code rollback may help a code regression,
+but cannot repair a Neon outage. Escalate
 binding/DB recovery to the Director and authorized custodian; never credential-hop.
 
 ## Queue containment, drain and failed-job replay

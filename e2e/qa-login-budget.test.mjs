@@ -87,11 +87,11 @@ test("the sequential smoke holds at most one throttle window of QA logins", () =
 // the parity step once hid three spends from the guard above and reddened
 // fast runs with a 429 deep inside parity — so this test counts their POST
 // call sites directly and pins the green-run window total (journeys + parity,
-// with the DB-gated teardown spending 0 on clean runs) at the restored
-// pre-marginal-login ceiling. A new login anywhere in this window fails here
-// instead of reddening a fast run: cut a login elsewhere first. Parity
-// coverage is Test Author acceptance — reshape it with them, never by editing
-// their spec to satisfy this pin.
+// with the DB-gated teardown spending 0 on clean runs) at the tightened
+// ceiling below. A new login anywhere in this window fails here instead of
+// reddening a fast run: cut a login elsewhere first. Parity coverage is Test
+// Author acceptance — reshape it with them, never by editing their spec to
+// satisfy this pin.
 // Any .post( whose first argument contains /auth/qa/, whatever precedes it:
 // inline paths, absolute https URLs, and template-origin `${origin}/...`
 // forms all spend the same throttle budget. The match stays inside the first
@@ -113,8 +113,8 @@ function countNonInlineQaLoginPosts(relativePath) {
 
 // The qaLogin helper is counted per journey spec above, which excludes
 // kit-parity — so a helper call in a parity file would spend the shared
-// throttle invisibly to both tests. Parity logs in through its two counted
-// POST call sites instead.
+// throttle invisibly to both tests. Parity logs in through its one counted
+// POST call site instead (the renewal session is DB-minted).
 function countQaLoginCalls(relativePath) {
   const source = readFileSync(new URL(relativePath, e2eDir), "utf8");
   return (source.match(/qaLogin\s*\(/g) ?? []).length;
@@ -161,11 +161,13 @@ test("teardown and parity QA logins stay pinned inside the throttle window", () 
   );
   assert.equal(
     paritySites,
-    2,
-    `kit-parity specs must keep exactly two QA-login POST call sites (found ${paritySites}: ${parityBreakdown || "none"}): ` +
-      `one shared member login plus one isolated renewal login. A third parity login ` +
-      `reddened fast runs before — cut a login elsewhere first, and reshape renewal ` +
-      `coverage with the Test Author rather than editing their spec to satisfy this pin.`,
+    1,
+    `kit-parity specs must keep exactly one QA-login POST call site (found ${paritySites}: ${parityBreakdown || "none"}): ` +
+      `the shared member login only — the isolated renewal session is minted directly ` +
+      `in Postgres (the login was never under test) and spends no throttle budget. ` +
+      `A second parity login reddened fast runs before — cut a login elsewhere first, ` +
+      `and reshape renewal coverage with the Test Author rather than editing their ` +
+      `spec to satisfy this pin.`,
   );
   assert.deepEqual(
     directSites,
@@ -184,20 +186,22 @@ test("teardown and parity QA logins stay pinned inside the throttle window", () 
   assert.deepEqual(
     parityHelperLogins,
     [],
-    `kit-parity specs must log in through the two counted POST call sites above, not the qaLogin helper: ` +
+    `kit-parity specs must log in through the one counted POST call site above, not the qaLogin helper: ` +
       `${parityHelperLogins.map((row) => `${row.file}: ${row.count}`).join(", ")}. ` +
       `A helper login here spends the shared throttle invisibly to both budget tests.`,
   );
   // Green-run window: journeys + parity, with the DB-gated teardown at 0.
-  // 12 is the restored pre-marginal-login ceiling against the 10/min sliding
-  // window — the journeys spread across a minute-plus step so the trailing
-  // window at the last spend holds fewer, but every login past 12 erases that
-  // margin and reds the fastest runs.
+  // 11 is the tightened ceiling against the 10/min sliding window: the
+  // isolated parity renewal login was replaced by a DB-minted session with
+  // identical renewal coverage (the login was never under test), cutting one
+  // spend from the restored 12. The journeys spread across a minute-plus step
+  // so the trailing window at the last spend holds fewer, but every login
+  // past 11 erases that margin and reds the fastest runs.
   const greenTotal = journeys + paritySites;
   assert.ok(
-    greenTotal <= 12,
+    greenTotal <= 11,
     `green-run QA logins total ${greenTotal} (journeys ${journeys} + parity ${paritySites}), ` +
-      `past the restored 12 ceiling against the 10/min sliding window. Cut a login ` +
+      `past the tightened 11 ceiling against the 10/min sliding window. Cut a login ` +
       `elsewhere first — fewer logins, not retries.`,
   );
 });

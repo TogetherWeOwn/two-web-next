@@ -33,7 +33,8 @@ Moderator status is copied into the session at sign-in, so removing a Discord
 role does not update existing sessions. First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
-normal browsing can rotate and extend that window. For immediate invalidation,
+normal browsing can rotate and extend that window. Kit-served admin pages renew
+the sliding session exactly like the Hono panel. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
@@ -121,7 +122,9 @@ QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-
 ```
 
 It spends two QA-login hits and stays inside the admin-write throttle budget.
-Live runs belong to the authorized cutover procedure, not CI.
+Live runs belong to the authorized cutover procedure, not CI. The queue
+operator legs (preview, redispatch, source-evidence) have their own drill in
+[the redrive runbook](queue-redrive-runbook.md#auth-wall-drill-staging-only).
 
 ## Busy writes and retrying
 

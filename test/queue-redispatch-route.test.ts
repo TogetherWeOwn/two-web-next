@@ -400,6 +400,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.audit).not.toHaveBeenCalled();
   });
   it("source error fails closed and does not leak raw diagnostics", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = createMemorySessionStore();
     const dispatch = vi.fn();
     const res = await request(
@@ -419,6 +420,11 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
     expect(dispatch).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch source read failed; refusing redispatch.",
+      { exception: "Error", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("private SQL failure");
   });
   it("a keep advice refuses without dispatching or deleting, but audits the refusal", async () => {
     const store = createMemorySessionStore();
@@ -446,6 +452,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a missing queue binding fails closed before anything is written", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = createMemorySessionStore();
     const res = await request(
       store,
@@ -458,8 +465,14 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
     expect(mocks.audit).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch prerequisites missing; refusing redispatch.",
+      { exception: "MissingConfiguration", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("redispatch_unavailable");
   });
   it("a dispatch failure fails closed but keeps the attempt receipt", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = createMemorySessionStore();
     const dispatch = vi.fn(async () => {
       throw new Error("private queue failure");
@@ -480,6 +493,12 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.audit).toHaveBeenCalledTimes(1);
     expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch dispatch failed; refusing redispatch.",
+      { exception: "Error", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("private queue failure");
+    expect(JSON.stringify(err.mock.calls)).not.toContain("redispatch_unavailable");
   });
   it("a held lock reports the in-flight dispatch instead of queueing a duplicate", async () => {
     const store = createMemorySessionStore();
@@ -582,6 +601,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
   });
   it("audit failure always refuses the dispatch before anything is queued", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     mocks.audit.mockRejectedValue(new Error("private audit failure"));
     const store = createMemorySessionStore();
     const dispatch = vi.fn(async () => true);
@@ -600,5 +620,10 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
     expect(dispatch).not.toHaveBeenCalled();
     expect(mocks.end).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch audit failed; refusing redispatch.",
+      { exception: "Error", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("private audit failure");
   });
 });
