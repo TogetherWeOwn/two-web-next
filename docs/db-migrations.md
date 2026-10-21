@@ -159,6 +159,55 @@ policy-change PR with a rationale and independent Code Reviewer approval under
 the same exact-head green-CI merge gate; lock regeneration alone is never an
 exception. Normal migration PRs review the append-only SQL and lock diff together.
 
+## Migration runtime rights and default ACLs
+
+New or changed SQL migrations that create runtime-visible tables, views, or
+sequences must state the reviewed runtime privileges explicitly: one privilege
+per `GRANT`, directly from the creating object owner, to `two_web_app`, with no
+grant option. The object-by-object allowlists and static SQL parser are in
+[`ci/migration-runtime-rights.mjs`](../ci/migration-runtime-rights.mjs). They
+cover regular and partition tables, views (including recursive ones), explicit
+sequences, and serial or identity-generated sequences under quoted and
+catalog-qualified spellings alike; unlisted objects and unsupported SQL fail
+closed. The lexer mirrors PostgreSQL on `E'...'` escapes (only at token starts)
+and dollar quotes (including `$` after digits or non-ASCII identifier
+characters), accepts non-ASCII identifier characters and dollar-quote tags,
+and rejects unterminated strings, quotes, and comments rather than silently
+merging statements. PostgreSQL string continuation across a newline inherits
+the first literal's escape mode and is comment-sensitive (line comments
+preserve it, block comments break it), so an `E'...'` literal followed by a
+newline gap rejects instead of risking a hidden statement; no historical
+migration uses that shape. Both scanners use PostgreSQL's whitespace classes:
+CR and LF are newlines, and space, tab, form feed, and vertical tab extend the
+gap. Line comments end at CR or LF, so a CR-only line ending cannot hide the
+next statement.
+The check applies only to added/changed migration SQL and does not rewrite or
+bless historical migrations. Session configuration (`SET`, `RESET`, and
+`DISCARD` in any spelling, which could change object resolution, ownership, or
+string lexing) and persisted configuration defaults (`ALTER DATABASE ...
+SET/RESET`, `ALTER SYSTEM`) are rejected with no allowlist, as are role
+switching (including quoted `set_config` calls), role and ownership changes,
+`ALTER DEFAULT PRIVILEGES`, `REVOKE`, dynamic SQL, `SELECT INTO`, temporary
+objects, unlogged sequences, inherited or LIKE-copied tables, `CREATE SCHEMA`
+schema elements, sequence references, `ALTER FUNCTION ... SECURITY DEFINER`,
+trigger, rule, policy, extension or server DDL, and table RLS
+enable/disable/force changes outside a separately reviewed policy change.
+
+The custom migration runner also performs a read-only catalog preflight against
+the active migration role's table/sequence defaults before planning or applying.
+It refuses to run as the runtime role, refuses table defaults, and refuses any
+sequence default outside the reviewed `two_web_app` `USAGE`/`SELECT` set; the
+refusal names the offending reason while other database errors stay masked. The
+runner also pins `standard_conforming_strings=on` per connection and
+transaction, matching the guard's string lexing even under a hostile database
+default. It does not change ACLs or role membership. The ledger keeps the canonical Drizzle
+serial format both this runner and `drizzle-kit migrate` insert through, so the
+two writers stay interchangeable. The runtime-rights guard and its selftests run
+in the existing `check` job, which feeds the required `ci-ok` status. CI and
+runner selftests use disposable Postgres only; this check does not authorize a
+staging or production connection or any live grant, revoke, role, or
+default-ACL change.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,
