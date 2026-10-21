@@ -145,6 +145,7 @@ describe("RED: Kit past overlong answers the 422 notice", () => {
     expect(copy.code).toBe("422");
     expect(copy.lead).toBe(NOTICE);
     expect(copy.title.length).toBeGreaterThan(0);
+    expect(copy.title).toBe("Events");
     for (const outage of OUTAGE_COPY) {
       expect(copy.title).not.toContain(outage);
       expect(copy.lead).not.toContain(outage);
@@ -170,6 +171,28 @@ describe("RED: Kit past overlong answers the 422 notice", () => {
     expect(html).not.toContain(OVERLONG_Q);
     expect(html).not.toContain(OVERLONG_ASTRAL_Q);
     expect(html).toContain("data-testid=");
+  });
+
+  it("422 SSR offers exactly events and home recovery, never 503 invite/retry actions", () => {
+    const { head, body } = renderErrorShell(422);
+    expect(head).toContain("<title>Events — Together We Own</title>");
+    expect(body).toContain('<h1 id="error-heading">Events</h1>');
+    const main = body.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1];
+    expect(main).toBeDefined();
+    const links = [...main!.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map(([, attrs, content]) => ({
+      testid: attrs!.match(/data-testid="([^"]*)"/)?.[1],
+      href: attrs!.match(/href="([^"]*)"/)?.[1],
+      text: content!
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    }));
+    expect(links).toEqual([
+      { testid: "error-events", href: "/events", text: "Back to events" },
+      { testid: "error-home", href: "/", text: "Back to the homepage" },
+    ]);
+    expect(main).not.toContain('data-testid="error-invite"');
+    expect(main).not.toContain('data-testid="error-retry"');
   });
 
   it("root boundary preserves 422 instead of falling back to the 500 shell", async () => {

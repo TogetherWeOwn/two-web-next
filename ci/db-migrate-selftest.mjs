@@ -500,6 +500,197 @@ test("driver race capture swallows the exact crash and restores listeners", asyn
   assert.deepEqual(process.listeners("uncaughtException"), before);
 });
 
+test("capture restores the saved raw listeners before rethrowing a nonmatching error", () => {
+  const witness = () => assert.fail("restoration must not dispatch the error to saved listeners");
+  process.prependOnceListener("uncaughtException", witness);
+  const before = process.rawListeners("uncaughtException");
+  const race = captureDriverRaceCrashes();
+  try {
+    const [handler] = process.listeners("uncaughtException");
+    const error = new Error("not-the-driver-race");
+    // Call the real handler synchronously: assert.throws observes the rethrow
+    // without turning it into an uncaught error in node's own test listener.
+    assert.throws(
+      () => handler(error),
+      (thrown) => {
+        assert.equal(thrown, error);
+        assert.deepEqual(process.rawListeners("uncaughtException"), before);
+        return true;
+      },
+    );
+    assert.deepEqual(race.crashes, []);
+    race.release();
+    assert.deepEqual(process.rawListeners("uncaughtException"), before);
+  } finally {
+    race.release();
+    process.removeListener("uncaughtException", witness);
+  }
+});
+
+// Replace only the external driver in a child; journal/admission/reporting and
+// runMigration (or the actual CLI entrypoint) execute unchanged. This driver
+// deliberately has no begin/onclose Promise.race: the live backend-kill case
+// below covers the real driver, while this seam isolates our explicit guard.
+function controlledDriver(_url, options) {
+  const state = globalThis.migrationDriverFixture;
+  state.constructed = true;
+  const query = async (text) => {
+    state.statements.push(text);
+    if (state.closed) {
+      state.afterLoss.push(text);
+      throw new Error("statement attempted after connection loss");
+    }
+    if (text === "SET LOCAL search_path = public" || text === "SET LOCAL datestyle = 'ISO, YMD'")
+      return [];
+    if (text.includes("pg_try_advisory_xact_lock")) return [{ acquired: true }];
+    if (text.includes("to_regclass")) return [{ ledger: null }];
+    if (text.includes("clock_timestamp")) return [{ timestamp: "2026-10-21T00:00:00.000000Z" }];
+    throw new Error(`unexpected fixture statement: ${text}`);
+  };
+  const client = (strings) => query(strings.join("?"));
+  client.unsafe = query;
+  client.begin = async (callback) => {
+    if (process.env.MIGRATION_DRIVER_CRASH) {
+      setImmediate(() => {
+        if (process.env.MIGRATION_DRIVER_CRASH === "matching") {
+          const error = new TypeError("Cannot read properties of null (reading 'write')");
+          error.stack =
+            "TypeError: Cannot read properties of null (reading 'write')\n" +
+            "    at Immediate.nextWrite (node_modules/postgres/src/connection.js:255:22)";
+          throw error;
+        }
+        throw new Error("cli-nonmatching-uncaught-exception");
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      console.log("driver continuation after crash");
+      return [];
+    }
+    return callback(client);
+  };
+  client.end = async () => {
+    state.ended = true;
+  };
+  state.loseConnection = () => {
+    state.closed = true;
+    options.onclose();
+  };
+  return client;
+}
+
+function withControlledMigrationDriver(callback) {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "migration-driver-"),
+  );
+  try {
+    const preload = join(dir, "driver-preload.mjs");
+    const driverUrl = `data:text/javascript,${encodeURIComponent(`export default ${controlledDriver.toString()}`)}`;
+    writeFileSync(
+      preload,
+      `
+import { registerHooks } from "node:module";
+globalThis.migrationDriverFixture = { statements: [], afterLoss: [], closed: false, ended: false };
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "postgres" && context.parentURL === ${JSON.stringify(new URL("./db-migrate.mjs", import.meta.url).href)})
+      return { url: ${JSON.stringify(driverUrl)}, shortCircuit: true };
+    return nextResolve(specifier, context);
+  }
+});
+`,
+    );
+    return callback({ dir, preload });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const withheld =
+  "Migration failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
+
+test("the PITR connection-loss guard throws MigrationError before any ledger or migration statement", () => {
+  withControlledMigrationDriver(({ dir, preload }) => {
+    const entry = join(dir, "guard.mjs");
+    writeFileSync(
+      entry,
+      `
+import assert from "node:assert/strict";
+import { runMigration, safeMigrationError } from ${JSON.stringify(script)};
+const state = globalThis.migrationDriverFixture;
+const env = ${JSON.stringify({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: "postgres://agent_test@agent-testdb:5432/web_migrate_test_abcdef" })};
+let MigrationError;
+try { await runMigration("invalid", env); } catch (error) { MigrationError = error.constructor; }
+assert.equal(MigrationError.name, "MigrationError");
+const reports = [];
+let caught;
+try {
+  await runMigration("apply", env, { testDatabase: true, report: (line) => {
+    reports.push(line);
+    if (line.startsWith("Pre-migration PITR timestamp")) {
+      state.receipt = true;
+      state.loseConnection();
+    }
+  }});
+} catch (error) { caught = error; }
+assert.equal(state.constructed, true);
+assert.equal(state.receipt, true, "the actual runner must reach the PITR receipt");
+assert.equal(state.closed, true);
+assert.deepEqual(state.afterLoss, [], "no ledger/schema/migration statements may be attempted after loss");
+assert.ok(caught instanceof MigrationError, "the explicit guard must refuse with MigrationError, not a driver rejection");
+assert.equal(caught.message, ${JSON.stringify(withheld)});
+assert.equal(safeMigrationError(caught), ${JSON.stringify(withheld)});
+assert.equal(state.ended, true, "the client is still closed in finally");
+assert.deepEqual(state.statements, [
+  "SET LOCAL search_path = public",
+  "SET LOCAL datestyle = 'ISO, YMD'",
+  "select pg_try_advisory_xact_lock(?) as acquired",
+  "select to_regclass(?) as ledger",
+  ${JSON.stringify("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') as timestamp")},
+]);
+assert.ok(reports.includes("Pending: ${journal.entries.length} (${journal.entries.map((entry) => entry.tag).join(", ")})"));
+assert.ok(!reports.includes("Post-check: zero pending web migrations."));
+console.log("guard refused before DDL");
+`,
+    );
+    const result = spawnSync(process.execPath, ["--import", preload, entry], {
+      encoding: "utf8",
+      timeout: 15000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /guard refused before DDL/);
+  });
+});
+
+test("the actual CLI rethrows nonmatching uncaught exceptions instead of masking or continuing", () => {
+  withControlledMigrationDriver(({ preload }) => {
+    const cli = (crash) =>
+      spawnSync(process.execPath, ["--import", preload, script, "apply"], {
+        encoding: "utf8",
+        timeout: 15000,
+        env: {
+          ...process.env,
+          ...mainEnv,
+          GITHUB_STEP_SUMMARY: "",
+          // Synthetic credential accepted by admission only; the loader replaces
+          // postgres before construction, so no DNS/socket/database is touched.
+          PLANETSCALE_STAGING_DATABASE_URL: `postgres://fixture.${PLANETSCALE_STAGING_BRANCH_ID}:fixture@${PLANETSCALE_STAGING_HOST}/fixture?sslmode=require`,
+          MIGRATION_DRIVER_CRASH: crash,
+        },
+      });
+    const negative = cli("nonmatching");
+    assert.equal(negative.error, undefined);
+    assert.notEqual(negative.status, 0);
+    assert.match(negative.stderr, /Error: cli-nonmatching-uncaught-exception/);
+    assert.doesNotMatch(negative.stderr, /database details withheld/);
+    assert.doesNotMatch(negative.stdout, /driver continuation after crash/);
+    const matching = cli("matching");
+    assert.equal(matching.error, undefined);
+    assert.equal(matching.status, 1);
+    assert.equal(matching.stderr.trim(), withheld);
+    assert.match(matching.stdout, /driver continuation after crash/);
+  });
+});
+
 test("uncaught errors outside the driver race signature still fail the run", () => {
   const dir = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "driver-race-negative-"),
