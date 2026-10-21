@@ -202,7 +202,7 @@ async function main() {
     console.log(HELP);
     return;
   }
-  if (args.length !== 2 || args[0] !== "--receipt-file") {
+  if (args.length !== 2 || args[0] !== "--receipt-file" || args[1].startsWith("-")) {
     console.error(USAGE);
     process.exitCode = 2;
     return;

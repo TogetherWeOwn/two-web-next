@@ -141,7 +141,9 @@ export async function runProbe({ baseUrl = STAGING_URL, token, fetch: send = fet
   );
   if (redispatchWalled) {
     checks.push({
-      id: checkId("guest POST redispatch recovery target"),
+      // Shared stable ID with the disabled branch below: the same 18 IDs in
+      // the same order whatever the admission state. Labels stay distinct.
+      id: "guest-post-redispatch-location",
       label: "guest POST redispatch recovery target",
       actual: guestRecovery ? "recovery" : locationShape(guestRedispatchLocation),
       expected: "recovery",

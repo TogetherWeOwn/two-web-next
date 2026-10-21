@@ -14,6 +14,7 @@
 // the value `wrangler rollback` takes.
 
 import { appendFileSync, realpathSync } from "node:fs";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
 const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -104,13 +105,14 @@ function isAllowedOrigin(origin) {
     return false;
   }
   if (url.origin === STAGING_ORIGIN) return true;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   const host = url.hostname;
   return (
     host === "localhost" ||
     host === "127.0.0.1" ||
     host === "::1" ||
     host === "[::1]" ||
-    host.startsWith("127.")
+    (isIP(host) === 4 && host.startsWith("127."))
   );
 }
 
@@ -160,8 +162,11 @@ if (isMainEntry()) {
 
 async function recordMode(origin, jsonMode) {
   if (jsonMode) {
-    // Record never fails: an absent marker or an unreadable /up is a fact to
-    // report, not an error. No human summary, no step-summary write.
+    // Record never fails the exit code: an absent marker or an unreadable /up
+    // is a fact to report, not a deploy error. An unreadable /up still reports
+    // ok:false with a distinct code and a failing read check, so a JSON
+    // consumer can tell a down Worker from an old Worker without a marker.
+    // No human summary, no step-summary write.
     try {
       const revision = await readRevision(origin);
       console.log(
@@ -181,10 +186,10 @@ async function recordMode(origin, jsonMode) {
       console.log(
         JSON.stringify(
           jsonVerdict({
-            ok: true,
-            code: "REVISION_CHECK_OK",
-            next: "No action: live revision recorded; rerun after the next staging deploy.",
-            checks: [{ id: "up-revision-read", label: "live revision read from /up", ok: true }],
+            ok: false,
+            code: "REVISION_CHECK_UNREADABLE",
+            next: "Check the staging deploy workflow: /up is unreadable; the live revision was not recorded.",
+            checks: [{ id: "up-revision-read", label: "live revision read from /up", ok: false }],
             revision: null,
           }),
           null,
