@@ -112,10 +112,7 @@ function tagWith(inner: string, surface: string, pattern: RegExp, name: string) 
 // The shipped feed-copy toast line, read behaviorally: run the served island
 // against a feed control with no Clipboard API, so the toast reports the
 // manual-copy line without touching the fallback.
-const binder = readFileSync(
-	new NodeURL("../public/islands/copy-link.js", import.meta.url),
-	"utf8",
-);
+const binder = readFileSync(new NodeURL("../public/islands/copy-link.js", import.meta.url), "utf8");
 
 async function toastManualCopy() {
   const toast = { textContent: "" };
