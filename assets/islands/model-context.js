@@ -30,9 +30,13 @@
   // cleanup that settles even when abort is ignored. Failures reject with an
   // Error carrying a stable .code, a safe .message naming the next step, and
   // .retryAfter seconds for rate limits only; late completions are fenced and
-  // pagehide settles in-flight reads instead of stranding them. Unknown
-  // statuses (including 404) read as unavailable: the read cannot be served
-  // right now, so the caller tries again rather than trusting a guess.
+  // pagehide settles in-flight reads instead of stranding them. Settlement
+  // aborts the per-call controller and releases the queued entry plus its
+  // page-signal forwarder, so settled calls hold no connections or listeners.
+  // Bodies stream through the reader when one exists and fail as soon as the
+  // byte count passes the cap; without a reader the buffered text is measured
+  // in UTF-8 bytes. A 404 reads as not_found with no retry hint; other
+  // unknown statuses read as unavailable and name try-again.
   var READ_DEADLINE_MS = 10000;
   var MAX_BODY_BYTES = 32768;
   var MAX_RETRY_AFTER_S = 86400;
@@ -69,10 +73,20 @@
     return new Promise(function (resolve, reject) {
       var settled = false;
       var timer = 0;
+      var ctrl = null;
+      var release = null;
       function settle(ok, value) {
         if (settled) return;
         settled = true;
         if (canTimeout) clearTimeout(timer);
+        if (ctrl) {
+          try {
+            ctrl.abort();
+          } catch (_settleAbortIgnored) {
+            // Cleanup must not throw; the fence drops what follows.
+          }
+        }
+        if (release) release();
         if (ok) resolve(value);
         else reject(value);
       }
@@ -85,32 +99,108 @@
       function failBad() {
         fail("invalid_response");
       }
+      function failMissing() {
+        settle(false, toolError("not_found", "No published event with that key."));
+      }
+      // Cap enforcement while streaming: count wire bytes as chunks arrive and
+      // fail as soon as the cap passes, cancelling the reader so a fast large
+      // body stops downloading. Without a reader the buffered text path below
+      // measures UTF-8 bytes instead.
+      function consumeCapped(res, done) {
+        var body = res.body;
+        var canStream =
+          body && typeof body.getReader === "function" && typeof TextDecoder !== "undefined";
+        if (!canStream) {
+          res.text().then(done, failGone);
+          return;
+        }
+        var reader = null;
+        try {
+          reader = body.getReader();
+        } catch (_readerIgnored) {
+          res.text().then(done, failGone);
+          return;
+        }
+        var decoder = new TextDecoder();
+        var text = "";
+        var total = 0;
+        function cancelReader() {
+          try {
+            reader.cancel();
+          } catch (_cancelIgnored) {
+            // Best-effort: abort below already stopped the fetch.
+          }
+        }
+        function pump() {
+          if (settled) {
+            cancelReader();
+            return;
+          }
+          reader.read().then(function (step) {
+            if (settled) {
+              cancelReader();
+              return;
+            }
+            if (!step || step.done) {
+              try {
+                done(text + decoder.decode());
+              } catch (_flushIgnored) {
+                failBad();
+              }
+              return;
+            }
+            var chunk = step.value;
+            total += chunk && chunk.byteLength ? chunk.byteLength : 0;
+            if (total > MAX_BODY_BYTES) {
+              cancelReader();
+              failBad();
+              return;
+            }
+            try {
+              text += decoder.decode(chunk, { stream: true });
+            } catch (_decodeIgnored) {
+              cancelReader();
+              failBad();
+              return;
+            }
+            pump();
+          }, failGone);
+        }
+        pump();
+      }
       if (canTimeout) {
         timer = setTimeout(function () {
           fail("timeout");
         }, READ_DEADLINE_MS);
       }
-      var ctrl = null;
       try {
         ctrl = new AbortController();
       } catch (_readAbortConstructIgnored) {
         // ctrl stays null; the read still issues and the deadline guards it.
       }
-      if (ctrl) {
-        // Pagehide aborts every per-call controller created since register(),
-        // settled or not, so no live signal leaks into a discarded document;
-        // settled calls fence the late rejection.
-        pageFetches.signal.addEventListener("abort", function () {
-          try {
-            ctrl.abort();
-          } catch (_forwardAbortIgnored) {
-            // Already aborted; the settled fence drops what follows.
-          }
-        });
+      // The forwarder is named so settle can remove it: settled calls release
+      // their queue entry and listener instead of waiting for pagehide.
+      function forwardAbort() {
+        try {
+          ctrl.abort();
+        } catch (_forwardAbortIgnored) {
+          // Already aborted; the settled fence drops what follows.
+        }
       }
-      // Settled entries stay queued: the fence makes removal unnecessary and
-      // teardown drains the whole list, so abandon is just failGone.
+      var pageSignal = ctrl && pageFetches ? pageFetches.signal : null;
       pendingReads.push(failGone);
+      if (pageSignal) pageSignal.addEventListener("abort", forwardAbort);
+      release = function () {
+        var at = pendingReads.indexOf(failGone);
+        if (at >= 0) pendingReads.splice(at, 1);
+        if (pageSignal) {
+          try {
+            pageSignal.removeEventListener("abort", forwardAbort);
+          } catch (_releaseAbortIgnored) {
+            // Listener removal is best-effort.
+          }
+        }
+      };
       var init = { headers: { accept: "application/json" }, redirect: "manual" };
       if (ctrl) init.signal = ctrl.signal;
       fetch(url, init).then(function (res) {
@@ -121,10 +211,11 @@
         if (!res || !res.ok) {
           var status = (res && res.status) || 0;
           if (status === 429) fail("rate_limited", retryAfterSeconds(res));
+          else if (status === 404) failMissing();
           else failGone();
           return;
         }
-        res.text().then(function (text) {
+        consumeCapped(res, function (text) {
           var bytes = canEncode ? new TextEncoder().encode(text).length : text.length;
           if (bytes > MAX_BODY_BYTES) {
             failBad();
@@ -135,7 +226,7 @@
           } catch {
             failBad();
           }
-        }, failGone);
+        });
       }, failGone);
     });
   }
