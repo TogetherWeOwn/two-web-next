@@ -33,8 +33,11 @@ Moderator status is copied into the session at sign-in, so removing a Discord
 role does not update existing sessions. First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
-normal browsing can rotate and extend that window. Kit-served admin pages renew
-the sliding session exactly like the Hono panel. For immediate invalidation,
+normal browsing can rotate and extend that idle window, but never beyond
+24 hours from the login that started the session lineage. Rotation preserves
+that start time; reaching the absolute cap requires a fresh sign-in and role
+lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
