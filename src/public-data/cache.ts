@@ -51,15 +51,12 @@ export function readApiPublicCache(key: string, now = Date.now()): ApiPublicCach
 }
 
 /**
- * Infer the clamped page for an out-of-range raw page from an already-cached
- * entry for the same limit. Collection bodies carry `meta.last_page`, and
- * every same-limit entry agrees on it (a mutation retires all event entries
- * in the mutating isolate, so disagreement is only cross-isolate TTL
- * staleness). When the raw page exceeds that last page, the caller replays
- * the clamped entry instead of issuing another count query — so a sweep of
- * past-the-end aliases shares one entry and never evicts page 1. Returns null
- * when nothing cached proves the raw page is out of range: no same-limit
- * entry, an unparseable body, or an in-range raw page.
+ * Find a same-limit entry cached at its own `meta.last_page`, so past-the-end
+ * aliases replay that final page without another count query. Entries can
+ * disagree after a cross-isolate mutation within the TTL: never infer a
+ * target from one page's metadata and replay another snapshot's non-final
+ * page. Only the entry at the target itself can prove it is the last page.
+ * Returns null when no unexpired final-page entry proves a clamp.
  */
 export function findCachedClampTarget(
   limit: number,
@@ -77,8 +74,7 @@ export function findCachedClampTarget(
       continue;
     }
     if (typeof lastPage !== "number" || !Number.isSafeInteger(lastPage) || lastPage < 1) continue;
-    if (rawPage > lastPage) return lastPage;
-    return null;
+    if (rawPage > lastPage && key === `${prefix}${lastPage}`) return lastPage;
   }
   return null;
 }

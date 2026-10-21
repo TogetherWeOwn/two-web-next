@@ -296,9 +296,10 @@ function parseLimit(raw: string): number {
 
 /**
  * Raw page with the documented ceiling applied before any key or offset is
- * built. Missing, malformed and sub-1 values fall back to 1 (never a 422);
- * huge or unsafe integers cap at maxPage so the offset stays a safe integer.
- * Lenient `parseInt` prefix parsing is preserved: "2abc" still reads as 2.
+ * built. Missing values, values without an integer prefix and sub-1 values
+ * fall back to 1 (never a 422); huge or unsafe integers cap at maxPage so the
+ * offset stays a safe integer. Lenient `parseInt` parsing is preserved:
+ * "2abc" and "2.9" still read as 2, with optional sign and leading whitespace.
  */
 function parsePage(raw: string): number {
   const n = Number.parseInt(raw, 10);
@@ -316,8 +317,8 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
-    // Out-of-range replay: a cached same-limit entry proves the clamp target,
-    // so the alias shares the clamped entry instead of costing a count query.
+    // Out-of-range replay: only an entry at its own last page proves a clamp,
+    // so never combine metadata and bytes from different cached snapshots.
     const clampTarget = findCachedClampTarget(limit, page);
     if (clampTarget !== null && clampTarget !== page) {
       const clampedHit = readApiPublicCache(

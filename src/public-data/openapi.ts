@@ -94,11 +94,9 @@ function error(status: number, description: string) {
 }
 
 /**
- * Paging is documented here and only here: these descriptions are the single
- * source for the coercion rules the route implements (invalid falls back to
- * the default, out-of-range is coerced/clamped, past-the-end clamps to the
- * last page, never a 422). The consistency test pins the alias, the ceiling
- * and this wording.
+ * These served descriptions are the single source for paging coercion rules.
+ * Consistency and behavioral tests pin the alias, ceiling, integer-prefix
+ * page parsing, defaults and clamp-to-last-page behavior (never a 422).
  */
 const PAGING_PARAMETERS = [
   {
@@ -106,8 +104,10 @@ const PAGING_PARAMETERS = [
     in: "query",
     schema: { type: "integer", minimum: 1, maximum: API_PUBLIC_BOUNDS.maxPage, default: 1 },
     description:
-      "1-based page. Invalid or malformed values fall back to the default 1; " +
-      "out-of-range values are coerced: capped at the maximum 1000 pages, then " +
+      "1-based page. Accepts a leading integer prefix (2abc and 2.9 read as 2), " +
+      "with optional sign and leading whitespace. Invalid or malformed values " +
+      "without an integer prefix, or values below 1, fall back to the default 1; " +
+      `out-of-range values are coerced: capped at the maximum ${API_PUBLIC_BOUNDS.maxPage} pages, then ` +
       "clamped to the last page. Never a 422.",
   },
   {
