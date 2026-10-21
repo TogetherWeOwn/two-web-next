@@ -2,7 +2,8 @@
 //
 // Today web/src/lib/ErrorShell.svelte renders <Shell> with no header override,
 // so every Kit error status falls back to the guest header: "Sign in with
-// Discord" pointing at the OAuth start (/join/discord, a 302 to Discord). On
+// Discord" pointing at the ordinary sign-in (/auth/discord, a 302 to Discord;
+// explicit join/RSVP entries use /join/discord instead). On
 // 403/429/500/503 that start is dead or a loop — Hono deliberately renders
 // those headers with an invite "Open Discord" CTA instead
 // (src/error-pages.tsx, src/page-shell.tsx cta branch) — and Kit's generic
@@ -165,7 +166,9 @@ function mainHtml(body: string, label: string): string {
 describe("acceptance: outage headers point at Discord, never the OAuth start", () => {
   it.each(OUTAGE)("%d header renders the invite Open Discord CTA", (code) => {
     const { body } = renderShell(code);
-    const cta = signinCta(headerAccount(body, `${code}`), `${code}`);
+    const header = headerAccount(body, `${code}`);
+    expect(header).toContain("Welcome, guest");
+    const cta = signinCta(header, `${code}`);
     // Same href/label/testid contract as Hono's cta branch
     // (src/page-shell.tsx): the invite that works during an outage.
     expect(cta.href).toBe(INVITE);
@@ -175,9 +178,9 @@ describe("acceptance: outage headers point at Discord, never the OAuth start", (
   it.each(OUTAGE)("%d header never links the OAuth start", (code) => {
     const { body } = renderShell(code);
     const header = headerAccount(body, `${code}`);
-    // Kit starts OAuth at /join/discord (a 302 to Discord); Hono at
-    // /auth/discord. During an outage neither can help, so neither may
-    // appear in the header.
+    // Ordinary sign-in is /auth/discord (a 302 to Discord); explicit
+    // join/RSVP entries use /join/discord instead. During an outage
+    // neither can help, so neither may appear in the header.
     expect(header).not.toContain("/join/discord");
     expect(header).not.toContain("/auth/discord");
   });
@@ -185,8 +188,8 @@ describe("acceptance: outage headers point at Discord, never the OAuth start", (
   it("no outage page sends the member to the OAuth start anywhere", () => {
     for (const code of OUTAGE) {
       const { body } = renderShell(code);
-      expect(body, `${code} body links no OAuth start`).not.toContain("/join/discord");
-      expect(body, `${code} body links no legacy OAuth start`).not.toContain("/auth/discord");
+      expect(body, `${code} body links no join journey`).not.toContain("/join/discord");
+      expect(body, `${code} body links no ordinary sign-in`).not.toContain("/auth/discord");
     }
   });
 });
@@ -279,10 +282,10 @@ describe("controls: sign-in statuses, selectors, indexes and read budget stay pu
     const { body } = renderShell(code);
     const header = headerAccount(body, `${code}`);
     // OAuth is alive on these statuses, so the header is unchanged: the
-    // guest caption plus today's sign-in link.
+    // guest caption plus the ordinary sign-in link (/auth/discord).
     expect(header).toContain("Welcome, guest");
     const cta = signinCta(header, `${code}`);
-    expect(cta.href).toBe("/join/discord");
+    expect(cta.href).toBe("/auth/discord");
     expect(cta.text).toBe("Sign in with Discord");
   });
 
