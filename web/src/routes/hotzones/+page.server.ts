@@ -4,7 +4,7 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../src/admin/db";
 import { alertRequestError } from "../../../../src/alerts";
 import { loadHotzonesIndexData } from "../../../../src/kit-hotzones";
-import { renderHotzoneGrid } from "../../../../src/hotzones/pages";
+import { renderHotzoneGrid, renderPeriodPicker } from "../../../../src/hotzones/pages";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.
@@ -44,6 +44,7 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
       joinsPeak: data.peaks.joins,
       voicePeak: data.peaks.voice,
       gamesPeak: data.peaks.games,
+      periodPickerHtml: renderPeriodPicker("/hotzones", data.season),
     };
   } catch (err) {
     const status = (err as { status?: number })?.status;

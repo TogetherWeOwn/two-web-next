@@ -5,8 +5,9 @@ import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-// Only escaped JSX produced by renderHotzoneGrid in the server loader enters
-// these HTML slots; captions and every cell are escaped by the shared renderer.
+// Only escaped JSX produced by renderHotzoneGrid/renderPeriodPicker in the
+// server loader enters these HTML slots; captions, every cell and the picker
+// values are escaped by the shared renderer.
 const {
   season,
   joinsHtml,
@@ -20,6 +21,7 @@ const {
   joinsPeak,
   voicePeak,
   gamesPeak,
+  periodPickerHtml,
 } = $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
 
@@ -54,6 +56,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   {/if}
   <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
   {#if retentionNote}<p>{retentionNote}</p>{/if}
+  {@html periodPickerHtml}
   <nav aria-label="Signals">
     <ul>
       <li><a href="/hotzones/joins{qs}">Joins heatmap</a></li>

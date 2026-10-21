@@ -5,7 +5,8 @@ import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-// gridHtml comes only from the escaped server-side renderHotzoneGrid output.
+// gridHtml and periodPickerHtml come only from the escaped server-side
+// renderHotzoneGrid/renderPeriodPicker output.
 const {
   signal,
   season,
@@ -17,6 +18,7 @@ const {
   appUrl,
   available,
   peak,
+  periodPickerHtml,
 } = $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
@@ -58,6 +60,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
     <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
+  {@html periodPickerHtml}
   <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}">joins</a> · <a href="/hotzones/voice{qs}">voice</a> · <a href="/hotzones/games{qs}">games</a></p>
   {#if unavailable}
     <p role="status">Join activity is temporarily unavailable.</p>
