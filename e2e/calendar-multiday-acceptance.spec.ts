@@ -59,6 +59,7 @@ async function mount(context: BrowserContext, twin: CalendarTwin, index: number)
     const html = await renderCalendar(twin, [row], {
       month: url.searchParams.get("month") ?? fixture.month,
       view: url.searchParams.get("view") === "calendar" ? "calendar" : "list",
+      loginReturnTo: url.pathname + url.search,
     });
     return route.fulfill({
       status: 200,

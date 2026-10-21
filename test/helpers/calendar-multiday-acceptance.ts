@@ -144,6 +144,7 @@ export async function renderCalendar(
     zone?: string;
     past?: PublicEvent[];
     showPast?: boolean;
+    loginReturnTo?: string;
   } = {},
 ): Promise<string> {
   const state: CalendarState = {
@@ -168,7 +169,7 @@ export async function renderCalendar(
     inviteUrl: "https://discord.gg/fixture",
     appUrl: "https://calendar.example.test",
     canonical: "https://calendar.example.test/events",
-    loginReturnTo: "/events",
+    loginReturnTo: options.loginReturnTo ?? "/events",
     joinResult: null,
     queryTooLong: false,
   };
