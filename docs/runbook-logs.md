@@ -339,6 +339,52 @@ no-secret UNKNOWN stay silent by design.
 | `kit session bridge store unavailable` | The session store could not be acquired in `kitSessionBridge`, before any read ran (`console.warn` in `src/kit-session.ts`). | UNKNOWN with the return journey kept: public Kit pages render as guest, protected member contents are refused. | Same store check as the row above, joined by time window to `http.request` (Kit routes). A `store.get` failure instead warns once via the `kit session store unavailable` line above, never this one. | `exception` (class only, never the message, token, cookie, or member identity) |
 | `kit events session store unavailable` | The session store could not be acquired in `kitEventsSessionFor`, before any read ran (`console.warn` in `src/kit-session.ts`). | Null viewer bits: the native Kit events list renders as guest with no drafts. | Same store check as the rows above, joined by time window to `http.request` (the Kit events list). A `store.get` failure instead warns once via the `kit session store unavailable` line above, never this one. | `exception` (class only, never the message, token, cookie, or member identity) |
 
+### Kit public-read 503 alerts
+
+Eight throw legs across four Kit public-read loads emit the leak-free
+`error.alert` diagnostic before answering the branded 503
+(`src/kit-events.ts` database handle and page-model reads,
+`src/kit-past-events.ts` database handle and list reads,
+`src/kit-event-states.ts` database handle and event lookup,
+`src/events/kit-detail.ts` database handle and event lookup on the wired
+`/e/:key` Kit load). Each leg
+alerts once per distinct `class@route` fingerprint (muted five minutes per
+isolate, like every `error.alert`); the `request_id` carries the validated
+`cf-ray` value when the binding threaded one, and is absent otherwise.
+These Kit routes never emit the `http.request` line (Hono's request log
+runs only for Hono-dispatched requests), so correlate by the `request_id`
+value plus time window and route — never expect an `http.request` join
+here. Response bodies and headers are byte-stable: the binding ignores the
+thrown message. Two cancelled-page degrades warn instead of alerting (one
+per `/e/:key` twin). Find
+an alert with the message **contains** filter from
+[Find a request](#find-a-request) on `"event":"error.alert"` plus the
+route, or the warn by its exact message. Read-only checks only: a Workers
+Logs search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `error.alert` with `route: /events` | A code bug (no branded status) threw from the events-list database handle or page-model read (`loadEventsPage` in `src/kit-events.ts`). | Fails closed with the branded 503 (`Events temporarily unavailable`, `private, no-store`); pages via the existing `error.alert` Tail Worker path, no new paging. | Filter `error.alert` by `route: /events` and split by `exception`; then check database health with the [alert runbook](runbook-alerts.md). | `fingerprint` (`ExceptionClass@/events`), `exception`/`error_class` (class only), `method: GET`, validated `request_id` |
+| `error.alert` with `route: /events/past` | A code bug threw from the past-archive database handle or list read (`loadPastArchivePage` in `src/kit-past-events.ts`). | Fails closed with the branded 503, same paging as above. | Filter `error.alert` by `route: /events/past` and split by `exception`; then check database health. | Same shape with `route: /events/past` |
+| `error.alert` with `route: /e/:key` | A code bug threw from the wired Kit event-detail database handle or event lookup (`resolveKitEventDetail` in `src/events/kit-detail.ts`); the state twin (`resolveEventState` in `src/kit-event-states.ts`) emits the same line. | Fails closed with the unavailable outcome (503, `private, no-store`), same paging. | Filter `error.alert` by `route: /e/:key` and split by `exception`; then check database health. | Same shape with `route: /e/:key` |
+| `Event alternatives unavailable; serving the empty list.` | The cancelled-event alternatives lookup threw (`relatedFn` in `src/events/kit-detail.ts` or the `src/kit-event-states.ts` twin); the 410 page still serves with an empty list. | Degrades to an empty list; does not page. | Filter logs for the exact message over the window and split by `exception`; then check database health. | `exception` (class only, never the message, which can carry SQL or wire detail), validated `request_id` |
+
+Silent by design around these lines: branded throws (any numeric `status`)
+pass through with no new alert; null database handles answer the branded
+503 silently; session/journey fail-open legs serve the anonymous list
+silently; the 404-path suggestions degrade (`suggestionsFn`) stays silent
+because forged and unknown keys already miss, so warning there would fire
+on probe traffic during an outage.
+
+Agent check (fixtures only, proves fire/silent per branch):
+
+```sh
+env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  npx vitest run test/kit-public-read-503-alerts-acceptance.test.ts \
+  test/kit-public-read-503-alerts-pins.test.ts
+```
+
 ### Auth sign-in warnings
 
 This section documents one auth-scoped `console.warn` line (the oversized
