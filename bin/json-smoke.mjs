@@ -941,7 +941,7 @@ Environment:
   QA_AUTH_TOKEN  staging QA login token (required for probing only)
 
 Options:
-  --ledger <path>  append JSONL evidence (also written when guards fail)
+  --ledger <path>  write JSON evidence for the run (also written when guards fail)
   --skip-ledger <reason>  replay every guard as skipped with one reason;
                    no token, no network
   --report-ledger <path> <heading> <warn-context>
