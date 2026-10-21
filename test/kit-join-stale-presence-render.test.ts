@@ -140,17 +140,13 @@ describe("Kit /join stale-presence render", () => {
   });
 
   it("a stale empty-channels snapshot qualifies the line and never renders right now", () => {
-    const body = renderPage(
-      pageData({ widgetSnapshot: snapshot({ stale: true, channels: [] }) }),
-    );
+    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: true, channels: [] }) }));
     expect(body).toContain("No voice channels open as of the last update.");
     expect(body).not.toContain("right now");
   });
 
   it("a fresh empty-channels snapshot keeps the live line and never qualifies", () => {
-    const body = renderPage(
-      pageData({ widgetSnapshot: snapshot({ stale: false, channels: [] }) }),
-    );
+    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: false, channels: [] }) }));
     expect(body).toContain("No voice channels open right now.");
     expect(body).not.toContain("as of the last update");
   });
