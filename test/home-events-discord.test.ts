@@ -238,7 +238,9 @@ describe("homepage Discord rendering", () => {
     expect(html).toContain("RSVP in Discord");
     expect(html).not.toContain("going");
     expect(html).not.toContain("/e/discord-");
-    expect(html).not.toContain("d1");
+    // The muted token (#bdb7d1) in the inlined stylesheet contains "d1", so
+    // the id-leak check scans past the static style block.
+    expect(html.replace(/<style>[\s\S]*?<\/style>/g, "")).not.toContain("d1");
     expect(html).not.toContain("Discord public description");
   });
 

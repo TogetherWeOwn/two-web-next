@@ -272,7 +272,9 @@ describe("join callback: a rate-limited bot add surfaces Retry-After and a disti
       expectThrottleRecovery(res, html);
       // The body's own retry_after (77) is never mined as a substitute.
       expect(res.headers.get("retry-after")).toBeNull();
-      if (provider) expect(html).not.toContain(provider);
+      // The inline header lockup's path data legitimately contains short
+      // substrings like "-5"; the echo check scans past the static SVGs.
+      if (provider) expect(html.replace(/<svg[\s\S]*?<\/svg>/g, "")).not.toContain(provider);
       expect(fake.attempts).toEqual([
         { outcome: "rate_limited", source: null, requestId: null, discordId: "42" },
       ]);

@@ -46,7 +46,7 @@ let {
       >{/if}
   </nav>
   <a class="brand" href="/" aria-label="Together We Own homepage">
-    <svg width="180" height="50" class="brand-lockup" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 456.86 126.34">
+        <svg width="180" height="50" class="brand-lockup" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 456.86 126.34">
       <title>Together We Own — horizontal lockup</title>
       <defs>
       <linearGradient id="twoGrad" gradientUnits="userSpaceOnUse" x1="0" y1="184.8722" x2="0" y2="42.9503">
@@ -55,14 +55,14 @@ let {
         <stop offset="1" stop-color="#FF9C36"/>
       </linearGradient>
       <linearGradient id="SVGID_00000124150778372924420240000000827096360530070404_" gradientUnits="userSpaceOnUse" x1="308.0973" y1="183.4668" x2="350.0181" y2="183.4668">
-    					<stop  offset="0" style="stop-color:#5701AE"/>
-    					<stop  offset="0.5212" style="stop-color:#FF0E52"/>
-    					<stop  offset="1" style="stop-color:#FF9C36"/>
+    					<stop  offset="0" stop-color="#5701AE"/>
+    					<stop  offset="0.5212" stop-color="#FF0E52"/>
+    					<stop  offset="1" stop-color="#FF9C36"/>
     				</linearGradient>
       <linearGradient id="SVGID_00000167394417452148436550000002663480996556811446_" gradientUnits="userSpaceOnUse" x1="175.1019" y1="183.4668" x2="217.0226" y2="183.4668">
-    					<stop  offset="0" style="stop-color:#5701AE"/>
-    					<stop  offset="0.5212" style="stop-color:#FF0E52"/>
-    					<stop  offset="1" style="stop-color:#FF9C36"/>
+    					<stop  offset="0" stop-color="#5701AE"/>
+    					<stop  offset="0.5212" stop-color="#FF0E52"/>
+    					<stop  offset="1" stop-color="#FF9C36"/>
     				</linearGradient>
       </defs>
       <g id="icon" transform="translate(-159.21 -38.00)">
