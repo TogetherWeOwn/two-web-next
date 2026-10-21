@@ -15,7 +15,13 @@
 import { Context } from "hono";
 import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
-import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import {
+  isContentLeafPath,
+  isKitFallbackDocument,
+  robotsTagFor,
+  securityHeadersFor,
+  withKitFallbackStyleCsp,
+} from "./headers";
 import { STAGING_APP_URL } from "./qa";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
@@ -582,6 +588,36 @@ function decorateKitResponse(
   }
 }
 
+// Catastrophic-fallback CSP widening, async twin of the leaf allowlist: the
+// fallback can be served for ANY path, so unlike the leaf pages it cannot be
+// scoped by path in securityHeadersFor. After decoration, an HTML error
+// response carrying the exact fallback style element gets the block's hash
+// appended to style-src. Gated on status + content-type so normal pages
+// never pay for a body read; the clone keeps the served body intact. The
+// same-origin refusal is JSON-only and the Hono-fallback route returns
+// undecorated (no CSP to widen), so this call lives only on the decorated
+// dispatch path below — any new HTML decorate site must call it too.
+async function allowlistKitFallbackStyle(response: Response): Promise<void> {
+  if (response.status < 400) return;
+  if (!(response.headers.get("content-type") ?? "").includes("text/html")) return;
+  const csp = response.headers.get("Content-Security-Policy");
+  if (!csp || !csp.includes("style-src 'self'")) return;
+  let body: string;
+  try {
+    body = await response.clone().text();
+  } catch (err) {
+    // Fail closed to the unwidened policy: an unstyled fallback still
+    // recovers through its plain anchors, while a thrown read would 500
+    // the error page itself.
+    console.warn("kit fallback style probe unreadable; serving without the style hash.", {
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
+    return;
+  }
+  if (!isKitFallbackDocument(body)) return;
+  response.headers.set("Content-Security-Policy", withKitFallbackStyleCsp(csp));
+}
+
 // Same-origin parity for the Kit branch (src/same-origin.ts twin, framework-free).
 // Exact method + path exemptions only, never prefixes: agent ingress, the CSP
 // sink and the MCP endpoint authenticate/validate independently. Mirrors the
@@ -950,5 +986,6 @@ export async function dispatchHookRequest(
     response = c.res;
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  await allowlistKitFallbackStyle(response);
   return response;
 }
