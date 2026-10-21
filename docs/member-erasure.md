@@ -17,8 +17,8 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 - Dry-run is the default: it prints per-table row counts only, never row
   contents. `--apply` deletes.
 - `DATABASE_URL` comes from the environment only — never argv, never logs.
-  The output is one JSON line (`{"mode","counts","passes","deletesPerPass"}`);
-  the URL is never printed. `counts` keeps one key per table; `passes` is the
+  The output is one JSON line with `ok: true`, `mode`, `counts`, `passes`
+  and `deletesPerPass`; the URL is never printed. `counts` keeps one key per table; `passes` is the
   number of session-chase passes executed and `deletesPerPass` the session
   rows each pass deleted, in order. A dry-run reports `passes: 0` with an
   empty list because no chase ran.
@@ -46,7 +46,36 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
   exits 2 without touching the database.
 
 Exit codes: 0 success, 2 usage/config/refusal (including a malformed id),
-1 driver/transaction failure (changes rolled back).
+1 driver/transaction failure (changes rolled back if a transaction started).
+
+## Machine-readable errors (both member-data CLIs)
+
+`erase-member` and `revoke-sessions` emit exactly one failure JSON line to
+stderr: `{ "ok": false, "code": "E_TARGET", "message": "…", "next": "…" }`.
+No stdout accompanies a failure. Messages and next actions are fixed strings;
+argv, endpoint details, Discord ids and driver/row contents are never echoed.
+Success remains one stdout JSON line with the existing count/chase fields and
+additive `ok: true` (`stampsPerPass` replaces `deletesPerPass` for revocation).
+`--help` exits 0 without configuration and prints usage plus this shared table.
+
+The table is defined once in `bin/operator-cli-errors.mjs`, rendered by both
+help commands and checked here by `test/operator-cli-error-table.test.mjs`.
+
+| Code | Exit | Message | Next action |
+| --- | --- | --- | --- |
+| E_MODE_CONFLICT | 2 | --apply and --dry-run conflict; they cannot be used together. | Choose one mode: --dry-run (the default) or --apply. |
+| E_TARGET | 2 | --target must be staging or production. | Set --target staging or --target production for the intended environment. |
+| E_DUPLICATE_FLAG | 2 | A flag or Discord id was repeated. | Supply each flag and the Discord id only once. |
+| E_UNKNOWN_FLAG | 2 | Unknown or unsupported flag. | Remove the unknown flag; use --help for supported options. |
+| E_URL_ARG | 2 | Connection URLs are not accepted as arguments. | Supply DATABASE_URL through the environment only, never argv. |
+| E_DISCORD_ID | 2 | Missing or malformed Discord id. | Supply --discord-id=<snowflake> using a nonzero, unpadded decimal Discord id. |
+| E_DATABASE_URL | 2 | Refusing: DATABASE_URL is missing or invalid. | Check DATABASE_URL in the environment without logging its value. |
+| E_TLS_OVERRIDE | 2 | Refusing: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification. | Remove NODE_TLS_REJECT_UNAUTHORIZED=0 from the environment. |
+| E_PRODUCTION_TARGET | 2 | Refusing: production database without --target production. | Verify the intended environment before selecting --target production. |
+| E_REMOTE_TARGET | 2 | Refusing: remote database needs --target staging or --target production. | Verify the intended environment and supply its --target explicitly. |
+| E_TLS_REQUIRED | 2 | Refusing: remote database must use sslmode=verify-full or sslrootcert=system. | Configure verified TLS in the environment URL; do not disable verification. |
+| LOCK_TIMEOUT | 1 | operation failed; changes rolled back (lock timeout 55P03). | Retry once the lock clears; verify with a dry-run first. |
+| TX_FAILED | 1 | operation failed; transaction rolled back if it started. | Check connectivity and migrations without logging DATABASE_URL; re-run the dry-run. |
 
 ## Bounded waits
 

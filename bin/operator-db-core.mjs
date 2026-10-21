@@ -7,10 +7,10 @@
 // Each CLI keeps its own argv parser (usage text and refusal edges differ);
 // everything that touches DATABASE_URL, TLS, or the driver lives here.
 import { parseDatabaseUrl } from "./db-ping-core.mjs";
+import { OPERATOR_ERRORS, OperatorCliError } from "./operator-cli-errors.mjs";
 
 export const LOCAL_HOSTS = new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]);
-export const TLS_OVERRIDE_REFUSAL =
-  "Refusing: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification.";
+export const TLS_OVERRIDE_REFUSAL = OPERATOR_ERRORS.E_TLS_OVERRIDE.message;
 
 /** Production-looking connection strings need `--target production`. */
 export function isProductionDatabaseUrl(raw) {
@@ -38,23 +38,20 @@ export function validateOperatorEnvironment(env, target) {
   try {
     endpoint = parseDatabaseUrl(raw);
   } catch {
-    throw new Error("Refusing: DATABASE_URL is missing or invalid.");
+    throw new OperatorCliError("E_DATABASE_URL");
   }
-  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new Error(TLS_OVERRIDE_REFUSAL);
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new OperatorCliError("E_TLS_OVERRIDE");
   if (isProductionDatabaseUrl(raw) && target !== "production") {
-    throw new Error("Refusing: production database without --target production.");
+    throw new OperatorCliError("E_PRODUCTION_TARGET");
   }
   if (LOCAL_HOSTS.has(endpoint.host[0].toLowerCase().replace(/\.$/, "")))
     return { databaseUrl: raw };
   if (target !== "staging" && target !== "production")
-    throw new Error("Refusing: remote database needs --target staging or --target production.");
+    throw new OperatorCliError("E_REMOTE_TARGET");
   const url = new URL(raw);
   const mode = url.searchParams.get("sslmode");
   const verified = mode === "verify-full" || (mode === null && url.searchParams.has("sslrootcert"));
-  if (!verified)
-    throw new Error(
-      "Refusing: remote database must use sslmode=verify-full or sslrootcert=system.",
-    );
+  if (!verified) throw new OperatorCliError("E_TLS_REQUIRED");
   return { databaseUrl: raw };
 }
 
