@@ -79,6 +79,17 @@ function cancellingFunnelDb() {
   });
 }
 
+/** The funnel read stays healthy; zero-search fails ordinarily through the real helper. */
+function failingZeroSearchDb() {
+  let calls = 0;
+  vi.stubGlobal("__kitDashboardLogDb", {
+    transaction: async () => {
+      if (++calls === 2) throw new TypeError("private widget bug");
+      return [];
+    },
+  });
+}
+
 function event(headers, requestId) {
   return {
     parent,
@@ -127,6 +138,23 @@ describe("degraded Kit dashboard widgets resolve undefined through the real help
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(RAY);
     expect(widgetLines(/zero.?searches/i)).toEqual([]);
+  });
+
+  it("an ordinary zero-search failure logs one zero-search line and omits only that widget", async () => {
+    // Real helpers, no mocks: an ordinary (non-outage, non-cancellation)
+    // error resolves undefined out of topZeroResultSearches, and the load
+    // omits the section with one correlated line carrying no error text.
+    // Promise.allSettled evaluates the funnel read first, so its transaction
+    // is always call 1 and the zero-search read is call 2.
+    failingZeroSearchDb();
+    const data = await load(event({ "cf-ray": RAY, "x-request-id": RAY }, RAY), {});
+    expect(data.funnel).toEqual([]);
+    expect(data.zeroSearches).toBeUndefined();
+    const lines = widgetLines(/zero.?searches/i);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(RAY);
+    expect(JSON.stringify(lines)).not.toContain("private widget bug");
+    expect(widgetLines(/funnel/i)).toEqual([]);
   });
 
   it("an invalid cf-ray falls back to the valid x-request-id", async () => {
