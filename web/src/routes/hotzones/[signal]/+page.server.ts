@@ -9,7 +9,7 @@ import { parseSeasonParam } from "../../../../../src/hotzones/season";
 // reads the source top to bottom.
 import { isHotzoneSignal } from "../../../../../src/hotzones/aggregates";
 import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
-import { renderHotzoneGrid } from "../../../../../src/hotzones/pages";
+import { renderHotzoneGrid, renderPeriodPicker } from "../../../../../src/hotzones/pages";
 
 // Locked signal vocabulary: joins | voice | games exactly, via the shared
 // predicate. Any other segment 404s at this binding, never a grid; the helper
@@ -51,6 +51,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,
+      periodPickerHtml: renderPeriodPicker(`/hotzones/${data.signal}`, data.season),
     };
   } catch (err) {
     const status = (err as { status?: number })?.status;

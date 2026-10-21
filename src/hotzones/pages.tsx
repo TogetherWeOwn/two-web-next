@@ -9,6 +9,7 @@ import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { HOTZONE_SIGNALS, WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
+import { utcPeriodShortcuts } from "./season";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -50,6 +51,45 @@ const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
 export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
   (<Grid cells={cells} caption={caption} />).toString();
 
+// Native period picker shared by Hono and Kit: a GET form whose action stays
+// on the current index/signal route, plus server-derived UTC shortcuts. No
+// JavaScript dependency; the committed season renders back into the input so
+// applies and resets stay bookmarkable. The all/absent reset anchor carries
+// no query state, keeping the canonical URL bare.
+const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }) => {
+  const { month, quarter } = utcPeriodShortcuts();
+  return (
+    <section aria-labelledby="hotzone-period-heading">
+      <h2 id="hotzone-period-heading">Choose a period</h2>
+      <form method="get" action={action}>
+        <label for="hotzone-season">Period</label>{" "}
+        <input
+          type="text"
+          id="hotzone-season"
+          name="season"
+          value={season}
+          aria-describedby="hotzone-season-help"
+        />{" "}
+        <button type="submit">Apply</button>
+        <p id="hotzone-season-help">
+          Enter all for all available data, a year such as 2026, a month such as 2026-02, or a
+          quarter such as 2026-Q2. Shortcuts use UTC.
+        </p>
+      </form>
+      <p>
+        <a href={`${action}?season=${month}`}>This month</a> ·{" "}
+        <a href={`${action}?season=${quarter}`}>This quarter</a> ·{" "}
+        <a href={action}>All available data</a>
+      </p>
+    </section>
+  );
+};
+
+// Kit's server-only loaders reuse this escaped JSX string for the identical
+// picker, rather than shipping a second renderer in the client bundle.
+export const renderPeriodPicker = (action: string, season: string) =>
+  (<PeriodPicker action={action} season={season} />).toString();
+
 export const HotzonesIndexPage: FC<{
   appUrl: string;
   season: string;
@@ -88,6 +128,7 @@ export const HotzonesIndexPage: FC<{
           never count.
         </p>
         {retentionNote ? <p>{retentionNote}</p> : null}
+        <PeriodPicker action="/hotzones" season={season} />
         <nav aria-label="Signals">
           <ul>
             <li>
@@ -177,6 +218,7 @@ export const HotzoneSignalPage: FC<{
             {retentionNote ? <p>{retentionNote}</p> : null}
           </>
         )}
+        <PeriodPicker action={`/hotzones/${signal}`} season={season} />
         <p>
           <a href={`/hotzones${qs}`}>All hot zones</a> · <a href={`/hotzones/joins${qs}`}>joins</a>{" "}
           · <a href={`/hotzones/voice${qs}`}>voice</a> · <a href={`/hotzones/games${qs}`}>games</a>
