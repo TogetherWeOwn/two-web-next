@@ -4,6 +4,7 @@
 // Each read degrades independently so ranks can survive a
 // missing collector snapshot (and live counts can survive a missing ladder).
 import postgres from "postgres";
+import { exceptionClass } from "./alerts";
 import { botDatabaseUrl, databaseOptions } from "./db/connection";
 import type { Env } from "./env";
 
@@ -85,9 +86,10 @@ function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Pr
         // pool. Force shutdown after a second if a query/connection is stuck.
         await sql?.end({ timeout: 1 });
       }
-    })().catch(() => {
-      // Never log the driver message/URL: either may contain credentials.
-      console.warn("Counts read unavailable", { key });
+    })().catch((err: unknown) => {
+      // Class only (`queueExceptionClass` style): never the driver
+      // message/URL, either of which may contain credentials.
+      console.warn("Counts read unavailable", { key, exception: exceptionClass(err) });
       return fallback;
     });
     // Pending/abandoned fills do not disqualify usable completions. Only an

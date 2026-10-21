@@ -3,8 +3,10 @@ import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 if (process.argv.length > 2) {
-  console.error("check:offline does not accept arguments; its fixture-only exclusion is fixed.");
-  process.exit(1);
+  console.error(
+    "usage: node ci/offline-check.mjs (check:offline does not accept arguments; its fixture-only exclusion is fixed.)",
+  );
+  process.exit(2);
 }
 
 const cwd = fileURLToPath(new URL("../", import.meta.url));

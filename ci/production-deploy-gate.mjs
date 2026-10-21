@@ -402,9 +402,20 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   return { ...ci, autoApprove: true, staging };
 }
 
+// The single flag reference for this tool: --help prints it to stdout,
+// unknown dash-flags print it to stderr with exit 2 instead of running the
+// gate. A bare invocation (or a non-flag positional, as before) runs the
+// full gate.
+export const PRODUCTION_DEPLOY_GATE_USAGE =
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    if (process.argv[2] === "--credentials") {
+    if (process.argv[2] === "--help") {
+      // Safe discovery: usage to stdout, exit 0, zero side effects — no gate
+      // run, no GITHUB_OUTPUT write.
+      console.log(PRODUCTION_DEPLOY_GATE_USAGE);
+    } else if (process.argv[2] === "--credentials") {
       assertProductionCredentials(process.env);
       console.log("Production-only Cloudflare credentials are present");
     } else if (process.argv[2] === "--version-id") {
@@ -506,6 +517,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           console.log(`No pending production migrations (${deploySha} vs live ${liveSha})`);
         }
       }
+    } else if (typeof process.argv[2] === "string" && process.argv[2].startsWith("-")) {
+      // A mistyped flag must never run the full gate: refuse as a usage
+      // error (exit 2) with the usage line, not a gate failure.
+      console.error(PRODUCTION_DEPLOY_GATE_USAGE);
+      process.exitCode = 2;
     } else {
       const evidence = await checkProductionGate(process.env);
       assertProductionTarget(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));

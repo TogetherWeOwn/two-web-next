@@ -520,17 +520,24 @@ export async function listCalendarPast(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), lt(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, lt(events.endsAt, now)))
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(EVENTS_PAST_DRAWER_LIMIT);
   // Ended rows are normally renderable by construction (ends_at < now), but
   // imports can violate the end-after-start invariant with an unrenderable
-  // starts_at, and the drawer/`EmptyGap` render it unguarded.
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+  // starts_at, and the drawer/`EmptyGap` render it unguarded. The SQL finite
+  // guard keeps infinity rows from occupying limit slots (like the sibling
+  // upcoming reads); the JS filter stays as defence for JS-overflow timestamps
+  // that `isfinite()` cannot see. Truncation is judged on the pre-filter
+  // fetched count (like `listUpcoming`/`listPast` `hasMore`): a post-filter
+  // length would misread a drawer that dropped an overflow row as complete.
+  const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
+  const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
+  return Object.assign(visible, { mayBeTruncated: truncated });
 }
 
 /** Invalid HTML archive pages/offsets retain the page-one fallback. */
