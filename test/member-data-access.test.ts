@@ -1,15 +1,15 @@
-// W15 ports AccessRecorder arm/flush and RecordMemberDataAccess. Hono uses a
-// request-local declaration instead of Eloquent retrieval observers; see parity table.
+// W15 ports AccessRecorder arm/flush and RecordMemberDataAccess. The old
+// declare-subjects Hono middleware was retired (production audits only
+// through the keyed read boundary since PR #145); this file keeps the legacy
+// enforcement-flag parsing pins plus the DB-backed recorder contract.
 import { eq, sql } from "drizzle-orm";
-import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { enforceOn, memberAccessLog, type AccessDecl, type AccessSink } from "../src/access-log";
+import { enforceOn } from "../src/access-log";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { users } from "../src/db/schema";
-import type { Env } from "../src/env";
 import { profilesApp } from "../src/profiles/routes";
 import { createDbProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore } from "../src/sessions";
@@ -27,36 +27,9 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 
 afterEach(() => vi.restoreAllMocks());
 
-function router(sink: () => Promise<AccessSink | null>) {
-  const app = new Hono<{ Bindings: Env; Variables: { viewerId: string; access: AccessDecl } }>();
-  app.use("*", async (c, next) => {
-    c.set("viewerId", MEMBER.userId);
-    await next();
-  });
-  app.use("*", memberAccessLog(sink));
-  app.get("/read", (c) => {
-    c.set("access", {
-      resource: "member",
-      action: "view",
-      route: "test.member",
-      subjects: [SUBJECT.userId],
-    });
-    return c.text(PERSONAL_STRINGS[1]!);
-  });
-  app.get("/unarmed", (c) => c.text("no member data"));
-  app.get("/error", (c) => {
-    c.set("access", {
-      resource: "member",
-      action: "view",
-      route: "test.error",
-      subjects: [SUBJECT.userId],
-    });
-    return c.text("Not found", 404);
-  });
-  return app;
-}
-
-describe("access-log flush lifecycle", () => {
+// The legacy flag feeds the informational /up label only; no production
+// read honors it (the keyed boundary always fails closed).
+describe("legacy enforcement flag parsing", () => {
   it.each([
     [undefined, true],
     ["", true],
@@ -69,61 +42,6 @@ describe("access-log flush lifecycle", () => {
   ])("enforcement flag parsing for %s => %s", (flag, expected) => {
     const bindings = { ...env, MEMBER_ACCESS_LOG_ENFORCE: flag };
     expect(enforceOn(bindings)).toBe(expected);
-  });
-
-  it("arming a later request inherits nothing from unarmed/error requests", async () => {
-    const write = vi.fn(async (_entry: Parameters<AccessSink>[0]) => true);
-    const app = router(async () => write);
-    for (const path of ["/read", "/unarmed", "/error", "/read"]) await app.request(path, {}, env);
-    expect(write).toHaveBeenCalledTimes(2);
-    for (const [entry] of write.mock.calls) {
-      expect(entry).toMatchObject({
-        viewerDiscordId: MEMBER.userId,
-        subjectUserIds: [SUBJECT.userId],
-        route: "test.member",
-      });
-    }
-  });
-
-  it("does not release the response until the access-log write completes", async () => {
-    let entered!: () => void;
-    const sinkEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let release!: () => void;
-    const persisted = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const app = router(async () => async () => {
-      entered();
-      await persisted;
-      return true;
-    });
-    let returned = false;
-    const response = Promise.resolve(app.request("/read", {}, env)).then((res) => {
-      returned = true;
-      return res;
-    });
-    await sinkEntered;
-    expect(returned).toBe(false);
-    release();
-    expect((await response).status).toBe(200);
-  });
-
-  it("does not acquire a sink for an unarmed or error response", async () => {
-    const acquire = vi.fn(async () => null);
-    const app = router(acquire);
-    expect((await app.request("/unarmed", {}, env)).status).toBe(200);
-    expect((await app.request("/error", {}, env)).status).toBe(404);
-    expect(acquire).not.toHaveBeenCalled();
-  });
-
-  it("a missing sink fails closed and replaces all profile contents", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await router(async () => null).request("/read", {}, env);
-    expect(res.status).toBe(503);
-    expect(await res.text()).not.toContain(PERSONAL_STRINGS[1]);
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 });
 

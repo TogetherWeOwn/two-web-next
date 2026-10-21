@@ -15,7 +15,6 @@ The app writes ONE single-line JSON object on `console.error`, with
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
 | `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
-| `error.alert` (serve-unaudited) | A degraded member-facing read was served without its audit row (`MEMBER_ACCESS_LOG_ENFORCE=false` and the access-log sink failed or is missing); the loud `could not be recorded` log stays | `fingerprint` (`ExceptionClass@access.route`), `exception`, `error_class` (same class), `method`, `route` (the declared access route), `request_id`, `build_sha`, `release`. No messages, stacks, SQL, bindings, payloads, subjects or viewer ids. Muted per `class@route` for 5 minutes; enforced 503 refusals and successful audits stay silent. This is an app `error.alert`, never a jobs `scheduled.failing`: one failure pages once, through one path. Triage: `npx wrangler tail two-web-next` filtered to the page plus its loud log, correlated by route and time (the page's `request_id` then joins to its `http.request` record; full query below) |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
 | `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone. Exception: a `model:prune` line with exception `PruneBatchCapError` means the pass committed but hit the per-pass batch ceiling with rows possibly pending — a backlog, not an outage. Exception: an `events:reconcile` line with exception `ReconcilePartialFailureError` means the pass committed with isolated dispatch failures while healthy keys still dispatched — a poison key, not an outage | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent. A capped pass likewise pages once per pass, after the flight commits; only `PruneBatchCapError` pages for a committed pass, and a rolled-back pass pages only its real error. A resolved partial reconcile pass likewise pages once per pass, after the flight commits, with `ReconcilePartialFailureError`; the pass still resolves and the all-failed throw path keeps exactly its one real-class page. On a cap page, check that the next pass drains the remainder; pages on consecutive passes mean inflow above the ceiling. On a `ReconcilePartialFailureError` page, first check the same pass's `Event reconcile pass completed.` counts in the jobs Worker logs (failed > 0 with resynced/absorbed preserved); pages on consecutive passes mean a persisting poison key |
 
@@ -35,26 +34,6 @@ The app writes ONE single-line JSON object on `console.error`, with
 - Queue source lines are not muted: one per terminal job failure. **Their
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.
-
-### Serve-unaudited triage
-
-A serve-unaudited page means member data left without its receipt: treat the
-sink failure as the incident, not the read. The page carries the same `route`
-as its loud `could not be recorded` log, but the loud log carries no
-`request_id`: correlate page and log by route plus timestamp proximity, then
-take the page's `request_id` to its `http.request` record (see [Find a
-request](runbook-logs.md#find-a-request)). The mute is the shared `error.alert` per-`class@route` 5 minutes mute,
-so a second page for the same fingerprint means the window elapsed and the sink
-is still down. Triage in the app logs (tail two-web-next, not two-web-jobs): a
-coincident `scheduled.failing` line is a separate jobs signal, not a second
-page for this failure.
-
-```sh
-# Serve-unaudited page source lines plus their loud logs, projected to the
-# correlation keys (kind, route, request_id where present).
-npx wrangler tail two-web-next --format json \
-  | jq -c '.logs[]? | select(any(.message[]?; tostring | test("could not be recorded|\"event\":\"error.alert\""))) | {kind: (if any(.message[]?; tostring | contains("\"event\":\"error.alert\"")) then "page" else "loud-log" end), route: (([.message[]? | select(type == "object") | .route] + [.message[]? | select(type == "string") | (fromjson? // {}) | .route]) | first), request_id: (([.message[]? | select(type == "string") | (fromjson? // {}) | .request_id]) | first)}'
-```
 
 ### Sync-event retry-cause diagnostics
 
