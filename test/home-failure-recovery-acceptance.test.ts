@@ -73,10 +73,21 @@ function anchorHref(anchor: string): string | null {
 }
 
 function anchorText(anchor: string): string {
-  return anchor
-    .replace(/<[^>]*>/g, "")
-    .replaceAll("&amp;", "&")
-    .trim();
+  let stripped = "";
+  for (let i = 0; i < anchor.length; ) {
+    if (anchor[i] === "<") {
+      const close = anchor.indexOf(">", i + 1);
+      if (close === -1) {
+        stripped += anchor.slice(i);
+        break;
+      }
+      i = close + 1;
+    } else {
+      stripped += anchor[i];
+      i += 1;
+    }
+  }
+  return stripped.replaceAll("&amp;", "&").trim();
 }
 
 // The card's own markup, depth-counted to its close so nested builder markup
