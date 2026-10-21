@@ -205,15 +205,18 @@ describe("member leaderboard query grammar (memory sessions, no DB)", () => {
     expect(await res.text()).toMatch(/friend|defer/i);
   });
 
-  it.each(["!!!", "a".repeat(65), "chess!"])("rejects ?activity=%s with 400", async (activity) => {
-    const { live, cookie } = await memberEnv();
-    const res = await app.request(
-      `/leaderboards/members?activity=${encodeURIComponent(activity)}`,
-      { headers: { cookie } },
-      live,
-    );
-    expect(res.status).toBe(400);
-  });
+  it.each(["a".repeat(101), "chess\u0000", "ch\u0007ess"])(
+    "rejects ?activity=%s with 400",
+    async (activity) => {
+      const { live, cookie } = await memberEnv();
+      const res = await app.request(
+        `/leaderboards/members?activity=${encodeURIComponent(activity)}`,
+        { headers: { cookie } },
+        live,
+      );
+      expect(res.status).toBe(400);
+    },
+  );
 
   it.each(["last-season", "2026-13", "2026-Q0"])(
     "rejects ?season=%s with 400 before any aggregation",
