@@ -14,6 +14,7 @@ import { getPublicEvent, listFeed } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
 import { isDatabaseUnavailable } from "../db/errors";
 import { robotsTagFor } from "../headers";
+import { inviteDestination } from "../invite";
 import { requestRoute } from "../request-log";
 import { rulesLastUpdated } from "../rules-last-updated";
 import {
@@ -129,8 +130,10 @@ export function registerAiFriendlyRoutes(app: App): void {
     mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
   );
   app.get("/privacy.md", (c) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE));
+  // Sanitized like /join: a bad DISCORD_INVITE_URL renders the hardcoded
+  // fallback, never a dead, relative or hostile href.
   app.get("/join.md", (c) =>
-    mdOk(c, mdJoin(c.env.APP_URL, c.env.DISCORD_INVITE_URL), STATIC_MD_CACHE),
+    mdOk(c, mdJoin(c.env.APP_URL, inviteDestination(c.env.DISCORD_INVITE_URL)), STATIC_MD_CACHE),
   );
 
   app.get("/events.md", async (c) => {
