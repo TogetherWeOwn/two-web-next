@@ -287,11 +287,28 @@ export const EventPage: FC<{
       ) : !member && !session ? (
         // Guest: the lineup count shows above, so the roster names itself and
         // points at sign-in with this event as ?next= instead of vanishing.
+        // Zero RSVPs gets its own line: "0 going — sign in to see who's in"
+        // invites a sign-in to view an empty list.
         <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
           <h2 id="event-roster-heading">Who's going</h2>
           <p>
-            {e.goingCount} going —{" "}
-            <a href={`/join/discord?next=${encodeURIComponent(path)}`}>sign in to see who's in</a>.
+            {e.goingCount > 0 ? (
+              <>
+                {e.goingCount} going —{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
+                  sign in to see who's in
+                </a>
+                .
+              </>
+            ) : (
+              <>
+                No RSVPs yet —{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
+                  sign in to be the first
+                </a>
+                .
+              </>
+            )}
           </p>
         </section>
       ) : !member ? (

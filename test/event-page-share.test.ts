@@ -185,6 +185,17 @@ describe("Event detail share matrix (fixture-only)", () => {
     ).toHaveLength(0);
   });
 
+  it("shows a guest on a zero-RSVP event its own nudge line, never a 0-going line", async () => {
+    const source = fixture({}, { going: 0 });
+    const html = await (await source.request()).text();
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("No RSVPs yet");
+    expect(html).toContain("sign in to be the first");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(PATH)}"`);
+    // The old nudge line is gone; the lineup's "0 of 10 going" stays.
+    expect(html).not.toContain("0 going —");
+  });
+
   it("shows a member their going answer and their linked attendee name, never the pitch", async () => {
     const source = fixture(
       {},

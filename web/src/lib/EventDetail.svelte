@@ -308,12 +308,19 @@ const lineup = $derived(
     </section>
   {:else if !model.viewerMember && !model.viewerUsername}
     <!-- Guest: the lineup count shows above, so the roster names itself and points at
-         sign-in with this event as ?next= instead of vanishing. -->
+         sign-in with this event as ?next= instead of vanishing. Zero RSVPs gets its own
+         line: "0 going — sign in to see who's in" invites a sign-in to view an
+         empty list. -->
     <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
       <h2 id="event-roster-heading">Who's going</h2>
       <p>
-        {model.goingCount} going —
-        <a href={loginUrl(model.path)}>sign in to see who's in</a>.
+        {#if model.goingCount > 0}
+          {model.goingCount} going —
+          <a href={loginUrl(model.path)}>sign in to see who's in</a>.
+        {:else}
+          No RSVPs yet —
+          <a href={loginUrl(model.path)}>sign in to be the first</a>.
+        {/if}
       </p>
     </section>
   {:else if !model.viewerMember}

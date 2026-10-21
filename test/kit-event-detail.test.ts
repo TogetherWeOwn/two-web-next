@@ -787,6 +787,24 @@ describe("Kit detail presentation", () => {
     expect(html).not.toContain('name="robots"');
   });
 
+  it("renders the guest zero-RSVP nudge line, never a 0-going line", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row(), goingCount: 0 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("No RSVPs yet");
+    expect(html).toContain("sign in to be the first");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(`/e/${KEY}`)}"`);
+    // The old nudge line is gone; the lineup's "0 of 10 going" stays.
+    expect(html).not.toContain("0 going —");
+  });
+
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
