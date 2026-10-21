@@ -150,7 +150,12 @@ describe("profile writes degrade to allow when the throttle store throws", () =>
       env,
     );
     expect(res.status).toBe(403);
-    expect(await res.text()).toBe("Forbidden");
+    // JSON Accept selects the machine envelope (browsers get the branded
+    // own-profile page); the bare "Forbidden" text is gone on this leg.
+    expect(await res.json()).toEqual({
+      error: "forbidden",
+      message: "You can only edit your own profile.",
+    });
     expect(await store.find(ALICE.userId)).toEqual(before);
     // Throttle-first order: the throttle branch ran before the owner check
     // 403 (an owner-check-first reorder would skip the store entirely).
