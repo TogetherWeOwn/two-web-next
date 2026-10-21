@@ -78,7 +78,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <label for="f-url">Link (full http(s) URL, or empty)</label>
       <input id="f-url" name="url" type="url" value={data.view.values.url} aria-describedby="f-url-hint" />
       <p id="f-url-hint" class="hint">
-        Full http(s) URL, or empty. Not accepted: credentials before the host (user@ or user:pass@), backslashes, spaces or other whitespace, and control characters. An explicit port is fine.
+        No credentials, backslashes, whitespace or control characters.
       </p>
     </div>
     <div class="field">

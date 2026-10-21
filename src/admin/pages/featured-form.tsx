@@ -73,7 +73,7 @@ export const FeaturedFormPage: FC<{
             name="url"
             label="Link (full http(s) URL, or empty)"
             errors={errors}
-            hint="Full http(s) URL, or empty. Not accepted: credentials before the host (user@ or user:pass@), backslashes, spaces or other whitespace, and control characters. An explicit port is fine."
+            hint="No credentials, backslashes, whitespace or control characters."
           >
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
