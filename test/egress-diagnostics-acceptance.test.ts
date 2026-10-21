@@ -40,7 +40,7 @@ const READ = "Sitemap events read.";
 // null-store line before the read's own diagnostic.
 const THROTTLE_NULL = [
   "Throttle store unavailable; allowing the request.",
-  { bucket: "events-read:anon" },
+  { throttle: "events-read" },
 ];
 const CAPACITY = "Event egress read reached capacity.";
 const FEED_SKIP = "listFeed skipped unrenderable rows.";

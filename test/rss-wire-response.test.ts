@@ -84,7 +84,7 @@ describe("RSS wire timestamp responses", () => {
       expect(console.warn).toHaveBeenNthCalledWith(
         1,
         "Throttle store unavailable; allowing the request.",
-        { bucket: "events-read:anon" },
+        { throttle: "events-read" },
       );
       expect(console.warn).toHaveBeenNthCalledWith(
         2,
@@ -127,7 +127,7 @@ describe("RSS wire timestamp responses", () => {
     // throttle allow.
     expect(console.warn).toHaveBeenCalledExactlyOnceWith(
       "Throttle store unavailable; allowing the request.",
-      { bucket: "events-read:anon" },
+      { throttle: "events-read" },
     );
   });
 });

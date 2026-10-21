@@ -460,8 +460,8 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
       // DB-free env: both login throttles fail open with a null-store line
       // before the sign-in failure line.
       expect(recordsFor(logs, THROTTLE_NULL_LOG).map((r) => r.args)).toEqual([
-        [THROTTLE_NULL_LOG, { bucket: "login-redirect:anon" }],
-        [THROTTLE_NULL_LOG, { bucket: "login-callback:anon" }],
+        [THROTTLE_NULL_LOG, { throttle: "login-redirect" }],
+        [THROTTLE_NULL_LOG, { throttle: "login-callback" }],
       ]);
       expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 3, error: 0 });
       expect(fake.attempts).toEqual([]);

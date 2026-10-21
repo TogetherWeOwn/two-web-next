@@ -106,13 +106,14 @@ export async function throttleGuard(
   const verdict = await throttleStore(c)
     .then((sql) => checkJoinThrottle(sql, bucket, max))
     .catch((err: unknown) => {
-      // Fail open with a bucket-naming, class-only line: the message can
-      // quote statement bindings. Exactly one line per allow: the null-store
+      // Fail open with a throttle-naming, class-only line: the client segment
+      // is a member IP and must never be logged, and the message can quote
+      // statement bindings. Exactly one line per allow: the null-store
       // allow already warned inside checkJoinThrottle (no throw, so this
       // catch never runs for it), and the verdict transaction never warns
       // before rethrowing.
       console.warn("Throttle store failed; allowing the request.", {
-        bucket,
+        throttle: name,
         exception: exceptionClass(err),
       });
       return { limited: false } as const;

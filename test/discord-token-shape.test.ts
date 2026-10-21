@@ -223,14 +223,8 @@ for (const journey of journeys) {
           // line before the sign-in failure line. (The join journey below
           // carries a healthy JOIN_DEPS store, so it stays quiet.)
           expect(warn.mock.calls).toEqual([
-            [
-              "Throttle store unavailable; allowing the request.",
-              { bucket: "login-redirect:anon" },
-            ],
-            [
-              "Throttle store unavailable; allowing the request.",
-              { bucket: "login-callback:anon" },
-            ],
+            ["Throttle store unavailable; allowing the request.", { throttle: "login-redirect" }],
+            ["Throttle store unavailable; allowing the request.", { throttle: "login-callback" }],
             [
               "discord sign-in failed",
               { ...rejectedMeta, request_id: res.headers.get("x-request-id") },
