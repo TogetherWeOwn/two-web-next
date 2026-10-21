@@ -177,7 +177,7 @@ describe("supplemental route-level refusal pins", () => {
     return { response, store };
   }
 
-  async function logoutRequest(accept: string) {
+  async function logoutRequest(accept?: string) {
     const sessions = createMemorySessionStore();
     const cookie = await cookieFor(sessions, MEMBER);
     const revoke = vi.spyOn(sessions, "revoke").mockRejectedValue(new Error(PRIVATE));
@@ -185,7 +185,7 @@ describe("supplemental route-level refusal pins", () => {
       "/logout",
       {
         method: "POST",
-        headers: { origin: env.APP_URL, cookie, accept },
+        headers: { origin: env.APP_URL, cookie, ...(accept === undefined ? {} : { accept }) },
       },
       { ...env, SESSION_STORE: sessions } as Env,
     );
@@ -278,6 +278,33 @@ describe("supplemental route-level refusal pins", () => {
       expect(typeof body.request_id).toBe("string");
       expect(JSON.stringify(body)).not.toContain(PRIVATE);
     }
+  });
+
+  it.each([[undefined], ["*/*"], ["text/plain"], ["text/html;q=0, application/json;q=0"]])(
+    "logout revocation failure serves the correlated JSON envelope for Accept %s",
+    async (accept) => {
+      // No explicit HTML preference (absent/wildcard Accept included) is a
+      // machine representation: a default fetch must get JSON, not the page.
+      const { response, revoke } = await logoutRequest(accept);
+      expect(response.status).toBe(503);
+      expect(revoke).toHaveBeenCalledOnce();
+      expect(response.headers.get("vary")).toContain("Accept");
+      expect(response.headers.get("content-type")).toContain("application/json");
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ error: "db_unavailable" });
+      expect(typeof body.request_id).toBe("string");
+      expect(JSON.stringify(body)).not.toContain(PRIVATE);
+    },
+  );
+
+  it("logout revocation failure logs a bounded diagnostic without the driver detail", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { response } = await logoutRequest(MACHINE);
+    expect(response.status).toBe(503);
+    const lines = warn.mock.calls.filter(([message]) => message === "logout revocation failed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.[1]).toMatchObject({ exception: "Error", kind: "unknown" });
+    expect(JSON.stringify(lines)).not.toContain(PRIVATE);
   });
 
   it.each([BROWSER, MACHINE])("admin no-DB write merges Vary for %s", async (accept) => {

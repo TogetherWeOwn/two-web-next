@@ -22,7 +22,7 @@ import {
 } from "../discord";
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
-import { databaseUnavailable } from "../error-responses";
+import { databaseUnavailable, prefersHtmlError } from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
@@ -313,12 +313,21 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
             await store.revokeLineage(statusHash);
           }
-        } catch {
+        } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone. Negotiated
-          // like other 503s (JSON for fetch, branded page for nav), with the
-          // correlation id and no driver detail.
-          return databaseUnavailable(c);
+          // this browser's cookie as if the server row were gone. Explicit-HTML
+          // opt-in preserved: browsers get the branded page, every other
+          // caller (absent/wildcard Accept included) gets the correlated JSON
+          // envelope. The failure itself logs bounded facts only — class and
+          // kind, never the message, which can quote connection details.
+          const meta = failureMeta(err);
+          console.warn("logout revocation failed", {
+            exception: meta.exception,
+            kind: meta.kind,
+            request_id: safeRequestId(c.get("requestId")),
+          });
+          if (prefersHtmlError(c)) return databaseUnavailable(c);
+          return databaseUnavailable(c, true);
         }
       }
       deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });

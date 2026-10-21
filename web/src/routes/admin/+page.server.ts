@@ -43,18 +43,19 @@ export const load: PageServerLoad = async ({ parent, request, locals }) => {
   const widgets = resolveDashboardWidgets(funnelSettled, zeroSettled);
   if (widgets.outage) error(503, "Admin temporarily unavailable");
   // One correlated line per degraded widget, same contract as the Hono twin:
-  // a cancelled settlement omits its section but stays 200. Outages threw
-  // above; fulfilled undefined stays silent. Request may be absent in unit
-  // tests that call load({ parent }); tolerate that.
-  const rawId =
-    (request as Request | undefined)?.headers?.get("cf-ray") ??
-    (request as Request | undefined)?.headers?.get("x-request-id") ??
-    (locals as { requestId?: unknown } | undefined)?.requestId;
-  const requestId = safeRequestId(rawId);
-  if (funnelSettled.status !== "fulfilled") {
+  // with a db present, a settled value of undefined is exactly the degraded
+  // signal for both helpers. Outages threw above. Request may be absent in
+  // unit tests that call load({ parent }); tolerate that. Each id candidate
+  // is validated before fallback selection, so an invalid cf-ray never
+  // shadows a valid x-request-id or locals id.
+  const requestId =
+    safeRequestId((request as Request | undefined)?.headers?.get("cf-ray")) ??
+    safeRequestId((request as Request | undefined)?.headers?.get("x-request-id")) ??
+    safeRequestId((locals as { requestId?: unknown } | undefined)?.requestId);
+  if (funnelSettled.status !== "fulfilled" || funnelSettled.value === undefined) {
     console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
   }
-  if (zeroSettled.status !== "fulfilled") {
+  if (zeroSettled.status !== "fulfilled" || zeroSettled.value === undefined) {
     console.warn("dashboard widget degraded", {
       widget: "zero_searches",
       request_id: requestId,

@@ -275,14 +275,17 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           throw result.reason;
         }
       }
-      // One correlated line per degraded widget: a cancelled settlement omits
-      // its section but stays 200, so the log distinguishes degraded from
-      // healthy. Outages threw above; fulfilled undefined stays silent.
+      // One correlated line per degraded widget: with a db present, a settled
+      // value of undefined is exactly the degraded signal for both helpers
+      // (they resolve undefined on cancellations, ordinary failures and
+      // deadline timeouts), so the log distinguishes degraded from healthy.
+      // Outages threw above; rejected cancellations fall through to the same
+      // line.
       const requestId = safeRequestId(c.get("requestId"));
-      if (funnelResult.status !== "fulfilled") {
+      if (funnelResult.status !== "fulfilled" || funnelResult.value === undefined) {
         console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
       }
-      if (zeroSearchesResult.status !== "fulfilled") {
+      if (zeroSearchesResult.status !== "fulfilled" || zeroSearchesResult.value === undefined) {
         console.warn("dashboard widget degraded", {
           widget: "zero_searches",
           request_id: requestId,
