@@ -499,6 +499,7 @@ describe("staging smoke workflow safety", () => {
           `--discord-id=${values[0]}`,
           `--role-key=${values[1]}`,
           `--channel-key=${values[2]}`,
+          "--apply",
         ]);
       }
       // announcement_only drops the user and role arguments entirely.
@@ -511,6 +512,7 @@ describe("staging smoke workflow safety", () => {
         "--",
         "--announcement-only",
         `--channel-key=${values[2]}`,
+        "--apply",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
