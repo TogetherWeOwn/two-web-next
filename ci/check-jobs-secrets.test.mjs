@@ -8,7 +8,9 @@ import {
   REQUIRED_JOBS_SECRETS,
   checkJobsSecrets,
   missingRequiredSecrets,
+  parseEnv,
   parseSecretNames,
+  secretListArgs,
 } from "./check-jobs-secrets.mjs";
 
 const allPresent = JSON.stringify([
@@ -102,7 +104,37 @@ test("extra fields that resemble values are ignored and never surface", () => {
   );
 });
 
-function cliWithStubbedWrangler(stubStdout, { exitCode = 0, stubStderr = "" } = {}) {
+const STAGING_ARGV = [
+  "wrangler",
+  "secret",
+  "list",
+  "--config",
+  "wrangler.jobs.jsonc",
+  "--format",
+  "json",
+];
+const PRODUCTION_ARGV = [...STAGING_ARGV, "--env", "production"];
+
+test("secret listing targets the staging top level by default, production only on request", () => {
+  assert.deepEqual(secretListArgs(), STAGING_ARGV);
+  assert.deepEqual(secretListArgs(""), STAGING_ARGV);
+  assert.deepEqual(secretListArgs("production"), PRODUCTION_ARGV);
+  assert.throws(() => secretListArgs("preview"), /unknown environment/);
+  assert.throws(() => secretListArgs("--env=production"), /unknown environment/);
+});
+
+test("CLI env parsing accepts only the production flag", () => {
+  assert.equal(parseEnv([]), "");
+  assert.equal(parseEnv(["--env=production"]), "production");
+  assert.throws(() => parseEnv(["--env=preview"]), /usage/);
+  assert.throws(() => parseEnv(["production"]), /usage/);
+  assert.throws(() => parseEnv(["--env=production", "--env=production"]), /usage/);
+});
+
+function cliWithStubbedWrangler(
+  stubStdout,
+  { exitCode = 0, stubStderr = "", args = [], expected = STAGING_ARGV } = {},
+) {
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -114,7 +146,7 @@ function cliWithStubbedWrangler(stubStdout, { exitCode = 0, stubStderr = "" } = 
       join(scratch, "npx"),
       `#!${process.execPath}
 import { writeSync } from "node:fs";
-const expected = ["wrangler", "secret", "list", "--config", "wrangler.jobs.jsonc", "--format", "json"];
+const expected = ${JSON.stringify(expected)};
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
@@ -125,7 +157,7 @@ process.exit(Number(process.env.STUB_EXIT));
 `,
       { mode: 0o700 },
     );
-    const result = spawnSync(process.execPath, ["ci/check-jobs-secrets.mjs"], {
+    const result = spawnSync(process.execPath, ["ci/check-jobs-secrets.mjs", ...args], {
       encoding: "utf8",
       timeout: 30_000,
       env: {
@@ -167,6 +199,34 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.match(failed.stderr, /Could not verify jobs Worker secrets/);
   assert.ok(!failed.stderr.includes("fixture denied"), "wrangler output is never echoed");
   assert.equal(failed.stdout, "");
+});
+
+test("CLI --env=production lists the production jobs Worker with the same names-only contract", () => {
+  const result = cliWithStubbedWrangler(allPresent, {
+    args: ["--env=production"],
+    expected: PRODUCTION_ARGV,
+  });
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_JOBS_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.equal(result.stderr, "");
+
+  const missing = cliWithStubbedWrangler(JSON.stringify([{ name: "BOT_ENDPOINT_URL" }]), {
+    args: ["--env=production"],
+    expected: PRODUCTION_ARGV,
+  });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Missing jobs Worker secret.*BOT_KEY_ID.*BOT_SHARED_SECRET/);
+  assert.equal(missing.stdout, "");
+});
+
+test("CLI rejects unknown flags before invoking wrangler", () => {
+  // The stub exits 2 on any invocation; a usage error exits 1 without calling it.
+  const result = cliWithStubbedWrangler(allPresent, { args: ["--env=preview"] });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /usage: check-jobs-secrets\.mjs/);
+  assert.equal(result.stdout, "");
 });
 
 // Child-stream boundary: the fake wrangler's stdout/stderr are untrusted
