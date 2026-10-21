@@ -208,12 +208,37 @@ export function prefersHtmlError(c: Context): boolean {
   return selection.htmlExact && selection.htmlQ > 0 && selection.type === "text/html";
 }
 
+// Static upload-refusal messages, shared by the generic envelopes and the
+// /mcp transport errors so the surfaces cannot drift.
+const BAD_REQUEST_MESSAGE = "Check your request and try again.";
+const PAYLOAD_TOO_LARGE_MESSAGE = "Reduce the size of your request and try again.";
+
+// JSON-RPC "Invalid Request": the one static transport code for early /mcp
+// upload refusals (over-cap 413, broken-stream 400), matching the documented
+// batch refusal in mcp/routes.ts. Uploads fail before any id is known, so the
+// id is always null.
+const MCP_TRANSPORT_ERROR_CODE = -32600;
+
+function isMcpTransport(c: Context): boolean {
+  return c.req.method.toUpperCase() === "POST" && c.req.path === "/mcp";
+}
+
+function mcpTransportError(c: Context, message: string): Response {
+  return c.json({
+    jsonrpc: "2.0",
+    id: null,
+    error: { code: MCP_TRANSPORT_ERROR_CODE, message },
+  });
+}
+
 // Malformed input shares the established 403/413 negotiation, while feed
-// readers retain the original plaintext upload refusal.
+// readers retain the original plaintext upload refusal. /mcp uploads answer
+// the documented JSON-RPC error whatever Accept says.
 export function badRequest(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(400);
+  if (isMcpTransport(c)) return mcpTransportError(c, BAD_REQUEST_MESSAGE);
   if (isFeedErrorPath(c.req.path)) {
     return memberReadActive()
       ? bufferedMemberText(c, "Bad request", 400)
@@ -224,7 +249,7 @@ export function badRequest(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
-    const body = { error: "bad_request", message: "Check your request and try again." };
+    const body = { error: "bad_request", message: BAD_REQUEST_MESSAGE };
     return memberReadActive() ? bufferedMemberJson(c, body, 400) : c.json(body);
   }
   const page = <BadRequestPage />;
@@ -277,11 +302,13 @@ function payloadTooLargeReturn(path: string): { href: string; label: string } {
 // machine-only contracts (return JSON even if Accept prefers HTML or is
 // absent); otherwise delegates to the quality selector so that q=0,
 // specificity, case and wildcards match the outage contract. Always sets
-// private no-store + Vary: Accept (merged).
+// private no-store + Vary: Accept (merged). /mcp uploads answer the
+// documented JSON-RPC error whatever Accept says.
 export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(413);
+  if (isMcpTransport(c)) return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE);
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
@@ -290,7 +317,7 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
     const requestId = supportReference(c);
     return c.json({
       reason: "payload_too_large",
-      message: "Reduce the size of your request and try again.",
+      message: PAYLOAD_TOO_LARGE_MESSAGE,
       ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }

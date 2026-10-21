@@ -467,7 +467,7 @@ describe("agent ingress admission", () => {
       expect(ctx.waitUntil).toHaveBeenCalledOnce();
       // Emission proof: the redaction assert below is vacuous when nothing is
       // logged, so pin the expected error first (silencing the logger fails here).
-      expect(log).toHaveBeenCalledWith("agent-events failed", "Error");
+      expect(log).toHaveBeenCalledWith("agent-events failed", { exception: "Error" });
       expect(JSON.stringify(log.mock.calls)).not.toContain("private grant failure");
     } finally {
       log.mockRestore();

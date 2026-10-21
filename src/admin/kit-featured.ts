@@ -14,6 +14,7 @@
 // uses — never a UI-local copy.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { alertRequestError } from "../alerts";
 import { featuredStatus, type FeaturedStatus } from "../featured-status";
 import {
   FEATURED_PAGE_SIZE,
@@ -87,8 +88,11 @@ export async function resolveKitFeaturedList(
     // A classified outage answers the shared 503 (the Hono guard's
     // memberReadBoundary turns the list read's rethrown outage into the
     // databaseUnavailable envelope; SvelteKit would otherwise render its 500
-    // error page for the uncaught rejection). Anything else still throws.
+    // error page for the uncaught rejection). A code bug emits the leak-free
+    // error.alert diagnostic first so it never looks like a downstream
+    // outage, mirroring src/admin/kit-activity-log.ts, then still throws.
     if (isDatabaseUnavailable(err)) return { kind: "unavailable" };
+    alertRequestError(err, { method: "GET", route: "/admin/featured" });
     throw err;
   }
   const rows = fetched.slice(0, FEATURED_PAGE_SIZE).map((r) => ({

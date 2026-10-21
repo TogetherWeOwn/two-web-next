@@ -751,6 +751,9 @@ function eventValues(row: EventRow): Record<string, unknown> {
     ends_at: utcToWall(row.endsAt, row.timezone),
     timezone: row.timezone,
     location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
     capacity: row.capacity === null ? "" : String(row.capacity),
   };
 }
