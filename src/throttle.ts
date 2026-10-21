@@ -94,10 +94,13 @@ export const clientKey = (c: Context) => {
 const MAX_THROTTLE_CLASS_LENGTH = 100;
 
 function exceptionClass(err: unknown): string {
-  const name =
+  const raw =
     err instanceof Error
       ? err.name
       : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // Only strings are sanitized: a non-string name must degrade to unknown
+  // instead of throwing the fail-open catch into a 500.
+  const name = typeof raw === "string" ? raw : "unknown";
   // De-newline and bound: a hostile error name must not forge log lines.
   return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
 }

@@ -91,4 +91,33 @@ describe("fallback warn exception classes are log-safe", () => {
       guild_id: GUILD,
     });
   });
+
+  it("throttle store throw with a non-string class still allows as unknown", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = new Error("synthetic non-string class marker");
+    (err as unknown as { name: unknown }).name = 12345;
+    const get = probeApp(async () => {
+      throw err;
+    });
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Throttle store failed; allowing the request.",
+      expect.objectContaining({ throttle: "probe", exception: "unknown" }),
+    );
+  });
+
+  it("moderator transport throw with an undefined class still degrades as unknown", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = new Error("synthetic undefined class marker");
+    (err as unknown as { name: unknown }).name = undefined;
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(err));
+    await expect(recomputeModerator(modOpts())).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("moderator recompute lookup transport failed", {
+      exception: "unknown",
+      guild_id: GUILD,
+    });
+  });
 });
