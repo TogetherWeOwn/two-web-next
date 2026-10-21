@@ -143,22 +143,24 @@ jobs:
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
-      # The journeys spend the full 10/min qa-login budget (10 spec logins
-      # plus the teardown login) against the shared web_throttle_hits table,
-      # so the parity run's own QA login 429s whenever the rolling 60 s
-      # window still holds them. Clear the volitional counters on the
-      # disposable DB so each suite starts with a clean window.
+      # The journeys spend the full 10/min qa-login budget (10 spec logins,
+      # plus the teardown login when orphans exist) against the shared
+      # web_throttle_hits table, so the parity run's own QA logins 429
+      # whenever the rolling 60 s window still holds them. Clear the
+      # volitional counters on the disposable DB so each suite starts with a
+      # clean window.
       - name: Reset throttle counters for parity
         if: ${{ !cancelled() }}
         run: node e2e/reset-throttle.mjs
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
       # run against Hono and the built Kit Worker on the same seeded disposable
       # Postgres after the browser suite. The Kit workspace is rebuilt here
-      # for the parity run. Read-only apart from the
-      # member-board journey's single shared QA login and its one going RSVP
-      # (withdrawn in afterAll) and the archive journey's 24 seeded rows
-      # (swept in afterAll), so they neither contaminate either visual suite
-      # nor skew the teardown sweep. The visual spec above stays pinned to its
+      # for the parity run. Read-only apart from the parity step's two QA
+      # logins (one shared member, one isolated renewal — pinned by
+      # e2e/qa-login-budget.test.mjs) and its one going RSVP (withdrawn in
+      # afterAll) and the archive journey's 24 seeded rows (swept in afterAll),
+      # so they neither contaminate either visual suite nor skew the teardown
+      # sweep. The visual spec above stays pinned to its
       # file: the parity run below must not re-run it after the mutating
       # journeys.
       - name: Install Kit workspace dependencies
@@ -181,7 +183,7 @@ jobs:
       # server-response gate with a real session cookie. Read-only (no RSVP
       # writes, no fixtures to cancel) and exactly two QA logins, placed
       # after the browser suite so the shared qa-login throttle window holds
-      # at most this step's pair plus the parity journey's one. The ledger
+      # at most this step's pair plus the parity journey's two. The ledger
       # lands in test-results/ and rides the failure-traces upload below.
       - name: Authenticated perf budgets (session-cookie journeys)
         if: ${{ !cancelled() }}
