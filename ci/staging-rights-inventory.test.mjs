@@ -124,6 +124,15 @@ const SQL_KEYWORDS = [
   "WITH",
 ];
 
+// PostgreSQL unquoted identifiers start with a letter (including non-ASCII
+// letters) or an underscore; later characters add digits and dollar signs.
+// Every identifier pattern below is built from these classes so no spelling
+// resolves in one scan and vanishes in another. All of them run with the
+// unicode flag; ASCII-only \b stays only beside fixed ASCII keywords.
+const ID_START = "\\p{L}_";
+const ID_CONT = "\\p{L}\\p{N}_$";
+const IDENT = `[${ID_START}][${ID_CONT}]*`;
+
 function blankLiterals(sql) {
   return sql.replace(/'(?:[^']|'')*'/g, "''");
 }
@@ -141,7 +150,10 @@ function scanSql(sql) {
 // `name AS (` outside a CTE definition from registering a name.
 function cteNames(sql) {
   const names = new Set();
-  const defs = /(?:WITH\s+RECURSIVE|WITH|,)\s*(\w+)\s*(?:\([^)]*\)\s*)?AS\s*\(/gi;
+  const defs = new RegExp(
+    `(?:WITH\\s+RECURSIVE|WITH|,)\\s*(${IDENT})\\s*(?:\\([^)]*\\)\\s*)?AS\\s*\\(`,
+    "giu",
+  );
   for (const [, name] of sql.matchAll(defs)) names.add(name.toUpperCase());
   return names;
 }
@@ -152,7 +164,7 @@ function cteNames(sql) {
 // catalog column that the main query resolves against its FROM tables.
 function blankCteColumns(sql) {
   return sql.replace(
-    /((?:WITH\s+RECURSIVE|WITH|,)\s*\w+\s*)\(([^)]*)\)(\s*AS\s*\()/gi,
+    new RegExp(`((?:WITH\\s+RECURSIVE|WITH|,)\\s*${IDENT}\\s*)\\(([^)]*)\\)(\\s*AS\\s*\\()`, "giu"),
     (_, head, list, tail) => `${head}(${" ".repeat(list.length)})${tail}`,
   );
 }
@@ -190,16 +202,40 @@ function isPositionalCteName(sql, ctes, match) {
 // with no usable alias (keyword or end of clause) registers under its own
 // table name, so table-qualified references still resolve against the
 // allowlist instead of being skipped.
+function catalogTargetPattern() {
+  // The lookahead after the table name is load-bearing: without it the call
+  // guard below backtracks into a truncated table (`current_database(` would
+  // register `current_databas` as a target).
+  return new RegExp(
+    `(?:FROM|JOIN|,)\\s*pg_catalog\\.(${IDENT})(?![${ID_CONT}])(?!\\s*\\()(?:\\s+AS\\s+(${IDENT})|\\s+(${IDENT}))?`,
+    "giud",
+  );
+}
+
 function catalogAliases(sql) {
   const aliases = new Map();
-  const target = /(?:FROM|JOIN|,)\s*pg_catalog\.(\w+)\b(?!\s*\()(?:\s+AS\s+(\w+)|\s+(\w+))?/gi;
-  for (const [, table, asAlias, alias] of sql.matchAll(target)) {
+  for (const [, table, asAlias, alias] of sql.matchAll(catalogTargetPattern())) {
     const name = asAlias ?? alias;
     if (name && !SQL_KEYWORDS.includes(name.toUpperCase()))
       aliases.set(name.toUpperCase(), table.toLowerCase());
     else aliases.set(table.toUpperCase(), table.toLowerCase());
   }
   return aliases;
+}
+
+// CTE-name alternation safe to interpolate: $ is the only identifier
+// character with regex meaning. The trailing lookahead keeps a CTE name from
+// matching a longer identifier's prefix (`c` in `FROM cx`).
+function cteTargetPattern(ctes) {
+  const names = [...ctes].map((name) => name.replace(/\$/g, "\\$")).join("|");
+  return new RegExp(
+    `(?:FROM|JOIN|,)\\s*(?:${names})(?![${ID_CONT}])(?:\\s+AS\\s+(${IDENT})|\\s+(${IDENT}))?`,
+    "giud",
+  );
+}
+
+function lateralAliasPattern() {
+  return new RegExp(`\\)\\s*(?:AS\\s+)?(${IDENT})\\s+ON(?![${ID_CONT}])`, "giu");
 }
 
 // Non-catalog aliases usable as bare tokens: CTE FROM/JOIN/comma targets and
@@ -209,23 +245,56 @@ function catalogAliases(sql) {
 function extraAliases(sql, cteNames) {
   const aliases = new Set();
   if (cteNames.size > 0) {
-    const cte = [...cteNames].join("|");
-    const target = new RegExp(`(?:FROM|JOIN|,)\\s*(?:${cte})\\s*(?:AS\\s+(\\w+)|(\\w+))?`, "gi");
-    for (const [, asAlias, alias] of sql.matchAll(target)) {
+    for (const [, asAlias, alias] of sql.matchAll(cteTargetPattern(cteNames))) {
       const name = asAlias ?? alias;
       if (name && !SQL_KEYWORDS.includes(name.toUpperCase())) aliases.add(name.toUpperCase());
     }
   }
-  for (const [, alias] of sql.matchAll(/\)\s*(?:AS\s+)?(\w+)\s+ON\b/gi))
+  for (const [, alias] of sql.matchAll(lateralAliasPattern()))
     if (!SQL_KEYWORDS.includes(alias.toUpperCase())) aliases.add(alias.toUpperCase());
   return aliases;
+}
+
+// Token start indices where an alias is defined: catalog FROM/JOIN/comma
+// targets, CTE targets, and parenthesized-output aliases (`) alias`, with or
+// without ON). A bare catalog alias is a whole-row reference anywhere else,
+// so the definition itself is the only bare occurrence that names no column;
+// even a shadowed name (member_checks defines r for both pg_roles and
+// relevant) is safe to exempt exactly there.
+function aliasDefinitionIndices(sql, ctes) {
+  const indices = new Set();
+  const record = (match, group) => {
+    const name = match[group];
+    if (name !== undefined && !SQL_KEYWORDS.includes(name.toUpperCase()))
+      indices.add(match.indices[group][0]);
+  };
+  for (const match of sql.matchAll(catalogTargetPattern()))
+    record(match, match[2] !== undefined ? 2 : 3);
+  if (ctes.size > 0)
+    for (const match of sql.matchAll(cteTargetPattern(ctes)))
+      record(match, match[1] !== undefined ? 1 : 2);
+  const paren = new RegExp(`\\)\\s*(?:AS\\s+)?(${IDENT})`, "giud");
+  for (const match of sql.matchAll(paren)) record(match, 1);
+  return indices;
+}
+
+// A catalog alias outside qualifier position (`alias.`), schema-qualified
+// table position (`pg_catalog.table`) and its definitions is a whole-row
+// reference in value position (`p::text`, `(p)`), which selects every column
+// without naming one for the per-column gate.
+function isQualifierPositionAlias(sql, aliases, defs, match) {
+  if (!aliases.has(match[1].toUpperCase())) return false;
+  const after = sql[match.index + match[0].length];
+  if (after === "." || sql[match.index - 1] === ".") return true;
+  return defs.has(match.index);
 }
 
 function assertBuiltinCalls(read, builtins) {
   const sql = scanSql(read.sql);
   const ctes = cteNames(sql);
   const fixed = builtins.map((name) => name.toLowerCase());
-  for (const [, schema, builtin] of sql.matchAll(/([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(/g)) {
+  const qualified = new RegExp(`(${IDENT})\\.(${IDENT})\\s*\\(`, "gu");
+  for (const [, schema, builtin] of sql.matchAll(qualified)) {
     assert.equal(
       schema.toLowerCase(),
       "pg_catalog",
@@ -236,7 +305,8 @@ function assertBuiltinCalls(read, builtins) {
       `${read.id}: builtin outside fixed list: ${builtin.toLowerCase()}`,
     );
   }
-  for (const match of sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
+  const unqualified = new RegExp(`(?<![${ID_CONT}.\"'])(${IDENT})\\s*\\(`, "gu");
+  for (const match of sql.matchAll(unqualified)) {
     const name = match[1];
     const upper = name.toUpperCase();
     if (UNQUALIFIED_KEYWORDS.includes(upper)) continue;
@@ -259,6 +329,23 @@ function assertNoQuotedIdentifiers(read) {
   );
 }
 
+function assertNoExtendedLiterals(read) {
+  // Extended string forms must not reach the standard-quote blanker. A quote
+  // inside a dollar-quoted literal ($$...$$, $tag$...$tag$) ends the blanked
+  // span early and hides following column references, and a backslash inside
+  // an E-string escapes the blanker's closing quote the same way. The fixed
+  // surface uses neither form (its SQL is pure ASCII with standard quotes
+  // only), so any dollar-quote opener or backslash fails here on the raw SQL
+  // before blanking. A backslash-free E-string is lexed identically by the
+  // blanker and selects only a constant, so it needs no form of its own.
+  assert.doesNotMatch(
+    read.sql,
+    /\$([\p{L}_][\p{L}\p{N}_]*)?\$/u,
+    `${read.id}: dollar-quoted literal outside the fixed surface`,
+  );
+  assert.doesNotMatch(read.sql, /\\/, `${read.id}: backslash outside the fixed surface`);
+}
+
 function assertBareTokens(read) {
   // Every unqualified token must be a fixed keyword, a declared output field,
   // or a table/CTE alias. CTE names resolve only at their definition, as a
@@ -271,23 +358,32 @@ function assertBareTokens(read) {
   const ctes = cteNames(sql);
   const allowed = new Set([...SQL_KEYWORDS]);
   for (const field of read.fields ?? []) allowed.add(field.toUpperCase());
-  for (const alias of catalogAliases(sql).keys()) allowed.add(alias);
+  const aliases = catalogAliases(sql);
+  for (const alias of aliases.keys()) allowed.add(alias);
   for (const alias of extraAliases(sql, ctes)) allowed.add(alias);
-  for (const match of sql.matchAll(/(?<![\w.:\"'])([A-Za-z_]\w*)/g)) {
-    const token = match[1];
-    if (allowed.has(token.toUpperCase())) continue;
+  const defs = aliasDefinitionIndices(sql, ctes);
+  const token = new RegExp(`(?<![${ID_CONT}.:\"'])(${IDENT})`, "gu");
+  for (const match of sql.matchAll(token)) {
+    const name = match[1];
+    if (!isQualifierPositionAlias(sql, aliases, defs, match) && aliases.has(name.toUpperCase()))
+      assert.fail(`${read.id}: bare catalog alias outside qualifier position: ${name}`);
+    if (allowed.has(name.toUpperCase())) continue;
     if (isPositionalCteName(sql, ctes, match)) continue;
-    assert.fail(`${read.id}: bare token outside fixed surface: ${token}`);
+    assert.fail(`${read.id}: bare token outside fixed surface: ${name}`);
   }
 }
 
 function assertCatalogColumns(read, catalogColumns) {
   const sql = scanSql(read.sql);
+  // Star expansions select every column without naming one, including
+  // through a CTE (`SELECT p.* ...` then `SELECT x.forbidden FROM x`), so
+  // the per-column scan below would see nothing to check.
+  assert.doesNotMatch(sql, /\.\*/, `${read.id}: star expansion outside the fixed surface`);
   // Three-part references never occur in the fixed surface; the two-part
   // scan below would consume `schema.table` and skip the column.
   assert.doesNotMatch(
     sql,
-    /\b[A-Za-z_]\w*\.[A-Za-z_]\w*\.[A-Za-z_]\w*\b/,
+    new RegExp(`(?<![${ID_CONT}])${IDENT}\\.${IDENT}\\.${IDENT}`, "u"),
     `${read.id}: three-part reference outside the fixed surface`,
   );
   const aliases = catalogAliases(sql);
@@ -297,7 +393,8 @@ function assertCatalogColumns(read, catalogColumns) {
       columns.map((column) => column.toLowerCase()),
     ]),
   );
-  for (const [, alias, column] of sql.matchAll(/\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b/g)) {
+  const qualified = new RegExp(`(?<![${ID_CONT}])(${IDENT})\\.(${IDENT})`, "gu");
+  for (const [, alias, column] of sql.matchAll(qualified)) {
     const table = aliases.get(alias.toUpperCase());
     if (table !== undefined)
       assert.ok(
@@ -309,8 +406,10 @@ function assertCatalogColumns(read, catalogColumns) {
 
 function assertCatalogTargets(read, catalogColumns) {
   const sql = scanSql(read.sql);
-  const targets =
-    /\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)\b(?!\s*\()|,\s*pg_catalog\.(\w+)\b(?!\s*\()/gi;
+  const targets = new RegExp(
+    `\\b(?:FROM|JOIN)\\s+pg_catalog\\.(${IDENT})(?![${ID_CONT}])(?!\\s*\\()|,\\s*pg_catalog\\.(${IDENT})(?![${ID_CONT}])(?!\\s*\\()`,
+    "giu",
+  );
   for (const [, fromJoin, comma] of sql.matchAll(targets)) {
     const catalog = (fromJoin ?? comma).toLowerCase();
     assert.ok(Object.hasOwn(catalogColumns, catalog), `catalog outside fixed list: ${catalog}`);
@@ -659,8 +758,242 @@ test("candidate SQL stays inside the exact fixed surface", async () => {
   for (const read of READS) {
     assertCatalogColumns(read, CATALOG_COLUMNS);
     assertNoQuotedIdentifiers(read);
+    assertNoExtendedLiterals(read);
     assertBareTokens(read);
   }
+});
+
+// Frozen candidate SQL per read id. Any drift in reads.mjs fails the pin
+// test below even when the spelling gates above would still pass it, so no
+// new implicit-column, identifier-charset or literal-lexing spelling class
+// can recur silently. Reads are frozen by design; changing one means
+// updating this pin in the same reviewed change.
+const EXPECTED_SQL = {
+  identity: `SELECT current_user::text AS current_user_name, session_user::text AS session_user_name,
+  pg_catalog.current_database() AS database_name,
+  pg_catalog.current_setting('server_version') AS server_version,
+  pg_catalog.current_setting('server_version_num')::integer AS server_version_num,
+  (pg_catalog.inet_server_addr() IS NOT NULL) AS server_address_present`,
+  schemas: `SELECT n.oid AS schema_oid, n.nspname::text AS schema_name, n.nspowner AS owner_oid,
+  CASE WHEN n.nspacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(n.nspacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state
+  FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'drizzle') ORDER BY n.oid`,
+  relations: `SELECT c.oid AS relation_oid, n.nspname::text AS schema_name, c.relname::text AS relation_name,
+  c.relkind::text AS relation_kind, c.relowner AS owner_oid, c.relrowsecurity AS row_security,
+  c.relforcerowsecurity AS force_row_security, c.relispartition AS is_partition
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') ORDER BY n.nspname, c.relname, c.oid`,
+  columns: `SELECT a.attrelid AS relation_oid, a.attnum::integer AS column_number,
+  a.attname::text AS column_name, a.atttypid AS type_oid, a.atttypmod AS type_modifier,
+  a.attidentity::text AS identity_kind, a.attgenerated::text AS generated_kind,
+  CASE WHEN a.attacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(a.attacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state
+  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attrelid, a.attnum`,
+  partitions: `SELECT i.inhrelid AS relation_oid, i.inhparent AS parent_oid,
+  i.inhseqno AS sequence_number, i.inhdetachpending AS detach_pending
+  FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+  JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') OR pn.nspname IN ('public', 'drizzle') ORDER BY i.inhrelid, i.inhseqno`,
+  sequence_dependencies: `SELECT c.oid AS sequence_oid, n.nspname::text AS sequence_schema,
+  c.relname::text AS sequence_name, c.relowner AS owner_oid,
+  d.refobjid AS referenced_oid, d.refobjsubid AS referenced_column, d.deptype::text AS dependency_kind
+  FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class c ON c.oid = d.objid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') AND c.relkind = 'S'
+    AND d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+    AND d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+    AND d.objsubid = 0 AND d.deptype IN ('a', 'i') ORDER BY c.oid, d.refobjid, d.refobjsubid`,
+  relation_acls: `SELECT c.oid AS relation_oid, c.relowner AS owner_oid, CASE WHEN c.relacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(c.relacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state,
+  x.grantor AS grantor_oid, x.grantee AS grantee_oid, x.privilege_type AS privilege, x.is_grantable AS grantable
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(c.relacl,
+    pg_catalog.acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) x ON true
+  WHERE n.nspname IN ('public', 'drizzle') AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+  ORDER BY c.oid, x.grantor, x.grantee, x.privilege_type`,
+  column_acls: `SELECT a.attrelid AS relation_oid, a.attnum::integer AS column_number,
+  c.relowner AS owner_oid, CASE WHEN a.attacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(a.attacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state,
+  x.grantor AS grantor_oid, x.grantee AS grantee_oid, x.privilege_type AS privilege, x.is_grantable AS grantable
+  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN LATERAL pg_catalog.aclexplode(a.attacl) x ON true
+  WHERE n.nspname IN ('public', 'drizzle') AND a.attnum > 0 AND NOT a.attisdropped
+  ORDER BY a.attrelid, a.attnum, x.grantor, x.grantee, x.privilege_type`,
+  schema_acls: `SELECT n.oid AS schema_oid, n.nspowner AS owner_oid, CASE WHEN n.nspacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(n.nspacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state,
+  x.grantor AS grantor_oid, x.grantee AS grantee_oid, x.privilege_type AS privilege, x.is_grantable AS grantable
+  FROM pg_catalog.pg_namespace n
+  LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))) x ON true
+  WHERE n.nspname IN ('public', 'drizzle') ORDER BY n.oid, x.grantor, x.grantee, x.privilege_type`,
+  memberships: `WITH RECURSIVE objects(owner_oid, acl) AS (
+  SELECT c.relowner, c.relacl FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT c.relowner, a.attacl FROM pg_catalog.pg_attribute a
+  JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') AND a.attnum > 0 AND NOT a.attisdropped
+  UNION ALL SELECT n.nspowner, n.nspacl FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT p.proowner, p.proacl FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT d.defaclrole, d.defaclacl FROM pg_catalog.pg_default_acl d
+), acl_entries AS (
+  SELECT x.grantor, x.grantee FROM objects o
+  CROSS JOIN LATERAL pg_catalog.aclexplode(o.acl) x
+), participants(oid) AS (
+  SELECT o.owner_oid FROM objects o
+  UNION SELECT x.grantor FROM acl_entries x
+  UNION SELECT x.grantee FROM acl_entries x WHERE x.grantee <> 0
+), roots(oid) AS (
+  SELECT r.oid FROM pg_catalog.pg_roles r
+  WHERE r.rolname IN ('two_web_app', 'pg_read_all_data', 'pg_write_all_data')
+  UNION SELECT x.grantor FROM acl_entries x
+), paths(oid, direction) AS (
+  SELECT roots.oid, 'forward'::text FROM roots
+  UNION SELECT roots.oid, 'reverse'::text FROM roots
+  UNION
+  SELECT CASE WHEN w.direction = 'forward' THEN m.roleid ELSE m.member END, w.direction
+  FROM paths w JOIN pg_catalog.pg_auth_members m
+    ON (w.direction = 'forward' AND m.member = w.oid)
+    OR (w.direction = 'reverse' AND m.roleid = w.oid)
+), edges AS (
+  SELECT m.oid, m.roleid, m.member, m.grantor, m.admin_option, m.inherit_option, m.set_option
+  FROM pg_catalog.pg_auth_members m
+  WHERE EXISTS (SELECT w.oid FROM paths w
+    WHERE (w.direction = 'forward' AND w.oid = m.member)
+       OR (w.direction = 'reverse' AND w.oid = m.roleid))
+), relevant(oid) AS (
+  SELECT paths.oid FROM paths
+  UNION SELECT edges.grantor FROM edges
+  UNION SELECT participants.oid FROM participants
+)
+  SELECT e.oid AS membership_oid, e.roleid AS role_oid, e.member AS member_oid,
+  e.grantor AS grantor_oid, e.admin_option, e.inherit_option, e.set_option
+  FROM edges e ORDER BY e.roleid, e.member, e.grantor`,
+  roles: `WITH RECURSIVE objects(owner_oid, acl) AS (
+  SELECT c.relowner, c.relacl FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT c.relowner, a.attacl FROM pg_catalog.pg_attribute a
+  JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') AND a.attnum > 0 AND NOT a.attisdropped
+  UNION ALL SELECT n.nspowner, n.nspacl FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT p.proowner, p.proacl FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT d.defaclrole, d.defaclacl FROM pg_catalog.pg_default_acl d
+), acl_entries AS (
+  SELECT x.grantor, x.grantee FROM objects o
+  CROSS JOIN LATERAL pg_catalog.aclexplode(o.acl) x
+), participants(oid) AS (
+  SELECT o.owner_oid FROM objects o
+  UNION SELECT x.grantor FROM acl_entries x
+  UNION SELECT x.grantee FROM acl_entries x WHERE x.grantee <> 0
+), roots(oid) AS (
+  SELECT r.oid FROM pg_catalog.pg_roles r
+  WHERE r.rolname IN ('two_web_app', 'pg_read_all_data', 'pg_write_all_data')
+  UNION SELECT x.grantor FROM acl_entries x
+), paths(oid, direction) AS (
+  SELECT roots.oid, 'forward'::text FROM roots
+  UNION SELECT roots.oid, 'reverse'::text FROM roots
+  UNION
+  SELECT CASE WHEN w.direction = 'forward' THEN m.roleid ELSE m.member END, w.direction
+  FROM paths w JOIN pg_catalog.pg_auth_members m
+    ON (w.direction = 'forward' AND m.member = w.oid)
+    OR (w.direction = 'reverse' AND m.roleid = w.oid)
+), edges AS (
+  SELECT m.oid, m.roleid, m.member, m.grantor, m.admin_option, m.inherit_option, m.set_option
+  FROM pg_catalog.pg_auth_members m
+  WHERE EXISTS (SELECT w.oid FROM paths w
+    WHERE (w.direction = 'forward' AND w.oid = m.member)
+       OR (w.direction = 'reverse' AND w.oid = m.roleid))
+), relevant(oid) AS (
+  SELECT paths.oid FROM paths
+  UNION SELECT edges.grantor FROM edges
+  UNION SELECT participants.oid FROM participants
+)
+  SELECT r.oid AS role_oid, r.rolname::text AS role_name, r.rolsuper AS superuser,
+  r.rolinherit AS inherit, r.rolcreaterole AS create_role, r.rolcreatedb AS create_database,
+  r.rolcanlogin AS can_login, r.rolreplication AS replication, r.rolbypassrls AS bypass_rls
+  FROM pg_catalog.pg_roles r JOIN relevant v ON v.oid = r.oid ORDER BY r.oid`,
+  member_checks: `WITH RECURSIVE objects(owner_oid, acl) AS (
+  SELECT c.relowner, c.relacl FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT c.relowner, a.attacl FROM pg_catalog.pg_attribute a
+  JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') AND a.attnum > 0 AND NOT a.attisdropped
+  UNION ALL SELECT n.nspowner, n.nspacl FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT p.proowner, p.proacl FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 'drizzle')
+  UNION ALL SELECT d.defaclrole, d.defaclacl FROM pg_catalog.pg_default_acl d
+), acl_entries AS (
+  SELECT x.grantor, x.grantee FROM objects o
+  CROSS JOIN LATERAL pg_catalog.aclexplode(o.acl) x
+), participants(oid) AS (
+  SELECT o.owner_oid FROM objects o
+  UNION SELECT x.grantor FROM acl_entries x
+  UNION SELECT x.grantee FROM acl_entries x WHERE x.grantee <> 0
+), roots(oid) AS (
+  SELECT r.oid FROM pg_catalog.pg_roles r
+  WHERE r.rolname IN ('two_web_app', 'pg_read_all_data', 'pg_write_all_data')
+  UNION SELECT x.grantor FROM acl_entries x
+), paths(oid, direction) AS (
+  SELECT roots.oid, 'forward'::text FROM roots
+  UNION SELECT roots.oid, 'reverse'::text FROM roots
+  UNION
+  SELECT CASE WHEN w.direction = 'forward' THEN m.roleid ELSE m.member END, w.direction
+  FROM paths w JOIN pg_catalog.pg_auth_members m
+    ON (w.direction = 'forward' AND m.member = w.oid)
+    OR (w.direction = 'reverse' AND m.roleid = w.oid)
+), edges AS (
+  SELECT m.oid, m.roleid, m.member, m.grantor, m.admin_option, m.inherit_option, m.set_option
+  FROM pg_catalog.pg_auth_members m
+  WHERE EXISTS (SELECT w.oid FROM paths w
+    WHERE (w.direction = 'forward' AND w.oid = m.member)
+       OR (w.direction = 'reverse' AND w.oid = m.roleid))
+), relevant(oid) AS (
+  SELECT paths.oid FROM paths
+  UNION SELECT edges.grantor FROM edges
+  UNION SELECT participants.oid FROM participants
+)
+  SELECT r.oid AS member_oid, target.oid AS role_oid,
+  pg_catalog.pg_has_role(r.oid, target.oid, 'MEMBER') AS is_member
+  FROM relevant r CROSS JOIN pg_catalog.pg_roles target
+  WHERE target.rolname IN ('two_web_app', 'pg_read_all_data', 'pg_write_all_data')
+  ORDER BY r.oid, target.oid`,
+  default_acls: `SELECT d.oid AS default_acl_oid, d.defaclrole AS owner_oid,
+  d.defaclnamespace AS schema_oid, d.defaclobjtype::text AS object_kind,
+  CASE WHEN d.defaclacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(d.defaclacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state, x.grantor AS grantor_oid,
+  x.grantee AS grantee_oid, x.privilege_type AS privilege, x.is_grantable AS grantable
+  FROM pg_catalog.pg_default_acl d LEFT JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) x ON true
+  ORDER BY d.oid, x.grantor, x.grantee, x.privilege_type`,
+  policies: `SELECT p.oid AS policy_oid, p.polrelid AS relation_oid, p.polname::text AS policy_name,
+  p.polcmd::text AS command, p.polroles AS role_oids, p.polpermissive AS permissive,
+  (p.polqual IS NOT NULL) AS expression_present, (p.polwithcheck IS NOT NULL) AS check_present
+  FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid = p.polrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE (n.nspname = 'public' AND c.relname IN ('users', 'profiles', 'discord_event_snapshots', 'job_unique_locks', 'queue_jobs', 'featured_contents', 'rsvps', 'agent_event_idempotency_keys', 'agent_event_audits', 'agent_event_hits', 'member_data_access_logs', 'event_search_logs', 'board_view_logs', 'events', 'event_sync_attempts', 'queue_failed_jobs', 'activity_log', 'agent_event_grants', 'join_attempts', 'web_throttle_hits', 'web_sessions', 'web_oauth_journeys'))
+    OR (n.nspname = 'drizzle' AND c.relname = '__drizzle_migrations') ORDER BY p.oid`,
+  functions: `SELECT p.oid AS function_oid, n.nspname::text AS schema_name, p.proname::text AS function_name,
+  pg_catalog.oidvectortypes(p.proargtypes) AS identity_arguments, p.prokind::text AS function_kind,
+  p.proowner AS owner_oid, p.prosecdef AS security_definer, CASE WHEN p.proacl IS NULL THEN 'null-default' WHEN pg_catalog.cardinality(p.proacl) = 0 THEN 'empty' ELSE 'explicit' END AS acl_state,
+  x.grantor AS grantor_oid, x.grantee AS grantee_oid, x.privilege_type AS privilege, x.is_grantable AS grantable
+  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+  LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))) x ON true
+  WHERE n.nspname IN ('public', 'drizzle') ORDER BY p.oid, x.grantor, x.grantee, x.privilege_type`,
+  triggers: `SELECT t.oid AS trigger_oid, t.tgrelid AS relation_oid, t.tgfoid AS function_oid,
+  t.tgname::text AS trigger_name, t.tgisinternal AS internal, t.tgenabled::text AS enabled
+  FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname IN ('public', 'drizzle') ORDER BY t.tgrelid, t.oid`,
+};
+
+test("candidate SQL matches the frozen text exactly", async () => {
+  const { READS } = await modules();
+  assert.deepEqual(
+    READS.map((r) => r.id),
+    Object.keys(EXPECTED_SQL),
+  );
+  for (const read of READS) assert.equal(read.sql, EXPECTED_SQL[read.id]);
 });
 
 test("allowlist checks reject non-fixed SQL spellings", async () => {
@@ -821,6 +1154,83 @@ test("allowlist checks reject non-fixed SQL spellings", async () => {
     id: "mutant",
     sql: "WITH RECURSIVE c AS (SELECT 1) SELECT c.value FROM c",
   });
+  // A bare catalog alias in value position is a whole-row reference: it
+  // selects every column without naming one, so it fails instead of
+  // resolving as a bare token.
+  assert.throws(
+    () =>
+      assertBareTokens({
+        id: "mutant",
+        fields: ["function_kind"],
+        sql: "SELECT p::text AS function_kind FROM pg_catalog.pg_proc p",
+      }),
+    /mutant: bare catalog alias outside qualifier position: p/,
+  );
+  // Star expansions select every column unnamed, including through a CTE
+  // that re-exposes a forbidden column under its own qualifier.
+  assert.throws(
+    () => assertCatalogColumns(mutant("SELECT p.* FROM pg_catalog.pg_proc p"), CATALOG_COLUMNS),
+    /mutant: star expansion outside the fixed surface/,
+  );
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant(
+          "WITH RECURSIVE x AS (SELECT p.* FROM pg_catalog.pg_proc p) SELECT x.provolatile::text FROM x",
+        ),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: star expansion outside the fixed surface/,
+  );
+  // Dollar-sign and non-ASCII identifier characters resolve like ASCII ones,
+  // so forbidden columns under those aliases fail identically.
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT p$.provolatile::text FROM pg_catalog.pg_proc p$"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: p\$\.provolatile/,
+  );
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT pä.provolatile::text FROM pg_catalog.pg_proc pä"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: pä\.provolatile/,
+  );
+  // Allowlisted columns under those aliases still pass: the charset is
+  // parsed, not blanket-rejected.
+  assertCatalogColumns(mutant("SELECT p$.prokind FROM pg_catalog.pg_proc p$"), CATALOG_COLUMNS);
+  assertBareTokens(mutant("SELECT p$.prokind::text FROM pg_catalog.pg_proc p$"));
+  // Dollar-quoted literals would desync the standard-quote blanker and hide
+  // following column references, so both the bare and tagged forms fail.
+  assert.throws(
+    () =>
+      assertNoExtendedLiterals(
+        mutant(
+          "SELECT $$'$$ || rolconnlimit::text || 'SELECT' AS role_name FROM pg_catalog.pg_roles r",
+        ),
+      ),
+    /mutant: dollar-quoted literal outside the fixed surface/,
+  );
+  assert.throws(
+    () =>
+      assertNoExtendedLiterals(
+        mutant("SELECT $body$x$body$ || rolconnlimit::text FROM pg_catalog.pg_roles r"),
+      ),
+    /mutant: dollar-quoted literal outside the fixed surface/,
+  );
+  // A backslash escapes the blanker's closing quote inside an E-string, so
+  // any backslash fails on the raw SQL before blanking.
+  assert.throws(
+    () =>
+      assertNoExtendedLiterals(
+        mutant("SELECT e'\\'' || rolconnlimit::text || 'SELECT' AS c0 FROM pg_catalog.pg_class e"),
+      ),
+    /mutant: backslash outside the fixed surface/,
+  );
 });
 
 test("cycles terminate and incomplete ACL or MEMBER rows cannot pass", async () => {
