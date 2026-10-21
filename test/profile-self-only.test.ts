@@ -191,7 +191,17 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
         ]) {
           const res = await send(`/members/${target}`, init);
           expect(res.status, `${who.username} → ${target} ${init.method}`).toBe(403);
-          expect(await res.text()).toBe("Forbidden");
+          // Negotiated refusal, same 403 either way: the JSON envelope for
+          // JSON callers, the member-aware branded page for browsers.
+          const body = await res.text();
+          if ((res.headers.get("content-type") ?? "").includes("application/json")) {
+            expect(JSON.parse(body)).toEqual({
+              error: "forbidden",
+              message: "You can only edit your own profile.",
+            });
+          } else {
+            expect(body).toMatch(/only your own profile/i);
+          }
         }
       }
     }
