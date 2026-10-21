@@ -136,17 +136,17 @@ export const EventsCalendarPage: FC<{
     }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
-  // Month-local emptiness counts past rows even with the drawer closed: the
-  // claim names the month, not the visible rows, and spillover days plot
-  // outside the selected month so they never count as in-month. A truncated
-  // past drawer (at the cap) leaves months at or before the wall month
+  // Month-local emptiness follows occupied in-month cells, including canonical
+  // continuations, but never spillover cells. Count past start-days even with
+  // the drawer closed: the claim names the month, not just the visible rows.
+  // A truncated past drawer (at the cap) leaves months at or before the wall month
   // incomplete — older in-month past rows may exist unread — so the claim is
   // suppressed there; future months cannot hold past rows. A failed source
   // suppresses the claim — October may only look empty — while the
   // error/never/gap states keep their own precedence.
-  const monthHasInMonthRows = [...upcoming, ...past].some((e) =>
-    wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`),
-  );
+  const monthHasInMonthRows =
+    weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
+    past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
   const pastMayBeTruncated = pastMayBeTruncatedProp;
   const monthCouldHoldPast = state.month <= wallMonth(now, zone);
   const monthEmpty =
