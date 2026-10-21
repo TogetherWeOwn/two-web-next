@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const entry = new URL("./staging-rights-inventory.mjs", import.meta.url);
+const entryPath = fileURLToPath(entry);
 const sentinel = "SYNTHETIC_PRIVATE_SENTINEL";
 
 // Changing normal entry to import a driver, inspect env, or select a target must fail.
 test("inventory normal entry is an unconditional fixed-label refusal", () => {
   assert.ok(existsSync(entry), "inert inventory entry must exist");
   for (const args of [[], ["--selftest"], ["--target=staging"], ["--client=fake"], [sentinel]]) {
-    const result = spawnSync(process.execPath, [entry.pathname, ...args], {
+    const result = spawnSync(process.execPath, [entryPath, ...args], {
       cwd: root,
       env: { PATH: process.env.PATH, PLANETSCALE_STAGING_DATABASE_URL: sentinel },
       encoding: "utf8",
@@ -47,7 +49,7 @@ test("import and entry cannot inspect env, import clients, or construct sockets"
         return {...result, source: 'const process = globalThis.inventoryGuard;\\n' + result.source};
       }
     });
-    process.argv = ['node', '${entry.pathname}', '--target=${sentinel}'];
+    process.argv = ['node', '${entryPath}', '--target=${sentinel}'];
     const module = await import('${entry.href}');
     if (module.inventoryStatus() !== 'inventory stopped') fail();
   `;
@@ -76,8 +78,8 @@ async function modules() {
 
 // SQL keywords that textually resemble unqualified `name(` calls but invoke
 // nothing: grouping keywords, EXISTS/IN predicates and the SQL-standard
-// conditional. CTE column-alias definitions are derived per read instead, so a
-// new builtin cannot hide behind either form.
+// conditional. CTE names skip that scan only at a column-list definition, so
+// a CTE sharing a builtin's name cannot hide a call.
 const UNQUALIFIED_KEYWORDS = [
   "AND",
   "AS",
@@ -126,20 +128,61 @@ function blankLiterals(sql) {
   return sql.replace(/'(?:[^']|'')*'/g, "''");
 }
 
-// CTE names and definition columns from the WITH clause. The column list is
-// optional (edges/acl_entries carry none); the WITH/comma anchor keeps a
-// planted `name AS (` outside a CTE definition from registering a name.
-function cteDefinitions(sql) {
+// PostgreSQL permits arbitrary whitespace around the dot in qualified names,
+// so every scan below runs on literal-blanked SQL with that whitespace
+// collapsed: `p .col` and `pg_catalog .fn (` are the same references as
+// their adjacent forms, and the unqualified/bare scans skip dot-adjacent
+// tokens only once the dot is adjacent again.
+function scanSql(sql) {
+  return blankLiterals(sql).replace(/\s*\.\s*/g, ".");
+}
+
+// CTE names from the WITH clause. The WITH/comma anchor keeps a planted
+// `name AS (` outside a CTE definition from registering a name.
+function cteNames(sql) {
   const names = new Set();
-  const columns = new Set();
-  const defs = /(?:WITH\s+RECURSIVE|WITH|,)\s*(\w+)\s*(?:\(([^)]*)\)\s*)?AS\s*\(/gi;
-  for (const [, name, list] of sql.matchAll(defs)) {
-    names.add(name.toUpperCase());
-    if (list !== undefined)
-      for (const column of list.split(","))
-        if (/^[A-Za-z_]\w*$/.test(column.trim())) columns.add(column.trim().toUpperCase());
-  }
-  return { names, columns };
+  const defs = /(?:WITH\s+RECURSIVE|WITH|,)\s*(\w+)\s*(?:\([^)]*\)\s*)?AS\s*\(/gi;
+  for (const [, name] of sql.matchAll(defs)) names.add(name.toUpperCase());
+  return names;
+}
+
+// CTE header column lists declare names; they must not register usable bare
+// tokens. Blanking the lists (the CTE name and AS ( survive for the
+// positional checks) keeps a planted `x (provolatile)` from laundering a
+// catalog column that the main query resolves against its FROM tables.
+function blankCteColumns(sql) {
+  return sql.replace(
+    /((?:WITH\s+RECURSIVE|WITH|,)\s*\w+\s*)\(([^)]*)\)(\s*AS\s*\()/gi,
+    (_, head, list, tail) => `${head}(${" ".repeat(list.length)})${tail}`,
+  );
+}
+
+// A bare CTE name resolves only at its definition (`name [(cols)] AS (`),
+// as a FROM/JOIN target, or as a column qualifier (`name.`). Comma targets
+// stay rejected: a SELECT-list comma is indistinguishable from a FROM comma,
+// so allowing it would launder any planted name. Any other bare occurrence
+// resolves against the FROM tables, so a planted CTE name cannot launder a
+// catalog column or a builtin call there. Qualifier position is safe: a
+// qualified reference binds to the CTE, never to a catalog table.
+function isCteDefinitionName(sql, index, length) {
+  return /^\s*(\([^)]*\)\s*)?AS\s*\(/i.test(sql.slice(index + length));
+}
+
+function isFromJoinTarget(sql, index) {
+  return /(?:\bFROM|\bJOIN)\s+$/i.test(sql.slice(0, index));
+}
+
+function isQualifier(sql, index, length) {
+  return /^\s*\./.test(sql.slice(index + length));
+}
+
+function isPositionalCteName(sql, ctes, match) {
+  return (
+    ctes.has(match[1].toUpperCase()) &&
+    (isCteDefinitionName(sql, match.index, match[0].length) ||
+      isFromJoinTarget(sql, match.index) ||
+      isQualifier(sql, match.index, match[0].length))
+  );
 }
 
 // Alias (upper) -> catalog table (lower) for every pg_catalog FROM/JOIN/comma
@@ -179,8 +222,8 @@ function extraAliases(sql, cteNames) {
 }
 
 function assertBuiltinCalls(read, builtins) {
-  const sql = blankLiterals(read.sql);
-  const { names: ctes } = cteDefinitions(sql);
+  const sql = scanSql(read.sql);
+  const ctes = cteNames(sql);
   const fixed = builtins.map((name) => name.toLowerCase());
   for (const [, schema, builtin] of sql.matchAll(/([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(/g)) {
     assert.equal(
@@ -193,9 +236,14 @@ function assertBuiltinCalls(read, builtins) {
       `${read.id}: builtin outside fixed list: ${builtin.toLowerCase()}`,
     );
   }
-  for (const [, name] of sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
+  for (const match of sql.matchAll(/(?<![\w."'])([A-Za-z_]\w*)\s*\(/g)) {
+    const name = match[1];
     const upper = name.toUpperCase();
-    if (UNQUALIFIED_KEYWORDS.includes(upper) || ctes.has(upper)) continue;
+    if (UNQUALIFIED_KEYWORDS.includes(upper)) continue;
+    // A CTE name matches `name (` only at a column-list definition; a call
+    // sharing the name invokes the builtin, never the CTE.
+    if (ctes.has(upper) && /^[^)]*\)\s*AS\s*\(/i.test(sql.slice(match.index + match[0].length)))
+      continue;
     assert.fail(`${read.id}: unqualified call outside fixed list: ${name}`);
   }
 }
@@ -213,25 +261,35 @@ function assertNoQuotedIdentifiers(read) {
 
 function assertBareTokens(read) {
   // Every unqualified token must be a fixed keyword, a declared output field,
-  // a table/CTE alias, a CTE name or a CTE definition column. Qualified
-  // references (after .), cast targets (after :) and string contents never
-  // reach this check, so an unqualified column reference cannot evade the
+  // or a table/CTE alias. CTE names resolve only at their definition, as a
+  // FROM/JOIN target, or as a qualifier; CTE definition columns declare
+  // nothing usable (their lists are blanked above). Qualified references
+  // (after .), cast targets (after :) and string contents never reach this
+  // check, so an unqualified column reference cannot evade the
   // alias-qualified per-catalog check above.
-  const sql = blankLiterals(read.sql).replace(/::"char"/g, "");
-  const { names: ctes, columns: cteColumns } = cteDefinitions(sql);
-  const allowed = new Set([...SQL_KEYWORDS, ...ctes, ...cteColumns]);
+  const sql = blankCteColumns(scanSql(read.sql)).replace(/::"char"/g, "");
+  const ctes = cteNames(sql);
+  const allowed = new Set([...SQL_KEYWORDS]);
   for (const field of read.fields ?? []) allowed.add(field.toUpperCase());
   for (const alias of catalogAliases(sql).keys()) allowed.add(alias);
   for (const alias of extraAliases(sql, ctes)) allowed.add(alias);
-  for (const [, token] of sql.matchAll(/(?<![\w.:\"'])([A-Za-z_]\w*)/g))
-    assert.ok(
-      allowed.has(token.toUpperCase()),
-      `${read.id}: bare token outside fixed surface: ${token}`,
-    );
+  for (const match of sql.matchAll(/(?<![\w.:\"'])([A-Za-z_]\w*)/g)) {
+    const token = match[1];
+    if (allowed.has(token.toUpperCase())) continue;
+    if (isPositionalCteName(sql, ctes, match)) continue;
+    assert.fail(`${read.id}: bare token outside fixed surface: ${token}`);
+  }
 }
 
 function assertCatalogColumns(read, catalogColumns) {
-  const sql = blankLiterals(read.sql);
+  const sql = scanSql(read.sql);
+  // Three-part references never occur in the fixed surface; the two-part
+  // scan below would consume `schema.table` and skip the column.
+  assert.doesNotMatch(
+    sql,
+    /\b[A-Za-z_]\w*\.[A-Za-z_]\w*\.[A-Za-z_]\w*\b/,
+    `${read.id}: three-part reference outside the fixed surface`,
+  );
   const aliases = catalogAliases(sql);
   const allowed = Object.fromEntries(
     Object.entries(catalogColumns).map(([table, columns]) => [
@@ -246,6 +304,16 @@ function assertCatalogColumns(read, catalogColumns) {
         (allowed[table] ?? []).includes(column.toLowerCase()),
         `${read.id}: ${alias}.${column}`,
       );
+  }
+}
+
+function assertCatalogTargets(read, catalogColumns) {
+  const sql = scanSql(read.sql);
+  const targets =
+    /\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)\b(?!\s*\()|,\s*pg_catalog\.(\w+)\b(?!\s*\()/gi;
+  for (const [, fromJoin, comma] of sql.matchAll(targets)) {
+    const catalog = (fromJoin ?? comma).toLowerCase();
+    assert.ok(Object.hasOwn(catalogColumns, catalog), `catalog outside fixed list: ${catalog}`);
   }
 }
 
@@ -331,12 +399,7 @@ test("fixed PG18 reads expose only declared columns, catalogs and builtins", asy
       read.sql,
       /;|--|\/\*|\b(?:INSERT|UPDATE|DELETE|GRANT|REVOKE|CALL|DO|COPY)\b/i,
     );
-    const targets =
-      /\b(?:FROM|JOIN)\s+pg_catalog\.(\w+)\b(?!\s*\()|,\s*pg_catalog\.(\w+)\b(?!\s*\()/gi;
-    for (const [, fromJoin, comma] of read.sql.matchAll(targets)) {
-      const catalog = (fromJoin ?? comma).toLowerCase();
-      assert.ok(Object.hasOwn(CATALOG_COLUMNS, catalog), `catalog outside fixed list: ${catalog}`);
-    }
+    assertCatalogTargets(read, CATALOG_COLUMNS);
     assertBuiltinCalls(read, BUILTINS);
   }
   assert.ok(Object.isFrozen(READS));
@@ -682,6 +745,81 @@ test("allowlist checks reject non-fixed SQL spellings", async () => {
     id: "mutant",
     fields: ["function_kind"],
     sql: "SELECT p.prokind::text AS function_kind FROM pg_catalog.pg_proc p",
+  });
+  // Whitespace around the dot is legal SQL, so space-before-dot spellings
+  // must resolve exactly like their adjacent forms.
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT p .provolatile::text FROM pg_catalog.pg_proc p"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: p\.provolatile/,
+  );
+  assert.throws(
+    () =>
+      assertBuiltinCalls(mutant("SELECT pg_catalog .has_table_privilege(1, 'SELECT')"), BUILTINS),
+    /mutant: builtin outside fixed list: has_table_privilege/,
+  );
+  // Catalog targets with space-before-dot resolve too.
+  assert.throws(
+    () => assertCatalogTargets(mutant("SELECT 1 FROM pg_catalog .pg_shadow"), CATALOG_COLUMNS),
+    /catalog outside fixed list: pg_shadow/,
+  );
+  assertCatalogTargets(mutant("SELECT 1 FROM pg_catalog.pg_class"), CATALOG_COLUMNS);
+  // Three-part references bypass the two-part alias scan, so they fail.
+  assert.throws(
+    () =>
+      assertCatalogColumns(
+        mutant("SELECT pg_catalog.pg_proc.provolatile FROM pg_catalog.pg_proc"),
+        CATALOG_COLUMNS,
+      ),
+    /mutant: three-part reference/,
+  );
+  // A planted CTE definition column cannot launder a bare catalog column:
+  // the definition list declares no usable bare tokens.
+  assert.throws(
+    () =>
+      assertBareTokens(
+        mutant(
+          "WITH RECURSIVE x (provolatile) AS (SELECT 1) SELECT provolatile::text FROM pg_catalog.pg_proc p",
+        ),
+      ),
+    /mutant: bare token outside fixed surface: provolatile/,
+  );
+  // A planted CTE name cannot launder one either: names resolve only at
+  // their definition, as a FROM/JOIN target, or as a column qualifier.
+  assert.throws(
+    () =>
+      assertBareTokens(
+        mutant(
+          "WITH RECURSIVE provolatile AS (SELECT 1) SELECT provolatile::text FROM pg_catalog.pg_proc p",
+        ),
+      ),
+    /mutant: bare token outside fixed surface: provolatile/,
+  );
+  // A CTE sharing a builtin's name hides neither the call nor the token.
+  const shadowedBuiltin = mutant(
+    "WITH RECURSIVE has_table_privilege AS (SELECT 1) SELECT has_table_privilege(c.oid, 'SELECT') FROM pg_catalog.pg_class c",
+  );
+  assert.throws(
+    () => assertBuiltinCalls(shadowedBuiltin, BUILTINS),
+    /mutant: unqualified call outside fixed list: has_table_privilege/,
+  );
+  assert.throws(
+    () => assertBareTokens(shadowedBuiltin),
+    /mutant: bare token outside fixed surface: has_table_privilege/,
+  );
+  // Fixed CTE positions still pass: definitions naming declared fields,
+  // qualified references, and FROM targets.
+  assertBareTokens({
+    id: "mutant",
+    fields: ["value"],
+    sql: "WITH RECURSIVE c(value) AS (SELECT 1) SELECT value FROM c",
+  });
+  assertBareTokens({
+    id: "mutant",
+    sql: "WITH RECURSIVE c AS (SELECT 1) SELECT c.value FROM c",
   });
 });
 
