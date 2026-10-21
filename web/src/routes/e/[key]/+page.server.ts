@@ -40,6 +40,9 @@ export const load: PageServerLoad = async ({
     joinResult: locals.joinResult ?? null,
     setHeaders,
     store: kitEventDetailStore(env),
+    // Same correlation source as the Hono request log: the validated
+    // cf-ray (safeRequestId inside the alert drops anything else).
+    requestId: request.headers.get("cf-ray") ?? undefined,
   });
   // redirect()/error() never return: after these guards the outcome is ok.
   if (outcome.kind === "redirect") redirect(301, outcome.location);

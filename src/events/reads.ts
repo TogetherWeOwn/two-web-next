@@ -34,7 +34,9 @@ import {
 import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
-export type PublicEvent = typeof events.$inferSelect & {
+export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
   goingCount: number;
   /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
    * `full` verdict, spots-left text and Going/waitlist CTA so the page never
@@ -613,7 +615,14 @@ export async function getEventNeighbors(
     .select({ startsAt: events.startsAt })
     .from(events)
     .where(eq(events.id, event.id));
-  const [previous, next] = await Promise.all([
+  // Both sub-reads must settle before this call settles: Promise.all
+  // rejects on the first failure while the sibling still holds the capture
+  // pending, and the member-read boundary refuses while pending !== 0 — a
+  // fast previous-rejection with a slow next query 503s the whole page even
+  // though the caller fails decorative reads open. allSettled drains both
+  // permits first; a failure still rejects so the caller's empty-shape belt
+  // (routes-detail, kit-detail) applies after the capture is quiet.
+  const [previousSettled, nextSettled] = await Promise.allSettled([
     nonSensitiveRead("events", () =>
       db
         .select(eventLinkColumns)
@@ -653,6 +662,10 @@ export async function getEventNeighbors(
         .limit(1),
     ),
   ]);
+  if (previousSettled.status === "rejected") throw previousSettled.reason;
+  if (nextSettled.status === "rejected") throw nextSettled.reason;
+  const previous = previousSettled.value;
+  const next = nextSettled.value;
   return { previous: previous[0] ?? null, next: next[0] ?? null };
 }
 
@@ -903,7 +916,11 @@ export async function sitemapEvents(
 }
 
 /** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
-export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
+export async function listFeed(
+  db: Db,
+  statuses: ("published" | "cancelled")[],
+  now = new Date(),
+): Promise<Array<typeof events.$inferSelect>> {
   const rows = await db
     .select()
     .from(events)
@@ -921,7 +938,7 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
   return renderable;
 }
 
-export async function getEventRow(db: Db, key: string) {
+export async function getEventRow(db: Db, key: string): Promise<typeof events.$inferSelect | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   // Same refusal as the collection/single reads: a per-event export of an
   // unrenderable window would serve corrupt `NaN` instants, so it 404s.

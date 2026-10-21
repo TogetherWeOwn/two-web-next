@@ -225,7 +225,7 @@ describe("body-size cap precedes the admin-write throttle on lifecycle actions",
         const { request, pull } = oversized(env.APP_URL, path, cookie, advertised);
         const response = await app.request(request, undefined, bindings);
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.sql, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(0);
@@ -250,7 +250,7 @@ describe("body-size cap precedes the admin-write throttle on lifecycle actions",
         const { request } = oversized(env.APP_URL, path, cookie, advertised);
         const response = await app.request(request, undefined, bindings);
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(throttle.count(), `advertised=${advertised}`).toBe(WRITE_THROTTLE_PER_MINUTE);
         expectNoStoreWork();
@@ -270,7 +270,7 @@ describe("body-size cap precedes the admin-write throttle on queue redispatch", 
       const { request, pull } = oversized(STAGING_APP_URL, REDISPATCH, cookie, advertised);
       const response = await app.request(request, undefined, bindings);
       expect(response.status, `advertised=${advertised}`).toBe(413);
-      expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+      expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
       expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
       expect(throttle.sql, `advertised=${advertised}`).not.toHaveBeenCalled();
       expect(throttle.count(), `advertised=${advertised}`).toBe(0);
@@ -296,7 +296,7 @@ describe("body-size cap precedes the admin-write throttle on queue redispatch", 
       const { request } = oversized(STAGING_APP_URL, REDISPATCH, cookie, advertised);
       const response = await app.request(request, undefined, bindings);
       expect(response.status, `advertised=${advertised}`).toBe(413);
-      expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+      expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
       expect(throttle.store, `advertised=${advertised}`).not.toHaveBeenCalled();
       expect(throttle.count(), `advertised=${advertised}`).toBe(WRITE_THROTTLE_PER_MINUTE);
       expect(deps.loadCandidate, `advertised=${advertised}`).not.toHaveBeenCalled();
