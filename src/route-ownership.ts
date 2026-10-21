@@ -15,7 +15,13 @@
 import { Context } from "hono";
 import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
-import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import {
+  isContentLeafPath,
+  isKitFallbackDocument,
+  robotsTagFor,
+  securityHeadersFor,
+  withKitFallbackStyleCsp,
+} from "./headers";
 import { STAGING_APP_URL } from "./qa";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
@@ -505,8 +511,12 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
-  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
-  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
+  // The member-document proof is supplied only after audit release and full-HTML
+  // classification below; callers without it retain the moderator admin scope.
+  authStatusCookieFor?: (
+    event: HookEventLike,
+    releasedMemberDocument?: boolean,
+  ) => Promise<string | null>;
   // Optional sliding-session renewal for the native Kit event detail. Runs
   // only after the member-read boundary releases a successful GET (see
   // releasedEventDetailRenewsSession): a refused, failed, throttled or
@@ -580,6 +590,36 @@ function decorateKitResponse(
     const tag = robotsTagFor(appUrl, event.url.hostname);
     if (tag) response.headers.set("X-Robots-Tag", tag);
   }
+}
+
+// Catastrophic-fallback CSP widening, async twin of the leaf allowlist: the
+// fallback can be served for ANY path, so unlike the leaf pages it cannot be
+// scoped by path in securityHeadersFor. After decoration, an HTML error
+// response carrying the exact fallback style element gets the block's hash
+// appended to style-src. Gated on status + content-type so normal pages
+// never pay for a body read; the clone keeps the served body intact. The
+// same-origin refusal is JSON-only and the Hono-fallback route returns
+// undecorated (no CSP to widen), so this call lives only on the decorated
+// dispatch path below — any new HTML decorate site must call it too.
+async function allowlistKitFallbackStyle(response: Response): Promise<void> {
+  if (response.status < 400) return;
+  if (!(response.headers.get("content-type") ?? "").includes("text/html")) return;
+  const csp = response.headers.get("Content-Security-Policy");
+  if (!csp || !csp.includes("style-src 'self'")) return;
+  let body: string;
+  try {
+    body = await response.clone().text();
+  } catch (err) {
+    // Fail closed to the unwidened policy: an unstyled fallback still
+    // recovers through its plain anchors, while a thrown read would 500
+    // the error page itself.
+    console.warn("kit fallback style probe unreadable; serving without the style hash.", {
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
+    return;
+  }
+  if (!isKitFallbackDocument(body)) return;
+  response.headers.set("Content-Security-Policy", withKitFallbackStyleCsp(csp));
 }
 
 // Same-origin parity for the Kit branch (src/same-origin.ts twin, framework-free).
@@ -665,6 +705,7 @@ function renderMemberRead(
   event: HookEventLike,
   reads: MemberRead | undefined,
   deps: HookDispatchDeps,
+  onRelease?: (response: Response) => void,
 ): Promise<Response> {
   return memberReadResponse(
     { method: event.request.method, route: event.route?.id ?? "unmatched" },
@@ -676,7 +717,10 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
-    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
+    (response) => {
+      onRelease?.(response);
+      return deps.afterMemberRead?.(event, response) ?? Promise.resolve();
+    },
   );
 }
 
@@ -833,6 +877,7 @@ export async function dispatchHookRequest(
   // clients the budget allows through.
   const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
+  let releasedMemberResponse: Response | undefined;
   if (route.reads !== "public") {
     // Narrowed once for the deferred render: the closure below would lose the
     // branch narrowing on route.reads.
@@ -844,7 +889,9 @@ export async function dispatchHookRequest(
       });
     } else {
       await bridgeSession();
-      response = await renderMemberRead(event, reads, deps);
+      response = await renderMemberRead(event, reads, deps, (released) => {
+        releasedMemberResponse = released;
+      });
     }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
@@ -870,14 +917,43 @@ export async function dispatchHookRequest(
   if (
     deps.authStatusCookieFor &&
     event.request.method === "GET" &&
-    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
     response.status === 200 &&
     response.headers.get("content-type")?.includes("text/html") &&
-    locals?.status === "authenticated" &&
-    locals.session?.moderator
+    locals?.status === "authenticated"
   ) {
+    // Match the owned manifest entry, not an arbitrary member-looking URL.
+    // Only the exact buffered response released by the audit boundary qualifies.
+    let memberDocument = false;
+    if (
+      response === releasedMemberResponse &&
+      locals.session?.member === true &&
+      ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path)
+    ) {
+      const html = await response.clone().text();
+      memberDocument =
+        /<!doctype html>/i.test(html) && /<html[\s>]/i.test(html) && html.includes("</body>");
+      if (memberDocument) {
+        const headers = new Headers(response.headers);
+        headers.delete("content-length");
+        response = new Response(
+          /<script\b[^>]*src="\/islands\/auth-status\.js"[^>]*>/.test(html)
+            ? html
+            : html.replace(
+                "</body>",
+                '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script></body>',
+              ),
+          { status: response.status, headers },
+        );
+      }
+    }
+    // Preserve admin fragment cookies separately; the new member scope requires
+    // a full document and does not alter the existing admin controller.
+    const adminDocument = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals.session?.moderator;
     try {
-      const cookie = await deps.authStatusCookieFor(event);
+      const cookie =
+        memberDocument || adminDocument
+          ? await deps.authStatusCookieFor(event, memberDocument)
+          : null;
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
@@ -950,5 +1026,6 @@ export async function dispatchHookRequest(
     response = c.res;
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  await allowlistKitFallbackStyle(response);
   return response;
 }
