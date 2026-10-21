@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 export type Renderer = "Hono" | "Kit";
