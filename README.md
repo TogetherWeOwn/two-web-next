@@ -179,6 +179,12 @@ them with esbuild into the checked-in `public/islands/*.js` and
 frontend framework bundle to generate. Island and stylesheet tests execute the
 minified bytes, so edit the source, rebuild, and commit both.
 
+Successful calendar fragment navigation and Back/Forward keep guest header sign-in,
+hero Join and card sign-in destinations aligned with the committed URL, retaining
+ordinary-login versus join endpoints and attribution parameters. Unsent search
+drafts and failed, superseded or invalid fragments do not install new destinations;
+replacement links and zones are admitted together without replacing the search input.
+
 ```sh
 npm run build:assets                 # regenerate public/ from assets/
 npm run build:assets:check           # fail when the output drifted
