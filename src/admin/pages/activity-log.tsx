@@ -8,7 +8,7 @@ import {
   activityLogUrl,
   type ActivityLogQuery,
 } from "../table-list";
-import { Shell } from "./shell";
+import { SearchDroppedNotice, Shell } from "./shell";
 
 // Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
 // access-log guard cannot take as subjects (snowflakes only). The shared
@@ -42,6 +42,7 @@ export const ActivityLogPage: FC<{
           </button>
         </div>
       </form>
+      <SearchDroppedNotice query={query} />
       <p id="activity-log-scroll-hint">
         Scroll horizontally to see all columns on smaller screens.
       </p>
@@ -58,7 +59,7 @@ export const ActivityLogPage: FC<{
             <tr>
               <th scope="col">Who</th>
               <th scope="col">What</th>
-              <th scope="col">When</th>
+              <th scope="col">When (UTC)</th>
               <th scope="col">Subject</th>
             </tr>
           </thead>

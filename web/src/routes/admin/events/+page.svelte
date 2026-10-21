@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 import { eventListUrl, type EventSort } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -89,6 +89,7 @@ const now = new Date();
       <button type="submit" class="btn">Filter</button>
     </div>
   </form>
+  {@render searchNotice(query)}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>
@@ -135,19 +136,25 @@ const now = new Date();
               <td>
                 {#if r.status === "draft"}
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                    <button type="submit" class="link">Publish</button>
+                    <button type="submit" class="link" aria-label={`Publish ${r.title}`}>Publish</button>
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link">Cancel</button>
+                    <button type="submit" class="link" aria-label={`Cancel ${r.title}`}>Cancel</button>
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
+                  {@const label = r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
                   <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
-                    <button type="submit" class="link" data-testid={action}>
-                      {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
+                    <button
+                      type="submit"
+                      class="link"
+                      data-testid={action}
+                      aria-label="{label} for {r.title}"
+                    >
+                      {label}
                     </button>
                   </form>
                 {/if}

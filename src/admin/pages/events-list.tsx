@@ -4,7 +4,7 @@ import type { FC } from "hono/jsx";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
 import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "../event-list";
-import { RsvpAction, Shell } from "./shell";
+import { RsvpAction, SearchDroppedNotice, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
   label,
@@ -122,6 +122,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </button>
         </div>
       </form>
+      <SearchDroppedNotice query={query} />
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
           New event
@@ -167,14 +168,14 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                   <td>
                     {r.status === "draft" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                        <button type="submit" class="link">
+                        <button type="submit" class="link" aria-label={`Publish ${r.title}`}>
                           Publish
                         </button>
                       </form>
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                        <button type="submit" class="link">
+                        <button type="submit" class="link" aria-label={`Cancel ${r.title}`}>
                           Cancel
                         </button>
                       </form>

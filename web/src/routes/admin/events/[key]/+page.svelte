@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -205,18 +205,34 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <div class="actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
-          <button type="submit" class="btn" data-testid="publish-event">Publish</button>
+          <button
+            type="submit"
+            class="btn"
+            data-testid="publish-event"
+            aria-label={`Publish ${view.title}`}>Publish</button
+          >
         </form>
       {/if}
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
-          <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
+          <button
+            type="submit"
+            class="link"
+            data-testid="cancel-event"
+            aria-label={`Cancel event ${view.title}`}>Cancel event</button
+          >
         </form>
       {/if}
       {#if view.rsvpAction}
+        {@const label = view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
         <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
-          <button type="submit" class="link" data-testid={view.rsvpAction}>
-            {view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
+          <button
+            type="submit"
+            class="link"
+            data-testid={view.rsvpAction}
+            aria-label="{label} for {view.title}"
+          >
+            {label}
           </button>
         </form>
       {/if}
@@ -239,6 +255,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         <button type="submit" class="btn">Search</button>
       </div>
     </form>
+    {@render searchNotice(roster.query)}
     <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
     <!-- Keyboard-scroll parity with the Hono panel (test/admin-table-scroll-parity.test.ts):
       the labelled roster region stays Tab-focusable so keyboard users can arrow-scroll

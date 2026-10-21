@@ -3,7 +3,7 @@
 import type { FC } from "hono/jsx";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow } from "../reads";
 import { joinAttemptsUrl, type JoinAttemptsQuery } from "../table-list";
-import { Shell } from "./shell";
+import { SearchDroppedNotice, Shell } from "./shell";
 
 export const JoinAttemptsPage: FC<{
   rows: JoinAttemptRow[];
@@ -47,6 +47,7 @@ export const JoinAttemptsPage: FC<{
           </button>
         </div>
       </form>
+      <SearchDroppedNotice query={query} />
       <p id="join-attempts-scroll-hint">
         Scroll horizontally to see all columns on smaller screens.
       </p>
@@ -65,7 +66,7 @@ export const JoinAttemptsPage: FC<{
               <th scope="col">Source</th>
               <th scope="col">Discord id</th>
               <th scope="col">Request id</th>
-              <th scope="col">Attempted</th>
+              <th scope="col">Attempted (UTC)</th>
             </tr>
           </thead>
           <tbody>
