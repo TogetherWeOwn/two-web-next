@@ -190,6 +190,23 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
+a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
+(mirroring `API_PUBLIC_BOUNDS.maxBodyBytes`, enforced while streaming when a
+reader exists); settlement aborts the per-call fetch and releases its queue
+entry and pagehide forwarder. Failures reject with an `Error` carrying a
+stable `.code`, a safe `.message` naming the next step, and `.retryAfter`
+seconds (1–86400) on rate limits only. Codes: `timeout`,
+`invalid_response` (oversize, malformed, or unexpected redirect),
+`unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
+retried automatically), `not_found` (unknown event key, no retry),
+`invalid_request` (bad event key, thrown synchronously). Local check,
+fixtures only:
+
+```sh
+npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
+```
+
 ### Browser regressions
 
 Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so

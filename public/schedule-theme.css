@@ -13,7 +13,7 @@
 .events-page input::placeholder { color: var(--muted); opacity: 1; }
 .events-page :is([data-testid=events-list], [data-testid=events-past-list], [data-archive-list]) { list-style: none; padding: 0; margin: 1.5rem 0; }
 .events-page .schedule-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; gap: 1.5rem; align-items: start; background: var(--surface); border: 1px solid var(--line); margin-bottom: .75rem; padding: 1.5rem; overflow-wrap: anywhere; }
-.events-page .schedule-date { display: grid; text-align: center; color: var(--brand); border-right: 1px solid var(--line); padding-right: 1rem; font-family: Display, 'Arial Narrow', sans-serif; text-transform: uppercase; line-height: 1.2; }
+.events-page .schedule-date { display: grid; text-align: center; color: var(--brand); border-right: 1px solid var(--line); padding-right: 1rem; font-family: Display, 'Display Fallback', 'Arial Narrow', sans-serif; text-transform: uppercase; line-height: 1.2; }
 .events-page .schedule-date strong { font-size: 2.5rem; font-variant-numeric: tabular-nums; }
 .events-page .schedule-info :is(h2, h3) { font-size: 1.6rem; margin: 0; }
 .events-page .schedule-info p { margin: .4rem 0 0; }
@@ -23,6 +23,8 @@
 .events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *) { background: var(--surface); border-left: 4px solid var(--brand); padding: 1.5rem; }
 .events-page .schedule-month-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .events-page .schedule-month-nav a { padding: .5rem 1rem; border: 1px solid var(--line); }
+.events-page [data-testid=calendar-month-jump] { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
+.events-page input[type=month] { min-height: 44px; max-width: 100%; padding: .5rem; border: 1px solid var(--line); background: var(--surface); color: var(--ink); color-scheme: dark; font: inherit; }
 .events-page [data-testid=events-calendar-scroll] { overflow-x: auto; }
 .events-page [data-hotzone-scroll] { overflow-x: auto; max-width: 100%; }
 .events-page table { width: 100%; min-width: 42rem; table-layout: fixed; border-collapse: collapse; background: var(--surface); }

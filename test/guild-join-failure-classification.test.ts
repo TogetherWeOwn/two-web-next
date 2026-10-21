@@ -25,12 +25,13 @@
 // token nor any response-body byte may appear in a return value, a log
 // line, a rendered page, a redirect, a cookie or a journey row.
 //
-// Member-facing handling (no retry policy, no copy or status change):
+// Member-facing handling (no retry policy):
 //   - the join journey (`liveBotAdd` / `finishJoin` / GET /join/callback)
-//     surfaces the classified result through the BotAdd seam to the same
-//     blocked-copy recovery: `rate_limited` records the distinct
-//     "rate_limited" attempt row (plus `Retry-After` when the provider sent
-//     a usable backoff), every other classified failure records "degraded";
+//     surfaces the classified result through the BotAdd seam: `rate_limited`
+//     answers the 503 throttle page (plus `Retry-After` when the provider
+//     sent a usable backoff) and records the distinct "rate_limited"
+//     attempt row; every other classified failure keeps the 200
+//     blocked-copy recovery, headerless, and records "degraded";
 //   - ordinary login (GET /auth/discord/callback) still signs in as a
 //     non-member to /?n=join_failed, and its existing "guild auto-join
 //     failed" log line gains the fixed `kind` classification next to
@@ -418,13 +419,15 @@ describe("join callback handling: every classified failure degrades exactly like
     },
   );
 
-  it("PUT 429 rate_limited: same blocked-copy recovery, one rate_limited attempt, headerless without backoff", async () => {
+  it("PUT 429 rate_limited: 503 throttle recovery, one rate_limited attempt, headerless without backoff", async () => {
     const { fake, env: e } = isolated();
     const { logs, calls, res, html } = await joinRoundTrip(e, markerPut(429));
-    expect(res.status).toBe(200);
-    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(res.status).toBe(503);
+    expect(html).toContain("Discord throttled the automatic add");
+    expect(html).toContain("rate-limiting automatic adds");
     expect(html).toContain('data-testid="recovery-invite"');
     expect(html).not.toContain("Discord is unreachable");
+    expect(html).not.toContain("We couldn&#39;t add you automatically");
     expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
     expect(res.headers.get("retry-after")).toBeNull();
     expect(fake.attempts).toEqual([
