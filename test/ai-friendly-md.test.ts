@@ -60,8 +60,8 @@ const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
   title: "Friday night Helldivers",
   game: past.game,
   description: past.description,
-  startsAt: new Date("2026-07-15T18:00:00Z"),
-  endsAt: new Date("2026-07-15T20:00:00Z"),
+  startsAt: new Date("2030-07-15T18:00:00Z"),
+  endsAt: new Date("2030-07-15T20:00:00Z"),
   timezone: "Europe/London",
   location: past.location,
   capacity: null,
@@ -158,6 +158,31 @@ describe("md builders (pure, DB-free)", () => {
     expect(past).not.toContain("Add to calendar");
     expect(past).not.toContain("See upcoming events");
     expect(past).toContain(`[Browse past events](${APP_URL}/events/past)`);
+  });
+
+  it("elapsed published detail reads past, like the HTML share twins", () => {
+    // The */10 reconcile hasn't flipped this row yet, but both HTML twins
+    // already render the honest past share box for it; the .md alternate
+    // must agree instead of offering calendar links for an ended event.
+    const now = new Date("2026-10-21T12:00:00Z");
+    const elapsed = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-07-15T18:00:00Z"),
+        endsAt: new Date("2026-07-15T20:00:00Z"),
+      }),
+      now,
+    );
+    expect(elapsed).toContain("- Status: past");
+    expect(elapsed).not.toContain("scheduled");
+    expect(elapsed).not.toContain("Add to calendar");
+    expect(elapsed).not.toContain("See upcoming events");
+    expect(elapsed).toContain(`[View this event](${APP_URL}/e/01J0000000000000000000ABCD)`);
+    expect(elapsed).toContain(`[Browse past events](${APP_URL}/events/past)`);
+    // Boundary matches the HTML verdict: endsAt == now already reads past.
+    const boundary = mdEvent(APP_URL, mdRow({ startsAt: now, endsAt: now }), now);
+    expect(boundary).toContain("- Status: past");
+    expect(boundary).not.toContain("Add to calendar");
   });
 
   it("event detail carries public fields only", () => {

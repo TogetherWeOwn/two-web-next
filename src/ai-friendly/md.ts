@@ -236,14 +236,18 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
   return out.join("\n");
 }
 
-export function mdEvent(appUrl: string, e: MdEvent): string {
+export function mdEvent(appUrl: string, e: MdEvent, now: Date = new Date()): string {
   const lineup = lineupLine(e);
+  // Same verdict as the HTML share twins (pages-detail.tsx shareAsPast):
+  // an elapsed published row already reads past there, so the .md
+  // alternate agrees. Drafts/cancelled never reach this builder.
+  const asPast = e.status === "past" || e.endsAt <= now;
   return [
     `# ${mdInlineText(e.title)}`,
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
-    `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
+    `- Status: ${asPast ? "past" : "scheduled"}`,
     `- Starts: ${mdDetailInstant(e.startsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     `- Ends: ${mdDetailInstant(e.endsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
@@ -251,7 +255,7 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",
-    ...(e.status === "past"
+    ...(asPast
       ? [
           `[View this event](${canonicalUrl(appUrl, `/e/${e.eventKey}`)}) · [Browse past events](${canonicalUrl(appUrl, "/events/past")})`,
         ]

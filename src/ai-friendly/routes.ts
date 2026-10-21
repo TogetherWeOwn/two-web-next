@@ -142,6 +142,6 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (e.status === "draft") return mdError(c, "Forbidden", 403);
     if (e.status === "cancelled") return mdError(c, mdEventGone(c.env.APP_URL, e), 410);
     const robots = e.status === "past" ? NOINDEX : undefined;
-    return mdOk(c, mdEvent(c.env.APP_URL, toMdEvent(e)), FEED_MD_CACHE, robots);
+    return mdOk(c, mdEvent(c.env.APP_URL, toMdEvent(e), new Date()), FEED_MD_CACHE, robots);
   });
 }
