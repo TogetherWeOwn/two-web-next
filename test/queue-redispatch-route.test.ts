@@ -452,6 +452,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a missing queue binding fails closed before anything is written", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = createMemorySessionStore();
     const res = await request(
       store,
@@ -464,8 +465,14 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
     expect(mocks.audit).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch prerequisites missing; refusing redispatch.",
+      { exception: "MissingConfiguration", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("redispatch_unavailable");
   });
   it("a dispatch failure fails closed but keeps the attempt receipt", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = createMemorySessionStore();
     const dispatch = vi.fn(async () => {
       throw new Error("private queue failure");
@@ -486,6 +493,12 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.audit).toHaveBeenCalledTimes(1);
     expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "queue redispatch dispatch failed; refusing redispatch.",
+      { exception: "Error", failureId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("private queue failure");
+    expect(JSON.stringify(err.mock.calls)).not.toContain("redispatch_unavailable");
   });
   it("a held lock reports the in-flight dispatch instead of queueing a duplicate", async () => {
     const store = createMemorySessionStore();
