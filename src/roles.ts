@@ -83,10 +83,15 @@ export function parseModeratorRoleIds(raw: string | undefined): string[] {
 }
 
 /** Class-only classification of a lookup rejection: never the message, which can carry wire detail. */
+const MAX_LOOKUP_CLASS_LENGTH = 100;
+
 function lookupExceptionClass(err: unknown): string {
-  return err instanceof Error
-    ? err.name
-    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  const name =
+    err instanceof Error
+      ? err.name
+      : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // De-newline and bound: a hostile error name must not forge log lines.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_LOOKUP_CLASS_LENGTH) || "unknown";
 }
 
 /** ID intersection, never name matching. A blank allowlist fails closed. */

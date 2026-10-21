@@ -90,10 +90,16 @@ export const clientKey = (c: Context) => {
   return "anon";
 };
 
+/** Class-only classification of a store rejection: never the message, which can quote statement bindings. */
+const MAX_THROTTLE_CLASS_LENGTH = 100;
+
 function exceptionClass(err: unknown): string {
-  return err instanceof Error
-    ? err.name
-    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  const name =
+    err instanceof Error
+      ? err.name
+      : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // De-newline and bound: a hostile error name must not forge log lines.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
 }
 
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
