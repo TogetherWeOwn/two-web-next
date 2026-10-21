@@ -1,4 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
+import type { AdminWayBack } from "./admin-wayback";
 import type { SuggestedEvent } from "./events/suggestions";
 import { RecoveryShell } from "./pages";
 
@@ -157,10 +158,14 @@ export const InternalErrorPage: FC<{ inviteUrl: string; supportReference?: strin
 
 // 429 (ports errors/429 + App\Support\ThrottleEnvelope::render). Same outage-safe
 // CTA as 500/503: the invite URL works when the session store is throttled or down.
-export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
-  inviteUrl,
-  supportReference,
-}) => (
+// A throttled admin write additionally names the refused form: adminBack is
+// path-derived (no session or DB reads) and states plainly that the submission
+// was not saved, since no-store kills back-button draft recovery.
+export const RateLimitedPage: FC<{
+  inviteUrl: string;
+  supportReference?: string;
+  adminBack?: AdminWayBack;
+}> = ({ inviteUrl, supportReference, adminBack }) => (
   <ErrorShell
     code="429"
     title="Slow down a little"
@@ -170,7 +175,17 @@ export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string 
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is
       not going anywhere.
     </p>
+    {adminBack ? (
+      <p class="admin-back-note">Your submission was not saved. Reopen the form and try again.</p>
+    ) : null}
     <p class="recovery-actions">
+      {adminBack ? (
+        <>
+          <a href={adminBack.href} data-testid="error-admin-back">
+            {adminBack.label}
+          </a>{" "}
+        </>
+      ) : null}
       <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
         Use the Discord invite instead
       </a>{" "}

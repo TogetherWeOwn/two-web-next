@@ -340,7 +340,7 @@ describe("fresh-journey intent-cookie isolation (acceptance)", () => {
     };
     const res = await app.request("/join/discord", { headers: { cookie: jar.header() } }, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     for (const name of [STATE, SOURCE, NEXT]) {
       expect(setCookieFor(res, name), `${name} untouched on store failure`).toBeUndefined();
