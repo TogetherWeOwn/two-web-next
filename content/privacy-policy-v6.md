@@ -33,9 +33,16 @@ Concretely, the website keeps:
   indexing stays off unless you opt in.
 - **Your linked Steam account, if you link one** — linking is optional and
   link-only: Discord stays the only way to sign in. We keep your Steam ID,
-  persona name, avatar, profile link, what you are currently playing, and
-  your top 5 games by playtime, refreshed from Steam daily. Your owned
-  games are offered as suggestions when you edit your games list. One
+  persona name, avatar, profile link, what you are currently playing
+  (hidden while the sync is stale), your top 5 games by playtime and how
+  many games you own, refreshed from Steam daily. We also keep three
+  sync-diagnostic fields that are stored but never shown: your Steam
+  profile visibility state, your account state, and when you were last
+  online on Steam — last-online time is personal data, and it is used
+  only to keep the sync healthy. Steam data is used only to render your
+  profile block and to suggest games when you edit your games list. We
+  never keep your friends list, achievements, real name or playtime
+  history. One
   Steam account per member: an additional link attempt is refused with an
   explanation. Unlinking removes all synced Steam data immediately, and
   moderators can unlink an account too.
@@ -98,7 +105,9 @@ public. The members view adds your username and a Message on Discord
 button.
 Only you can edit your profile. If you leave the server, your public
 profile shows a not-found page while members still see it marked former
-member.
+member. Your Steam block follows the same rule: gone from the not-found
+public view, still on the members' former-member view until you ask for
+erasure.
 
 Public profiles tell search engines not to index them. That changes only
 if you opt in to indexing.
@@ -165,14 +174,19 @@ the page shows a plain line of text from our own site instead. Avatars and
 other pictures load from our own site, straight from Discord's image server
 (`cdn.discordapp.com`), or — on profiles showing a linked Steam account —
 from Steam's image servers, each told only that the request came from this
-site. This policy page itself ships no JavaScript at all — elsewhere on the
+site. Any picture load still discloses the viewer's IP address to the
+server it loads from, so viewing a Steam-linked profile discloses your IP
+address to Valve. This policy page itself ships no JavaScript at all — elsewhere on the
 site, interactivity comes from small first-party scripts served from this
 site, such as the copy-link button and the RSVP button on event pages.
 
 The site runs on Cloudflare, which handles each request (including your IP
 address) to deliver the page. Our own request logs record the page route,
 the response status, how long it took and which Cloudflare data center
-served it — never your IP address or who you are.
+served it — never your IP address or who you are. Separate from those,
+the Steam sync job keeps its own diagnostic logs, which record your
+SteamID64 so a failed sync can be traced — and never the Steam API key
+or the sign-in assertion signatures.
 
 ## Deletion
 
@@ -209,4 +223,4 @@ Version 4 names the two further Deletion traces alongside the two tamper-proof e
 
 Version 5 clarifies that anonymous board-view telemetry and viewer-linked member-data access auditing are separate records. No collection, erasure category or retention period changes.
 
-Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. Erasure gains linked-account rows, the banner image and profile reports; existing retention periods are unchanged.
+Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. It also discloses the stored-never-shown Steam sync diagnostics, viewer-IP disclosure to Valve on Steam avatars, and SteamID64 in sync diagnostic logs. Erasure gains linked-account rows, the banner image and profile reports; existing retention periods are unchanged.
