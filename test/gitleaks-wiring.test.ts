@@ -80,6 +80,25 @@ paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
 regexes = ['''^777666555444333222$''']`,
     ]);
   });
+
+  it("keeps the unknown-event fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Synthetic unknown-event ULID in the cancelled-event alternatives"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic unknown-event ULID in the cancelled-event alternatives acceptance fixture, used only for an in-memory 404 lookup, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/event-gone-alternatives-acceptance\.test\.ts$''']
+regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FA9$''']`,
+    ]);
+  });
 });
 
 describe("gitleaks job wiring", () => {

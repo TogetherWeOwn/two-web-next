@@ -2,27 +2,27 @@
 // route-inventory: GET /join/callback
 // route-inventory: GET /auth/discord
 // route-inventory: GET /auth/discord/callback
-// Acceptance: a rate-limited bot add surfaces Retry-After distinctly.
+// Acceptance: a rate-limited bot add answers an honored throttle.
 //
 // The classified bot-add contract (test/guild-join-failure-classification.test.ts)
 // distinguishes Discord's 429 (`rate_limited`) from its 403 (`forbidden`),
-// but both membership journeys then collapse every classified failure into
-// the same member-facing result: the join callback renders one 200 recovery
-// page, records one "degraded" attempt row and sets no `Retry-After`; the
-// login auto-join redirects to /?n=join_failed, also headerless. Discord's
-// 429 already told us how long to wait — the join token-exchange path
-// forwards that bounded backoff as `Retry-After`
-// (test/join-discord-429-backoff.test.ts), but the bot-add path discards it.
+// and the join callback keeps the two distinct member-facing: a
+// `rate_limited` bot add answers 503 with the provider's bounded backoff as
+// `Retry-After` and copy that names the throttle, while `forbidden` and
+// every other classified failure keep the 200 blocked-copy recovery with no
+// header and the "degraded" row. A 200 would tell clients and caches
+// success, and `Retry-After` on 200 is ignored — status, header and copy
+// agree instead. The login auto-join still redirects to /?n=join_failed
+// (302): only the join callback renders the throttle page.
 //
-// Pinned contract (header + funnel row only — status and copy never change):
-//   - GET /join/callback with a `rate_limited` bot add renders the SAME 200
-//     recovery page, byte-identical to the `forbidden` recovery (the
-//     per-request support reference aside — it is a request id, not copy), plus a
-//     `Retry-After` header carrying the provider's bounded backoff: the same
-//     admission as the exchange 429 branch (trimmed digits with an optional
-//     fraction, rounded UP, minimum 1, capped at 86400; absent, malformed or
-//     body-only values are unusable and keep today's headerless response —
-//     never "0", never a raw provider string);
+// Pinned contract (status, header, copy and funnel row agree):
+//   - GET /join/callback with a `rate_limited` bot add renders the 503
+//     throttle page — distinct title and message from the `forbidden`
+//     recovery — plus a `Retry-After` header carrying the provider's
+//     bounded backoff: the same admission as the exchange 429 branch
+//     (trimmed digits with an optional fraction, rounded UP, minimum 1,
+//     capped at 86400; absent, malformed or body-only values are unusable
+//     and keep the headerless 503 — never "0", never a raw provider string);
 //   - that callback records the DISTINCT attempt outcome "rate_limited"
 //     (a canonical JOIN_OUTCOMES value) instead of "degraded", whether or
 //     not the provider sent a usable backoff; the other three safe columns
@@ -190,7 +190,21 @@ async function joinRoundTrip(e: Env, putAnswer: PutAnswer) {
   return { logs, calls, res, html: await res.text() };
 }
 
-/** The blocked-copy recovery every failed join-callback bot add must keep. */
+/** The throttle recovery every rate-limited join-callback bot add must keep. */
+function expectThrottleRecovery(res: Response, html: string) {
+  expect(res.status).toBe(503);
+  expect(html).toContain("Discord throttled the automatic add");
+  expect(html).toContain("rate-limiting automatic adds");
+  expect(html).toContain("Wait a moment, then try again below, or use the invite link.");
+  expect(html).toContain('data-testid="recovery-retry"');
+  expect(html).toContain('data-testid="recovery-invite"');
+  expect(html).toContain("https://discord.gg/invite");
+  expect(html).not.toContain("Discord is unreachable");
+  expect(html).not.toContain("We couldn&#39;t add you automatically");
+  expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+}
+
+/** The blocked-copy recovery every refused join-callback bot add must keep. */
 function expectBlockedRecovery(res: Response, html: string) {
   expect(res.status).toBe(200);
   expect(html).toContain("We couldn&#39;t add you automatically");
@@ -209,11 +223,11 @@ describe("join callback: a rate-limited bot add surfaces Retry-After and a disti
     ["2.5", "3"],
     ["0.4", "1"],
   ])(
-    "PUT 429 with retry-after %s: 200 recovery + Retry-After: %s + rate_limited attempt",
+    "PUT 429 with retry-after %s: 503 throttle + Retry-After: %s + rate_limited attempt",
     async (provider, expected) => {
       const { fake, create, env: e } = isolatedJoin();
       const { logs, calls, res, html } = await joinRoundTrip(e, providerPut(429, provider));
-      expectBlockedRecovery(res, html);
+      expectThrottleRecovery(res, html);
       expect(res.headers.get("retry-after")).toBe(expected);
       expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
       expect(fake.attempts).toEqual([
@@ -229,7 +243,7 @@ describe("join callback: a rate-limited bot add surfaces Retry-After and a disti
   it("caps an absurd but representable provider value at the 86400s ceiling", async () => {
     const { fake, env: e } = isolatedJoin();
     const { res, html } = await joinRoundTrip(e, providerPut(429, "999999999"));
-    expectBlockedRecovery(res, html);
+    expectThrottleRecovery(res, html);
     const header = res.headers.get("retry-after");
     expect(header).not.toBeNull();
     expect(header).toMatch(/^\d+$/);
@@ -251,11 +265,11 @@ describe("join callback: a rate-limited bot add surfaces Retry-After and a disti
     ["empty", ""],
     ["unrepresentable magnitude", "999999999999999999999999"],
   ] as [string, string | undefined][])(
-    "PUT 429 with unusable backoff (%s): outcome still rate_limited, no Retry-After",
+    "PUT 429 with unusable backoff (%s): 503 throttle, outcome still rate_limited, no Retry-After",
     async (_name, provider) => {
       const { fake, env: e } = isolatedJoin();
       const { res, html } = await joinRoundTrip(e, providerPut(429, provider));
-      expectBlockedRecovery(res, html);
+      expectThrottleRecovery(res, html);
       // The body's own retry_after (77) is never mined as a substitute.
       expect(res.headers.get("retry-after")).toBeNull();
       if (provider) expect(html).not.toContain(provider);
@@ -269,7 +283,7 @@ describe("join callback: a rate-limited bot add surfaces Retry-After and a disti
   it('PUT 429 with retry-after "0" never emits Retry-After: 0, outcome still distinct', async () => {
     const { fake, env: e } = isolatedJoin();
     const { res, html } = await joinRoundTrip(e, providerPut(429, "0"));
-    expectBlockedRecovery(res, html);
+    expectThrottleRecovery(res, html);
     const header = res.headers.get("retry-after");
     expect(header === null || (/^\d+$/.test(header) && Number(header) >= 1)).toBe(true);
     expect(fake.attempts).toEqual([
@@ -307,7 +321,7 @@ describe("join callback: forbidden and other failures carry neither header nor d
     },
   );
 
-  it("recovery copy is byte-identical for rate_limited and forbidden (header is the only difference)", async () => {
+  it("throttle and forbidden recoveries differ in status, header and copy — and both stay leak-free", async () => {
     const limited = isolatedJoin();
     const { res: limitedRes, html: limitedHtml } = await joinRoundTrip(
       limited.env,
@@ -318,24 +332,21 @@ describe("join callback: forbidden and other failures carry neither header nor d
       forbidden.env,
       providerPut(403, "37"),
     );
-    expect(limitedRes.status).toBe(200);
-    expect(forbiddenRes.status).toBe(200);
-    // Byte-identical copy: the only bytes allowed to differ are the
-    // per-request support reference (the request id a member quotes to
-    // support), which is not copy. Normalizing exactly that token — after
-    // proving each body actually carries one — must leave identical bytes.
-    const normalizeSupportReference = (html: string) => {
-      expect(html).toContain('data-testid="error-support-reference"');
-      return html.replace(
-        /(data-testid="error-support-reference">)[^<]*(<)/,
-        "$1<support-reference>$2",
-      );
-    };
-    expect(normalizeSupportReference(limitedHtml)).toBe(normalizeSupportReference(forbiddenHtml));
+    // Status, header and copy agree per path: 503 + backoff + throttle copy
+    // for the rate-limited add, 200 + headerless blocked copy for the refusal.
+    expectThrottleRecovery(limitedRes, limitedHtml);
+    expectBlockedRecovery(forbiddenRes, forbiddenHtml);
     expect(limitedRes.headers.get("retry-after")).toBe("37");
     expect(forbiddenRes.headers.get("retry-after")).toBeNull();
     expect(limited.fake.attempts.map((a) => a.outcome)).toEqual(["rate_limited"]);
     expect(forbidden.fake.attempts.map((a) => a.outcome)).toEqual(["degraded"]);
+    // The two pages share the recovery shell (retry + invite anchors, support
+    // reference) but never each other's copy.
+    for (const html of [limitedHtml, forbiddenHtml]) {
+      expect(html).toContain('data-testid="recovery-retry"');
+      expect(html).toContain('data-testid="error-support-reference"');
+    }
+    expect(forbiddenHtml).not.toContain("Discord throttled the automatic add");
   });
 
   it.each([
@@ -468,7 +479,7 @@ describe("BotAdd seam: retryAfter rides only on rate_limited, through finishJoin
     const { calls, res, html } = await joinRoundTrip(e, async () => {
       throw new Error("the live PUT must not run when JOIN_DEPS.bot is injected");
     });
-    expectBlockedRecovery(res, html);
+    expectThrottleRecovery(res, html);
     expect(res.headers.get("retry-after")).toBe("37");
     expect(fake.attempts).toEqual([
       { outcome: "rate_limited", source: null, requestId: "req-rl", discordId: "42" },
