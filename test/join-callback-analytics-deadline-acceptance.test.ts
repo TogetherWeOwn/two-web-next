@@ -712,9 +712,9 @@ afterEach(async () => {
     for (const [pending, fake] of ownedAttempts) await drainAttempt(pending, fake);
   } finally {
     ownedAttempts.clear();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   }
 });
 
@@ -1249,6 +1249,19 @@ describe("analytics driver lifecycle", () => {
     expect(fake.attempts).toHaveLength(1);
     expectStatementBounded(fake);
     expect(lines).toEqual([]);
+  });
+});
+
+describe("real timer restoration control", () => {
+  it("restores working real timers after the analytics lifecycle", async () => {
+    expect(vi.isFakeTimers()).toBe(false);
+    const winner = await Promise.race([
+      new Promise<string>((resolve) => {
+        globalThis.setTimeout(() => resolve("timer"), 5);
+      }),
+      realSleep(300).then(() => "never"),
+    ]);
+    expect(winner).toBe("timer");
   });
 });
 
