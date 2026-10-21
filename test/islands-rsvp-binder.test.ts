@@ -890,6 +890,43 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
+  it.each([
+    "javascript:alert(1)",
+    "https://evil.example/phish",
+    "/join/discord?next=%2Fe%2Fother",
+    "/auth/recover?next=%",
+  ])("falls back to the SSR join link for hostile recovery value %s", async (recovery) => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 401, { error: "Unauthorized", recovery });
+    await b.settle();
+    const notice = b.get("rsvp-session-expired")!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+    expect(b.get("rsvp-going")!.disabled).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it.each([401, 419])("renders the join link when the %i body is unreadable", async (status) => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.requests[0]!.resolve({
+      ok: false,
+      status,
+      json: () => Promise.reject(new Error("unreadable body")),
+    } as Response);
+    await b.settle();
+    const notice = b.get("rsvp-session-expired")!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+    expect(b.get("rsvp-going")!.disabled).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
   it.each([500, 422])(
     "announces HTTP %i failure without stealing focus or disabling retry",
     async (status) => {
@@ -1227,7 +1264,7 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
-  it.each([403, 409])(
+  it.each([401, 403, 409])(
     "keeps timeout recovery when a %i refusal body settles late",
     async (status) => {
       const b = browser();
@@ -1241,9 +1278,17 @@ describe("RsvpButton shipped binder", () => {
       await b.settle(false);
       b.runTimers(8000);
       expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
-      resolveBody(status === 403 ? { error: "rsvp_closed" } : { capacity: 9 });
+      resolveBody(
+        status === 401
+          ? { error: "Unauthorized", recovery: "/auth/recover?next=%2Fe%2Fraid%2Fone" }
+          : status === 403
+            ? { error: "rsvp_closed" }
+            : { capacity: 9 },
+      );
       await b.settle();
       expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
+      expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+      expect(b.get("rsvp-session-expired")).toBeNull();
       expect(b.reloads()).toBe(0);
       expect(b.get("event-full")).toBeNull();
       expect(b.get("rsvp-going")?.disabled).toBe(true);
