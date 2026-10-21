@@ -20,7 +20,7 @@ let { model }: { model: EventGoneModel } = $props();
   title={model.title}
   robots="noindex, nofollow"
   theme="event"
-  activeNav="events"
+  activeNav="event"
   hideAccount
 >
   <nav class="event-back" aria-label="Event calendar">
