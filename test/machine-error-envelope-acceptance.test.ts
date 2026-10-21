@@ -906,7 +906,7 @@ describe("machine errors: OpenAPI and doc agreement", () => {
   it("RED: docs/machine-errors.md is the single source in 60 lines or fewer", () => {
     let text: string;
     try {
-      text = readFileSync(new URL("../docs/machine-errors.md", root), "utf8");
+      text = readFileSync(new URL("docs/machine-errors.md", root), "utf8");
     } catch {
       throw new Error("docs/machine-errors.md is missing: K4 needs the single-source table");
     }
