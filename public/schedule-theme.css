@@ -45,6 +45,11 @@
 .events-page .member-board-table :is(th, td):last-child { width: 5rem; }
 .events-page [data-archive-state] { overflow-wrap: anywhere; }
 .events-page [data-archive-pager] { display: flex; flex-wrap: wrap; gap: 1.5rem; }
+.events-page .subscription-help { margin: 1rem 0; padding: .75rem 1rem; border: 1px solid var(--line); }
+.events-page .subscription-help summary { min-height: 44px; }
+.events-page .subscription-copy { display: flex; flex-wrap: wrap; gap: .5rem; }
+.events-page .subscription-copy [hidden] { display: none; }
+.events-page .subscription-copy input { flex: 1 1 20rem; min-width: 0; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); padding: .5rem; }
 @media (max-width: 48rem) {
   .events-page .schedule-row { grid-template-columns: 3.5rem minmax(0, 1fr); padding: 1rem; gap: 1rem; }
   .events-page .schedule-actions, .events-page .schedule-row > .schedule-attendance { grid-column: 2; justify-items: start; }
