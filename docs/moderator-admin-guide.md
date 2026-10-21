@@ -177,6 +177,16 @@ warning stays armed after rejection and while you correct the draft; navigating
 away can still discard it. Kit presentations use the same form actions: rejected
 POSTs are rendered by Hono, not a second Kit save or error endpoint.
 
+## Another moderator saved first
+
+If someone else saves the event while your edit form is open, your Save is
+refused (HTTP 409) instead of overwriting their changes. Your typed draft
+stays in the form with a notice; nothing is written. Follow the notice's
+**Review the current values** link to read what changed, copy over anything
+to keep, then Save again. Saving again without reviewing repeats the refusal.
+Like a validation rejection, focus starts at the notice and the unsaved-draft
+departure warning stays armed.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
