@@ -126,7 +126,7 @@ describe("Lighthouse fixture in Miniflare", () => {
       const after = Date.now();
       expect(response.status, path).toBe(200);
       expect(html).toContain("Lighthouse fixture game night");
-      expect(html).toContain(path === "/" ? "3 going" : "3 of 20 going");
+      expect(html).toContain("3 of 20 going");
       expect(html).toContain("Community voice channel");
       if (path === "/") {
         expect(html).toContain('data-testid="home-events-list"');
