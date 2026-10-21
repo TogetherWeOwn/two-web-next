@@ -312,11 +312,14 @@ Six throw legs across three Kit public-read loads emit the leak-free
 `src/kit-past-events.ts` database handle and list reads,
 `src/kit-event-states.ts` database handle and event lookup). Each leg
 alerts once per distinct `class@route` fingerprint (muted five minutes per
-isolate, like every `error.alert`); the `request_id` joins to the
-`http.request` line when the binding threaded a valid `cf-ray`, and is
-absent otherwise. Response bodies and headers are byte-stable: the binding
-ignores the thrown message. One cancelled-page degrade warns instead of
-alerting. Find an alert with the message **contains** filter from
+isolate, like every `error.alert`); the `request_id` carries the validated
+`cf-ray` value when the binding threaded one, and is absent otherwise.
+These Kit routes never emit the `http.request` line (Hono's request log
+runs only for Hono-dispatched requests), so correlate by the `request_id`
+value plus time window and route — never expect an `http.request` join
+here. Response bodies and headers are byte-stable: the binding ignores the
+thrown message. One cancelled-page degrade warns instead of alerting. Find
+an alert with the message **contains** filter from
 [Find a request](#find-a-request) on `"event":"error.alert"` plus the
 route, or the warn by its exact message. Read-only checks only: a Workers
 Logs search, a `SELECT`, or a source file.

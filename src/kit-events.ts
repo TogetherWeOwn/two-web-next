@@ -205,14 +205,15 @@ function reportEventsLoadFailure(
   err: unknown,
   setHeaders: (headers: Record<string, string>) => void,
   vary: string,
-  requestId?: string,
+  requestId: string | undefined,
+  method: string,
 ): never {
   const headers = { "cache-control": "private, no-store", vary };
   if (typeof (err as { status?: unknown })?.status === "number") {
     setHeaders(headers);
     throw err;
   }
-  alertRequestError(err, { method: "GET", route: "/events", requestId });
+  alertRequestError(err, { method, route: "/events", requestId });
   setHeaders(headers);
   throw eventsUnavailable();
 }
@@ -312,7 +313,7 @@ export async function loadEventsPage(
   try {
     db = await dbForFn({ env });
   } catch (err) {
-    reportEventsLoadFailure(err, setHeaders, vary, requestId);
+    reportEventsLoadFailure(err, setHeaders, vary, requestId, method);
   }
   if (!db) {
     setHeaders({ "cache-control": "private, no-store", vary });
@@ -349,7 +350,7 @@ export async function loadEventsPage(
       now,
     });
   } catch (err) {
-    reportEventsLoadFailure(err, setHeaders, vary, requestId);
+    reportEventsLoadFailure(err, setHeaders, vary, requestId, method);
   }
 
   // Request consumption after the read succeeds, like Hono's takeJoinResult.
