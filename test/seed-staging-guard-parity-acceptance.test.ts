@@ -24,10 +24,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STAGING_APP_URL } from "../src/qa";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
 import { createSeedClient, validateEnvironment } from "../bin/seed-staging.mjs";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
 import { isProductionDatabaseUrl, LOCAL_HOSTS } from "../bin/operator-db-core.mjs";
 
 const script = fileURLToPath(new URL("../bin/seed-staging.mjs", import.meta.url).href);
