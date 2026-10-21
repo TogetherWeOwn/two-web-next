@@ -146,7 +146,8 @@ describe.each(archiveTwins)("%s past-archive edge links", (twin) => {
     for (const link of recovery) {
       const url = new URL(link.href, ARCHIVE_ORIGIN);
       expect(url.pathname).toBe("/events/past");
-      expect([1, 3]).toContain(pageNumber(url));
+      expect(pageNumber(url)).toBe(1);
+      expect(link.label).toBe("Back to page 1");
       expect(url.searchParams.has("q")).toBe(false);
     }
   });
@@ -162,7 +163,8 @@ describe.each(archiveTwins)("%s past-archive edge links", (twin) => {
     for (const link of recovery) {
       const url = new URL(link.href, ARCHIVE_ORIGIN);
       expect(url.pathname).toBe("/events/past");
-      expect([1, 2]).toContain(pageNumber(url));
+      expect(pageNumber(url)).toBe(1);
+      expect(link.label).toBe("Back to page 1");
       expect(url.searchParams.get("q")).toBe(ARCHIVE_QUERY);
     }
   });
