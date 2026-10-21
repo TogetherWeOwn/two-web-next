@@ -148,7 +148,12 @@ export async function checkJoinThrottle(
   bucket: string,
   max: number,
 ): Promise<ThrottleVerdict> {
-  if (!sql) return { limited: false };
+  if (!sql) {
+    // Fail open with a bucket-naming line so every caller (generic
+    // middleware, join funnel, profile writes) reports a missing store.
+    console.warn("Throttle store unavailable; allowing the request.", { bucket });
+    return { limited: false };
+  }
   // The native postgres.js store supports transactions; the session SQL seam
   // deliberately exposes only the statements needed by session stores.
   const store = sql as Sql & {

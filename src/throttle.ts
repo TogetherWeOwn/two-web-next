@@ -90,15 +90,33 @@ export const clientKey = (c: Context) => {
   return "anon";
 };
 
+function exceptionClass(err: unknown): string {
+  return err instanceof Error
+    ? err.name
+    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+}
+
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
   c: Context<{ Bindings: Env }>,
   name: string,
   max: number,
 ): Promise<Response | null> {
+  const bucket = `${name}:${clientKey(c)}`;
   const verdict = await throttleStore(c)
-    .then((sql) => checkJoinThrottle(sql, `${name}:${clientKey(c)}`, max))
-    .catch(() => ({ limited: false }) as const);
+    .then((sql) => checkJoinThrottle(sql, bucket, max))
+    .catch((err: unknown) => {
+      // Fail open with a bucket-naming, class-only line: the message can
+      // quote statement bindings. Exactly one line per allow: the null-store
+      // allow already warned inside checkJoinThrottle (no throw, so this
+      // catch never runs for it), and the verdict transaction never warns
+      // before rethrowing.
+      console.warn("Throttle store failed; allowing the request.", {
+        bucket,
+        exception: exceptionClass(err),
+      });
+      return { limited: false } as const;
+    });
   return verdict.limited ? await rateLimitExceeded(c, verdict.retryAfter) : null;
 }
 

@@ -48,17 +48,29 @@ export async function fetchMemberRoles(
     return null;
   }
   // Discord answers JSON here; a non-JSON edge response is a failed lookup, not a crash.
-  let body: { roles?: unknown; joined_at?: unknown };
+  let body: unknown;
   try {
-    body = (await res.json()) as { roles?: unknown; joined_at?: unknown };
+    body = await res.json();
   } catch {
     console.warn("moderator recompute lookup returned non-JSON", { guild_id: guildId });
     return null;
   }
-  const roles = Array.isArray(body.roles)
-    ? body.roles.filter((r): r is string => typeof r === "string")
-    : [];
-  return { roles, joinedAt: typeof body.joined_at === "string" ? body.joined_at : null };
+  // A valid-JSON body with no object shape (null, scalar) carries no roles;
+  // degrade to empty instead of throwing, so the recomputeModerator boundary
+  // never misreports a shape miss as a transport failure. The flag verdict is
+  // unchanged: empty roles still fail the allowlist intersection.
+  const shape =
+    typeof body === "object" && body !== null
+      ? (body as { roles?: unknown; joined_at?: unknown })
+      : null;
+  const roles =
+    shape !== null && Array.isArray(shape.roles)
+      ? shape.roles.filter((r): r is string => typeof r === "string")
+      : [];
+  return {
+    roles,
+    joinedAt: shape !== null && typeof shape.joined_at === "string" ? shape.joined_at : null,
+  };
 }
 
 /** Parse `DISCORD_MODERATOR_ROLE_IDS` ("id1,id2") into snowflakes. Blank = nobody. */
@@ -68,6 +80,13 @@ export function parseModeratorRoleIds(raw: string | undefined): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => /^\d{10,25}$/.test(s));
+}
+
+/** Class-only classification of a lookup rejection: never the message, which can carry wire detail. */
+function lookupExceptionClass(err: unknown): string {
+  return err instanceof Error
+    ? err.name
+    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
 }
 
 /** ID intersection, never name matching. A blank allowlist fails closed. */
@@ -91,7 +110,18 @@ export async function recomputeModerator(opts: {
   // Fail closed before any lookup (TOG-12687): a blank bot token means no
   // bot-credentialed role fetch, so the flag stays non-moderator.
   if (!opts.botToken || opts.botToken.trim().length === 0) return false;
-  const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);
+  // The answered-path warns already fired inside fetchMemberRoles, so only a
+  // transport rejection reaches this catch: one line per degraded lookup,
+  // guild scope only, never member id, roles or credential.
+  const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(
+    (err: unknown) => {
+      console.warn("moderator recompute lookup transport failed", {
+        exception: lookupExceptionClass(err),
+        guild_id: opts.guildId,
+      });
+      return null;
+    },
+  );
   if (!member) return false;
   return isModerator(member.roles, opts.moderatorRoleIds);
 }
