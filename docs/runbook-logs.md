@@ -431,13 +431,14 @@ through the jobs Worker's own `SYNC_EVENT_QUEUE` binding. If the staging jobs
 Worker also lacks that binding, nothing re-dispatches the carrier until the
 binding is fixed: treat that case as stuck, not self-healing.
 
-In the production cutover template this self-healing does not apply: the web
-Worker `two-web-next-production` owns both the `SYNC_EVENT_QUEUE` producer
-binding (`env.production.queues.producers`) and the `*/10 * * * *` reconcile
-cron (`env.production.triggers`, `wrangler.jsonc`), and its `scheduled`
-handler (`src/worker.ts`) builds its queue from the same `env.SYNC_EVENT_QUEUE`.
-A missing binding there also stops reconcile, so the carrier stays unsent until
-the binding is fixed: treat a production warning as stuck, not late.
+In production the same split applies after the jobs transfer: the web Worker
+`two-web-next-production` owns the `SYNC_EVENT_QUEUE` producer binding
+(`env.production.queues.producers`, `wrangler.jsonc`), while the jobs Worker `two-web-jobs-production` owns the
+`*/10 * * * *` reconcile cron (`env.production.triggers`, `wrangler.jobs.jsonc`)
+and re-dispatches through its own `SYNC_EVENT_QUEUE` binding. A production
+warning is late, not lost, as long as only the web Worker lacks the binding.
+If the production jobs Worker also lacks that binding, nothing re-dispatches the carrier until the binding is fixed:
+treat that case as stuck, not self-healing.
 
 | Field | Meaning and safe values |
 | --- | --- |
@@ -465,9 +466,9 @@ the deployed Workers' queue producer bindings with
 (`SYNC_EVENT_QUEUE` bound to `two-sync-event`). Production declares its own at
 `env.production.queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE` bound
 to `two-web-next-production-sync-event`) because bindings are not inherited, so
-check the environment that served the request. On staging, if reconcile is not
-recovering events, also compare the jobs Worker's bindings with
-`wrangler.jobs.jsonc` (which has no production env).
+check the environment that served the request. If reconcile is not recovering
+events, also compare the jobs Worker's bindings with `wrangler.jobs.jsonc`
+(top level for staging, `env.production` for production).
 Source stays unchanged: route any binding fix to the authorized Operator under
 the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
