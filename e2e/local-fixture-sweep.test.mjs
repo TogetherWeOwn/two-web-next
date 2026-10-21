@@ -22,6 +22,19 @@ function fakeSql(rows) {
   return { sql, seen };
 }
 
+test("local sweep only ever touches the draft and published statuses", () => {
+  assert.deepEqual([...LOCAL_SWEEP_STATUSES], ["published", "draft"]);
+});
+
+test("local sweep prefixes are space-terminated LIKE stems", () => {
+  // A new fixture family adds its prefix here AND its LIKE clause to the
+  // sweep statement; the statement test below fails until both land.
+  assert.equal(LOCAL_FIXTURE_TITLE_PREFIXES.length, 5);
+  for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
+    assert.ok(prefix.endsWith(" "), `prefix ${JSON.stringify(prefix)} must end in a space`);
+  }
+});
+
 test("local sweep matches only its named fixture titles", () => {
   for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
     assert.equal(isLocalFixtureTitle(`${prefix}fixture`), true);
@@ -48,7 +61,8 @@ test("local sweep cancels live fixtures in one statement and returns their keys"
   assert.deepEqual(swept, ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"]);
   assert.equal(seen.length, 1);
   const statement = seen[0];
-  assert.match(statement, /UPDATE events SET status = 'cancelled'/);
+  assert.match(statement, /UPDATE events SET status = 'cancelled', updated_at = now\(\)/);
+  assert.match(statement, /WHERE status IN \('draft', 'published'\)/);
   assert.match(statement, /RETURNING event_key/);
   for (const status of LOCAL_SWEEP_STATUSES) {
     assert.ok(statement.includes(`'${status}'`), `sweeps status ${status}`);
@@ -62,4 +76,9 @@ test("local sweep returns no keys when no fixture is live", async () => {
   const { sql, seen } = fakeSql([]);
   assert.deepEqual(await sweepLocalFixturesDb(sql), []);
   assert.equal(seen.length, 1);
+});
+
+test("local sweep surfaces database errors instead of reporting clean", async () => {
+  const failing = () => Promise.reject(new Error("connection refused"));
+  await assert.rejects(sweepLocalFixturesDb(failing), /connection refused/);
 });
