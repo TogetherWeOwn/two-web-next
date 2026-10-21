@@ -269,7 +269,7 @@ describe.skipIf(!process.env.DATABASE_URL)("documented event URLs against live r
     } as unknown as Env);
 
   it("marks the served /events.md footer URL while real event links stay fetchable", async () => {
-    const key = "01J0000000000000000000E3U1";
+    const key = "01J0000000000000000000E3V1";
     await db.insert(events).values({
       eventKey: key,
       title: "Template-marking probe night",
