@@ -16,7 +16,7 @@
 // reads env.<name>.vars only, with no fallback to the top level (Wrangler
 // does not inherit top-level vars into named environments, so a fallback
 // would prove nothing about what the named deploy receives).
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { checkModerators, renderModeratorReport } from "../src/probes/check-moderators.ts";
@@ -87,9 +87,12 @@ export function main(
       let text;
       try {
         const path = configs[0].slice("--config=".length);
-        if (!statSync(path).isFile()) refuse("CONFIG_UNREADABLE");
+        const stat = statSync(path);
+        if (!stat.isFile()) refuse("CONFIG_UNREADABLE");
+        if (stat.size > OPERATOR_PROBE_MAX_INPUT_BYTES) refuse("CONFIG_TOO_LARGE");
         text = readFileSync(path, "utf8");
-      } catch {
+      } catch (err) {
+        if (err instanceof ProbeInputError) throw err;
         refuse("CONFIG_UNREADABLE");
       }
       if (Buffer.byteLength(text, "utf8") > OPERATOR_PROBE_MAX_INPUT_BYTES) {
@@ -153,6 +156,15 @@ export function main(
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
   process.exitCode = main();
 }

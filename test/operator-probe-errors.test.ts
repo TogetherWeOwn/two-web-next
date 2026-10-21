@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -65,6 +65,44 @@ function refused(tool: Tool, args: string[], code: string) {
   return error;
 }
 
+const readsGuard = join(dir, `${marker}-reads-guard.mjs`);
+writeFileSync(
+  readsGuard,
+  `import fs from "node:fs";\nimport { syncBuiltinESMExports } from "node:module";\nlet reads = 0;\nconst read = fs.readFileSync.bind(fs);\nfs.readFileSync = (path, ...args) => {\n  if (String(path).startsWith(${JSON.stringify(dir)})) reads++;\n  return read(path, ...args);\n};\nsyncBuiltinESMExports();\nprocess.on("exit", () => fs.writeSync(3, String(reads)));\n`,
+);
+
+function runCountReads(tool: Tool, args: string[]) {
+  const result = spawnSync(
+    process.execPath,
+    ["--import", readsGuard, "--import", "./bin/ts-hook.mjs", `bin/${tool}.mjs`, ...args],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { PATH: process.env.PATH, HOME: dir },
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  const reads = Number(String(result.output[3]));
+  expect(Number.isInteger(reads)).toBe(true);
+  return { result, reads };
+}
+
+function runViaSymlink(tool: Tool, args: string[]) {
+  const link = join(dir, `${marker}-${tool}-link.mjs`);
+  rmSync(link, { force: true });
+  symlinkSync(resolve(`bin/${tool}.mjs`), link);
+  const result = spawnSync(process.execPath, ["--import", "./bin/ts-hook.mjs", link, ...args], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: { PATH: process.env.PATH, HOME: dir },
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  return result;
+}
+
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("operator probe entrypoints and local file types", () => {
@@ -97,6 +135,94 @@ describe("operator probe entrypoints and local file types", () => {
         "APP_FILE_UNREADABLE",
       );
     }
+  });
+});
+
+describe("operator probe symlinked entrypoints", () => {
+  it.each<Tool>(["check-moderators", "role-audit"])(
+    "%s refuses through a symlinked entrypoint instead of exiting 0 silently",
+    (tool) => {
+      const result = runViaSymlink(tool, [`--unknown=${marker}`, "--json"]);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      const error = JSON.parse(result.stderr);
+      expect(error).toMatchObject({
+        schema: "operator-probe-error.v1",
+        tool,
+        mode: "error",
+        ok: false,
+        code: "UNKNOWN_OPTION",
+        retryable: false,
+      });
+      expect(result.stderr).not.toContain(marker);
+    },
+  );
+  it("check-moderators symlinked deploy gate still emits its verdict", () => {
+    const result = runViaSymlink("check-moderators", ["--json"]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
+  });
+  it("role-audit symlinked drift still exits 1 with its verdict", () => {
+    const result = runViaSymlink("role-audit", [
+      "--discord-ids=100000000000000001",
+      "--app-ids=100000000000000002",
+      "--json",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const verdict = JSON.parse(result.stdout);
+    expect(verdict).toMatchObject({ ok: false, discordCount: 1, appCount: 1 });
+  });
+});
+
+describe("role-audit source validation opens no input files", () => {
+  it("refuses an ambiguous app source before opening a missing discord file", () => {
+    const error = refused(
+      "role-audit",
+      [`--discord-file=${missing}`, `--app-file=${empty}`, "--app-ids=100000000000000001"],
+      "APP_SOURCE_INVALID",
+    );
+    expect(error.next_action).toContain("--app-");
+  });
+  it("refuses an ambiguous discord source before opening a missing app file", () => {
+    refused(
+      "role-audit",
+      [`--discord-file=${empty}`, "--discord-ids=100000000000000001", `--app-file=${missing}`],
+      "DISCORD_SOURCE_INVALID",
+    );
+  });
+  const ambiguous: [string, string[]][] = [
+    [
+      "discord conflicting sources",
+      [`--discord-file=${empty}`, "--discord-ids=100000000000000001", `--app-file=${empty}`],
+    ],
+    [
+      "app conflicting sources",
+      [`--discord-file=${empty}`, `--app-file=${empty}`, "--app-ids=100000000000000001"],
+    ],
+    [
+      "discord duplicate file flags",
+      [`--discord-file=${empty}`, `--discord-file=${empty}`, `--app-file=${empty}`],
+    ],
+    [
+      "app duplicate file flags",
+      [`--discord-file=${empty}`, `--app-file=${empty}`, `--app-file=${empty}`],
+    ],
+    [
+      "missing discord plus ambiguous app",
+      [`--discord-file=${missing}`, `--app-file=${empty}`, "--app-ids=100000000000000001"],
+    ],
+    [
+      "ambiguous discord plus missing app",
+      [`--discord-file=${empty}`, "--discord-ids=100000000000000001", `--app-file=${missing}`],
+    ],
+  ];
+  it.each(ambiguous)("conflicting sources open no input files: %s", (_name, args) => {
+    const { result, reads } = runCountReads("role-audit", [...args, "--json"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(reads).toBe(0);
   });
 });
 

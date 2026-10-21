@@ -13,7 +13,7 @@
 // neither). Files hold either a JSON array of strings or newline/comma
 // separated IDs. Exit 0 = sets match (empty-safe), 1 = drift, 2 = usage or
 // malformed input. Output is bounded to ROLE_AUDIT_MAX_SHOWN IDs per side.
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
   assertSnowflakeIds,
@@ -79,9 +79,14 @@ function loadSide({ file, ids }, side) {
   let raw = ids;
   if (file !== undefined) {
     try {
-      if (!statSync(file).isFile()) throw new ProbeInputError(`${side}_FILE_UNREADABLE`);
+      const stat = statSync(file);
+      if (!stat.isFile()) throw new ProbeInputError(`${side}_FILE_UNREADABLE`);
+      if (stat.size > OPERATOR_PROBE_MAX_INPUT_BYTES) {
+        throw new ProbeInputError(`${side}_INPUT_TOO_LARGE`);
+      }
       raw = readFileSync(file, "utf8");
-    } catch {
+    } catch (err) {
+      if (err instanceof ProbeInputError) throw err;
       throw new ProbeInputError(`${side}_FILE_UNREADABLE`);
     }
   }
@@ -148,6 +153,15 @@ export async function main(
   return result.ok ? 0 : 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
   process.exitCode = await main();
 }

@@ -39,8 +39,9 @@ until both source selections are unambiguous.
 
 File inputs must be local regular files; directories, FIFOs and devices are
 refused before reading. Each config file and each role-audit input is limited
-to 1,000,000 UTF-8 bytes before parsing/comparison. This is an accepted-input bound, not a streaming
-memory guarantee: files are read locally before the byte check. Role-audit
+to 1,000,000 UTF-8 bytes before parsing/comparison. Files reporting over the
+bound are refused before reading; a post-decode byte check still covers inline
+CSV and UTF-8 replacement expansion. Role-audit
 verdicts show at most 20 IDs per difference list, with exact counts of omitted
 IDs. Valid comparison output intentionally includes those user IDs; refusals
 never include rejected values.
