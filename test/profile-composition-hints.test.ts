@@ -237,7 +237,9 @@ describe("Hono profile editor: composition hints and counts", () => {
     expect(describedBy(html, "profile-games-text")).toBe(
       `${GAMES_HINT_ID} ${GAMES_COUNT_ID} profile-games-text-error`,
     );
-    expect(describedBy(html, "profile-timezone")).toBe("profile-timezone-error");
+    expect(describedBy(html, "profile-timezone")).toBe(
+      "profile-timezone-help profile-timezone-error",
+    );
     expect(nodeText(html, BIO_COUNT_ID)).toBe("4 of 1000 characters");
     expect(nodeText(html, GAMES_COUNT_ID)).toBe("2 of 20 games, 12 of 1700 characters");
     // The established error contract still holds: errors sit directly after
@@ -291,7 +293,7 @@ describe("Hono profile editor: composition hints and counts", () => {
 
   it("timezone control and new-member CTA are unchanged", () => {
     const html = renderHono();
-    expect(describedBy(html, "profile-timezone")).toBeNull();
+    expect(describedBy(html, "profile-timezone")).toBe("profile-timezone-help");
     expect(openingTag(html, "profile-timezone")).toContain('placeholder="Europe/London"');
     expect(html).not.toContain("profile-timezone-hint");
     expect(html).not.toContain("profile-timezone-count");
@@ -468,7 +470,9 @@ describe("Kit profile editor: composition hints and counts", () => {
     expect(describedBy(html, "profile-games-text")).toBe(
       `${GAMES_HINT_ID} ${GAMES_COUNT_ID} profile-games-text-error`,
     );
-    expect(describedBy(html, "profile-timezone")).toBe("profile-timezone-error");
+    expect(describedBy(html, "profile-timezone")).toBe(
+      "profile-timezone-help profile-timezone-error",
+    );
     expect(nodeText(html, BIO_COUNT_ID)).toBe("4 of 1000 characters");
     expect(nodeText(html, GAMES_COUNT_ID)).toBe("2 of 20 games, 12 of 1700 characters");
     // Svelte 5 SSR wraps the conditional error block in hydration markers
@@ -525,7 +529,7 @@ describe("Kit profile editor: composition hints and counts", () => {
 
   it("timezone control and new-member CTA are unchanged", () => {
     const html = renderView(kitProps());
-    expect(describedBy(html, "profile-timezone")).toBeNull();
+    expect(describedBy(html, "profile-timezone")).toBe("profile-timezone-help");
     expect(openingTag(html, "profile-timezone")).toContain('placeholder="Europe/London"');
     expect(html).not.toContain("profile-timezone-hint");
     expect(html).not.toContain("profile-timezone-count");
