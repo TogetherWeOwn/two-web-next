@@ -11,9 +11,29 @@ let {
 } = $props();
 
 const copy = $derived(kitErrorCopy(code));
+
+// Outage headers point at the Discord invite, never the OAuth start:
+// during a store outage or throttle the sign-in round trip is dead, so the
+// header carries Hono's cta-branch contract instead (src/page-shell.tsx:
+// guest caption plus an invite "Open Discord" link on data-testid="signin").
+// 400/404/410 keep the default sign-in header — OAuth is alive there.
+const OUTAGE_CODES: KitErrorStatus[] = [403, 429, 500, 503];
+const isOutage = $derived(OUTAGE_CODES.includes(code));
 </script>
 
-<Shell title={copy.title} robots="noindex, nofollow" theme="home">
+{#snippet outageAccount()}
+  <div>
+    <span class="account-caption">Welcome, guest</span>
+    <a class="btn" href={inviteUrl} data-testid="signin">Open Discord</a>
+  </div>
+{/snippet}
+
+<Shell
+  title={copy.title}
+  robots="noindex, nofollow"
+  theme="home"
+  accountChrome={isOutage ? outageAccount : undefined}
+>
   <section class="hero recovery-hero" aria-labelledby="error-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>
@@ -68,4 +88,29 @@ const copy = $derived(kitErrorCopy(code));
       </p>
     {/if}
   </section>
+  {#if code === 404}
+    <!-- Generic-404 search: markup twin of Hono's NotFoundPage and
+      EventMissing (same action, input contract and submit button). Its own
+      section, not the hero: the rendered-a11y suite pins the hero's exact
+      text and the page's single heading. Suggestions stay out of scope —
+      the boundary reads no database — so there is no "Happening soon" twin. -->
+    <section class="recovery-events">
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input
+            id="error-events-search"
+            name="q"
+            type="search"
+            placeholder="Search events…"
+            autocomplete="off"
+            data-testid="error-events-search"
+          />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">
+            Search events
+          </button>
+        </div>
+      </form>
+    </section>
+  {/if}
 </Shell>
