@@ -9,6 +9,7 @@ import {
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   goingCountText,
   pastEventsOutOfRangeCopy,
@@ -26,8 +27,17 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => (
       <h2>
         <a href={`/e/${e.eventKey}`}>{e.title}</a>
       </h2>
+      {/* Upcoming-card shape (time · zone · location): the zone always
+          renders, the location only when the row has one. */}
       <p>
-        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
+        <span>{e.timezone}</span>
+        {e.location ? (
+          <>
+            {" · "}
+            <span>{e.location}</span>
+          </>
+        ) : null}
       </p>
       {e.game ? <p>{e.game}</p> : null}
     </div>
@@ -83,7 +93,9 @@ export const PastEventsPage: FC<{
         ) : null}
         {rows.length === 0 ? (
           totalPages === 0 && q ? (
-            <p role="status">No past events match your search.</p>
+            <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
+              No past events match “{q}”. <a href="/events/past">Clear search</a>
+            </p>
           ) : totalPages === 0 ? (
             <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
               <p>{PAST_EVENTS_COPY.empty}</p>

@@ -162,7 +162,7 @@ The citations above prove append-only enforcement for roles that cannot alter th
 tables (row 391), subject to the documented owner/superuser exception and pending
 runtime-role provisioning, and the executable retention adapter (rows 406/428).
 Optional MemberStats reads now return keyed owner columns;
-unavailable bot-owned views still hide the stats block within the existing budget.
+unavailable bot-owned views now render an explicit unavailable state (keeping membership on milestones-only failure) within the budget.
 
 ## Scoped runtime control and evidence split
 

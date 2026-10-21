@@ -1,9 +1,16 @@
 // Backstop sweep for RSVP fixtures made by the local browser spec.
-// This module is local-origin-only and never constructs a request to staging.
+//
+// DB-direct: cancels leftover fixture events with one UPDATE on the disposable
+// CI Postgres, spending zero QA logins. The previous HTTP sweep logged in as
+// qa-moderator and cancelled through the admin UI; that login shared the
+// 10/min `qa-login` throttle with every spec in the sequential smoke, so a
+// fast runner compressed the run past the budget and 429'd the late parity
+// logins. Cleanup needs no session proof — specs already prove cancel through
+// the UI in their own `finally` blocks — so the backstop goes straight to the
+// row. The caller (local-global-teardown.ts) guards the connection with
+// requireGithubRunner + requireTestDatabase; this module never opens a
+// connection itself and never touches staging or production.
 
-import { parseRetryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS, sleep } from "./qa-login-retry.mjs";
-
-export const LOCAL_FIXTURE_ORIGIN = "https://localhost:8787";
 export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze([
   "E2E Waitlist ",
   "E2E Promotion ",
@@ -12,190 +19,31 @@ export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze([
   "E2E Filter ",
 ]);
 export const LOCAL_SWEEP_STATUSES = Object.freeze(["published", "draft"]);
-export const LOCAL_SWEEP_MAX_PASSES = 4;
-export const LOCAL_SWEEP_MAX_PAGES = 20;
-export const LOCAL_SWEEP_MAX_DURATION_MS = 300_000;
 
-const ROW_LINK = /<a href="\/admin\/events\/([0-9A-HJKMNP-TV-Z]{26})">([^<]*)<\/a>/g;
-
-// DB gate for the backstop sweep (QA-LOGIN BUDGET FIX).
-//
-// The sweep's one QA login spends the shared `qa-login` throttle (10/min per
-// runner IP, src/throttle.ts) on EVERY run — even green runs whose journeys
-// already withdrew every fixture. The parity step follows in the same
-// throttle window, so that unconditional spend is what pushes fast runs over
-// the budget. Gate it: when no live sweep-target fixture exists, the teardown
-// skips the login and the HTTP pass entirely (0 spends); when orphans exist,
-// it runs the unchanged login + cancel pass below.
-//
-// The gate predicate MUST stay a superset-or-equal of the HTTP sweep set:
-// parseLocalFixtureRows keeps titles starting with a frozen prefix (the admin
-// `q` search is a case-insensitive substring that can only widen, never
-// narrow, that set) with a frozen status. It is built FROM the frozen lists
-// so a new prefix or status can never slip past the gate, and the unit tests
-// pin every entry. A false positive only costs the login we spend today; a
-// false negative would leave orphans for parity — so err broad, never narrow.
-export function liveLocalFixtureGateQuery() {
-  const statuses = [...LOCAL_SWEEP_STATUSES];
-  const prefixes = [...LOCAL_FIXTURE_TITLE_PREFIXES];
-  const statusParams = statuses.map((_, index) => `$${index + 1}`).join(", ");
-  const titleParams = prefixes
-    .map((_, index) => `starts_with(title, $${statuses.length + index + 1})`)
-    .join(" OR ");
-  return {
-    text:
-      `select 1 as one from events where status in (${statusParams}) ` +
-      `and (${titleParams}) limit 1`,
-    values: [...statuses, ...prefixes],
-  };
+/** True when a title belongs to the local browser fixtures (never the seeded event). */
+export function isLocalFixtureTitle(title) {
+  return LOCAL_FIXTURE_TITLE_PREFIXES.some((prefix) => title.startsWith(prefix));
 }
 
-export function localSweepListPath(prefix, status, page = 1) {
-  if (!LOCAL_FIXTURE_TITLE_PREFIXES.includes(prefix) || !LOCAL_SWEEP_STATUSES.includes(status)) {
-    throw new Error("local fixture sweep: invalid list filter");
-  }
-  const params = new URLSearchParams({
-    q: prefix.trim(),
-    status,
-    sort: "starts_at",
-    order: "desc",
-  });
-  if (page > 1) params.set("page", String(page));
-  return `/admin/events?${params}`;
-}
-
-export function parseLocalFixtureRows(html, prefix) {
-  if (!LOCAL_FIXTURE_TITLE_PREFIXES.includes(prefix)) {
-    throw new Error("local fixture sweep: invalid fixture prefix");
-  }
-  const rows = [];
-  for (const match of html.matchAll(ROW_LINK)) {
-    const [, eventKey, title] = match;
-    if (title.startsWith(prefix)) rows.push({ eventKey, title });
-  }
-  return rows;
-}
-
-export function localSweepNextListPath(html, currentPath) {
-  const link = [...html.matchAll(/<a\b([^>]*)>/g)].find((match) =>
-    /\brel=["']next["']/.test(match[1]),
-  );
-  if (!link) return null;
-  const href = /\bhref=["']([^"']*)["']/.exec(link[1])?.[1];
-  const current = new URL(currentPath, LOCAL_FIXTURE_ORIGIN);
-  const page = Number(current.searchParams.get("page") ?? 1);
-  const prefix = LOCAL_FIXTURE_TITLE_PREFIXES.find(
-    (value) => value.trim() === current.searchParams.get("q"),
-  );
-  const status = current.searchParams.get("status");
-  if (!href || !prefix || !LOCAL_SWEEP_STATUSES.includes(status)) {
-    throw new Error("local fixture sweep: invalid pagination link");
-  }
-  const expectedPath = localSweepListPath(prefix, status, page + 1);
-  const expected = new URL(expectedPath, LOCAL_FIXTURE_ORIGIN);
-  let next;
-  try {
-    next = new URL(href.replaceAll("&amp;", "&"), current);
-  } catch {
-    throw new Error("local fixture sweep: invalid pagination link");
-  }
-  next.searchParams.sort();
-  expected.searchParams.sort();
-  if (
-    next.origin !== LOCAL_FIXTURE_ORIGIN ||
-    next.username ||
-    next.password ||
-    next.hash ||
-    next.pathname !== expected.pathname ||
-    next.search !== expected.search
-  ) {
-    throw new Error("local fixture sweep: invalid pagination link");
-  }
-  return expectedPath;
-}
-
-function requestTimeout(deadline, now) {
-  const remaining = deadline - now();
-  if (remaining <= 0) throw new Error("local fixture sweep: time limit exhausted");
-  return Math.min(30_000, remaining);
-}
-
-// Earlier journeys can consume the shared QA-login window. Retry only 429,
-// using the same credential and honoring Retry-After within the sweep deadline.
-export async function loginLocalSweep(
-  send,
-  { now = Date.now, wait = sleep, deadline = now() + LOCAL_SWEEP_MAX_DURATION_MS } = {},
-) {
-  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt++) {
-    const response = await send({ maxRedirects: 0, timeout: requestTimeout(deadline, now) });
-    if (response.status() === 204) return;
-    if (response.status() !== 429) {
-      throw new Error(`local fixture sweep: QA moderator login answered ${response.status()}`);
-    }
-    if (attempt === QA_LOGIN_MAX_ATTEMPTS) {
-      throw new Error("local fixture sweep: QA login throttle retry limit exhausted");
-    }
-    const waitMs = parseRetryAfterSeconds(response.headers()) * 1000;
-    if (waitMs >= deadline - now()) {
-      throw new Error("local fixture sweep: time limit exhausted before QA login retry");
-    }
-    await wait(waitMs);
-  }
-}
-
-export async function sweepLocalFixtures(
-  api,
-  { now = Date.now, deadline = now() + LOCAL_SWEEP_MAX_DURATION_MS } = {},
-) {
-  const timeout = () => requestTimeout(deadline, now);
-  const listLive = async () => {
-    const keys = new Set();
-    for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
-      for (const status of LOCAL_SWEEP_STATUSES) {
-        let path = localSweepListPath(prefix, status);
-        for (let page = 1; path !== null; page++) {
-          if (page > LOCAL_SWEEP_MAX_PAGES) {
-            throw new Error("local fixture sweep: pagination limit exhausted");
-          }
-          const response = await api.get(path, {
-            maxRedirects: 0,
-            timeout: timeout(),
-          });
-          if (response.status() !== 200) {
-            throw new Error(`local fixture sweep: admin events list answered ${response.status()}`);
-          }
-          const html = await response.text();
-          for (const row of parseLocalFixtureRows(html, prefix)) keys.add(row.eventKey);
-          path = localSweepNextListPath(html, path);
-        }
-      }
-    }
-    return [...keys];
-  };
-
-  let cancelled = 0;
-  for (let pass = 1; pass <= LOCAL_SWEEP_MAX_PASSES; pass++) {
-    const live = await listLive();
-    if (live.length === 0) break;
-    for (const eventKey of live) {
-      const response = await api.post(`/admin/events/${eventKey}/cancel`, {
-        headers: { Origin: LOCAL_FIXTURE_ORIGIN },
-        maxRedirects: 0,
-        timeout: timeout(),
-      });
-      if (response.status() !== 303) {
-        throw new Error(
-          `local fixture sweep: cancel answered ${response.status()} for ${eventKey}`,
-        );
-      }
-      cancelled++;
-    }
-  }
-  const remaining = await listLive();
-  if (remaining.length > 0) {
-    throw new Error(
-      `local fixture sweep left ${remaining.length} RSVP fixture(s) live after ${LOCAL_SWEEP_MAX_PASSES} passes: ${remaining.join(", ")}`,
-    );
-  }
-  return cancelled;
+/**
+ * Cancel every live fixture event in one statement. `sql` is a postgres.js
+ * client (or a fake with the same tagged-template shape in tests). Returns
+ * the cancelled event keys. Cancel is terminal and idempotent: already
+ * cancelled rows are untouched, and the seeded event ("E2E Community Night")
+ * matches no prefix so it is never swept.
+ */
+export async function sweepLocalFixturesDb(sql) {
+  const rows = await sql`
+    UPDATE events SET status = 'cancelled', updated_at = now()
+    WHERE status IN ('draft', 'published')
+      AND (
+        title LIKE 'E2E Waitlist %'
+        OR title LIKE 'E2E Promotion %'
+        OR title LIKE 'E2E Pause %'
+        OR title LIKE 'E2E Moderator %'
+        OR title LIKE 'E2E Filter %'
+      )
+    RETURNING event_key
+  `;
+  return rows.map((row) => row.event_key);
 }

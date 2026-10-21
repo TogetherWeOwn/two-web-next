@@ -555,7 +555,12 @@ for (const target of targets) {
     });
 
     test("bad season answers 400 before any grid", async () => {
-      for (const path of ["/hotzones?season=bogus", "/hotzones/joins?season=bogus"]) {
+      for (const path of [
+        "/hotzones?season=bogus",
+        "/hotzones/joins?season=bogus",
+        "/hotzones/voice?season=bogus",
+        "/hotzones/games?season=bogus",
+      ]) {
         const response = await api(target).get(path);
         expect(response.status(), `${target.name} ${path}`).toBe(400);
         const body = await response.text();
@@ -709,7 +714,9 @@ for (const target of targets) {
         "/leaderboards/members?season=bogus",
         "/leaderboards/members?scope=friends",
         "/leaderboards/members?scope=bogus",
-        "/leaderboards/members?activity=chess!",
+        // Punctuation is a valid savable game name, so the activity
+        // refusal pin uses an overlong value (101 chars > 100 max).
+        `/leaderboards/members?activity=${"a".repeat(101)}`,
       ]) {
         const response = await api(target).get(path, { headers: { cookie } });
         expect(response.status(), `${target.name} ${path}`).toBe(400);
@@ -1135,16 +1142,175 @@ for (const target of targets) {
           }
         };
         await expectContained("/hotzones", 3);
+        // Control: the Joins heatmap path stays a live aggregate, never an
+        // estimate. Voice/games must read as estimates even when this live
+        // fixture has data (the raw index pins live gatherings).
         await page.getByRole("link", { name: "Joins heatmap" }).click();
         await expect(page).toHaveURL(/\/hotzones\/joins/);
         await page.waitForLoadState("load");
         await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
+        await expect(page.locator("p", { hasText: /Join activity for season/ })).toBeVisible();
+        await expect(page.getByText("Successful joins only")).toBeVisible();
+        await expect(page.getByText(/Total estimate:/)).toHaveCount(0);
+        await expect(page.getByText(/estimates until bot event-store calibration/)).toHaveCount(0);
         await expectContained("/hotzones/joins", 1);
-        for (const signal of ["voice", "games"]) {
-          const signalResponse = await page.goto(`/hotzones/${signal}`);
-          expect(signalResponse?.status()).toBe(200);
+        // Heatmap navigation from the index: each Voice/Games heatmap link is
+        // visible and navigates to its matching page (the Joins click above
+        // is the preserved control path).
+        for (const signal of ["voice", "games"] as const) {
+          const heatmap = `${signal.charAt(0).toUpperCase()}${signal.slice(1)} heatmap`;
+          await page.goto("/hotzones");
+          await page.waitForLoadState("load");
+          await expect(page.getByRole("link", { name: heatmap })).toBeVisible();
+          await page.getByRole("link", { name: heatmap }).click();
+          await expect(page).toHaveURL(new RegExp(`/hotzones/${signal}`));
+          await page.waitForLoadState("load");
           await expect(page.getByRole("heading", { name: `${signal} hot zone` })).toBeVisible();
-          await expectContained(`/hotzones/${signal}`, 1);
+        }
+        // Voice/games rendered acceptance contract
+        // (docs/kit-parity-gates.md): direct loads assert heading, estimate
+        // copy, numeric totals, labelled table, cross-signal nav, layout,
+        // privacy and marker. Pins are fixture-stable (labels, dimensions,
+        // nonnegative totals) — never seeded cells or live counts.
+        // Failure/empty boundaries stay status contracts, not success
+        // screens: malformed season 400 and unknown signal 404 are pinned by
+        // the raw API tests above; the outage 503 mapping is loader scope
+        // (test/kit-hotzones.test.ts signal 503,
+        // test/kit-public-load-alerts-acceptance.test.ts hotzones signal
+        // outage); zero-join rendered state is out (the shared helper's
+        // null-DB branch is unit-test scope,
+        // test/hotzone-season-continuity-acceptance.test.ts null-DB fixture).
+        for (const signal of ["voice", "games"] as const) {
+          const path = `/hotzones/${signal}`;
+          const caption = `Season-independent seeded estimate of ${signal} activity`;
+          const signalResponse = await page.goto(path);
+          expect(
+            signalResponse?.status(),
+            `${target.name} ${viewport.name} ${path} direct load`,
+          ).toBe(200);
+          const signalHeaders = signalResponse?.headers() ?? {};
+          expect(signalHeaders["content-type"], `${target.name} ${path} html`).toContain(
+            "text/html",
+          );
+          expect(signalHeaders["cache-control"], `${target.name} ${path} cache`).toBe(
+            "public, max-age=300",
+          );
+          const derived = expectedKitMarker(path);
+          expect(derived, `manifest owns ${path} on Kit`).toBe("kit");
+          const expectedMarker = target.name === "kit" ? derived : null;
+          expect(signalHeaders["x-two-renderer"] ?? null, `${target.name} ${path} marker`).toBe(
+            expectedMarker,
+          );
+          if (target.name === "kit")
+            expect(signalHeaders["x-two-renderer"] ?? null, `${path} Kit answers from Kit`).toBe(
+              "kit",
+            );
+          await expect(page.getByRole("heading", { name: `${signal} hot zone` })).toBeVisible();
+          await expect(
+            page.getByText(new RegExp(`Season-independent seeded estimates of ${signal} activity`)),
+          ).toBeVisible();
+          await expect(page.getByText(/estimates until bot event-store calibration/)).toBeVisible();
+          const totalText = await page.getByText(/Total estimate:/).textContent();
+          expect(totalText, `${target.name} ${path} total estimate`).toMatch(/Total estimate: \d+/);
+          const total = Number(totalText?.match(/Total estimate: (\d+)/)?.[1]);
+          expect(
+            Number.isInteger(total) && total >= 0,
+            `${target.name} ${path} nonnegative total`,
+          ).toBe(true);
+          // Estimates, never the live joins copy.
+          await expect(page.getByText("Successful joins only")).toHaveCount(0);
+          expect(
+            await page.content(),
+            `${target.name} ${path} no live joins caption`,
+          ).not.toContain("Join activity for season");
+          // Cross-signal links: All hot zones plus each signal, with seasonless
+          // canonical hrefs (the default all view carries no query).
+          await expect(page.getByRole("link", { name: "All hot zones" })).toBeVisible();
+          await expect(page.getByRole("link", { name: "joins", exact: true })).toBeVisible();
+          await expect(page.getByRole("link", { name: "voice", exact: true })).toBeVisible();
+          await expect(page.getByRole("link", { name: "games", exact: true })).toBeVisible();
+          expect(await page.getByRole("link", { name: "All hot zones" }).getAttribute("href")).toBe(
+            "/hotzones",
+          );
+          expect(
+            await page.getByRole("link", { name: "joins", exact: true }).getAttribute("href"),
+          ).toBe("/hotzones/joins");
+          expect(
+            await page.getByRole("link", { name: "voice", exact: true }).getAttribute("href"),
+          ).toBe("/hotzones/voice");
+          expect(
+            await page.getByRole("link", { name: "games", exact: true }).getAttribute("href"),
+          ).toBe("/hotzones/games");
+          // Labelled table: one focusable region, caption, weekday rows and
+          // hour columns (src/hotzones/weekday-names.ts labels; the 42rem
+          // floor is unit-pinned in test/hotzones-grid-scroll-region.test.ts
+          // and measured as contained scrolling by expectContained below).
+          const region = page.locator("[data-hotzone-scroll]");
+          await expect(region, `${target.name} ${viewport.name} ${path} one region`).toHaveCount(1);
+          await expect(region).toHaveAttribute("role", "region");
+          await expect(region).toHaveAttribute("aria-label", caption);
+          await expect(region).toHaveAttribute("tabindex", "0");
+          await expect(region.locator("caption")).toHaveText(caption);
+          const headerCells = region.locator("thead th");
+          await expect(headerCells).toHaveCount(25);
+          await expect(headerCells.first()).toHaveText("Day");
+          for (let h = 0; h < 24; h++) {
+            await expect(headerCells.nth(h + 1), `${target.name} ${path} hour ${h}`).toHaveText(
+              String(h).padStart(2, "0"),
+            );
+          }
+          const expectedWeekdays = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+          ];
+          const rowHeaders = region.locator("tbody th[scope='row']");
+          await expect(rowHeaders).toHaveCount(7);
+          for (let d = 0; d < 7; d++) {
+            await expect(rowHeaders.nth(d), `${target.name} ${path} weekday ${d}`).toHaveText(
+              expectedWeekdays[d]!,
+            );
+          }
+          await expect(region.locator("tbody tr")).toHaveCount(7);
+          const cells = region.locator("tbody td");
+          await expect(cells).toHaveCount(168);
+          const cellTexts = await cells.allTextContents();
+          expect(cellTexts).toHaveLength(168);
+          let cellsSum = 0;
+          for (const text of cellTexts) {
+            const trimmed = text.trim();
+            expect(trimmed, `${target.name} ${path} cell numeric`).toMatch(/^\d+$/);
+            const n = Number(trimmed);
+            expect(n, `${target.name} ${path} cell nonnegative`).toBeGreaterThanOrEqual(0);
+            cellsSum += n;
+          }
+          expect(cellsSum, `${target.name} ${path} total matches grid sum`).toBe(total);
+          // Public/privacy: guest rendered (Open Discord replaces the
+          // default sign-in chrome on both renderers, so no Welcome caption
+          // and no sign-in/sign-out controls), no member identifiers, noindex
+          // plus canonical (cache/marker headers asserted above).
+          await expect(page.getByRole("link", { name: "Open Discord" })).toBeVisible();
+          await expect(page.getByText("Sign in with Discord")).toHaveCount(0);
+          await expect(page.getByText("Sign out")).toHaveCount(0);
+          expect(await page.content(), `${target.name} ${path} no member identifiers`).not.toMatch(
+            /discord_id|created_at/i,
+          );
+          const robots = page.locator('meta[name="robots"]');
+          await expect(robots).toHaveCount(1);
+          await expect(robots).toHaveAttribute("content", "noindex, follow");
+          const canonicalLinks = page.locator('link[rel="canonical"]');
+          await expect(canonicalLinks).toHaveCount(1);
+          const canonicalHref = await canonicalLinks.first().getAttribute("href");
+          expect(canonicalHref, `${target.name} ${path} canonical present`).not.toBeNull();
+          const canonical = new URL(canonicalHref!, target.origin);
+          expect(canonical.pathname, `${target.name} ${path} canonical path`).toBe(path);
+          expect(canonical.search, `${target.name} ${path} canonical query`).toBe("");
+          expect(canonical.hash, `${target.name} ${path} canonical hash`).toBe("");
+          await expectContained(path, 1);
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
@@ -1642,7 +1808,19 @@ test.describe("kit: member-board visuals", () => {
       const context = await browser.newContext({
         baseURL: kit.origin,
         ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
-        extraHTTPHeaders: { cookie },
+        // Keep the session in the jar so a later status probe shares one
+        // Cookie header with it. Raw extra headers collide with jar cookies
+        // on the second navigation. Preserve the issued cookie's attributes.
+        storageState: {
+          cookies: (await api(hono).storageState()).cookies
+            .filter((session) => session.name === "__Host-two_session")
+            .map((session) => ({
+              ...session,
+              domain: new URL(kit.origin).hostname,
+              value: cookie.slice(cookie.indexOf("=") + 1),
+            })),
+          origins: [],
+        },
       });
       const pageErrors: string[] = [];
       try {
@@ -1659,6 +1837,20 @@ test.describe("kit: member-board visuals", () => {
           await page.setViewportSize(viewport.size);
           const response = await page.goto(path);
           expect(response?.status(), `kit ${path} @ ${viewport.name}`).toBe(200);
+          const cookieHeaders = (await response!.request().headersArray()).filter(
+            (header) => header.name.toLowerCase() === "cookie",
+          );
+          expect(cookieHeaders.length, "one browser Cookie header").toBe(1);
+          const cookieNames = cookieHeaders[0]!.value
+            .split(/;\s*/)
+            .map((pair) => pair.slice(0, pair.indexOf("=")));
+          expect(cookieNames.filter((name) => name === "__Host-two_session")).toHaveLength(1);
+          if (viewport.name === "mobile") {
+            expect(
+              cookieNames.filter((name) => name === "__Host-two_session_status"),
+              "second navigation replays the status probe alongside the session",
+            ).toHaveLength(1);
+          }
           await expect(page.getByRole("heading", { name: "Member leaderboard" })).toBeVisible();
           await expect(page.getByRole("navigation", { name: "Board scope" })).toBeVisible();
           await page.waitForLoadState("networkidle");

@@ -115,6 +115,7 @@ export const CalendarSearchForm: FC<{ state: CalendarState; searching: boolean }
       value={state.q}
       placeholder={EVENTS_SEARCH_PLACEHOLDER}
       aria-label={EVENTS_SEARCH_LABEL}
+      aria-describedby="events-search-scope"
       data-testid={EVENTS_SEARCH_TESTID}
     />
     <button class="btn" type="submit">
@@ -128,5 +129,8 @@ export const CalendarSearchForm: FC<{ state: CalendarState; searching: boolean }
         </a>
       ) : null}
     </span>
+    {/* Persistent visible scope hint: the input is never swapped, so this
+        association survives every fragment turn and calendar state. */}
+    <p id="events-search-scope">Searches event titles and descriptions.</p>
   </form>
 );
