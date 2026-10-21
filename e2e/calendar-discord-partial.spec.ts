@@ -82,6 +82,8 @@ async function fixture(context: BrowserContext) {
         upcoming: [partialEvent(state.row)],
         discordFailed: state.failed,
       }),
+      PARTIAL_ORIGIN,
+      url.pathname + url.search,
     );
     if (fragment && state.badFragment)
       body = "<html><main>Malformed fixture response</main></html>";
@@ -118,9 +120,7 @@ test("complete fixture turns keep the input identity, focus and canonical rows w
   const search = page.getByTestId("events-search");
   await search.focus();
   const original = await search.elementHandle();
-  await page
-    .getByTestId("events-view-calendar")
-    .evaluate((link: { click(): void }) => link.click());
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "calendar");
   await expect(
     root(page)
@@ -194,15 +194,13 @@ test("fragment failure → recovery → failure removes and restores the notice 
   await search.focus();
   const original = await search.elementHandle();
   f.state.failed = false;
-  await page
-    .getByTestId("events-view-calendar")
-    .evaluate((link: { click(): void }) => link.click());
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "calendar");
   await expect(notice(page)).toHaveCount(0);
   await expect(search).toBeFocused();
   expect(await search.evaluate((node, saved) => node === saved, original)).toBe(true);
   f.state.failed = true;
-  await page.getByTestId("events-view-list").evaluate((link: { click(): void }) => link.click());
+  await page.getByTestId("events-view-list").evaluate((link: HTMLElement) => link.click());
   await expect(root(page)).toHaveAttribute("data-view", "list");
   await expect(notice(page)).toHaveCount(1);
   await expect(
@@ -245,9 +243,7 @@ test("malformed fragment retains the committed partial rows, warning, controls a
   const search = page.getByTestId("events-search");
   await search.focus();
   f.state.badFragment = true;
-  await page
-    .getByTestId("events-view-calendar")
-    .evaluate((link: { click(): void }) => link.click());
+  await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
   await expect(page.locator("[data-cal-feedback]")).not.toHaveText("");
   expect(await page.locator('[data-cal-zone="content"]').innerHTML()).toBe(before);
   await expect(root(page)).toHaveAttribute("data-view", "list");
@@ -269,13 +265,11 @@ test("a superseded failed-source response cannot overwrite a recovered committed
   f.state.failed = true;
   const stale = f.holdNext();
   try {
-    await page
-      .getByTestId("events-view-calendar")
-      .evaluate((link: { click(): void }) => link.click());
+    await page.getByTestId("events-view-calendar").evaluate((link: HTMLElement) => link.click());
     await stale.entered.ready;
     f.state.failed = false;
     f.state.row = 2;
-    await page.getByTestId("events-view-list").evaluate((link: { click(): void }) => link.click());
+    await page.getByTestId("events-view-list").evaluate((link: HTMLElement) => link.click());
     await expect(root(page)).toContainText("Local chess night 2");
   } finally {
     stale.done.release();

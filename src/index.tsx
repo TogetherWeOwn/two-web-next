@@ -706,12 +706,11 @@ app.get("/up", async (c) => {
     // the status code. Parsing mirrors enforceOn exactly — no raw value or
     // variable name is echoed into the body. Security note: this two-state
     // label is intentionally public on the unauthenticated /up body. The
-    // control name and its degraded meaning are already public in the
-    // operator runbooks, and dashboards poll /up without credentials, so an
-    // authenticated-only signal would not reach its consumers. Exploiting a
-    // log-only window still needs an authenticated read plus a failed audit
-    // write, so the field aids operators without giving an unauthenticated
-    // caller a bypass. Consistent with the existing public config/db/queue
+    // control name is already public in the operator runbooks, and dashboards
+    // poll /up without credentials, so an authenticated-only signal would not
+    // reach its consumers. `log_only` is a legacy label with no serving
+    // effect — the keyed read boundary always fails closed — so the field
+    // aids operators without giving an unauthenticated caller a bypass. Consistent with the existing public config/db/queue
     // signals, which likewise describe operational posture, not secrets.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
