@@ -1,4 +1,4 @@
-// Acceptance contract: throttle fail-open paths warn (X3 leg B).
+// Acceptance contract: throttle fail-open paths warn (X3 leg B), route-only (rev 2).
 //
 // Acceptance-owned: the Builder builds on this branch and never edits this file.
 // Failing-first: the three "warns" tests run RED on main (both fail-open paths
@@ -7,17 +7,20 @@
 //
 // Contract for the Builder (exact console.warn lines, each fired once per allow):
 //   1. Null store (checkJoinThrottle with sql === null):
-//      "Throttle store unavailable; allowing the request." { bucket }
+//      "Throttle store unavailable; allowing the request." { throttle }
 //   2. Throwing store (throttleGuard catch, covering both a throwing
 //      THROTTLE_STORE and a non-55P03 throw from the verdict transaction):
-//      "Throttle store failed; allowing the request." { bucket, exception }
+//      "Throttle store failed; allowing the request." { throttle, exception }
 // The null-store warn lives in checkJoinThrottle so every caller (generic
 // middleware, join funnel, profile writes) reports it; the store-throw warn
 // lives in the throttleGuard catch. Emit exactly one line per allow: no
 // pre-rethrow warn inside the verdict transaction. Verdicts are unchanged,
 // including the 55P03 busy -> 429 refusal, which stays silent (a refusal is
-// not a fail-open). Bucket names the full "<name>:<client>" bucket; exception
-// is the class only, never the message (it can quote statement bindings).
+// not a fail-open). Throttle names the route/throttle only (e.g. "probe");
+// never the full "<name>:<client>" bucket, never IP bytes, never Discord or
+// member IDs (content/privacy-policy-v5.md "never your IP address or who you
+// are"; docs/throttling.md "No header bytes are logged"). Exception is the
+// class only, never the message (it can quote statement bindings).
 //
 // Hermetic: in-memory SQL doubles, no database, no network.
 import { Hono } from "hono";
@@ -27,7 +30,8 @@ import type { Sql } from "../src/sessions";
 import { type EnvWithThrottle, throttleGuard } from "../src/throttle";
 
 const IP = "192.0.2.44";
-const BUCKET = `probe:${IP}`;
+const THROTTLE = "probe";
+const BUCKET = `${THROTTLE}:${IP}`;
 
 function memorySql(opts: { count: number; wait?: number }): Sql {
   const tag = (async (strings: TemplateStringsArray, ..._values: unknown[]) => {
@@ -86,14 +90,18 @@ afterEach(() => {
 });
 
 describe("throttle fail-open warns (failing-first)", () => {
-  it("null store allows with a bucket-naming warn", async () => {
+  it("null store allows with a throttle-naming warn", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const verdict = await checkJoinThrottle(null, BUCKET, 10);
     expect(verdict).toEqual({ limited: false });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("Throttle store unavailable; allowing the request.", {
-      bucket: BUCKET,
+      throttle: THROTTLE,
     });
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("bucket");
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(IP);
+    expect(logged).not.toContain(BUCKET);
   });
 
   it("throwing throttle store allows with a class-carrying warn", async () => {
@@ -107,9 +115,12 @@ describe("throttle fail-open warns (failing-first)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Throttle store failed; allowing the request.",
-      expect.objectContaining({ bucket: BUCKET, exception: "Error" }),
+      expect.objectContaining({ throttle: THROTTLE, exception: "Error" }),
     );
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("bucket");
     const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(IP);
+    expect(logged).not.toContain(BUCKET);
     expect(logged).not.toContain("throttle-store-marker");
     expect(logged).not.toContain("private store failure");
   });
@@ -129,9 +140,12 @@ describe("throttle fail-open warns (failing-first)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Throttle store failed; allowing the request.",
-      expect.objectContaining({ bucket: BUCKET, exception: "Error" }),
+      expect.objectContaining({ throttle: THROTTLE, exception: "Error" }),
     );
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("bucket");
     const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(IP);
+    expect(logged).not.toContain(BUCKET);
     expect(logged).not.toContain("throttle-verdict-marker");
     expect(logged).not.toContain("private verdict failure");
   });
