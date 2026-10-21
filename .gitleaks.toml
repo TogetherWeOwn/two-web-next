@@ -109,3 +109,19 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/admin-event-route-key-admission\.test\.ts$''']
 regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FAU$''']
+
+[[allowlists]]
+description = "Synthetic hostile request-id fixture in the Kit error correlation tests, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^0123456789abcdef-IP-secret$''']
+paths = ['''^test/kit-error-request-correlation\.test\.ts$''']
+
+[[allowlists]]
+description = "Synthetic Discord snowflake leak-marker in the queue/agent structured-fields acceptance test; patterned digits, not a real client or credential"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
+regexes = ['''^777666555444333222$''']
