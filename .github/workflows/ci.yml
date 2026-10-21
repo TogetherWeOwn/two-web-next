@@ -442,6 +442,23 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # UTC-contract pin (hotzone period picker): the acceptance suite's
+      # shortcut expectations are UTC-derived, but the coverage run above
+      # executes under the runner's UTC zone, so a local-getter regression
+      # in src/hotzones/season.ts stays green there. Re-run just this
+      # hermetic suite (~4s) under a non-UTC TZ so the merge gate kills
+      # that mutant (32 fail with local getters, 162/162 pass with UTC
+      # getters). The node assertion fails closed if the image ever loses
+      # tzdata and TZ stops applying.
+      - name: Hotzone period suite under non-UTC TZ
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node -e "if (new Date('2026-04-01T00:00:00Z').getMonth() !== 2) throw new Error('TZ pin vacuous: expected March under America/Los_Angeles')"
+          npx vitest run test/hotzone-period-picker-acceptance.test.ts --pool=forks
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          TZ: America/Los_Angeles
       # Tier-0 check: validator properties, the role x route authz matrix and
       # the default-planner EXPLAIN seq-scan check. This existing check is
       # required; the trap keeps a failure before the report visible in logs.
