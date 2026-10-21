@@ -22,71 +22,85 @@ import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
 import { events, rsvps } from "../db/admin-schema";
 import type { EventRow } from "./store-event-writes";
+import { boundInventoryRead } from "./store-shared";
 
 /** One admin list row: the event plus its Going-only seat count. */
 export type EventListRow = EventRow & { goingCount: number };
 
-/** Fetch one extra row so pagination needs no separate count query. */
+/**
+ * Fetch one extra row so pagination needs no separate count query.
+ *
+ * Both inventory statements run in one transaction behind the shared
+ * transaction-local lock/statement bound, so a stalled table cancels
+ * server-side and the caller refuses only after the transaction settles.
+ */
 export async function listEvents(db: Db, params: EventListParams): Promise<EventListRow[]> {
   const opts = parseEventListQuery(params);
-  const conds: (SQL | undefined)[] = [];
-  if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
-  if (opts.status) conds.push(eq(events.status, opts.status));
-  if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
-  if (opts.series === "parent")
-    conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
-  if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
-  if (opts.series === "standalone")
-    conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
-  if (opts.fill === "unlimited") conds.push(isNull(events.capacity));
-  if (opts.fill === "full" || opts.fill === "has_seats") {
-    // Only Going occupies a seat: Maybe and Waitlist never make an event full.
-    const going = db
-      .select({ count: sql<number>`count(*)` })
-      .from(rsvps)
-      .where(and(eq(rsvps.eventId, events.id), eq(rsvps.status, "going")));
-    conds.push(isNotNull(events.capacity));
-    conds.push(
-      opts.fill === "full"
-        ? sql`(${going}) >= ${events.capacity}`
-        : sql`(${going}) < ${events.capacity}`,
+  return db.transaction(async (tx) => {
+    await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    const conds: (SQL | undefined)[] = [];
+    if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
+    if (opts.status) conds.push(eq(events.status, opts.status));
+    if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
+    if (opts.series === "parent")
+      conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
+    if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
+    if (opts.series === "standalone")
+      conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
+    if (opts.fill === "unlimited") conds.push(isNull(events.capacity));
+    if (opts.fill === "full" || opts.fill === "has_seats") {
+      // Only Going occupies a seat: Maybe and Waitlist never make an event full.
+      const going = tx
+        .select({ count: sql<number>`count(*)` })
+        .from(rsvps)
+        .where(and(eq(rsvps.eventId, events.id), eq(rsvps.status, "going")));
+      conds.push(isNotNull(events.capacity));
+      conds.push(
+        opts.fill === "full"
+          ? sql`(${going}) >= ${events.capacity}`
+          : sql`(${going}) < ${events.capacity}`,
+      );
+    }
+    // Pick real column objects, never an identifier interpolated from the URL.
+    const column =
+      opts.sort === "title"
+        ? events.title
+        : opts.sort === "status"
+          ? events.status
+          : events.startsAt;
+    const order = opts.order === "asc" ? asc(column) : desc(column);
+    const rows = await nonSensitiveRead("events", () =>
+      tx
+        .select()
+        .from(events)
+        .where(and(...conds))
+        .orderBy(order, asc(events.id))
+        .limit(EVENT_PAGE_SIZE + 1)
+        .offset((opts.page - 1) * EVENT_PAGE_SIZE),
     );
-  }
-  // Pick real column objects, never an identifier interpolated from the URL.
-  const column =
-    opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
-  const order = opts.order === "asc" ? asc(column) : desc(column);
-  const rows = await nonSensitiveRead("events", () =>
-    db
-      .select()
-      .from(events)
-      .where(and(...conds))
-      .orderBy(order, asc(events.id))
-      .limit(EVENT_PAGE_SIZE + 1)
-      .offset((opts.page - 1) * EVENT_PAGE_SIZE),
-  );
-  if (rows.length === 0) return [];
-  // Going-only seat counts for the rendered Fill column (same rule as the
-  // fill filter: Maybe/Waitlist/Not going never occupy a seat). One
-  // classified aggregate read, like the public withGoing helper — a second
-  // non-sensitive statement, not member subjects.
-  const counts = await nonSensitiveRead("going-counts", () =>
-    db
-      .select({ eventId: rsvps.eventId, n: count() })
-      .from(rsvps)
-      .where(
-        and(
-          inArray(
-            rsvps.eventId,
-            rows.map((r) => r.id),
+    if (rows.length === 0) return [];
+    // Going-only seat counts for the rendered Fill column (same rule as the
+    // fill filter: Maybe/Waitlist/Not going never occupy a seat). One
+    // classified aggregate read, like the public withGoing helper — a second
+    // non-sensitive statement, not member subjects.
+    const counts = await nonSensitiveRead("going-counts", () =>
+      tx
+        .select({ eventId: rsvps.eventId, n: count() })
+        .from(rsvps)
+        .where(
+          and(
+            inArray(
+              rsvps.eventId,
+              rows.map((r) => r.id),
+            ),
+            eq(rsvps.status, "going"),
           ),
-          eq(rsvps.status, "going"),
-        ),
-      )
-      .groupBy(rsvps.eventId),
-  );
-  const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
-  return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
+        )
+        .groupBy(rsvps.eventId),
+    );
+    const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
+    return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
+  });
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
