@@ -38,7 +38,12 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
-import { readReturnJourney, type KitLocals, type KitRequestSession } from "../src/kit-session";
+import {
+  readReturnJourney,
+  type KitLocals,
+  type KitRequestSession,
+  type KitReturnJourney,
+} from "../src/kit-session";
 import { resolveKitProfile } from "../src/profiles/kit";
 import { createMemoryProfileStore, type MemberView } from "../src/profiles/store";
 import {
