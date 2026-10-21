@@ -245,7 +245,7 @@ snapshot > "$T/after"
 cmp "$T/before" "$T/after" || fail "dry-run mutated pairs"
 [ "$(grep -c '^delete:' "$T/out")" = 4 ] || fail "retention dry-run count changed"
 ok "dry-run leaves all archive/receipt pairs untouched"
-"$BIN" rotate staging > /dev/null
+"$BIN" rotate staging --apply > /dev/null
 python3 - "$MANIFEST" "$STUB_R2/$BACKUP_BUCKET" <<'PY'
 import pathlib, sys
 manifest, root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -261,7 +261,7 @@ PY
 ok "rotation retains newest 7/4 with receipts and deletes both expired objects"
 seed_retention
 cp "$MANIFEST" "$T/manifest-before"
-expect_failure env STUB_FAIL_OP=delete STUB_FAIL_SUFFIX=.digest.json "$BIN" rotate staging
+expect_failure env STUB_FAIL_OP=delete STUB_FAIL_SUFFIX=.digest.json "$BIN" rotate staging --apply
 cmp "$MANIFEST" "$T/manifest-before" || fail "failed paired delete rewrote manifest"
 ok "failed receipt deletion fails rotation without reporting a successful manifest"
 printf 'selftest: %s passed\n' "$PASS"

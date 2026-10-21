@@ -3,6 +3,34 @@
 # Path overrides are for offline selftests; no backup credentials are consumed.
 set -euo pipefail
 
+print_usage() {
+  echo "usage: $0 [--help | -h]"
+  echo ""
+  echo "Install the public PGDG key and PostgreSQL 18 client on a persistent"
+  echo "Debian/Ubuntu runner. Takes no arguments: --help (or -h) prints this"
+  echo "usage; any other argument is refused before any privilege, network,"
+  echo "package or temp-dir work."
+}
+
+# argv validation comes first: --help must answer with zero side effects (no
+# sudo, network, package or temp-dir work), and anything else is refused
+# before the installer can do anything.
+if [ "$#" -gt 1 ]; then
+  echo "backup-bootstrap: refusing: takes no arguments (got $#)" >&2
+  print_usage >&2
+  exit 2
+fi
+if [ "$#" -eq 1 ] && [ -z "$1" ]; then
+  echo "backup-bootstrap: refusing: takes no arguments (got an empty argument)" >&2
+  print_usage >&2
+  exit 2
+fi
+case "${1:-}" in
+  "") ;;
+  --help|-h) print_usage; exit 0 ;;
+  *) echo "backup-bootstrap: refusing unknown argument '$1'" >&2; print_usage >&2; exit 2 ;;
+esac
+
 KEYRING="${PGDG_KEYRING:-/usr/share/keyrings/pgdg.gpg}"
 SOURCE_LIST="${PGDG_SOURCE_LIST:-/etc/apt/sources.list.d/pgdg.list}"
 CLIENT_BIN="${PGDG_CLIENT_BIN:-/usr/lib/postgresql/18/bin}"
