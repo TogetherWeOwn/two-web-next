@@ -100,7 +100,7 @@ function browser(entry = "/events") {
       const id = /data-testid="([^"]+)"/.exec(selector)?.[1];
       return id ? (live[id] ?? null) : null;
     },
-    querySelectorAll: () => zones,
+    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? zones : []),
     contains: () => true,
   });
   root.dataset = {
@@ -143,8 +143,16 @@ function browser(entry = "/events") {
       },
       clearTimeout: (id: number) => timers.delete(id),
       document: {
+        // The fixture mounts no header or hero auth links, so unknown selectors
+        // match nothing — og:url only answers its own meta selector.
         querySelector: (selector: string) =>
-          selector === MOUNT ? root : selector.startsWith("link") ? canonical : og,
+          selector === MOUNT
+            ? root
+            : selector.startsWith("link")
+              ? canonical
+              : selector.startsWith("meta")
+                ? og
+                : null,
         importNode: (node: string) => node,
       },
       window: {
@@ -215,7 +223,12 @@ function browser(entry = "/events") {
   function page(index: number) {
     const token = `page-${index}`;
     const sourceZones = createZones(`response-${index}`);
-    const next = { dataset: root.dataset, querySelectorAll: () => sourceZones };
+    // The fragment carries zones only: any other selector (for example the
+    // card sign-in links the island validates) matches nothing, as in a DOM.
+    const next = {
+      dataset: root.dataset,
+      querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? sourceZones : []),
+    };
     pages.set(token, {
       querySelector: (selector: string) =>
         selector === MOUNT
