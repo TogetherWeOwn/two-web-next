@@ -671,7 +671,10 @@ describe("hotzone valid and outage stability", () => {
     });
     expect(data.season).toBe("2026");
     expect(setHeaders).toHaveBeenCalledTimes(1);
-    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=300",
+      vary: "Cookie",
+    });
     const signal = await loadHotzoneSignalData({
       env: { APP_URL } as never,
       seasonParam: "2026",
