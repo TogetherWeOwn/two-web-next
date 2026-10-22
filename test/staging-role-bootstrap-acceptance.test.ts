@@ -303,6 +303,10 @@ describe("bootstrap module pins the fixed role and constant DDL", () => {
     ]) {
       expect(sql).toContain(column);
     }
+    expect(sql).toContain("pg_auth_members");
+    expect(sql).toMatch(
+      /EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+pg_auth_members\s+WHERE\s+member\s*=\s*pg_roles\.oid\s*\)\s+AS\s+has_memberships/i,
+    );
   });
 });
 
@@ -447,6 +451,21 @@ describe("bootstrap role classification", () => {
       const verdict = bootstrap.classifyRole(row);
       expect(verdict.state, name).toBe("incompatible");
       expect(verdict.reason ?? "", name).toMatch(pattern);
+    }
+  });
+
+  it("refuses a missing membership signal as unknown, never assumes absent", async () => {
+    const bootstrap = await bootstrapModule();
+    for (const missing of [undefined, null] as const) {
+      const row = compatibleRow() as Partial<RoleRow>;
+      if (missing === undefined) {
+        delete row.has_memberships;
+      } else {
+        row.has_memberships = missing as unknown as boolean;
+      }
+      const verdict = bootstrap.classifyRole(row as RoleRow);
+      expect(verdict.state, String(missing)).toBe("incompatible");
+      expect(verdict.reason ?? "", String(missing)).toMatch(/unknown/i);
     }
   });
 });
