@@ -27,14 +27,14 @@
 //   /join never 500s on an event-read outage.
 // - Kit load data carries `nextEvent: HomeUpcomingRow | null` (the teaser's
 //   row type); the page renders the same block from it, null renders nothing.
-// - Cache contract unchanged: flash -> private, no-store; presence snapshot
-//   -> public, max-age=60; static -> public, max-age=3600; Vary: Cookie.
+// - Freshness correction: flash -> private, no-store; every non-flash page
+//   -> public, max-age=60, regardless of widget, schedule or DB availability;
+//   Vary: Cookie. Empty schedules change headers, never their DOM.
 //
 // Local fixtures only: pg-proxy records real Drizzle SQL; the Kit page is the
-// real +page.svelte SSR-compiled with the web workspace's own compiler (the
-// kit-about-parity shape). The Kit server load imports cloudflare:workers so
-// it cannot run in this process; it is pinned by source text like
-// join-kit-page.test.ts does.
+// real +page.svelte SSR-compiled with the web workspace's own compiler. The
+// same bundle executes the real Kit server load and response policy, replacing
+// only cloudflare:workers with a mutable fixture environment.
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
@@ -226,6 +226,29 @@ function fixture(
   };
 }
 
+const publicJoinCases = [
+  "populated",
+  "empty",
+  "event-read-unavailable",
+  "discord-read-unavailable",
+  "missing-db",
+].flatMap((schedule) => [false, true].map((presence) => ({ schedule, presence })));
+
+const flashJoinCases = [
+  { result: "added" as const, presence: false },
+  { result: "added" as const, presence: true },
+  { result: "already_member" as const, presence: false },
+  { result: "already_member" as const, presence: true },
+];
+
+function freshnessEnv(schedule: string): Env {
+  if (schedule === "missing-db") return { ...baseEnv };
+  if (schedule === "event-read-unavailable") return fixture([event(1)], { failAt: "events" }).env;
+  if (schedule === "discord-read-unavailable")
+    return fixture([], { discord: { failed: true } }).env;
+  return fixture(schedule === "populated" ? [event(1)] : []).env;
+}
+
 function freezeNow() {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -323,7 +346,7 @@ describe("Hono GET /join next game night card", () => {
     const f = fixture([event(2), event(3), event(1)]);
     const response = await f.request();
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     expect(response.headers.get("vary")).toBe("Cookie");
     const html = await response.text();
     expectCardCount(html, 1);
@@ -465,12 +488,55 @@ describe("Hono GET /join next game night card", () => {
 });
 
 describe("Hono GET /join schedule-edge behavior", () => {
+  it.each(publicJoinCases)(
+    "bounds public HTML freshness: $schedule, presence=$presence",
+    async ({ schedule, presence }) => {
+      freezeNow();
+      if (presence) pinWidgetPresence();
+      else pinWidgetFallback();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const response = await app.request("/join", {}, freshnessEnv(schedule));
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expectCardCount(html, schedule === "populated" ? 1 : 0);
+      expect(html.includes('data-testid="join-widget-presence"')).toBe(presence);
+      expect(html).not.toContain("postgres://");
+      expect(response.headers.get("vary")).toBe("Cookie");
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(response.headers.get("cache-control")).toBe("public, max-age=60");
+    },
+  );
+
+  it.each(flashJoinCases)(
+    "consumes $result flash privately with events, presence=$presence",
+    async ({ result, presence }) => {
+      freezeNow();
+      if (presence) pinWidgetPresence();
+      else pinWidgetFallback();
+      const cookie = await signedFlashCookie(result);
+      const response = await fixture([event(1)]).request({ headers: { cookie } });
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expectCardCount(html, 1);
+      expect(html).toContain('data-testid="join-result"');
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("vary")).toBe("Cookie");
+      const deletion = response.headers.get("set-cookie");
+      expect(deletion).toContain(`${JOIN_RESULT_COOKIE}=`);
+      expect(deletion).toContain("Max-Age=0");
+      expect(deletion).toContain("Path=/");
+      expect(deletion).toContain("Secure");
+      expect(deletion).toContain("HttpOnly");
+      expect(deletion).toContain("SameSite=Lax");
+    },
+  );
+
   it("renders an empty schedule byte-identical to the DB-free page", async () => {
     freezeNow();
     pinWidgetFallback();
     const withDb = await fixture([]).request();
     expect(withDb.status).toBe(200);
-    expect(withDb.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(withDb.headers.get("cache-control")).toBe("public, max-age=60");
     const withDbHtml = await withDb.text();
     const withoutDbHtml = await (await app.request("/join", {}, baseEnv)).text();
     expect(withDbHtml).toBe(withoutDbHtml);
@@ -526,11 +592,26 @@ const { compile } = webRequire("svelte/compiler") as {
   ) => { js: { code: string } };
 };
 
-async function buildKitJoinBundle(): Promise<{
+type KitJoinBundle = {
   renderPage: (data: Record<string, unknown>) => string;
-}> {
+  load: (args: {
+    url: URL;
+    request: Request;
+    locals: Record<string, unknown>;
+    cookies: { delete: (name: string, options: Record<string, unknown>) => void };
+    setHeaders: (values: Record<string, string>) => void;
+  }) => Promise<Record<string, unknown>>;
+  workerEnv: Env;
+  widgetHealth: typeof discordWidgetHealth;
+  resetCache: () => void;
+  pending: Promise<unknown>[];
+};
+
+async function buildKitJoinBundle(): Promise<KitJoinBundle> {
   const worktree = fileURLToPath(new NodeURL("../", import.meta.url));
-  const scratch = mkdtempSync(join(tmpdir(), "kit-join-next-"));
+  const scratch = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-join-next-"),
+  );
   try {
     const entry = join(scratch, "kit-join-entry.mjs");
     writeFileSync(
@@ -538,6 +619,10 @@ async function buildKitJoinBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/join/+page.svelte"))};
+export { load } from ${JSON.stringify(join(worktree, "web/src/routes/join/+page.server.ts"))};
+export { env as workerEnv, pending } from "cloudflare:workers";
+export { discordWidgetHealth as widgetHealth } from ${JSON.stringify(join(worktree, "src/discord-widget.ts"))};
+export { __resetHomeGuestCacheForTests as resetCache } from ${JSON.stringify(join(worktree, "src/home-cache.ts"))};
 export function renderPage(data) {
   const { head, body } = render(Page, { props: { data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
@@ -557,6 +642,20 @@ export function renderPage(data) {
       alias: { "#lib": fileURLToPath(new NodeURL("../web/src/lib/", import.meta.url)) },
       plugins: [
         {
+          name: "kit-join-next-worker-env",
+          setup(plugin) {
+            plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+              path: "worker-env",
+              namespace: "kit-join-next",
+            }));
+            plugin.onLoad({ filter: /.*/, namespace: "kit-join-next" }, () => ({
+              contents:
+                "export const env = {}; export const pending = []; export function waitUntil(work) { pending.push(work); }",
+              loader: "js",
+            }));
+          },
+        },
+        {
           name: "kit-join-next-svelte-ssr",
           setup(plugin) {
             plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
@@ -572,10 +671,7 @@ export function renderPage(data) {
         },
       ],
     });
-    const { renderPage } = (await import(pathToFileURL(outfile).href)) as {
-      renderPage: (data: Record<string, unknown>) => string;
-    };
-    return { renderPage };
+    return (await import(pathToFileURL(outfile).href)) as KitJoinBundle;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -602,6 +698,7 @@ const kitCanonical: HomeUpcomingRow = {
   timezone: "Europe/London",
   location: "Voice lobby",
   goingCount: 2,
+  goingOccupancy: 2,
   capacity: null,
 };
 
@@ -615,11 +712,76 @@ const kitDiscord: HomeUpcomingRow = {
 };
 
 describe("Kit /join next game night parity", () => {
+  let kit: KitJoinBundle;
   let renderPage: (data: Record<string, unknown>) => string;
 
   beforeAll(async () => {
-    ({ renderPage } = await buildKitJoinBundle());
+    kit = await buildKitJoinBundle();
+    ({ renderPage } = kit);
   }, 60_000);
+
+  async function loadPage(env: Env, presence: boolean, cookie?: string) {
+    kit.resetCache();
+    for (const key of Object.keys(kit.workerEnv))
+      delete (kit.workerEnv as Record<string, unknown>)[key];
+    Object.assign(kit.workerEnv, env);
+    vi.spyOn(kit.widgetHealth, "url").mockReturnValue(presence ? FACADE_URL : null);
+    vi.spyOn(kit.widgetHealth, "snapshot").mockReturnValue(presence ? PRESENCE : null);
+    const url = new URL("/join", baseEnv.APP_URL);
+    const headers: Record<string, string> = {};
+    const deleted: Array<{ name: string; options: Record<string, unknown> }> = [];
+    const data = await kit.load({
+      url,
+      request: new Request(url, { headers: cookie ? { cookie } : {} }),
+      locals: {},
+      cookies: { delete: (name, options) => deleted.push({ name, options }) },
+      setHeaders: (values) => Object.assign(headers, values),
+    });
+    await Promise.all(kit.pending.splice(0));
+    return { data, headers, deleted, html: renderPage(data) };
+  }
+
+  it.each(publicJoinCases)(
+    "executes real load with bounded public HTML freshness: $schedule, presence=$presence",
+    async ({ schedule, presence }) => {
+      freezeNow();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await loadPage(freshnessEnv(schedule), presence);
+      if (schedule === "populated") expect(result.data.nextEvent).toEqual(kitCanonical);
+      else expect(result.data.nextEvent).toBeNull();
+      expectCardCount(result.html, schedule === "populated" ? 1 : 0);
+      expect(result.html.includes('data-testid="join-widget-presence"')).toBe(presence);
+      expect(result.html).not.toContain("postgres://");
+      if (schedule !== "populated" && !presence) {
+        expect(result.html).toBe(renderPage(kitData(null)));
+      }
+      expect(result.deleted).toEqual([]);
+      expect(result.headers).toEqual({
+        "cache-control": "public, max-age=60",
+        vary: "Cookie",
+      });
+    },
+  );
+
+  it.each(flashJoinCases)(
+    "real load consumes $result flash privately, presence=$presence",
+    async ({ result, presence }) => {
+      freezeNow();
+      const cookie = await signedFlashCookie(result);
+      const loaded = await loadPage(fixture([event(1)]).env, presence, cookie);
+      expect(loaded.data.joinResult).toBe(result);
+      expect(loaded.data.nextEvent).toEqual(kitCanonical);
+      expectCardCount(loaded.html, 1);
+      expect(loaded.html).toContain('data-testid="join-result"');
+      expect(loaded.headers).toEqual({ "cache-control": "private, no-store", vary: "Cookie" });
+      expect(loaded.deleted).toEqual([
+        {
+          name: JOIN_RESULT_COOKIE,
+          options: { path: "/", secure: true, httpOnly: true, sameSite: "lax" },
+        },
+      ]);
+    },
+  );
 
   it("renders the same card block from nextEvent load data", () => {
     const html = renderPage(kitData(kitCanonical));

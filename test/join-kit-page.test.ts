@@ -2,8 +2,8 @@
 // SvelteKit migration: the Kit GET /join load keeps the Hono landing page's
 // cache contract byte-for-byte (src/index.tsx joinPage render). A consumed
 // one-shot flash makes the view viewer-specific (private, no-store); a
-// rendered presence snapshot says "now" (60 s shared TTL matching the widget
-// verdict TTL); the static page without presence keeps 3600 s. Vary stays on
+// non-flash page uses a 60 s shared TTL for event freshness, even without
+// presence or an available schedule. Vary stays on
 // every variant: the representation depends on the flash cookie even when the
 // view has nothing to consume.
 import { readFileSync } from "node:fs";
@@ -36,9 +36,9 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
     expect(joinPageCacheControl(null, snapshot)).toBe("public, max-age=60");
   });
 
-  it("the static page without presence or flash keeps 3600 s", () => {
-    expect(joinPageCacheControl(null, null)).toBe("public, max-age=3600");
-    expect(joinPageCacheControl(null, undefined)).toBe("public, max-age=3600");
+  it("the page without presence or flash keeps the event freshness bound of 60 s", () => {
+    expect(joinPageCacheControl(null, null)).toBe("public, max-age=60");
+    expect(joinPageCacheControl(null, undefined)).toBe("public, max-age=60");
   });
 });
 

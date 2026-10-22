@@ -182,7 +182,7 @@ describe("/join widget.json presence (server-side cache only)", () => {
   it("keeps presence under a 60 s shared-cache TTL matching the verdict TTL", async () => {
     const h = harness(async () => Response.json(widgetPayload()));
     const first = await h.join();
-    expect(first.cacheControl).toBe("public, max-age=3600");
+    expect(first.cacheControl).toBe("public, max-age=60");
     await Promise.all(first.pending);
     const second = await h.join();
     expect(second.html).toContain('data-testid="join-widget-presence"');

@@ -59,7 +59,7 @@ describe("Kit GET /join response policy", () => {
     ]);
   });
 
-  it("leaves HEAD flash pending and keeps the public static TTL", async () => {
+  it("leaves HEAD flash pending and keeps the public 60-second TTL", async () => {
     const cookie = await signedFlash("already_member");
     const { journey, deleted, headers } = responseHarness(
       new Request("https://example.test/join", {
@@ -70,7 +70,7 @@ describe("Kit GET /join response policy", () => {
 
     await expect(journey).resolves.toEqual({ joinResult: null });
     expect(headers).toEqual({
-      "cache-control": "public, max-age=3600",
+      "cache-control": "public, max-age=60",
       vary: "Cookie",
     });
     expect(deleted).toEqual([]);
@@ -104,7 +104,7 @@ describe("Kit GET /join response policy", () => {
 
     await expect(journey).resolves.toEqual({ joinResult: null });
     expect(headers).toEqual({
-      "cache-control": "public, max-age=3600",
+      "cache-control": "public, max-age=60",
       vary: "Cookie",
     });
     expect(deleted).toEqual([]);
