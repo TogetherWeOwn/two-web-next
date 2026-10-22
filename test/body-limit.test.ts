@@ -158,7 +158,11 @@ describe("every registered write route is body-limited", () => {
         expect(await response.json()).toEqual({
           jsonrpc: "2.0",
           id: null,
-          error: { code: -32600, message: ERROR.message },
+          error: {
+            code: -32600,
+            message: ERROR.message,
+            data: { next: expect.any(String), request_id: expect.any(String) },
+          },
         });
       } else {
         expect(response.status).toBe(413);
