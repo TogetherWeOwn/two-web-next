@@ -233,7 +233,8 @@ describe.skipIf(!process.env.DATABASE_URL)("moderation POST outages (agent-testd
     sent.length = 0;
     globalThis.fetch = (async (input: unknown) => {
       const url = String(input);
-      if (url.startsWith(BOT_URL)) return new Response("bot down", { status: 500 });
+      if (url === BOT_URL || url.startsWith(`${BOT_URL}/`))
+        return new Response("bot down", { status: 500 });
       if (url.startsWith("https://discord.com/api/v10/guilds/")) {
         return new Response(JSON.stringify({ roles: [MOD_ROLE], joined_at: null }), {
           status: 200,
@@ -281,7 +282,7 @@ describe.skipIf(!process.env.DATABASE_URL)("moderation POST outages (agent-testd
     const okFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith(BOT_URL)) {
+      if (url === BOT_URL || url.startsWith(`${BOT_URL}/`)) {
         return new Response(
           JSON.stringify({
             ok: true,
@@ -317,7 +318,7 @@ describe.skipIf(!process.env.DATABASE_URL)("moderation POST outages (agent-testd
     const okFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith(BOT_URL)) {
+      if (url === BOT_URL || url.startsWith(`${BOT_URL}/`)) {
         return new Response(
           JSON.stringify({
             ok: true,
