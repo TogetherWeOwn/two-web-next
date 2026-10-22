@@ -242,6 +242,7 @@ export async function participationFixture(
     joinResult: null,
     returnTo: null,
     expiredWrite: null,
+    restoredWrite: null,
   };
   const statsReads: string[] = [];
   const renderKit = async (event: HookEventLike) => {

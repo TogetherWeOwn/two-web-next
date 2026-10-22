@@ -31,6 +31,7 @@ const { appUrl, faqs, leafCss } = $derived(data);
   theme="content"
   {leafCss}
   accountChrome={accountJoin}
+  restoredWrite={data.restoredWrite}
 >
   <ContentLeaf navCurrent="faq" headingId="faq-heading" heading="Frequently asked questions">
     <p class="strap">New here? Start here</p>

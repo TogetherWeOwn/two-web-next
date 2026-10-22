@@ -64,7 +64,9 @@ describe("Kit featured-new page contract", () => {
   });
 
   it("renders inside the admin chrome with its own title and ships no hydration bundle", () => {
-    expect(source).toContain('<AdminShell title="New featured slot">');
+    expect(source).toContain(
+      '<AdminShell title="New featured slot" restoredWrite={data.restoredWrite}>',
+    );
     expect(source).toContain("<h1>New featured slot</h1>");
     expect(load).toContain("csr = false");
   });

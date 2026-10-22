@@ -65,6 +65,7 @@ const siteGraph = $derived(siteJsonLd(appUrl));
   activeNav="home"
   member={session?.member ?? false}
   accountChrome={session ? memberChrome : guestChrome}
+  restoredWrite={data.restoredWrite}
 >
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">

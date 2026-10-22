@@ -23,7 +23,7 @@ const view = $derived(data.view);
   <title>Join attempt {view.id} — TWO admin</title>
 </svelte:head>
 
-<AdminShell title={`Join attempt ${view.id}`}>
+<AdminShell title={`Join attempt ${view.id}`} restoredWrite={data.restoredWrite}>
 <section aria-labelledby="join-attempt-heading">
   <p>
     <a href="/admin/join-attempts">Back to join attempts</a>

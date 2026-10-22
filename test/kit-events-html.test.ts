@@ -79,6 +79,35 @@ describe("Kit events list HTML render", () => {
     expect(withoutFlash.body).not.toContain('data-testid="join-result"');
   });
 
+  it("injects the restored-write banner first inside <main> without echoing the destination", async () => {
+    const banner =
+      '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>';
+    const rendered = await renderEventsHtml(
+      { ...baseData(), emptyState: "never" } as never,
+      headers,
+      {
+        restoredWrite: "/profile?edit=1",
+      },
+    );
+
+    expect(rendered.body).toContain(banner);
+    const main = rendered.body.indexOf("<main");
+    expect(rendered.body.indexOf('data-testid="auth-error"')).toBeGreaterThan(main);
+    expect(rendered.body.indexOf('data-testid="auth-error"')).toBeLessThan(
+      rendered.body.indexOf(`data-testid="${EVENTS_CALENDAR_TESTID}"`),
+    );
+    expect(rendered.body).not.toContain("/profile?edit=1");
+  });
+
+  it("renders byte-identical HTML when the restored notice is absent", async () => {
+    const data = { ...baseData(), emptyState: "never" } as never;
+    const implicit = await renderEventsHtml(data, headers);
+    const explicitNull = await renderEventsHtml(data, headers, { restoredWrite: null });
+
+    expect(implicit.body).toBe(explicitNull.body);
+    expect(implicit.body).not.toContain('data-testid="auth-error"');
+  });
+
   it("renders the too-long notice without echoing the query", async () => {
     const sentinel = `qq${"z".repeat(300)}`;
     const rendered = await renderEventsHtml(

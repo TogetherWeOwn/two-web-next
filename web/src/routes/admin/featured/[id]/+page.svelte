@@ -27,7 +27,7 @@ let { data }: PageProps = $props();
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title={`Edit ${data.view.title}`}>
+<AdminShell title={`Edit ${data.view.title}`} restoredWrite={data.restoredWrite}>
 <section class="featured-form">
   <h1>Edit {data.view.title}</h1>
   <section

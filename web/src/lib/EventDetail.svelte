@@ -33,7 +33,16 @@ import {
 // mutation stays Hono-owned until card 26/43); the islands only enhance it.
 // Attendees render only when the model carries them — the resolver discloses
 // them to members alone, so anonymous HTML can never hold member names.
-let { model }: { model: KitEventDetailModel } = $props();
+let {
+  model,
+  restoredWrite = null,
+}: {
+  model: KitEventDetailModel;
+  /** Restored-write notice from the root layout data, forwarded to the shared
+    shell, which renders the "you signed in again" banner first inside
+    <main>. Never interpolated, so a hostile value stays inert. */
+  restoredWrite?: string | null;
+} = $props();
 
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
@@ -102,6 +111,7 @@ const lineup = $derived(
   member={model.viewerMember}
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
+  {restoredWrite}
 >
   <nav class="event-back" aria-label="Event calendar">
     <a href="/events">← All events</a>
