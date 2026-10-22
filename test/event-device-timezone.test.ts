@@ -164,6 +164,14 @@ function eventRow(clock: ClockCase): typeof events.$inferSelect {
   };
 }
 
+// The timezone instants are wall-clock pinned, so rows elapse in real time
+// (the winter/summer cases are past today; the November fold cases follow).
+// Both twins render an elapsed published row with the past share box, so
+// link expectations branch on the same endsAt verdict the views use.
+function isElapsed(clock: ClockCase): boolean {
+  return eventRow(clock).endsAt <= new Date();
+}
+
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
   compile(
@@ -312,8 +320,20 @@ for (const view of VIEWS) {
         const { html } = await renderFixture(view, clock);
         expect(html).toContain(`<time datetime="${clock.instant}">${clock.hostText}</time>`);
         expect(html).toContain(KEY);
-        expect(html).toContain("event-ics");
-        expect(html).toContain("event-google-calendar");
+        if (isElapsed(clock)) {
+          // Elapsed rows honestly render the past share box: Copy link plus
+          // the past-events way-forward, never calendar actions.
+          const share = html.match(/<section class="event-share"[\s\S]*?<\/section>/)?.[0] ?? "";
+          expect(share).toContain("Share this event");
+          expect(share).not.toContain("Save the date");
+          expect(share).toContain('data-testid="event-copy-link"');
+          expect(share).toContain('href="/events/past">Browse past events</a>');
+          expect(share).not.toContain('data-testid="event-ics"');
+          expect(share).not.toContain('data-testid="event-google-calendar"');
+        } else {
+          expect(html).toContain("event-ics");
+          expect(html).toContain("event-google-calendar");
+        }
       }
     });
   });
@@ -530,12 +550,22 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     for (const view of VIEWS) {
       it(`${view}: positive control, real no-JS browser keeps host schedule and links usable`, async () => {
-        const { page, errors } = await open(view, CASES[0], undefined, false);
-        expect(await page.locator(`time[datetime="${CASES[0].instant}"]`).first().innerText()).toBe(
-          CASES[0].hostText,
+        const clock = CASES[0];
+        const { page, errors } = await open(view, clock, undefined, false);
+        expect(await page.locator(`time[datetime="${clock.instant}"]`).first().innerText()).toBe(
+          clock.hostText,
         );
-        expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
-        expect(await page.locator('[data-testid="event-google-calendar"]').count()).toBe(1);
+        if (isElapsed(clock)) {
+          // Elapsed rows honestly render the past share box: Copy link plus
+          // the past-events way-forward stay usable, calendar actions are gone.
+          expect(await page.locator('[data-testid="event-ics"]').count()).toBe(0);
+          expect(await page.locator('[data-testid="event-google-calendar"]').count()).toBe(0);
+          expect(await page.locator('[data-testid="event-copy-link"]').count()).toBe(1);
+          expect(await page.getByRole("link", { name: "Browse past events" }).count()).toBe(1);
+        } else {
+          expect(await page.locator('[data-testid="event-ics"]').count()).toBe(1);
+          expect(await page.locator('[data-testid="event-google-calendar"]').count()).toBe(1);
+        }
         expect(errors).toEqual([]);
       });
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {

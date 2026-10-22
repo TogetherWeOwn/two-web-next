@@ -241,23 +241,37 @@ const lineup = $derived(
         </section>
       {/if}
     </div>
-    <section class="event-share" aria-labelledby="event-share-heading">
-      <h2 id="event-share-heading">Save the date</h2>
-      <p>
-        <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {#if model.googleCalendarUrl}
-          {" · "}
-          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-            Google Calendar
+    {#if model.isPast || model.rsvpClosed === "past"}
+      <section class="event-share" aria-labelledby="event-share-heading">
+        <h2 id="event-share-heading">Share this event</h2>
+        <p>
+          <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
+            Copy link
           </a>
-        {/if}
-        {" · "}
-        <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
-          Copy link
-        </a>
-      </p>
-      <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-    </section>
+          {" · "}
+          <a href="/events/past">Browse past events</a>
+        </p>
+        <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      </section>
+    {:else}
+      <section class="event-share" aria-labelledby="event-share-heading">
+        <h2 id="event-share-heading">Save the date</h2>
+        <p>
+          <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
+          {#if model.googleCalendarUrl}
+            {" · "}
+            <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+              Google Calendar
+            </a>
+          {/if}
+          {" · "}
+          <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
+            Copy link
+          </a>
+        </p>
+        <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      </section>
+    {/if}
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
     <section aria-labelledby="event-attendees-heading" data-testid="event-attendees" data-island="attendees-live">

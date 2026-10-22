@@ -172,7 +172,7 @@ export function registerAiFriendlyRoutes(app: App): void {
       return mdError(c, gone, 410);
     }
     const robots = e.status === "past" ? NOINDEX : undefined;
-    const built = await mdRead(c, async () => mdEvent(c.env.APP_URL, toMdEvent(e)));
+    const built = await mdRead(c, async () => mdEvent(c.env.APP_URL, toMdEvent(e), new Date()));
     if (built instanceof Response) return built;
     return mdOk(c, built, FEED_MD_CACHE, robots);
   });
