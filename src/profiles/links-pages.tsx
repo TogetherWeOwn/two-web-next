@@ -2,9 +2,9 @@
 // page and the owner's native-form editor. The public page ships zero
 // <script> tags and always renders guest chrome (link-in-bio viewers arrive
 // logged out from other platforms), so it reads no session. Both pages reuse
-// the profile theme; the public page owns its head markup so the canonical
-// tag serializes with the exact `>` form the inventory pins (Hono JSX
-// self-closes void elements as `/>`).
+// the profile theme through a standalone shell (Layout's theme="profile"
+// head), so the canonical tag serializes with the exact `>` form the
+// inventory pins (Hono JSX self-closes void elements as `/>`).
 import { html, raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { profileAvatarSrcset } from "../islands/contracts";
