@@ -1,4 +1,5 @@
 <script lang="ts">
+import { BROWSER } from "esm-env";
 import {
   MEMBER_PROFILE_ISLAND,
   MOUNT_ATTR,
@@ -23,8 +24,7 @@ import {
   profileIsNewMember,
   profileJoinedMonth,
 } from "../../../src/islands/contracts";
-import { fmt } from "../../../src/events/pages";
-import { escapeHtml } from "../../../src/html-escape";
+import { profileUpcomingMarkup } from "../../../src/profiles/upcoming-markup";
 import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
@@ -59,11 +59,11 @@ import { canonicalUrl } from "../../../src/seo";
 // test ids and copy are shared, so the existing profile tests and islands
 // apply. Member fields render through Svelte interpolation only — never
 // {@html} — so a hostile username, bio or game name stays escaped text, like
-// the Hono JSX render. The two event-content fields in the upcoming section
-// are the one exception: they render through {@html escapeHtml()} because
-// Svelte interpolation leaves `>` raw while Hono escapes it, and the section
-// must match Hono bytes exactly (escapeHtml is pinned in
-// test/html-escape.test.ts). The edit form posts to the Hono-owned write
+// the Hono JSX render. The static upcoming section is the one exception:
+// profileUpcomingMarkup escapes every value before {@html}, matching Hono's
+// escaping (pinned in test/html-escape.test.ts). These csr=false routes never
+// hydrate it, so its markup need not ship again as a client DOM program.
+// The edit form posts to the Hono-owned write
 // routes (POST/PATCH /members/:user stay off the manifest until edit parity).
 let {
   member,
@@ -328,38 +328,10 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
         </section>
       {/if}
     {/if}
-    {#if upcoming}
-      <section
-        class="profile-panel"
-        aria-labelledby="upcoming-heading"
-        data-testid="profile-upcoming"
-      >
-        <h2 id="upcoming-heading">Your upcoming game nights</h2>
-        {#if upcoming.length > 0}
-          <ol class="profile-upcoming-list">
-            {#each upcoming as night}
-              <li data-testid="profile-upcoming-item">
-                <a href={`/e/${night.eventKey}`}>{@html escapeHtml(night.title)}</a>
-                {" "}
-                <time datetime={night.startsAt.toISOString()}>
-                  {fmt(night.startsAt, night.timezone)}
-                </time>
-                <p>{@html escapeHtml(night.location ?? "Venue to be announced")}</p>
-                {#if night.status === "waitlisted"}
-                  <p data-testid="profile-upcoming-position">
-                    Waitlist position {night.waitlistPosition}
-                  </p>
-                {/if}
-              </li>
-            {/each}
-          </ol>
-        {:else}
-          <p data-testid="profile-upcoming-empty">
-            Nothing booked yet. <a href="/events">Browse the schedule</a> to find your next game
-            night.
-          </p>
-        {/if}
-      </section>
+    <!-- Both profile routes are csr=false: keep this static list server-only,
+      without duplicating its DOM program in the unused client chunk. -->
+    {#if !BROWSER && upcoming}
+      {@html profileUpcomingMarkup(upcoming)}
     {/if}
     {#if isOwner}
       <section
