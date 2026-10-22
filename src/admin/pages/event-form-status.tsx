@@ -5,7 +5,7 @@ import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import { RsvpAction } from "./shell";
 
-export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
+export const EventStatusSection: FC<{ row: EventRow; now?: Date }> = ({ row, now }) => {
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
@@ -24,7 +24,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
             </button>
           </form>
         ) : null}
-        <RsvpAction row={row} />
+        <RsvpAction row={row} now={now} />
       </div>
     </section>
   );
