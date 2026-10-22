@@ -45,6 +45,7 @@ export async function renderEventsHtml(
       state={data.state}
       upcoming={data.upcoming}
       past={data.past}
+      pastMayBeTruncated={data.pastMayBeTruncated}
       zone={data.zone}
       now={data.now}
       totalPages={data.totalPages}

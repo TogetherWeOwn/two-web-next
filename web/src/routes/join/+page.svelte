@@ -78,10 +78,9 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
           {:else}
             <p>No voice channels open right now.</p>
           {/if}
-          <!-- Public page: aggregate presence only (count + channels). Member
-            names stay off this logged-out, indexed page per privacy policy v2;
-            the snapshot may still carry them server-side for a future
-            member-gated use, but they never render here. -->
+          <!-- Public page: aggregate presence only (count + channels). The load
+            projects the snapshot before returning, so member names never reach
+            __data.json on this logged-out, indexed page (privacy policy v2). -->
         </section>
         {#if widgetUrl}
           <div class="strap">

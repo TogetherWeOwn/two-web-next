@@ -9,6 +9,7 @@
 // link (https://) share the /events.ics path, so they MUST map to distinct
 // tokens. One shared placeholder would let a Kit page that emits the wrong
 // scheme compare equal (Paperclip Review 4/5 on head 1c1df2ad).
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 export const PARITY_ORIGIN = "PARITY_ORIGIN";
 export const PARITY_WEBCAL_ORIGIN = "PARITY_WEBCAL_ORIGIN";
 
@@ -33,7 +34,7 @@ function selftest() {
     count += 1;
     console.log(`PASS ${name}`);
   };
-  const staging = "https://next.togetherweown.com";
+  const staging = STAGING_ORIGIN;
   const kit = "http://127.0.0.1:8788";
   // Same scheme on both sides still matches.
   check(

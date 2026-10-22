@@ -9,12 +9,16 @@ export const PUBLIC_DATA_BOUNDS = {
 /**
  * A3 bounds for the session-free `/api/public/*` surface. The collection is
  * capped at 20 rows (tighter than the session-gated `/events.json` 100) and
- * every JSON body must fit 32 KiB so AI pollers stay cheap to serve.
+ * every JSON body must fit 32 KiB so AI pollers stay cheap to serve. Raw page
+ * numbers cap at 1000 (20,000 events at 20/page, far beyond any real community
+ * calendar) so offsets stay safe integers and cache keys stay bounded; the
+ * database still clamps to the last page within that ceiling.
  */
 export const API_PUBLIC_BOUNDS = {
   defaultPageSize: 20,
   maxPageSize: 20,
   maxBodyBytes: 32 * 1024,
+  maxPage: 1000,
 } as const;
 
 /** One published event as the public API serves it. `going_count` is null — never 0 — when the RSVP aggregate cannot be read. */
@@ -82,6 +86,16 @@ export const PUBLIC_API_EVENT_FIELDS = [
 export const COMMUNITY_SNAPSHOT_FIELDS = ["member_count", "online_count", "ranks"] as const;
 
 export const COMMUNITY_RANK_FIELDS = ["key", "label", "member_count"] as const;
+
+/**
+ * Collection envelope keys, in serializer order. The OpenAPI collection
+ * schema and the MCP list_events output schema both require exactly these,
+ * so the envelope cannot drift between surfaces.
+ */
+export const PUBLIC_API_COLLECTION_FIELDS = ["data", "page", "limit", "meta"] as const;
+
+/** Paging cursor keys, in serializer order. Required by both the OpenAPI meta schema and the MCP output schema. */
+export const PUBLIC_API_META_FIELDS = ["current_page", "per_page", "total", "last_page"] as const;
 
 export const JOIN_HANDOFF_FIELDS = ["intro", "invite_url"] as const;
 

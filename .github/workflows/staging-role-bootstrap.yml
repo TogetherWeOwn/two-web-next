@@ -1,0 +1,56 @@
+name: staging-role-bootstrap
+
+# Fixed-purpose staging NOLOGIN role bootstrap for the overlay GRANTs. Manual
+# dispatch only, staging environment, no inputs: one check-then-create run
+# that ensures the fixed application role exists with PostgreSQL CREATE ROLE
+# defaults, using the EXISTING staging-environment secret in place; no copy,
+# no new credential, no mint/rotate, no plan+apply dispatch, no grants, no
+# ALTER, no other writes. Reviewed main only.
+#
+# The trigger stays dispatch-only with no inputs on purpose: this workflow
+# reads a staging secret, and no pull-request-triggered workflow in this repo
+# touches staging secrets (a fork PR would have no secret and fail). There is
+# no scope gate: every dispatch runs the same fixed check. This workflow
+# gates no merge (required checks are ci-ok, gitleaks, e2e-ok and pr-lint),
+# so there is no aggregator job and a skip never blocks anything.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-role-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: bootstrap
+    # The org's two-selfhosted runner group refuses public repos:
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Ref gate (reviewed main only, before dependency install or DB access)
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Bootstrap requires main.' >&2; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Ensure the fixed staging role exists (constant DDL)
+        env:
+          # Staging Environment secret; never echoed, never written to a file.
+          # GitHub masks secret values in logs automatically. No fallback and
+          # no other database secret is mapped into this step.
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          node ci/staging-role-bootstrap.mjs
