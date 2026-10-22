@@ -322,12 +322,19 @@ manually authorized dispatch for explicit redeploys; it never deploys on push,
 PR or release. Automatic runs promote only a staging green that soaked 30
 minutes with no newer red staging run, skip cleanly when production already
 serves the target (`/up` revision marker) or there is nothing soaked and green,
-and stop with a clear error when the target journal has entries production
-lacks (automatic migration waits on the least-privilege migrator). An unknown
-live commit after three `/up` reads also stops promotion. A manual re-dispatch
-with `migrations_applied: true` records an audited continuation past either stop
-once `db-migrate.yml` (target production) has applied the target's migrations;
-automatic runs ignore that input and halt on either condition. Repo
+and read the live production ledger via `/up` when the target journal has
+entries production lacks: when the ledger holds every target web entry (set
+inclusion), the run clears automatically; otherwise it stops with a clear
+error (ledger lacks entries, ledger read failed, unusable target timestamp,
+non-ok database, or a live Worker that predates the ledger signal —
+automatic migration otherwise waits on the least-privilege migrator). An
+unknown live commit after three `/up` reads also stops promotion. A manual
+re-dispatch with `migrations_applied: true` records an audited continuation
+past any stop once `db-migrate.yml` (target production) has applied the
+target's migrations; automatic runs ignore that input and halt on those stops
+unless the ledger already proves the target applied. The first promotion
+after the ledger signal ships needs one manual dispatch because the live
+Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
 promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
