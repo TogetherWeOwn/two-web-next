@@ -595,9 +595,11 @@ it.each([
       expect(typeof headerId).toBe("string");
       const body = (await res.json()) as { reason: string; message: string; request_id: string };
       expect(body).toEqual({
+        code: "ingress_unavailable",
         reason: "ingress_unavailable",
         message: "The agent event store is temporarily unavailable. Try again shortly.",
         request_id: headerId,
+        next: "Retry shortly.",
       });
     } finally {
       await Promise.allSettled(pending);
@@ -619,9 +621,11 @@ it("enabled agent ingress retains its reason envelope without a configured bindi
   expect(typeof headerId).toBe("string");
   const body = (await res.json()) as { reason: string; message: string; request_id: string };
   expect(body).toEqual({
+    code: "ingress_unavailable",
     reason: "ingress_unavailable",
     message: "The agent event store is not configured.",
     request_id: headerId,
+    next: "Retry shortly.",
   });
   expect(clients).toHaveLength(0);
 });
