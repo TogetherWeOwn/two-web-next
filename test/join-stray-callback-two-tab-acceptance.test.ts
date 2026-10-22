@@ -279,41 +279,51 @@ describe("stale-state callbacks preserve the newer tab's journey (acceptance)", 
   // Each stray is a callback hit that must NOT be admitted to tab B's
   // journey: it names the wrong journey, names none, is malformed or
   // oversized, or is a provider error for somebody else's journey.
-  const strays: [string, (a: string, b: string) => string][] = [
-    ["stale tab A completing against B's cookies", (a) => `code=abc&state=${a}`],
-    ["a bare hit with no params at all", () => ""],
-    ["a malformed state", () => "code=abc&state=not-a-issued-state"],
+  const strays: [string, (a: string, b: string) => string, "expired" | "cancelled"][] = [
+    ["stale tab A completing against B's cookies", (a) => `code=abc&state=${a}`, "expired"],
+    ["a bare hit with no params at all", () => "", "expired"],
+    ["a malformed state", () => "code=abc&state=not-a-issued-state", "expired"],
     [
       "a well-formed but never-issued state",
       () => "code=abc&state=00000000-0000-4000-8000-000000000000",
+      "expired",
     ],
-    ["an oversized state", () => `code=abc&state=${OVERSIZED}`],
-    ["an oversized code naming B's state", (_a, b) => `code=${OVERSIZED}&state=${b}`],
+    ["an oversized state", () => `code=abc&state=${OVERSIZED}`, "expired"],
+    ["an oversized code naming B's state", (_a, b) => `code=${OVERSIZED}&state=${b}`, "expired"],
     [
       "a provider error carrying tab A's state",
       (a) => `error=access_denied&error_description=never-echo-stray&state=${a}`,
+      "cancelled",
     ],
     [
       "a provider error with no state",
       () => "error=server_error&error_description=never-echo-stray",
+      "expired",
     ],
   ];
 
   it.each(strays)(
     "stray hit (%s) does no work and B still completes",
-    async (_name, strayQuery) => {
+    async (_name, strayQuery, expected) => {
       const { create, replace, fake, env: e } = isolated();
       const calls = mockDiscord();
       const { jar, a, b, before } = await twoTabs(e);
 
       const stray = await callbackWithJar(e, jar, strayQuery(a.state, b.state));
 
-      // The stray's visible answer is the existing generic failure page,
-      // never an echo of provider details and never the cancelled-consent
-      // outcome (B did not cancel anything).
+      // The stray's visible answer names the real outcome — the cancelled
+      // copy for a Cancel, the expiry copy for everything else — and never
+      // echoes provider details.
       expect(stray.status).toBe(200);
       const html = await stray.text();
-      expect(html).toContain("Join link expired");
+      if (expected === "cancelled") {
+        expect(html).toContain("Join cancelled");
+        expect(html).toContain("You cancelled the Discord approval");
+        expect(html).not.toContain("Join link expired");
+      } else {
+        expect(html).toContain("Join link expired");
+        expect(html).not.toContain("Join cancelled");
+      }
       expect(html).not.toContain("never-echo-stray");
 
       // Nothing downstream ran for the stray.
@@ -336,15 +346,15 @@ describe("stale-state callbacks preserve the newer tab's journey (acceptance)", 
     const calls = mockDiscord();
     const { jar, a, b, before } = await twoTabs(e);
 
-    for (const query of [
-      `code=abc&state=${a.state}`,
-      "",
-      `code=${OVERSIZED}&state=${b.state}`,
-      `error=access_denied&error_description=never-echo-stray&state=${a.state}`,
-    ]) {
+    for (const [query, expected] of [
+      [`code=abc&state=${a.state}`, "Join link expired"],
+      ["", "Join link expired"],
+      [`code=${OVERSIZED}&state=${b.state}`, "Join link expired"],
+      [`error=access_denied&error_description=never-echo-stray&state=${a.state}`, "Join cancelled"],
+    ] as [string, string][]) {
       const stray = await callbackWithJar(e, jar, query);
       expect(stray.status).toBe(200);
-      expect(await stray.text()).toContain("Join link expired");
+      expect(await stray.text()).toContain(expected);
       expectJourneyUntouched(stray, jar, before);
     }
     expect(calls).toHaveLength(0);

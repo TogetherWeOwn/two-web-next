@@ -164,6 +164,7 @@ describe("readCounts contract", () => {
     expect(await counts.readCounts(env)).toEqual({ memberCount: 84, onlineCount: 12, ranks: [] });
     expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", {
       key: "counts.ranks",
+      exception: "Error",
     });
   });
 });
@@ -271,7 +272,10 @@ describe("60-second isolate cache", () => {
     vi.setSystemTime(NOW + 60_000);
     expect((await counts.readCounts(env)).memberCount).toBeNull();
     await counts.readCounts(env);
-    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", { key: "counts.live" });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", {
+      key: "counts.live",
+      exception: "Error",
+    });
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-bearing");
     vi.setSystemTime(NOW + 120_000);
     state.liveError = null;
