@@ -84,33 +84,32 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
-{#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series = false)}
+{#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
+  {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
+    {#if event}
+      <a
+        href="/e/{event.key}"
+        rel={previous ? "prev" : "next"}
+        data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
+      >
+        {previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}
+      </a>
+    {/if}
+  {/snippet}
   {#if neighbors && (neighbors.previous || neighbors.next)}
     <nav
       class={series ? undefined : "event-pagination"}
       aria-label={series ? "Series events" : "More events"}
       data-testid={series ? "event-series-nav" : "event-pagination"}
     >
-      {#if neighbors.previous}
-        <a
-          href="/e/{neighbors.previous.key}"
-          rel="prev"
-          data-testid="event-{series ? 'series-' : ''}previous"
-        >
-          ← Previous {series ? "in series" : "event"}: {neighbors.previous.title}
-        </a>
-      {/if}{" "}
-      {#if neighbors.next}
-        <a
-          href="/e/{neighbors.next.key}"
-          rel="next"
-          data-testid="event-{series ? 'series-' : ''}next"
-        >
-          Next {series ? "in series" : "event"}: {neighbors.next.title} →
-        </a>
-      {/if}
+      {@render eventLink(neighbors.previous, true)}{" "}
+      {@render eventLink(neighbors.next, false)}
     </nav>
   {/if}
+{/snippet}
+
+{#snippet rsvpButton(status: "going" | "waitlisted" | "withdraw", testid: string, label: string)}
+  <button type="submit" name="status" value={status} data-testid={testid} data-action={status}>{label}</button>
 {/snippet}
 
 {#snippet memberChrome()}
@@ -220,25 +219,25 @@ const lineup = $derived(
             <p role="status" tabindex={-1} data-testid={RSVP_CONFIRMED_TESTID}>
               <span aria-hidden="true" data-testid={RSVP_CHECK_TESTID}>✓{" "}</span>{RSVP_COPY.confirmed}
             </p>
-            <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
+            {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_COPY.withdraw)}
           {:else if waitlisted}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the waitlist notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
             <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>
               {waitlistPositionCopy(model.waitlistPosition)}
             </p>
             {#if model.rsvpOpen && !full}
-              <button type="submit" name="status" value="going" data-testid={WAITLIST_CLAIM_TESTID} data-action="going">{RSVP_COPY.waitlistClaim}</button>
+              {@render rsvpButton("going", WAITLIST_CLAIM_TESTID, RSVP_COPY.waitlistClaim)}
             {/if}
-            <button type="submit" name="status" value="withdraw" data-testid={WAITLIST_LEAVE_TESTID} data-action="withdraw">{RSVP_COPY.waitlistLeave}</button>
+            {@render rsvpButton("withdraw", WAITLIST_LEAVE_TESTID, RSVP_COPY.waitlistLeave)}
           {:else if !model.rsvpOpen}
             <!-- paused with no answer: the notice above is the whole state -->
           {:else if full}
             <p role="status" data-testid={EVENT_FULL_TESTID}>
               {RSVP_COPY.full} {rsvpFullCapCopy(model.capacity!)}
             </p>
-            <button type="submit" name="status" value="waitlisted" data-testid={WAITLIST_JOIN_TESTID} data-action="waitlisted">{RSVP_COPY.waitlistJoin}</button>
+            {@render rsvpButton("waitlisted", WAITLIST_JOIN_TESTID, RSVP_COPY.waitlistJoin)}
           {:else}
-            <button type="submit" name="status" value="going" data-testid={RSVP_GOING_TESTID} data-action="going">{RSVP_COPY.cta}</button>
+            {@render rsvpButton("going", RSVP_GOING_TESTID, RSVP_COPY.cta)}
           {/if}
           {#if going || waitlisted}
             {#if model.answer?.syncedToDiscordAt}
@@ -346,7 +345,7 @@ const lineup = $derived(
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors)}
+  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
         <h2>More events you might like</h2>
