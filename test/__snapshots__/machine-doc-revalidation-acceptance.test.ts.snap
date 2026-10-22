@@ -12,6 +12,6 @@ exports[`machine-doc validator: /join.md > preserves the public 200 media type, 
 
 exports[`machine-doc validator: /openapi.json > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"5c53769ef3dd5bd0d0adab3a0023d53e254b89cec91c2e0c5fc353e515c65e79"`;
 
-exports[`machine-doc validator: /privacy.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"dd32b20cf52b9f3cd05e09544b9d0d6c2977bb0a06dc6ff700596b04d6053a23"`;
+exports[`machine-doc validator: /privacy.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"2dc4353cdddcbd9795cee18f893d3d9ff3f8507c73b44f5902c3c16c2a353ccc"`;
 
 exports[`machine-doc validator: /rules.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"d9dc86719c10789f94acb37a9f46f9899e7c03e9c3c9faf3eae2c9a1bd2ac596"`;
