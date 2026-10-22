@@ -110,9 +110,11 @@ describe("public event read admission", () => {
         expect(await response.text()).toBe("Too many requests");
       } else {
         expect(await response.json()).toEqual({
+          code: "rate_limited",
           reason: "rate_limited",
           message: "Too many requests. Try again in 60 seconds.",
           retry_after: 60,
+          next: "Wait for Retry-After, then retry.",
         });
       }
     }

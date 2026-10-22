@@ -403,7 +403,7 @@ export async function resolveKitEventDetail(
       }
       const viewer = session.session;
       if (event.status === "draft" && !viewer?.moderator) {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { "cache-control": NO_STORE };
         setHeaders(headers);
         return { kind: "forbidden", status: 403, headers };
       }
@@ -549,7 +549,7 @@ export async function resolveKitEventDetail(
   } catch {
     suggestions = [];
   }
-  const headers = { "x-robots-tag": NOINDEX };
+  const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
   setHeaders(headers);
   return {
     kind: "missing",

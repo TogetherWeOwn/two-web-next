@@ -49,10 +49,12 @@ describe("throttle envelope (pure, two-web TOG-6788)", () => {
     const a = throttleEnvelope(42, "req-429-pin-001");
     expect(a.status).toBe(429);
     expect(a.body).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 42 seconds.",
       request_id: "req-429-pin-001",
       retry_after: 42,
+      next: "Wait for Retry-After, then retry with the same key.",
     });
     expect(a.headers).toEqual({ "Retry-After": "42" });
     expect(a.body).not.toHaveProperty("exception");
@@ -208,8 +210,20 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect(near.body.reason).toBe("unauthenticated");
     expect(far.body.reason).toBe("unauthenticated");
     expect(near.body.message).toBe(far.body.message);
-    expect(Object.keys(near.body).sort()).toEqual(["message", "reason", "request_id"]);
-    expect(Object.keys(far.body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(near.body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
+    expect(Object.keys(far.body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
 
     // Two more near-miss hits spend that credential's shield of 3; the fourth
     // and fifth are refused by the outer layer with the shared envelope.
