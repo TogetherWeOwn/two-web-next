@@ -261,12 +261,15 @@ describe("Markdown refusals remain uncacheable", () => {
 });
 
 describe("agent-facing revalidation guidance", () => {
-  it("keeps the index in its current sub-2-KiB footprint", async () => {
-    // Main is 1668 UTF-8 bytes at APP_URL. No tracked llms-specific numeric
-    // ceiling exists; 2 KiB leaves space for the requested short sentence.
+  it("keeps the index in its current sub-3-KiB footprint", async () => {
+    // The merged index is 2288 UTF-8 bytes at APP_URL: main's reviewed MCP
+    // section alone (2158 bytes) already exceeds the former 2 KiB pin. No
+    // tracked llms-specific numeric ceiling exists; 3 KiB preserves the
+    // small-index intent with headroom for that growth plus the requested
+    // short revalidation sentence.
     const res = await get(INDEX.path);
     expect(res.status).toBe(200);
-    expect((await bodyBytes(res)).byteLength).toBeLessThanOrEqual(2048);
+    expect((await bodyBytes(res)).byteLength).toBeLessThanOrEqual(3072);
   });
 
   it("teaches If-None-Match revalidation in the served machine index", async () => {
