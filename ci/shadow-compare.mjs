@@ -4,6 +4,7 @@
 // Never authenticates, never follows redirects, never sends a body.
 import { appendFile, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { APEX_ORIGIN, STAGING_ORIGIN } from "./operator-constants.mjs";
 
 export const DEFAULT_PATHS = [
   "/",
@@ -28,8 +29,8 @@ const UA = "two-shadow-compare/1 (+TOG-9698; read-only)";
 
 export function parseArgs(argv) {
   const o = {
-    legacy: "https://togetherweown.com",
-    next: "https://next.togetherweown.com",
+    legacy: APEX_ORIGIN,
+    next: STAGING_ORIGIN,
     paths: DEFAULT_PATHS,
     intervalS: 300,
     durationH: 0,

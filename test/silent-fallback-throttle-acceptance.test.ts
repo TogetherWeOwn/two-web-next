@@ -18,7 +18,7 @@
 // including the 55P03 busy -> 429 refusal, which stays silent (a refusal is
 // not a fail-open). Throttle names the route/throttle only (e.g. "probe");
 // never the full "<name>:<client>" bucket, never IP bytes, never Discord or
-// member IDs (content/privacy-policy-v5.md "never your IP address or who you
+// member IDs (content/privacy-policy-v6.md "never your IP address or who you
 // are"; docs/throttling.md "No header bytes are logged"). Exception is the
 // class only, never the message (it can quote statement bindings).
 //

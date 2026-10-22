@@ -222,11 +222,20 @@ test("CLI --env=production lists the production jobs Worker with the same names-
 });
 
 test("CLI rejects unknown flags before invoking wrangler", () => {
-  // The stub exits 2 on any invocation; a usage error exits 1 without calling it.
-  const result = cliWithStubbedWrangler(allPresent, { args: ["--env=preview"] });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /usage: check-jobs-secrets\.mjs/);
-  assert.equal(result.stdout, "");
+  // The stub can only produce exit 0 (an expected listing) or a
+  // wrangler-failure exit 1; a usage error exits 2 without calling it.
+  for (const args of [
+    ["--env=preview"],
+    ["production"],
+    ["--env=production", "--env=production"],
+    ["--bogus"],
+  ]) {
+    const result = cliWithStubbedWrangler(allPresent, { args });
+    assert.equal(result.status, 2, `argv ${JSON.stringify(args)} must exit 2 (usage error)`);
+    assert.match(result.stderr, /^::error::/m);
+    assert.match(result.stderr, /usage: check-jobs-secrets\.mjs \[--env=production\]/);
+    assert.equal(result.stdout, "");
+  }
 });
 
 // Child-stream boundary: the fake wrangler's stdout/stderr are untrusted

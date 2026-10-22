@@ -4,7 +4,7 @@
 // body 413s with zero throttle spend and no session/store read.
 import { requestBodyLimit } from "../body-limit";
 import { alertRequestError, exceptionClass } from "../alerts";
-import { isDatabaseUnavailable } from "../db/errors";
+import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
 import { createRateLimitedWarn } from "../log-budget";
 import {
   BadRequestPage,
@@ -21,11 +21,12 @@ import {
   PROFILE_OPENED_AT_FIELD,
   profileTrapTripped,
 } from "../islands/contracts";
-import { ProfilePage } from "./pages";
+import { ProfilePage, type ProfileFormValues } from "./pages";
 import { admitWrite } from "./routes-admission";
 import { memberGate } from "./routes-gate";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
+import type { MemberView } from "./store";
 import { requestRoute, safeRequestId } from "../request-log";
 import { acceptsJson, isJsonMediaType, mediaType } from "../media-type";
 import { normalizeLeaderboardOptOut, validateProfile } from "./validation";
@@ -57,6 +58,24 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
 // 415s (admission refusal before the body is read) and well-formed
 // validation 422s stay silent and spend nothing.
 const malformedLog = createRateLimitedWarn({ shedLine: "profile.write.shed" });
+
+// Round-trip the submitted draft into the editor controls: whichever games
+// representation was sent (games_text wins), the switch where the member left
+// it, garbage falling back to the stored choice. Shared by the 422 validation
+// re-render and the 503 classified-failure re-render so both keep the same
+// draft next to the saved baseline.
+const draftValues = (input: Record<string, unknown>, member: MemberView): ProfileFormValues => ({
+  bio: typeof input.bio === "string" ? input.bio : "",
+  games_text:
+    typeof input.games_text === "string"
+      ? input.games_text
+      : Array.isArray(input.games)
+        ? input.games.filter((g): g is string => typeof g === "string").join("\n")
+        : "",
+  timezone: typeof input.timezone === "string" ? input.timezone : "",
+  leaderboard_opt_out:
+    normalizeLeaderboardOptOut(input.leaderboard_opt_out) ?? member.leaderboardOptOut ?? false,
+});
 
 export function registerWriteRoutes(
   app: ProfileApp,
@@ -143,22 +162,7 @@ export function registerWriteRoutes(
           appUrl={c.env.APP_URL}
           statsDraftWarning
           errors={result.errors}
-          values={{
-            bio: typeof input.bio === "string" ? input.bio : "",
-            // Round-trip whichever representation was sent; games_text wins.
-            games_text:
-              typeof input.games_text === "string"
-                ? input.games_text
-                : Array.isArray(input.games)
-                  ? input.games.filter((g): g is string => typeof g === "string").join("\n")
-                  : "",
-            timezone: typeof input.timezone === "string" ? input.timezone : "",
-            // Keep the switch where the member left it; garbage falls back to stored.
-            leaderboard_opt_out:
-              normalizeLeaderboardOptOut(input.leaderboard_opt_out) ??
-              member.leaderboardOptOut ??
-              false,
-          }}
+          values={draftValues(input, member)}
         />,
       );
     }
@@ -178,7 +182,45 @@ export function registerWriteRoutes(
         exception: (err as Error)?.constructor?.name,
         request_id: safeRequestId(c.get("requestId")),
       });
-      if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
+      // Classified store failure after admission, bounded parsing and
+      // validation already succeeded: keep the private no-store editor with
+      // the submitted draft, the saved baseline intact, and honest guidance.
+      // A cancelled write (57014, 55P03) may still have committed — uncertain,
+      // never "not saved". Any other transport outage definitely failed — safe
+      // to retry. Pre-admission 429/403/auth refusals never reach here, so no
+      // draft is echoed and no read is added on those paths.
+      if (isDatabaseUnavailable(err)) {
+        const uncertain = isDatabaseQueryCancellation(err);
+        if (acceptsJson(c.req.header("accept"))) {
+          if (!uncertain) return databaseUnavailable(c);
+          c.header("cache-control", "no-store, private");
+          varyAccept(c);
+          const requestId = safeRequestId(c.get("requestId"));
+          return c.json(
+            {
+              error: "profile_save_uncertain",
+              message: PROFILE_COPY.saveUncertain,
+              ...(requestId ? { request_id: requestId } : {}),
+            },
+            503,
+          );
+        }
+        c.header("cache-control", "no-store, private");
+        varyAccept(c);
+        c.status(503);
+        return c.html(
+          <ProfilePage
+            member={member}
+            stats={await statsFor(c, member.id)}
+            isOwner
+            isModerator={c.get("viewer").moderator}
+            appUrl={c.env.APP_URL}
+            statsDraftWarning
+            errors={{ save: uncertain ? PROFILE_COPY.saveUncertain : PROFILE_COPY.saveFailed }}
+            values={draftValues(input, member)}
+          />,
+        );
+      }
       c.header("cache-control", "no-store, private");
       varyAccept(c);
       if (prefersHtmlError(c)) {
