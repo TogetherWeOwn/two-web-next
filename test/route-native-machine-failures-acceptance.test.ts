@@ -147,16 +147,25 @@ const key = (n: number) => String(n).padStart(26, "0");
 // the outage bytes plus the safe next action; /mcp wraps the existing 413/400
 // messages in the JSON-RPC error shape with one static transport code.
 const REST_INTERNAL = {
-  error: { code: "internal", message: "Event data could not be read." },
-} as const;
+  error: {
+    code: "internal",
+    message: "Event data could not be read.",
+    request_id: expect.any(String),
+    next: "Retry the read shortly.",
+  },
+};
 const MD_INTERNAL_BODY = "Events temporarily unavailable. Try again shortly.";
 const MCP_TRANSPORT_CODE = -32600;
 const MCP_413_MESSAGE = "Reduce the size of your request and try again.";
 const MCP_400_MESSAGE = "Check your request and try again.";
-const mcpError = (message: string) => ({
+const mcpError = (message: string, next: string) => ({
   jsonrpc: "2.0",
   id: null,
-  error: { code: MCP_TRANSPORT_CODE, message },
+  error: {
+    code: MCP_TRANSPORT_CODE,
+    message,
+    data: { next, request_id: expect.any(String) },
+  },
 });
 
 const SQL_TEXT = 'select "id", "event_key" from "events"';
@@ -456,7 +465,9 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       status: 413,
       contentType: "application/json",
       body: async (text: string) => {
-        expect(JSON.parse(text)).toEqual(mcpError(MCP_413_MESSAGE));
+        expect(JSON.parse(text)).toEqual(
+          mcpError(MCP_413_MESSAGE, "Reduce the request size and retry."),
+        );
       },
       varyAccept: true,
       zeroHits: true,
@@ -484,7 +495,9 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       status: 413,
       contentType: "application/json",
       body: async (text: string) => {
-        expect(JSON.parse(text)).toEqual(mcpError(MCP_413_MESSAGE));
+        expect(JSON.parse(text)).toEqual(
+          mcpError(MCP_413_MESSAGE, "Reduce the request size and retry."),
+        );
       },
       varyAccept: true,
       zeroHits: true,
@@ -514,7 +527,7 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       status: 400,
       contentType: "application/json",
       body: async (text: string) => {
-        expect(JSON.parse(text)).toEqual(mcpError(MCP_400_MESSAGE));
+        expect(JSON.parse(text)).toEqual(mcpError(MCP_400_MESSAGE, "Fix the request and retry."));
       },
       varyAccept: true,
       zeroHits: true,
@@ -613,7 +626,9 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
         const res = raced as Response;
         expect(res.status).toBe(413);
         expect(res.headers.get("content-type")).toContain("application/json");
-        expect(await res.json()).toEqual(mcpError(MCP_413_MESSAGE));
+        expect(await res.json()).toEqual(
+          mcpError(MCP_413_MESSAGE, "Reduce the request size and retry."),
+        );
         expect(pull).not.toHaveBeenCalled();
         expect(cancel).toHaveBeenCalled();
         expect(hits).toHaveLength(0);
@@ -680,7 +695,12 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       const rest = await get("/api/public/events", {}, "192.0.2.90");
       expect(rest.status).toBe(503);
       expect(await rest.json()).toEqual({
-        error: { code: "unavailable", message: "Event data is temporarily unavailable." },
+        error: {
+          code: "unavailable",
+          message: "Event data is temporarily unavailable.",
+          request_id: expect.any(String),
+          next: "Retry the read shortly.",
+        },
       });
       const md = await get("/events.md", {}, "192.0.2.91");
       expect(md.status).toBe(503);
@@ -721,7 +741,12 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       const rest = await get("/api/public/events", {}, "192.0.2.93");
       expect(rest.status).toBe(503);
       expect(await rest.json()).toEqual({
-        error: { code: "unavailable", message: "Event data is temporarily unavailable." },
+        error: {
+          code: "unavailable",
+          message: "Event data is temporarily unavailable.",
+          request_id: expect.any(String),
+          next: "Retry the read shortly.",
+        },
       });
       const md = await get("/events.md", {}, "192.0.2.94");
       expect(md.status).toBe(503);
@@ -737,7 +762,12 @@ describe.skipIf(!process.env.DATABASE_URL)("route-native machine failures", () =
       expect(res.status).toBe(429);
       expect(res.headers.get("retry-after")).toBe("60");
       expect(await res.json()).toEqual({
-        error: { code: "rate_limited", message: "Too many requests. Try again in 60 seconds." },
+        error: {
+          code: "rate_limited",
+          message: "Too many requests. Try again in 60 seconds.",
+          request_id: expect.any(String),
+          next: "Wait for Retry-After, then retry.",
+        },
       });
       expect(selectSpy).not.toHaveBeenCalled();
       expect(hits).toHaveLength(BUDGET);
