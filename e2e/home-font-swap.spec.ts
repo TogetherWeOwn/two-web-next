@@ -153,12 +153,12 @@ test("font-swap acceptance detects a deliberately incorrect fallback metric", as
   // whose tuned fallback sits near 100%, so breaking upward to 100% renders
   // the same 2-line hero and no longer regresses. A 20%-narrower fallback
   // drops the hero to one line, which the line/CLS gates below must catch.
-  const shippedMetric = style![1].match(/size-adjust:\s*([\d.]+)%/);
+  const shippedMetric = style![1]!.match(/size-adjust:\s*([\d.]+)%/);
   expect(
     shippedMetric,
     "inline CSS should carry a size-adjust fallback metric to break",
   ).not.toBeNull();
-  const brokenPct = Math.round(Number.parseFloat(shippedMetric![1]) * 0.8);
+  const brokenPct = Math.round(Number.parseFloat(shippedMetric![1]!) * 0.8);
   const brokenCss = style![1]!.replace(/size-adjust:\s*[\d.]+%/, `size-adjust: ${brokenPct}%`);
   expect(brokenCss, "breaking the fallback metric should change the inline CSS").not.toBe(
     style![1],
