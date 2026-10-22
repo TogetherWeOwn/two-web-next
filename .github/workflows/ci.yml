@@ -630,6 +630,11 @@ jobs:
       - name: Scrub QA token selftest (offline fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/scrub-qa-token-selftest
+      # Checked-in brand set (Logo 1 vectors, icon renders, OG image) plus the
+      # maskable safe-circle measurement. Offline, no secrets, no database.
+      - name: Brand icon set verification (offline, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/generate-icons.py
       - name: Migration numbering check
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')

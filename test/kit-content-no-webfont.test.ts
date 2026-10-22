@@ -32,7 +32,12 @@ const { compile } = webRequire("svelte/compiler") as {
 // The real SiteMetadata component, SSR-compiled with the web workspace's own
 // svelte/compiler and bundled by esbuild.
 async function buildSiteMetadataBundle(): Promise<{
-  renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
+  renderMeta: (props: {
+    title: string;
+    theme: Theme;
+    canonical?: string;
+    leafCss?: string;
+  }) => string;
 }> {
   const worktree = fileURLToPath(new URL("../", import.meta.url));
   const scratch = mkdtempSync(join(tmpdir(), "kit-sitemetadata-"));
@@ -77,7 +82,12 @@ export function renderMeta(props) {
       ],
     });
     const { renderMeta } = (await import(pathToFileURL(outfile).href)) as {
-      renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
+      renderMeta: (props: {
+        title: string;
+        theme: Theme;
+        canonical?: string;
+        leafCss?: string;
+      }) => string;
     };
     return { renderMeta };
   } finally {
@@ -86,7 +96,12 @@ export function renderMeta(props) {
 }
 
 describe("Kit content shell preloads no display webfont", () => {
-  let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
+  let renderMeta: (props: {
+    title: string;
+    theme: Theme;
+    canonical?: string;
+    leafCss?: string;
+  }) => string;
 
   beforeAll(async () => {
     ({ renderMeta } = await buildSiteMetadataBundle());
@@ -118,5 +133,41 @@ describe("Kit content shell preloads no display webfont", () => {
       expect(html).toContain('rel="stylesheet" href="/theme.css"');
       expect(html).not.toContain("<style>");
     }
+  });
+});
+
+// The Hono head contract pins the rendered share image (absolute og:image and
+// twitter:image derived from the page canonical) in six suites; the Kit twin
+// must pin its rendered output the same way. Crawlers reject relative
+// summary_large_image URLs, so a source-only grep is not enough: a one-line
+// revert to the relative /og-1200x630.png must fail here.
+describe("Kit share image is absolute and pinned", () => {
+  let renderMeta: (props: {
+    title: string;
+    theme: Theme;
+    canonical?: string;
+    leafCss?: string;
+  }) => string;
+
+  beforeAll(async () => {
+    ({ renderMeta } = await buildSiteMetadataBundle());
+  }, 120_000);
+
+  it("emits one absolute og:image and twitter:image on canonical pages", () => {
+    for (const theme of ["home", "event"] as const) {
+      const canonical = "https://example.com/events";
+      const image = new URL("/og-1200x630.png", canonical).href;
+      const html = renderMeta({ title: "Events", theme, canonical });
+      expect(html, theme).toContain(`<meta property="og:image" content="${image}"`);
+      expect(html, theme).toContain(`<meta name="twitter:image" content="${image}"`);
+      expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
+      expect(html.match(/<meta name="twitter:image"/g) ?? []).toHaveLength(1);
+    }
+  });
+
+  it("emits no share image without a canonical", () => {
+    const html = renderMeta({ title: "Events", theme: "home" });
+    expect(html).not.toContain("og:image");
+    expect(html).not.toContain("twitter:image");
   });
 });
