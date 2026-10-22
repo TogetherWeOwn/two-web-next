@@ -88,10 +88,8 @@ import {
 } from "../src/sessions";
 import { auditPaths } from "../ci/lighthouse-paths";
 // @ts-expect-error Standalone probe tooling has no declaration file.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
 import { coverage } from "../ci/a11y-cases.mjs";
 // @ts-expect-error Standalone probe tooling has no declaration file.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
 import { auditCases } from "../ci/a11y-policy.mjs";
 
 const require = createRequire(import.meta.url);
@@ -944,7 +942,11 @@ describe("link-in-bio gate wiring", () => {
       expect(table[route]?.skip, `${route} must not be skipped`).toBeFalsy();
       expect(table[route]?.cases?.length ?? 0, `${route} needs audit cases`).toBeGreaterThan(0);
     }
-    const scenarios = auditCases(app.routes, coverage) as { route: string }[];
+    const probeRoutes = ["404", "404-empty", "429", "500", "503"].map((probe) => ({
+      method: "GET",
+      path: `/__a11y/${probe}`,
+    }));
+    const scenarios = auditCases([...app.routes, ...probeRoutes], coverage) as { route: string }[];
     const routes = scenarios.map((s) => s.route);
     expect(routes).toContain("/members/:user/links");
     expect(routes).toContain("/profile/links");
