@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const MAX_PROCESSES = 32;
 const MAX_READ_BYTES = 8192;
 const INTERVAL_MS = 60000;
-const MAX_SAMPLES = 28;
+const MAX_SAMPLES = 38;
 
 // Read only stat and main-thread child IDs, never cmdline/environ, process
 // names, stack/heap reports or test output. Even diagnostic errors stay fixed.
