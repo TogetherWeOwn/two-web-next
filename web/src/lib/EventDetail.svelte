@@ -84,6 +84,35 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series = false)}
+  {#if neighbors && (neighbors.previous || neighbors.next)}
+    <nav
+      class={series ? undefined : "event-pagination"}
+      aria-label={series ? "Series events" : "More events"}
+      data-testid={series ? "event-series-nav" : "event-pagination"}
+    >
+      {#if neighbors.previous}
+        <a
+          href="/e/{neighbors.previous.key}"
+          rel="prev"
+          data-testid="event-{series ? 'series-' : ''}previous"
+        >
+          ← Previous {series ? "in series" : "event"}: {neighbors.previous.title}
+        </a>
+      {/if}{" "}
+      {#if neighbors.next}
+        <a
+          href="/e/{neighbors.next.key}"
+          rel="next"
+          data-testid="event-{series ? 'series-' : ''}next"
+        >
+          Next {series ? "in series" : "event"}: {neighbors.next.title} →
+        </a>
+      {/if}
+    </nav>
+  {/if}
+{/snippet}
+
 {#snippet memberChrome()}
   <form method="post" action="/logout">
     <span class="account-caption">Signed in</span>
@@ -317,41 +346,7 @@ const lineup = $derived(
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">{#if model.series && (model.series.previous || model.series.next)}
-      <nav aria-label="Series events" data-testid="event-series-nav">
-        {#if model.series.previous}
-          <a
-            href="/e/{model.series.previous.key}"
-            rel="prev"
-            data-testid="event-series-previous"
-          >
-            ← Previous in series: {model.series.previous.title}
-          </a>
-        {/if}{" "}
-        {#if model.series.next}
-          <a href="/e/{model.series.next.key}" rel="next" data-testid="event-series-next">
-            Next in series: {model.series.next.title} →
-          </a>
-        {/if}
-      </nav>
-    {/if}{#if model.neighbors.previous || model.neighbors.next}
-      <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
-        {#if model.neighbors.previous}
-          <a
-            href="/e/{model.neighbors.previous.key}"
-            rel="prev"
-            data-testid="event-previous"
-          >
-            ← Previous event: {model.neighbors.previous.title}
-          </a>
-        {/if}{" "}
-        {#if model.neighbors.next}
-          <a href="/e/{model.neighbors.next.key}" rel="next" data-testid="event-next">
-            Next event: {model.neighbors.next.title} →
-          </a>
-        {/if}
-      </nav>
-    {/if}
+  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
         <h2>More events you might like</h2>
