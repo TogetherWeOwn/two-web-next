@@ -14,6 +14,7 @@ import {
   type IngressEffects,
   admitAgentEvent,
 } from "./service";
+import { ingressDenial } from "./envelope";
 
 type IngressEnv = {
   Bindings: Env;
@@ -52,11 +53,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const cfg = ingressConfig(c.env);
   if (!cfg.enabled) {
     return c.json(
-      {
-        reason: "ingress_disabled",
-        message: "The agent event ingress is not enabled in this environment.",
-        request_id: c.get("requestId"),
-      },
+      ingressDenial(
+        "ingress_disabled",
+        "The agent event ingress is not enabled in this environment.",
+        c.get("requestId"),
+      ),
       404,
     );
   }
@@ -66,11 +67,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const url = injected ? undefined : (c.env.AGENT_DB?.connectionString ?? databaseUrl(c.env));
   if (!injected && !url)
     return c.json(
-      {
-        reason: "ingress_unavailable",
-        message: "The agent event store is not configured.",
-        request_id: c.get("requestId"),
-      },
+      ingressDenial(
+        "ingress_unavailable",
+        "The agent event store is not configured.",
+        c.get("requestId"),
+      ),
       503,
     );
 
@@ -119,15 +120,18 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
       return c.json(
-        {
-          reason: "ingress_unavailable",
-          message: "The agent event store is temporarily unavailable. Try again shortly.",
-          request_id: c.get("requestId"),
-        },
+        ingressDenial(
+          "ingress_unavailable",
+          "The agent event store is temporarily unavailable. Try again shortly.",
+          c.get("requestId"),
+        ),
         503,
       );
     }
-    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+    return c.json(
+      ingressDenial("internal_error", "The agent event ingress failed.", c.get("requestId")),
+      500,
+    );
   } finally {
     // Close on shield refusals, admission/service errors and normal completion
     // (413 and source-read failures never reach this middleware). Never close
@@ -158,14 +162,17 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
       return c.json(
-        {
-          reason: "ingress_unavailable",
-          message: "The agent event store is temporarily unavailable. Try again shortly.",
-          request_id: c.get("requestId"),
-        },
+        ingressDenial(
+          "ingress_unavailable",
+          "The agent event store is temporarily unavailable. Try again shortly.",
+          c.get("requestId"),
+        ),
         503,
       );
     }
-    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+    return c.json(
+      ingressDenial("internal_error", "The agent event ingress failed.", c.get("requestId")),
+      500,
+    );
   }
 }
