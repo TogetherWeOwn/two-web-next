@@ -8,6 +8,7 @@ import { observeDiscordEvent, type ObservationEvent } from "../bot/event-read";
 import type { Grant, IngressEffects, Op, Outcome, Row, Tx } from "./types";
 import { isAgentVersion, storedEventKey, ulid, validateFields } from "./payload";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 import { checkGrant } from "./grants";
 
 const rid = (requestId: string) => ({ request_id: requestId });
@@ -30,7 +31,7 @@ export async function execute(
     eventKey: string | null = null,
   ): Promise<Outcome> => {
     await audit(tx, grant, op, eventKey, key, dig, requestId, "denied", reason);
-    return { status, body: { reason, message, ...extra, ...rid(requestId) } };
+    return { status, body: ingressDenial(reason, message, requestId, extra) };
   };
   const done = async (
     status: number,
@@ -206,11 +207,11 @@ export async function execute(
   if (op === "cancel" && event.status === "past") {
     return {
       status: 409,
-      body: {
-        reason: "event_not_open",
-        message: "That event is not in a position to make this move.",
-        ...rid(requestId),
-      },
+      body: ingressDenial(
+        "event_not_open",
+        "That event is not in a position to make this move.",
+        requestId,
+      ),
     };
   }
 

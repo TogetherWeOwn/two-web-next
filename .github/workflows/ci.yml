@@ -750,8 +750,9 @@ jobs:
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    # The suite takes ~29m on main and overruns 30m on slow runners (green
-    # runs cancelled at the ceiling); 40m matches `check` for the same core.
+    # Same lint + typecheck + test suite as `check` on the slower engines
+    # floor; 30m killed green runs once the suite passed ~29m, so this leg
+    # carries the same 40m budget.
     timeout-minutes: 40
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
