@@ -5,7 +5,7 @@
 // this file pins pass-count forensics only.
 //
 // Contract for the build:
-// - eraseMember apply returns its six table counts plus `passes` (number of
+// - eraseMember apply returns its eight table counts plus `passes` (number of
 //   session-chase passes executed) and `deletesPerPass` (session rows deleted
 //   in each pass, in order). Dry-run returns `passes: 0` and
 //   `deletesPerPass: []` (no chase ran). passes === deletesPerPass.length and
@@ -58,6 +58,8 @@ type EraseResultWithPasses = {
   web_sessions: number;
   web_session_grace: number;
   join_attempts: number;
+  overlay_configs: number;
+  overlay_tokens: number;
   passes: number;
   deletesPerPass: number[];
 };
@@ -75,18 +77,24 @@ const rows = (count: number) => Array.from({ length: count }, () => ({ "1": 1 })
 // the web_sessions chase follows the script: pass i deletes
 // sessionDeletes[i], then the recount reports sessionRemainings[i]. A
 // remaining of 0 ends the chase, like the real loop's quiescence check.
+// The overlay token chase follows the same shape with its own pass counter;
+// overlay deletes cover all statuses and default to zero.
 function makeEraseDouble(opts: {
   users?: number;
   profiles?: number;
   rsvps?: number;
   grace?: number;
   attempts?: number;
+  configs?: number;
   sessionDeletes?: number[];
   sessionRemainings?: number[];
+  tokenDeletes?: number[];
+  tokenRemainings?: number[];
   failOnSessionPass?: number;
   failWith?: unknown;
 }) {
   let pass = 0;
+  let tokenPass = 0;
   const tag = async (strings: TemplateStringsArray): Promise<Record<string, unknown>[]> => {
     const text = strings.join(" ");
     if (text.startsWith("delete from web_sessions")) {
@@ -99,6 +107,9 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
+    if (text.startsWith("delete from overlay_tokens"))
+      return rows(opts.tokenDeletes?.[tokenPass] ?? 0);
+    if (text.startsWith("delete from overlay_configs")) return rows(opts.configs ?? 0);
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
       const remaining = opts.sessionRemainings?.[pass] ?? 0;
       pass++;
@@ -114,6 +125,13 @@ function makeEraseDouble(opts: {
       return [{ n: opts.grace ?? 0 }];
     if (text.startsWith("select count") && text.includes("from join_attempts"))
       return [{ n: opts.attempts ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from overlay_tokens")) {
+      const remaining = opts.tokenRemainings?.[tokenPass] ?? 0;
+      tokenPass++;
+      return [{ n: remaining }];
+    }
+    if (text.startsWith("select count") && text.includes("from overlay_configs"))
+      return [{ n: opts.configs ?? 0 }];
     throw new Error(`unexpected statement: ${text.slice(0, 120)}`);
   };
   (tag as unknown as Record<string, unknown>).begin = (fn: (tx: unknown) => Promise<unknown>) =>
