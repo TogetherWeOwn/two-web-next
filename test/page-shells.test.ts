@@ -9,6 +9,7 @@ import {
   EVENT_KEY,
   HTML_READS,
   NON_HTML_READS,
+  OPERATIONAL_HTML_READS,
   pageShellFixture,
 } from "./helpers/page-shells";
 
@@ -52,7 +53,7 @@ function assertInventory(router: { routes: { method: string; path: string }[] })
     .map((route) => route.path)
     .sort();
   // The event read boundary encloses its existing GET registration.
-  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS].sort());
+  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS, ...OPERATIONAL_HTML_READS].sort());
 }
 
 beforeEach(() => {
@@ -86,6 +87,52 @@ describe("every GET HTML route uses an accessible page shell (local fixtures)", 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
       assertShell(await response.text());
+    },
+  );
+});
+
+describe("operational HTML shells with an exact local upstream fixture", () => {
+  it.each(["record", "empty", "unavailable"])(
+    "operator snapshot %s retains the normal shell",
+    async (state) => {
+      expect(OPERATIONAL_HTML_READS).toEqual(["/admin/ops-overrides"]);
+      const { env } = pageShellFixture();
+      const token = "page-shell-operator-fixture-".padEnd(32, "x");
+      const forbiddenFetch = globalThis.fetch;
+      const remote = vi.fn<typeof fetch>(async () =>
+        state === "unavailable"
+          ? new Response("fixture unavailable", { status: 503 })
+          : Response.json({
+              epoch: 7,
+              overrides: state === "empty" ? {} : { TWO_AUTOMOD_MENTION_LIMIT: "9" },
+              baseline: {},
+              enforcement: "pending",
+            }),
+      );
+      // Only this precise bearer fixture may make one simulated bot read. Restore
+      // the untouched rejecting spy so the suite-wide no-network guard stays hard.
+      vi.stubGlobal("fetch", remote);
+      try {
+        const response = await app.request(
+          `${env.APP_URL}/admin/ops-overrides`,
+          {
+            headers: { authorization: `Bearer ${token}`, accept: "text/html" },
+          },
+          { ...env, OPS_CONTROL_TOKEN: token, BOT_ENDPOINT_URL: "https://bot.example.test/action" },
+        );
+        expect(response.status).toBe(state === "unavailable" ? 503 : 200);
+        expect(remote).toHaveBeenCalledTimes(1);
+        const [input, init] = remote.mock.calls[0]!;
+        const outbound = new Request(input, init);
+        expect(outbound.url).toBe("https://bot.example.test/ops/config");
+        expect(outbound.method).toBe("GET");
+        expect(outbound.headers.get("authorization")).toBe(`Bearer ${token}`);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("content-type")).toContain("text/html");
+        assertShell(await response.text());
+      } finally {
+        vi.stubGlobal("fetch", forbiddenFetch);
+      }
     },
   );
 });

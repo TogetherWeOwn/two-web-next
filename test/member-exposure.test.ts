@@ -58,7 +58,11 @@ const ADMIN_READS = [
   "/join-attempts/:id",
   ...ADMIN_REDIRECTS,
 ];
-const OPERATIONAL_READS = ["/queue/failed/:id/preview", "/queue/source-evidence/:id"];
+const OPERATIONAL_READS = [
+  "/ops-overrides", // Session-free control bearer, dark when unconfigured; never member data.
+  "/queue/failed/:id/preview",
+  "/queue/source-evidence/:id",
+];
 const OTHER_READS = [
   "/",
   "/discord",
