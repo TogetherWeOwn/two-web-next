@@ -6,11 +6,11 @@ import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, listJson } from "./reads";
 import type { PublicEventCollectionDto } from "../public-data/contracts";
 import {
   publicEventJson,
-  publicReadGuard,
   jsonResponse,
   jsonSession,
   type App,
   type SessionReader,
+  publicReadGuard,
 } from "./routes-shared";
 
 export function registerJsonRoutes(app: App, readFragmentSession: SessionReader): void {
