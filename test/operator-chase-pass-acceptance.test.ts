@@ -79,6 +79,7 @@ function makeEraseDouble(opts: {
   users?: number;
   profiles?: number;
   rsvps?: number;
+  links?: number;
   grace?: number;
   attempts?: number;
   sessionDeletes?: number[];
@@ -97,6 +98,7 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from users")) return rows(opts.users ?? 0);
     if (text.startsWith("delete from profiles")) return rows(opts.profiles ?? 0);
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
+    if (text.startsWith("delete from member_links")) return rows(opts.links ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
@@ -110,6 +112,8 @@ function makeEraseDouble(opts: {
       return [{ n: opts.profiles ?? 0 }];
     if (text.startsWith("select count") && text.includes("from rsvps"))
       return [{ n: opts.rsvps ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from member_links"))
+      return [{ n: opts.links ?? 0 }];
     if (text.startsWith("select count") && text.includes("from web_session_grace"))
       return [{ n: opts.grace ?? 0 }];
     if (text.startsWith("select count") && text.includes("from join_attempts"))

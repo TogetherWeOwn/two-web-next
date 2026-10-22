@@ -53,6 +53,7 @@ const ZERO: ErasureCounts = {
   users: 0,
   profiles: 0,
   rsvps: 0,
+  member_links: 0,
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
@@ -221,6 +222,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 2,
         web_session_grace: 1,
         join_attempts: 1,
@@ -237,7 +239,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       // The minted successor cannot be rotated back to life afterwards.
       expect(await store.rotate("race-successor", session("race-revival"))).toBe(false);
       expect(await store.get("race-revival")).toBeNull();
-      // Repeat apply is a no-op across all six tables.
+      // Repeat apply is a no-op across all seven tables.
       await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual({
         ...ZERO,
         passes: 1,
@@ -248,6 +250,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
@@ -331,6 +334,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 4,
         web_session_grace: 3,
         join_attempts: 1,
@@ -349,6 +353,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 1,
         web_session_grace: 1,
         join_attempts: 1,
@@ -386,6 +391,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
@@ -412,6 +418,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -427,6 +434,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
@@ -441,6 +449,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
@@ -462,7 +471,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
     expect(await store.get("dry-new-signin")).toMatchObject({ userId: VICTIM });
   });
 
-  it("rolls back all six tables when a late deletion fails (control)", async () => {
+  it("rolls back all seven tables when a late deletion fails (control)", async () => {
     await seedMember(VICTIM, "synthetic-erase-rollback-a");
     await seedMember(BYSTANDER, "synthetic-erase-rollback-b");
     await store.create(session("rollback-source"));
@@ -473,6 +482,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 1,
       web_session_grace: 1,
       join_attempts: 1,
@@ -511,6 +521,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 1,
       web_session_grace: 0,
       join_attempts: 1,

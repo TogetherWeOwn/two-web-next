@@ -188,6 +188,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         users: 1,
         profiles: 0,
         rsvps: 0,
+        member_links: 0,
         web_sessions: 2,
         // A -> B was replaced by B -> C: only the immediate predecessor remains.
         web_session_grace: 1,
@@ -208,6 +209,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         users: 0,
         profiles: 0,
         rsvps: 0,
+        member_links: 0,
         web_sessions: 0,
         web_session_grace: 0,
         join_attempts: 0,
@@ -218,6 +220,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         users: 0,
         profiles: 0,
         rsvps: 0,
+        member_links: 0,
         web_sessions: 0,
         web_session_grace: 0,
         join_attempts: 0,
