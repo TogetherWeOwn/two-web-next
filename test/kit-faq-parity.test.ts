@@ -311,18 +311,20 @@ describe("Kit /faq parity with Hono", () => {
     );
     expect(raw).toContain("export const csr = false");
     expect(raw).toContain('"public, max-age=3600"');
-    // Comments describe the no-session/no-database contract in prose, so the
-    // dependency pin runs on code only.
+    // Comments describe the no-session/no-cookie/no-web-database contract in
+    // prose, so the dependency pin runs on code only. The single allowed
+    // database read is the bot-owned ranks leg for the ladder answers.
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
     expect(code).not.toMatch(/dbFor|session|SESSION_STORE|postgres|drizzle|cookies|locals|parent/i);
+    expect(code).toContain("readRanks(env)");
     // The load takes only setHeaders: a second destructured property
     // (cookies, locals, request, parent) would be a session/cookie read even
     // under a name the token list above does not know.
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
     // The leaf CSS reaches the page only through this load's data merge.
     expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
-    // APP_URL is the only config-driven behavior: dropping it must fail this
-    // pin rather than silently render a wrong canonical.
-    expect(code).toMatch(/faqPageData\(env\.APP_URL\)/);
+    // APP_URL plus the live ranks drive the render: dropping either must fail
+    // this pin rather than silently render a wrong canonical or stale rungs.
+    expect(code).toMatch(/faqPageData\(env\.APP_URL, ranks\)/);
   });
 });

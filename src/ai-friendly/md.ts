@@ -1,15 +1,18 @@
 // AI-friendly machine formats (A2): curated Markdown alternates + /llms.txt.
 //
-// Pure builders: no I/O, no session, no database. FAQ/rules bodies share the
-// exact source arrays the HTML screens render, so copy cannot drift; the
-// routes in ./routes.ts only add headers and reads. Public fields only —
+// Pure builders: no I/O, no session, no database. FAQ bodies share the
+// faqPageData output the HTML screen renders, and About facts share the
+// aboutPageData output — same ranks in, same copy out, so copy cannot drift;
+// the routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
+import { aboutPageData } from "../about-content";
 import { isValidZone } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
-import { FAQS } from "../faq-content";
+import { faqPageData } from "../faq-content";
+import type { LadderRank } from "../ladder-copy";
 import { JOIN_INTRO } from "../screens/join";
 import { RULES } from "../rules-content";
 
@@ -88,34 +91,32 @@ const sourceLine = (appUrl: string, path: string): string =>
 const leafFooter = (appUrl: string): string =>
   `[Join with Discord](${canonicalUrl(appUrl, "/join")}) · [Back to the homepage](${canonicalUrl(appUrl, "/")})`;
 
-export function mdAbout(appUrl: string): string {
-  return [
+// The optional ranks slice (ordered [{ key, label, memberCount }] from
+// web_v1.rank_counts) derives the ladder fact from live data, exactly like the
+// HTML leaf. Without ranks the static bytes below render as the null-state
+// fallback.
+export function mdAbout(appUrl: string, ranks?: LadderRank[]): string {
+  const { strap, lead, facts } = aboutPageData(appUrl, ranks);
+  const out = [
     "# About Together We Own",
     "",
     sourceLine(appUrl, "/about"),
     "",
-    "Est. 1998",
+    strap,
     "",
-    "An adult gaming community that spent most of its life private. Now the doors are open: turn up, say hello, come back.",
+    lead,
     "",
-    "## Voice-first",
-    "",
-    "The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.",
-    "",
-    "## No application, no interview",
-    "",
-    "You start as a Prospect. Show up a few times, play, become a Member. The ladder records trust and time, not grind.",
-    "",
-    "## From forum threads to voice rooms",
-    "",
-    "Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.",
-    "",
-    leafFooter(appUrl),
-    "",
-  ].join("\n");
+  ];
+  for (const [term, body] of facts) out.push(`## ${mdText(term)}`, "", mdText(body), "");
+  out.push(leafFooter(appUrl), "");
+  return out.join("\n");
 }
 
-export function mdFaq(appUrl: string): string {
+// Same ranks contract as mdAbout: the rungs and entry answers derive from
+// live data, exactly like the HTML leaf; without ranks the static bytes below
+// render as the null-state fallback.
+export function mdFaq(appUrl: string, ranks?: LadderRank[]): string {
+  const { faqs } = faqPageData(appUrl, ranks);
   const out = [
     "# Frequently asked questions",
     "",
@@ -126,7 +127,7 @@ export function mdFaq(appUrl: string): string {
     "Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.",
     "",
   ];
-  for (const group of FAQS) {
+  for (const group of faqs) {
     out.push(`## ${mdText(group.section)}`, "");
     for (const [q, a, link] of group.items) {
       const answer = mdText(a) + (link ? ` [${mdInlineText(link.label)}](${link.href})` : "");

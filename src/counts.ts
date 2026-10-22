@@ -12,6 +12,11 @@ export type Rank = {
   key: string;
   label: string;
   memberCount: number | null;
+  // The Discord role id from web_v1.rank_ladder, present only when the rank
+  // has a ladder row with a non-null role. A rank without a ladder row still
+  // renders (completeness comes from rank_counts) with the field omitted, so
+  // renders and toEqual pins treat it as absent rather than null.
+  roleId?: string;
 };
 
 export type Counts = {
@@ -114,20 +119,66 @@ const readLive = cachedRead<LiveCounts>(
   },
 );
 
-const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
-  const rows = await sql<Row[]>`
-    SELECT rank_key, rank_label, member_count
-    FROM web_v1.rank_counts ORDER BY rank_order
-  `;
-  return rows.map((row) => ({
+function mapRank(row: Row): Rank {
+  const rank: Rank = {
     key: String(row.rank_key),
     label: String(row.rank_label),
     memberCount: count(row.member_count),
-  }));
+  };
+  // A rank without a ladder row (or with a null role) carries no role: the
+  // field stays omitted so renders skip the attribute and shape pins still
+  // match the role-less rows.
+  if (typeof row.role_id === "string" && row.role_id) rank.roleId = row.role_id;
+  return rank;
+}
+
+// The ladder side of the join is optional: a bot schema without rank_ladder
+// (42P01), without a grant on it (42501), without its role column (42703),
+// or with its own rank_order column (42702) still renders role-less ranks
+// from the counts alone. A code here only costs a counts-only retry: when the
+// counts side itself is broken the retry fails too and takes the usual
+// single-warn fallback path, exactly as before.
+const LADDER_UNAVAILABLE_CODES = new Set(["42P01", "42501", "42703", "42702"]);
+
+function isLadderUnavailable(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    LADDER_UNAVAILABLE_CODES.has((error as { code?: unknown }).code as string)
+  );
+}
+
+const readRanksView = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
+  try {
+    const rows = await sql<Row[]>`
+      SELECT c.rank_key, c.rank_label, c.member_count, l.role_id
+      FROM web_v1.rank_counts c LEFT JOIN web_v1.rank_ladder l ON l.rank_key = c.rank_key
+      ORDER BY c.rank_order
+    `;
+    return rows.map(mapRank);
+  } catch (error) {
+    // The ladder table is optional: a bot schema that cannot serve the join
+    // still renders role-less ranks from the counts alone. Any other error —
+    // or a ranks-only failure too — takes the usual single-warn fallback path.
+    if (!isLadderUnavailable(error)) throw error;
+    const rows = await sql<Row[]>`
+      SELECT rank_key, rank_label, member_count
+      FROM web_v1.rank_counts ORDER BY rank_order
+    `;
+    return rows.map(mapRank);
+  }
 });
 
 export async function readCounts(env: Env): Promise<Counts> {
   const url = botDatabaseUrl(env); // Explicit local/dev URL, else Hyperdrive BOT_DB.
-  const [live, ranks] = await Promise.all([readLive(url), readRanks(url)]);
+  const [live, ranks] = await Promise.all([readLive(url), readRanksView(url)]);
   return { ...live, ranks };
+}
+
+// The ladder alone, for leaves that need ranks but no live numerals (/about,
+// /faq on both stacks): the same cached ranks read, minus the live leg. Never
+// throws: without a bot source (or with the views down) it resolves [] and
+// the caller renders its static null-state.
+export async function readRanks(env: Env): Promise<Rank[]> {
+  return readRanksView(botDatabaseUrl(env));
 }

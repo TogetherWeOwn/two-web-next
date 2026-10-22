@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   ranks: [] as Record<string, unknown>[],
   liveError: null as Error | null,
   ranksError: null as Error | null,
+  ladderError: null as Error | null,
   constructorError: null as Error | null,
   endError: null as Error | null,
   hung: false,
@@ -29,6 +30,11 @@ vi.mock("postgres", () => ({
       const rows = (live ? state.live : state.ranks).map((row) => ({ ...row }));
       if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
       if (error) throw error;
+      // A ladder-side failure (missing table/grant/column): the join rejects,
+      // but the counts-only retry never mentions rank_ladder so it resolves.
+      if (!live && state.ladderError && query.includes("rank_ladder")) {
+        throw state.ladderError;
+      }
       return rows;
     };
     sql.end = async () => {
@@ -53,6 +59,7 @@ beforeEach(async () => {
     ranks: [{ rank_key: "prospect", rank_label: "Prospect", member_count: "24" }],
     liveError: null,
     ranksError: null,
+    ladderError: null,
     constructorError: null,
     endError: null,
     hung: false,
@@ -85,7 +92,7 @@ describe("readCounts contract", () => {
     });
     expect(state.urls).toEqual([env.BOT_DB!.connectionString, env.BOT_DB!.connectionString]);
     expect(state.queries[0]).toContain("human_member_count, online_count, counts_updated_at");
-    expect(state.queries[1]).toContain("ORDER BY rank_order");
+    expect(state.queries[1]).toContain("ORDER BY c.rank_order");
     expect(state.options[0]).toMatchObject({
       prepare: false,
       fetch_types: false,
@@ -167,6 +174,27 @@ describe("readCounts contract", () => {
       exception: "Error",
     });
   });
+
+  it.each(["42P01", "42501", "42703", "42702"])(
+    "retries counts-only when the ladder side of the join is unavailable (%s)",
+    async (code) => {
+      const ladderError = new Error(`ladder unavailable (${code})`) as Error & {
+        code: string;
+      };
+      ladderError.code = code;
+      state.ladderError = ladderError;
+      expect(await counts.readCounts(env)).toEqual({
+        memberCount: 84,
+        onlineCount: 12,
+        ranks: [{ key: "prospect", label: "Prospect", memberCount: 24 }],
+      });
+      expect(state.queries).toHaveLength(3); // Live, failed join, counts-only retry.
+      expect(state.queries[1]).toContain("rank_ladder");
+      expect(state.queries[2]).not.toContain("rank_ladder");
+      expect(state.queries[2]).toContain("FROM web_v1.rank_counts");
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("60-second isolate cache", () => {

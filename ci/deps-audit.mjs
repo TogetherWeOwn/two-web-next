@@ -250,18 +250,18 @@ export function auditOneLockfile({
           },
         },
       );
-      if (isTransientExecutionFailure(audit)) {
-        if (attempt === attempts) break;
+      if (isTransientExecutionFailure(audit) && attempt < attempts) {
         console.error(
           `Dependency audit for "${label}": attempt ${attempt} of ${attempts} did not complete; retrying in ${retryDelaysMs[attempt - 1]}ms`,
         );
         sleep(retryDelaysMs[attempt - 1]);
         continue;
       }
-      // Only deterministic spawn errors (npm missing, not executable) reach
-      // here: timeouts and bad statuses retry above, completed runs parse below.
-      if (audit.error) {
-        throw new Error(`npm audit did not complete successfully for "${label}"`);
+      // Deterministic spawn errors fail immediately; transient failures reach
+      // here after exhausting retries. Name the cause without registry data.
+      if (audit.error || ![0, 1].includes(audit.status)) {
+        const cause = audit.error?.code ?? audit.signal ?? `exit ${String(audit.status)}`;
+        throw new Error(`npm audit did not complete successfully for "${label}" (${cause})`);
       }
       // fd 3 contains only validation state, never registry data or credentials.
       const boundary = JSON.parse(audit.output[3] || "null");

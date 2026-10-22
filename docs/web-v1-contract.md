@@ -77,6 +77,41 @@ fallback labels without numbers or an `unclaimed` claim. There is no rank
 snapshot timestamp in the frozen consumer contract; a stale live snapshot does
 not hide independently readable ranks.
 
+## `web_v1.rank_ladder`
+
+Optional ladder side for Discord role ids. The counts read left-joins this
+view onto `rank_counts`; when the view is unpublished, ungranted, or
+column-mismatched, the read retries counts-only and ranks render live but
+role-less (no `data-role-id` attribute). Role ids never gate rendering:
+completeness comes from `rank_counts` alone.
+
+| Column | SQL value contract | Consumer meaning |
+| --- | --- | --- |
+| `rank_key` | non-null text, matches `rank_counts.rank_key` | Join key; exactly one row per rank key. |
+| `role_id` | nullable text (Discord role snowflake) | Rendered as `data-role-id` on mapped rank cards; null or empty means the attribute is omitted. |
+
+Producer shape (one row per `rank_key`, from the bot-owned `rank_ladder` table):
+
+```sql
+CREATE OR REPLACE VIEW web_v1.rank_ladder AS
+SELECT rank_key, role_id FROM rank_ladder;
+
+GRANT SELECT ON web_v1.rank_ladder TO two_web_reader;
+```
+
+The reader issues:
+
+```sql
+SELECT c.rank_key, c.rank_label, c.member_count, l.role_id
+FROM web_v1.rank_counts c LEFT JOIN web_v1.rank_ladder l ON l.rank_key = c.rank_key
+ORDER BY c.rank_order;
+```
+
+and retries the `rank_counts`-only query when the join fails with `42P01`
+(view missing), `42501` (grant missing), `42703` (column missing), or `42702`
+(ambiguous column). Until the producer publishes this view, every fill takes
+the retry path and rank cards carry no `data-role-id`.
+
 ## Connection, cache, and failure boundary
 
 - Reuse `src/db/connection.ts` (`botDatabaseUrl`): explicit local/dev

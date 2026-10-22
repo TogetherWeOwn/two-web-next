@@ -5,6 +5,7 @@ import type { HomeUpcomingRow } from "../events/reads";
 import type { VisibleFeatured } from "../featured";
 import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
+import { ladderHeading, stackSentence } from "../ladder-copy";
 import {
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
@@ -51,6 +52,10 @@ export const Home: FC<{
   imageHosts,
 }) => {
   const inviteUrl = inviteDestination(configuredInviteUrl);
+  // The ladder names the live ranks (and derives its heading and stack
+  // sentence from them); the static fallback names the same rungs when the
+  // bot views are dark, so the null-state bytes never change.
+  const ranks = counts.ranks.length ? counts.ranks : FALLBACK_RANKS;
   // Site identities for AI consumers: stable Organization + WebSite @ids.
   const siteIdentities = siteJsonLd(appUrl);
   return (
@@ -148,7 +153,7 @@ export const Home: FC<{
           <section class="community-intro" aria-labelledby="community-heading">
             <h2 id="community-heading">No application. No interview.</h2>
             <p>
-              Show up a few times. Play. Become a Member. The ladder records trust and time, not
+              Show up a few times. Play. Become a member. The ladder records trust and time, not
               grind.
             </p>
             <p>Small enough that people notice when you come back.</p>
@@ -171,11 +176,11 @@ export const Home: FC<{
           </section>
         </div>
         <section aria-label="Community ladder" class="community-ladder">
-          <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-          <p>Ranks stack — a Veteran still holds everything below.</p>
+          <h2>{ladderHeading(ranks)}</h2>
+          <p>{stackSentence(ranks)}</p>
           <dl class="facts rank-stack" data-testid="rank-stack">
-            {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
-              <div class="card" key={rank.key} data-rank={rank.key}>
+            {ranks.map((rank) => (
+              <div class="card" key={rank.key} data-rank={rank.key} data-role-id={rank.roleId}>
                 <dt>{rank.label}</dt>
                 <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
               </div>

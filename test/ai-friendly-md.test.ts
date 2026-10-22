@@ -345,6 +345,34 @@ describe("md builders (pure, DB-free)", () => {
   });
 });
 
+describe("md builders with live ranks", () => {
+  // Three-rung ladder with an unclaimed top: pins the derived count word,
+  // order chain, stack sentence, unclaimed claim, and entry rungs.
+  const ranks = [
+    { key: "ember", label: "Ember", memberCount: 24 },
+    { key: "tide", label: "Tide", memberCount: 40 },
+    { key: "crown", label: "Crown", memberCount: 0 },
+  ];
+
+  it("about derives the ladder fact from live ranks", () => {
+    const body = mdAbout(APP_URL, ranks);
+    expect(body).toContain("Est. 1998");
+    expect(body).toContain("You start as an Ember. Show up a few times, play, become a Tide.");
+    expect(body).not.toContain("Prospect");
+    expect(body).not.toContain("Member");
+  });
+
+  it("faq derives the rungs and entry answers from live ranks", () => {
+    const body = mdFaq(APP_URL, ranks);
+    expect(body).toContain(
+      "Three, in order: Ember → Tide → Crown. Ranks stack — a Tide still holds everything below. Crown is still unclaimed.",
+    );
+    expect(body).toContain("Everyone starts as an Ember");
+    expect(body).not.toContain("Prospect → Member");
+    expect(body).not.toContain("Legend is still unclaimed");
+  });
+});
+
 describe("static .md routes (DB-free)", () => {
   it.each([
     ["/about.md", ["Voice-first", "Est. 1998"]],

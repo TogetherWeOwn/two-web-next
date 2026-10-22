@@ -4,6 +4,7 @@
 // anything. Sentences are byte-identical to the funnel leaf they port, so
 // both renderers stay byte-identical too; change them here once and both
 // renderers follow.
+import { aboutLadderFact, type LadderRank } from "./ladder-copy";
 
 export const ABOUT_STRAP = "Est. 1998";
 
@@ -33,8 +34,23 @@ export type AboutPageData = {
 };
 
 // The Kit load function only reorders the same reads as the Hono handler
-// (src/static-leaves.tsx): APP_URL alone. Kept here (not in the Kit route)
-// so the root suite can pin it without importing SvelteKit or worker code.
-export function aboutPageData(appUrl: string): AboutPageData {
-  return { appUrl, strap: ABOUT_STRAP, lead: ABOUT_LEAD, facts: ABOUT_FACTS };
+// (src/static-leaves.tsx): APP_URL plus the bot-owned ranks. Kept here (not
+// in the Kit route) so the root suite can pin it without importing SvelteKit
+// or worker code.
+const LADDER_TERM = "No application, no interview";
+
+// The optional ranks slice (ordered [{ key, label, memberCount }] from
+// web_v1.rank_counts; extra fields ignored) derives the ladder fact from live
+// data. Without ranks — the views are down — the static bytes below render as
+// the null-state fallback.
+export function aboutPageData(appUrl: string, ranks?: LadderRank[]): AboutPageData {
+  if (!ranks?.length) return { appUrl, strap: ABOUT_STRAP, lead: ABOUT_LEAD, facts: ABOUT_FACTS };
+  return {
+    appUrl,
+    strap: ABOUT_STRAP,
+    lead: ABOUT_LEAD,
+    facts: ABOUT_FACTS.map(([term, definition]): [string, string] =>
+      term === LADDER_TERM ? [term, aboutLadderFact(ranks)] : [term, definition],
+    ),
+  };
 }

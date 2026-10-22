@@ -1,11 +1,15 @@
-// Database-free static leaves: `/discord`, `/login`, `/community`, `/about`,
-// `/faq`, `/rules`.
+// Mostly database-free static leaves: `/discord`, `/login`, `/community`,
+// `/about`, `/faq`, `/rules`.
 //
-// Disjoint from the OAuth/login extraction: no session, no cookie, no cache,
-// no database — these handlers stay 200→302 when everything behind them is
-// down. One register function behind the same barrel pattern as the event
+// Disjoint from the OAuth/login extraction: no session, no cookie, no cache.
+// `/discord`, `/login`, `/community` and `/rules` read no database at all and
+// stay 200→302 when everything behind them is down. `/about` and `/faq` read
+// only the bot-owned rank views for their ladder prose, and that read degrades
+// to the static null-state copy — so they stay 200 during any database outage
+// too. One register function behind the same barrel pattern as the event
 // routes; `src/index.tsx` only calls it.
 import type { Hono } from "hono";
+import { readRanks } from "./counts";
 import type { Env } from "./env";
 import { inviteDestination } from "./invite";
 import { safeNext } from "./join/service";
@@ -45,14 +49,22 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
     return c.redirect("/", 302);
   });
 
-  // Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-  // no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
-  // read or set here on purpose, for the same reason.
+  // Funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): no
+  // controller, no session, no cookies — but the ladder prose reads the
+  // bot-owned rank views, so the rungs name the live ladder instead of
+  // hard-coded ranks. The read never throws: without ranks the screens render
+  // their static null-state copy, and the leaves stay 200 during any database
+  // outage. No cookies are read or set here on purpose, for the same reason.
   for (const path of ["/about", "/faq"] as const) {
-    app.get(path, (c) => {
+    app.get(path, async (c) => {
       c.header("cache-control", "public, max-age=3600");
+      const ranks = await readRanks(c.env);
       return c.html(
-        path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
+        path === "/about" ? (
+          <About appUrl={c.env.APP_URL} ranks={ranks} />
+        ) : (
+          <Faq appUrl={c.env.APP_URL} ranks={ranks} />
+        ),
       );
     });
   }
