@@ -552,7 +552,8 @@ describe("series context in Kit detail presentation (hermetic SSR)", () => {
   });
 
   it("CONTROL: renders no series markup without model.series", async () => {
-    const html = await renderDetail(await baseKitModel());
+    const { series: _stripped, ...rest } = await baseKitModel();
+    const html = await renderDetail(rest);
     expect(html).not.toContain("event-series-hosts");
     expect(html).not.toContain("event-series-nav");
     expect(html).not.toContain("event-series-previous");
