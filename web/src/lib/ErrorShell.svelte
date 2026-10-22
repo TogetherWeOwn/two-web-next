@@ -41,12 +41,47 @@ const copy = $derived(kitErrorCopy(code));
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
+      <!-- Static recovery: the EventMissing search form, copied verbatim. No
+        loader, session or database reads — suggestions stay Hono-only. -->
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input
+            id="error-events-search"
+            name="q"
+            type="search"
+            placeholder="Search events…"
+            autocomplete="off"
+            data-testid="error-events-search"
+          />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">
+            Search events
+          </button>
+        </div>
+      </form>
     {:else if code === 400 || code === 410}
       <!-- 400/410 share recovery links; each keeps its status-specific copy. -->
       <p class="recovery-actions">
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
+      <!-- Same static search form as the 404 block above. -->
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input
+            id="error-events-search"
+            name="q"
+            type="search"
+            placeholder="Search events…"
+            autocomplete="off"
+            data-testid="error-events-search"
+          />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">
+            Search events
+          </button>
+        </div>
+      </form>
     {:else if code === 403}
       <!-- 403 names the join-to-unlock path; re-signing in cannot mint the member bit. -->
       <p class="recovery-actions">
@@ -77,7 +112,7 @@ const copy = $derived(kitErrorCopy(code));
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
           Use the Discord invite instead
         </a>
-        <a href="/" data-testid="error-retry">Try again</a>
+        <a href="/" data-testid="error-retry">Back to the homepage</a>
       </p>
     {/if}
     {#if supportReference}
