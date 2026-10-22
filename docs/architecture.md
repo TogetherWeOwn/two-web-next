@@ -181,8 +181,10 @@ request and never stored. The session cookie (`__Host-two_session`,
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
-sessions last 120 minutes with rotation on authenticated reads
-(`SESSION_TTL_SECONDS`), and logout revokes the row. Operators can revoke
+sessions have a 120-minute sliding window with rotation on authenticated reads
+(`SESSION_TTL_SECONDS`) and an absolute 24-hour lineage cap
+(`SESSION_ABSOLUTE_MAX_AGE_SECONDS`). Rotation preserves the original login's
+`created_at`; a fresh login is required at the cap. Logout revokes the row. Operators can revoke
 one member's active sessions with
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs) (dry-run count by
 default, `--apply` revokes), implemented in
