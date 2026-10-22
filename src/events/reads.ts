@@ -740,10 +740,10 @@ export async function listRelatedEvents(
 }
 
 /** Series context for one detail render: the hosts behind the run plus the
- * adjacent published nights by series index. Null for standalone events, so
- * both renderers keep today's markup byte-identical there. */
+ * adjacent published/past nights by series index. Null for standalone events,
+ * so both renderers keep today's markup byte-identical there. */
 export interface EventSeriesContext {
-  /** Distinct non-blank organizers across the published run, current host
+  /** Distinct non-blank organizers across the visible run, current host
    * first, the rest in ascending series-index order. Empty when nobody in
    * the run names a host; the view then omits the line but keeps prev/next. */
   hosts: string[];
@@ -757,14 +757,17 @@ export type SeriesEventRef = Pick<
   "id" | "parentEventId" | "recurrenceFrequency" | "recurrenceIndex" | "organizer_name"
 >;
 
+// Native recurrence creates at most 52 occurrences, but legacy imports have
+// no such invariant. One extra row detects overflow; never show partial history.
+export const SERIES_CONTEXT_MAX_EVENTS = 52;
+export const SERIES_CONTEXT_MAX_TEXT_BYTES = 4096;
+
 /**
- * One published-only read for the whole series run: the parent plus its
- * children by the indexed parent pointer, ordered by series index. Draft and
- * cancelled siblings never leave the database; past rows stay included (the
- * run is history members can still read, unlike the upcoming-only neighbor
- * and related rails). Fails open at the callers like the other decorative
- * reads: organizer names are already public on the detail page, so the read
- * is anonymous-safe and audit-silent.
+ * One bounded projection for the parent and its children, in series-index
+ * order. Published and past rows form the readable history; draft/cancelled
+ * siblings never leave the database. Oversized imported runs or public text
+ * omit the entire decorative block rather than suggest it is complete.
+ * Organizer names are already public, so this is anonymous-safe and audit-silent.
  */
 export async function getEventSeriesContext(
   db: Db,
@@ -780,28 +783,47 @@ export async function getEventSeriesContext(
     return null;
   }
   const rootId = event.parentEventId ?? event.id;
-  // Full rows, not a link projection: the run is small (one indexed read)
-  // and both renderers need organizers plus link fields together.
+  // Bound transport bytes as well as row count: imported text columns have no
+  // schema length limit. CASE omits all text on overflow, including a huge host
+  // name; the marker below then refuses the whole context, not just that host.
+  const textFits = sql<boolean>`(
+    octet_length(${events.eventKey}) + octet_length(${events.title}) +
+    octet_length(${events.timezone}) + coalesce(octet_length(${events.location}), 0) +
+    coalesce(octet_length(${events.organizer_name}), 0)
+  ) <= ${SERIES_CONTEXT_MAX_TEXT_BYTES}`;
   const rows = await nonSensitiveRead("events", () =>
     db
-      .select()
+      .select({
+        ...eventLinkColumns,
+        eventKey: sql<string>`case when ${textFits} then ${events.eventKey} end`,
+        title: sql<string>`case when ${textFits} then ${events.title} end`,
+        timezone: sql<string>`case when ${textFits} then ${events.timezone} end`,
+        location: sql<string | null>`case when ${textFits} then ${events.location} end`,
+        organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
+        recurrenceIndex: events.recurrenceIndex,
+        textFits,
+      })
       .from(events)
       .where(
         and(
-          eq(events.status, "published"),
+          inArray(events.status, ["published", "past"]),
           finiteEventStart,
           or(eq(events.id, rootId), eq(events.parentEventId, rootId)),
         ),
       )
-      .orderBy(asc(events.recurrenceIndex)),
+      .orderBy(asc(events.recurrenceIndex), asc(events.id))
+      .limit(SERIES_CONTEXT_MAX_EVENTS + 1),
   );
-  // SQL orders by index with nulls last; re-sort defensively so a null index
-  // never interleaves siblings on any backend (stable: ties keep SQL order).
-  const run = [...rows].sort(
-    (a, b) =>
-      (a.recurrenceIndex ?? Number.MAX_SAFE_INTEGER) -
-      (b.recurrenceIndex ?? Number.MAX_SAFE_INTEGER),
-  );
+  if (rows.length > SERIES_CONTEXT_MAX_EVENTS || rows.some((row) => !row.textFits)) return null;
+  // Finite PostgreSQL timestamps can still decode to invalid JS Dates. Drop
+  // those rows before hosts/adjacency, so mapping a Kit link cannot throw.
+  const run = rows
+    .filter((row) => Number.isFinite(row.startsAt.getTime()))
+    .sort(
+      (a, b) =>
+        (a.recurrenceIndex ?? Number.MAX_SAFE_INTEGER) -
+        (b.recurrenceIndex ?? Number.MAX_SAFE_INTEGER),
+    );
   const toLink = (row: (typeof run)[number]): EventLink => ({
     id: row.id,
     eventKey: row.eventKey,
@@ -810,7 +832,7 @@ export async function getEventSeriesContext(
     timezone: row.timezone,
     location: row.location,
   });
-  // A run of one is a standalone render: the current row with no published
+  // A run of one is a standalone render: the current row with no visible
   // siblings keeps today's markup with no series block at all.
   if (run.filter((row) => row.id !== event.id).length === 0) return null;
   const at = run.findIndex((row) => row.id === event.id);
@@ -820,8 +842,8 @@ export async function getEventSeriesContext(
     previous = at > 0 ? toLink(run[at - 1]!) : null;
     next = at + 1 < run.length ? toLink(run[at + 1]!) : null;
   } else {
-    // The current row is not published (a moderator reading a draft child):
-    // bracket its index among the published run instead of a list position.
+    // The current row is not public (a moderator reading a draft child):
+    // bracket its index among the visible run instead of a list position.
     const idx = event.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;
     for (const row of run) {
       const rowIdx = row.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;

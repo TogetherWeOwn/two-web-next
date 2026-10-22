@@ -107,8 +107,8 @@ export interface KitEventDetailLink {
 }
 
 /** Series run context for the detail view: the hosts behind the run plus the
- * adjacent published nights. Null for standalone events, which render with
- * no series markup on either renderer. */
+ * adjacent published/past nights. Null for standalone or oversized imported
+ * runs, which render with no series markup on either renderer. */
 export interface KitEventDetailSeries {
   hosts: string[];
   previous: KitEventDetailLink | null;
