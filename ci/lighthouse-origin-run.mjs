@@ -390,6 +390,14 @@ export async function main(
         pendingMarginal = marginal;
         continue;
       }
+      // Observability-only: log the eligibility decision on every
+      // full-evidence non-retry path, so a declined hardening is verifiable
+      // from the job log (previously zero marginal/retry lines was the
+      // expected steady-state for every non-marginal run). No gate, band,
+      // retry, or budget behavior change: the predicate above is untouched.
+      if (!marginal.marginal) {
+        log(`Marginal retry declined (${marginal.reason}): no retry.`);
+      }
       const summary = await writeSummary(dir, {
         origin,
         eventPath,
@@ -638,9 +646,9 @@ function selftest() {
       assert.match(rows.find((row) => row.path === "/rules").note, /no Lighthouse run completed/);
     }
     // Full evidence plus the evaluated-assertion marker: real breach, NO
-    // retry, BUDGET BREACH.
+    // retry, BUDGET BREACH. The decline decision is logged with its reason.
     {
-      const { code, calls, lhciDir } = await runCase([
+      const { code, calls, lhciDir, logs } = await runCase([
         { exitCode: 1, urls: urlsFor(ROUTES), assertFailed: true },
       ]);
       assert.equal(code, 1);
@@ -648,6 +656,10 @@ function selftest() {
       assert.match(
         readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8"),
         /BUDGET BREACH/,
+      );
+      assert.match(
+        logs.join("\n"),
+        /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
       );
     }
     // Marginal `/` LCP breach retries once and gates on the retry: attempt 1
@@ -687,6 +699,11 @@ function selftest() {
       assert.match(
         logs.join("\n"),
         /Marginal breach \(only error is \/ LCP 2060 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
+      );
+      assert.doesNotMatch(
+        logs.join("\n"),
+        /Marginal retry declined/,
+        "a retried run keeps its retry line, with no decline line",
       );
       // Dual evidence: the archived first table, the gating table pointing at
       // it, and the first attempt's per-run LHRs.
@@ -737,7 +754,7 @@ function selftest() {
         raw: { "assertion-results.json": marginalFailure },
         assertFailed: true,
       };
-      const { code, calls, lhciDir } = await runCase([step, { ...step }]);
+      const { code, calls, lhciDir, logs } = await runCase([step, { ...step }]);
       assert.equal(code, 1);
       assert.equal(calls, 2);
       const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
@@ -749,6 +766,15 @@ function selftest() {
         /attempt 2: exit 1, 24 LHRs \(marginal \/ LCP breach at 2100 ms, retried\)/,
       );
       assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
+      assert.match(
+        logs.join("\n"),
+        /Marginal breach \(only error is \/ LCP 2100 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
+      );
+      assert.doesNotMatch(
+        logs.join("\n"),
+        /Marginal retry declined/,
+        "a terminal marginal breach is not a decline",
+      );
     }
     // Far over budget: `/` LCP at 2500 is outside the band, NO retry.
     {
@@ -761,7 +787,7 @@ function selftest() {
           expected: 2000,
         },
       ]);
-      const { code, calls, lhciDir } = await runCase([
+      const { code, calls, lhciDir, logs } = await runCase([
         {
           exitCode: 1,
           urls: urlsFor(ROUTES),
@@ -775,6 +801,10 @@ function selftest() {
       const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
       assert.match(diagnosis, /BUDGET BREACH/);
       assert.doesNotMatch(diagnosis, /systematic, not variance/);
+      assert.match(
+        logs.join("\n"),
+        /Marginal retry declined \(\/ LCP 2500 outside the marginal band \(2000, 2200\)\): no retry\./,
+      );
     }
     // The band edge is exclusive: exactly 2200 (10% over) is not marginal.
     {
@@ -787,7 +817,7 @@ function selftest() {
           expected: 2000,
         },
       ]);
-      const { code, calls, lhciDir } = await runCase([
+      const { code, calls, lhciDir, logs } = await runCase([
         {
           exitCode: 1,
           urls: urlsFor(ROUTES),
@@ -798,6 +828,10 @@ function selftest() {
       assert.equal(code, 1);
       assert.equal(calls, 1);
       assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
+      assert.match(
+        logs.join("\n"),
+        /Marginal retry declined \(\/ LCP 2200 outside the marginal band \(2000, 2200\)\): no retry\./,
+      );
     }
     // A second error anywhere else vetoes the retry, even with `/` LCP in the
     // band: the gate is no longer pass/warn-only outside `/`.
@@ -818,7 +852,7 @@ function selftest() {
           expected: 600,
         },
       ]);
-      const { code, calls, lhciDir } = await runCase([
+      const { code, calls, lhciDir, logs } = await runCase([
         {
           exitCode: 1,
           urls: urlsFor(ROUTES),
@@ -829,16 +863,26 @@ function selftest() {
       assert.equal(code, 1);
       assert.equal(calls, 1);
       assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
+      assert.match(
+        logs.join("\n"),
+        /Marginal retry declined \(\/events is fail, not pass\/warn-only\): no retry\./,
+      );
     }
     // Full evidence but no assertion verdict (upload/config blew up): NO
     // retry, and the verdict must NOT claim a budget breached.
     {
-      const { code, calls, lhciDir } = await runCase([{ exitCode: 1, urls: urlsFor(ROUTES) }]);
+      const { code, calls, lhciDir, logs } = await runCase([
+        { exitCode: 1, urls: urlsFor(ROUTES) },
+      ]);
       assert.equal(code, 1);
       assert.equal(calls, 1);
       const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
       assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
       assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
+      assert.match(
+        logs.join("\n"),
+        /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
+      );
     }
     // A half-written report from a crashed run is missing evidence, never a
     // crash: truncated JSON is skipped and the short attempt retries.
