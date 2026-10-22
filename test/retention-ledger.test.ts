@@ -86,6 +86,7 @@ function deleteWindows(body: string, table: string): string[] {
     events: "events",
     featured_contents: "featuredContents",
     job_unique_locks: "jobUniqueLocks",
+    member_links: "memberLinks",
     profiles: "profiles",
     queue_failed_jobs: "queueFailedJobs",
     queue_jobs: "queueJobs",
@@ -1093,6 +1094,7 @@ describe("retention ledger queue mechanisms (no DB)", () => {
       ["import { queueJobs as q } from './schema'; db.delete(q)", "queue_jobs"],
       ["const q = schema.queueJobs; const q2 = q; db.delete(q2)", "queue_jobs"],
       ["db.delete(activityLog)", "activity_log"],
+      ["db.delete(memberLinks)", "member_links"],
       // Drizzle sql-template with an interpolated table object (late-novel).
       ["db.execute(sql`delete from ${queueJobs} where available_at < ${cutoff}`)", "queue_jobs"],
       [

@@ -31,6 +31,7 @@ import {
 } from "../src/profiles/links-validation";
 import { createDbLinksStore, createMemoryLinksStore } from "../src/profiles/links-store";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { stripTags } from "./helpers/html-text";
 
 describe("links validator bounds", () => {
   it("pins the locked contract constants", () => {
@@ -252,7 +253,7 @@ describe("links page document shape", () => {
     const list = /<ul[^>]*data-testid="member-links-list"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1];
     expect(list).toBeDefined();
     expect(list).toContain('target="_blank"');
-    expect(list).toContain('rel="noopener"');
+    expect(list).toContain('rel="noopener nofollow ugc"');
     expect(list).toContain("opens in a new tab");
   });
 
@@ -262,7 +263,7 @@ describe("links page document shape", () => {
       await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv)
     ).text();
     const reports = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].filter((m) =>
-      /report/i.test(m[2]!.replace(/<[^>]*>/g, "")),
+      /report/i.test(stripTags(m[2]!)),
     );
     expect(reports.length).toBeGreaterThanOrEqual(1);
     for (const m of reports) {

@@ -127,7 +127,7 @@ export const MemberLinksPage: FC<{
                 <a
                   href={link.url}
                   target="_blank"
-                  rel="noopener"
+                  rel="noopener nofollow ugc"
                   aria-label={`${link.label} (opens in a new tab)`}
                 >
                   {link.label}

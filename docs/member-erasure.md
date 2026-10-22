@@ -74,6 +74,7 @@ For ONE Discord id, in one transaction:
 | `users` | `id` (PK = Discord id) |
 | `profiles` | `user_id` |
 | `rsvps` | `user_id` |
+| `member_links` | `user_id` |
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
