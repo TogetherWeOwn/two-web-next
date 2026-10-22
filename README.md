@@ -113,6 +113,12 @@ Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
 
+### Public-payload privacy contract
+
+Run `npm run check:hono-payloads -- --format json` for the fixture-only Hono
+no-member-data check with stable per-route IDs. See the
+[contract, detector limits and route-addition rules](docs/hono-public-payloads.md).
+
 ## Coverage ratchet
 
 ```sh
