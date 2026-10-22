@@ -178,6 +178,9 @@ RSVP writes require membership but honeypot decoys intentionally bypass auth.
 `evidence-bearer` is the session-free source-evidence verifier: a runtime-only
 one-time bearer token plus the authorized incident ID and expiry, staging-only
 and default-off. No moderator session, no `activity_log` write.
+`ops-control-bearer` is the session-free, view-only operator override panel:
+the existing control bearer admits it, never a moderator session. It is dark
+without separately provisioned runtime configuration; no dashboard write ships.
 Public routes may read optional sessions; this does not promise zero DB queries.
 
 | Registered method + Hono pattern | Auth class | Test reference / mapping |
@@ -189,6 +192,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `ALL /leaderboards/members` | member | member-leaderboard-route: member gate + access log on every verb; only GET serves the board |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |
+| `DELETE /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `DELETE /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `DELETE /events/:key/rsvp` | member-decoy | rsvp: owner withdrawal + decoy |
 | `GET /` | public | app: home / optional session |
@@ -205,6 +209,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
+| `GET /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: read-only record/epoch HTML, token-only admission, no-store, explicit staleness bound |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
 | `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
@@ -246,8 +251,10 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /rules.md` | public | ai-friendly-md: curated Markdown alternate with last-updated stamp, static TTL, staging noindex |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
+| `OPTIONS /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `OPTIONS /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `OPTIONS /mcp` | public | mcp: CORS preflight for the stateless public MCP; answered by the handler, no body, no budget burn |
+| `PATCH /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `PATCH /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
@@ -259,6 +266,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/featured` | moderator | admin: featured create |
 | `POST /admin/featured/:id` | moderator | admin: featured update |
 | `POST /admin/featured/:id/delete` | moderator | admin: featured delete |
+| `POST /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `POST /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route / queue-redispatch-postgres: one-row guarded re-dispatch of replay advice only; refusals and stale rows are never deleted, reset or re-budgeted |
 | `POST /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
@@ -270,6 +278,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /logout` | public | app: optional session revoke + origin check |
 | `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
+| `PUT /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 

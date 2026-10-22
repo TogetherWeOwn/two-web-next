@@ -29,7 +29,11 @@ export const TableSortHeader: FC<{
   );
 };
 
-export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
+export const Shell: FC<PropsWithChildren<{ title: string; audience?: string }>> = ({
+  title,
+  audience = "moderators only",
+  children,
+}) => (
   <>
     {raw("<!doctype html>")}
     <html lang="en">
@@ -54,7 +58,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <main id="main" tabindex={-1}>
           {children}
         </main>
-        <footer>Together We Own · moderators only</footer>
+        <footer>Together We Own · {audience}</footer>
       </body>
     </html>
   </>
