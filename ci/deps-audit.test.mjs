@@ -706,6 +706,7 @@ exit "$AUDIT_STATUS"
       encoding: "utf8",
     });
     assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /did not complete successfully.*ENOENT/);
     assert.deepEqual(readdirSync(dir), ["cache-trace"], "execution failures must also clean up");
   } finally {
     rmSync(dir, { recursive: true, force: true });

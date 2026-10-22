@@ -216,7 +216,12 @@ function auditOneLockfile({ label, dir, guard, allowlist, cacheParent }) {
       },
     );
     if (audit.error || ![0, 1].includes(audit.status)) {
-      throw new Error(`npm audit did not complete successfully for "${label}"`);
+      // Name the failure kind without printing registry data: a timeout kills
+      // the child (ETIMEDOUT/SIGTERM), a missing npm fails spawn (ENOENT),
+      // anything else reports its exit status. Timeout, retry policy and exit
+      // codes are unchanged; only the message gains the cause.
+      const cause = audit.error?.code ?? audit.signal ?? `exit ${String(audit.status)}`;
+      throw new Error(`npm audit did not complete successfully for "${label}" (${cause})`);
     }
     // fd 3 contains only validation state, never registry data or credentials.
     const boundary = JSON.parse(audit.output[3] || "null");
