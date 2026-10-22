@@ -1,0 +1,12 @@
+# PROSPECTIVE ONLY: deliberately outside .github/workflows; no event/secret binding.
+# Copying/renaming this file is NOT activation authorization. Admission is unbuilt.
+name: Offline inventory preparation scaffold
+permissions: {}
+jobs:
+  refused:
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Unconditional refusal only
+        run: node ci/staging-rights-inventory.mjs

@@ -227,7 +227,15 @@ describe("public event read admission", () => {
     };
     const response = await f.request("/events?q=chess");
     expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Events temporarily unavailable");
+    // The guard fails open, so the limiter outage is invisible: with no
+    // database this answers the negotiated databaseUnavailable envelope
+    // (branded HTML by default), never the legacy bare-text bytes, and the
+    // driver diagnostic stays out of the response.
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("We will be right back");
+    expect(body).toContain('id="error-heading"');
+    expect(body).not.toContain("private driver diagnostic");
     expect(f.hits).toHaveLength(0);
   });
 
