@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { build } from "esbuild";
 import {
+  SMOKE_PROBE_KEY,
   SMOKE_QUEUE_CRITICAL_AT,
   SMOKE_QUEUE_WARN_AT,
   SMOKE_SECURITY_TXT_EXPIRES,
@@ -99,7 +100,7 @@ const fixtures = {
   ],
   // The fixed probe key exists in no database, so like the real handler
   // (src/public-data/routes.ts) the stub answers 404 not_found.
-  "/api/public/events/00000000000000000000000001": [
+  [`/api/public/events/${SMOKE_PROBE_KEY}`]: [
     404,
     "application/json",
     '{"error":{"code":"not_found","message":"No published event with that key."}}',
@@ -122,7 +123,7 @@ const fixtures = {
   // Single-event HTML detail (GET /e/:key, src/events/routes-detail.tsx):
   // the fixed probe key exists in no database, so like the real handler's
   // notFound() the stub answers the branded missing-event page.
-  "/e/00000000000000000000000001": [
+  [`/e/${SMOKE_PROBE_KEY}`]: [
     404,
     "text/html",
     "<title>We cannot find that page — Together We Own</title>",
@@ -538,7 +539,7 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   const brokenBodies = [
     // A success envelope where the missing-event error belongs.
     JSON.stringify({
-      event_key: "00000000000000000000000001",
+      event_key: SMOKE_PROBE_KEY,
       title: "Fixture game night",
       status: "published",
       rsvp_open: true,
@@ -560,12 +561,12 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   ];
   for (const body of brokenBodies) {
     const { url } = await stub(t, (route, result) => {
-      if (route === "/api/public/events/00000000000000000000000001") result.body = body;
+      if (route === `/api/public/events/${SMOKE_PROBE_KEY}`) result.body = body;
     });
     const result = await run(url);
     assert.equal(result.ok, false, body);
     assert.ok(
-      result.output.includes("FAIL /api/public/events/00000000000000000000000001: expected"),
+      result.output.includes(`FAIL /api/public/events/${SMOKE_PROBE_KEY}: expected`),
       result.output,
     );
     assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
@@ -597,7 +598,7 @@ test("a broken single-event HTML detail fails only that entry", async (t) => {
   ];
   for (const [body, status, contentType, expectedFragment] of broken) {
     const { url } = await stub(t, (route, result) => {
-      if (route === "/e/00000000000000000000000001") {
+      if (route === `/e/${SMOKE_PROBE_KEY}`) {
         result.body = body;
         result.status = status;
         if (contentType) result.headers["content-type"] = `${contentType}; charset=UTF-8`;
@@ -606,19 +607,19 @@ test("a broken single-event HTML detail fails only that entry", async (t) => {
     const result = await run(url);
     assert.equal(result.ok, false, body);
     assert.ok(
-      result.output.includes("FAIL /e/00000000000000000000000001: expected"),
+      result.output.includes(`FAIL /e/${SMOKE_PROBE_KEY}: expected`),
       `${body}\n${result.output}`,
     );
     if (expectedFragment) {
       assert.ok(
-        result.output.includes(`FAIL /e/00000000000000000000000001: ${expectedFragment}`),
+        result.output.includes(`FAIL /e/${SMOKE_PROBE_KEY}: ${expectedFragment}`),
         `${body}\n${result.output}`,
       );
     }
     assert.match(result.output, /^PASS \/events$/m, `${body}\n${result.output}`);
     assert.match(
       result.output,
-      /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+      new RegExp(`^PASS \\/api\\/public\\/events\\/${SMOKE_PROBE_KEY}$`, "m"),
       `${body}\n${result.output}`,
     );
     assert.match(result.output, /^PASS \/__smoke_unknown_route__$/m, `${body}\n${result.output}`);
@@ -900,7 +901,7 @@ test("security.txt passes in both indexing modes", async (t) => {
       if (
         allowIndexable &&
         (route === "/events/past" ||
-          route === "/e/00000000000000000000000001" ||
+          route === `/e/${SMOKE_PROBE_KEY}` ||
           route === "/__smoke_unknown_route__")
       )
         return;
@@ -2065,7 +2066,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   const { url, requests } = await stub(t, (route, result) => {
     if (
       route === "/events/past" ||
-      route === "/e/00000000000000000000000001" ||
+      route === `/e/${SMOKE_PROBE_KEY}` ||
       route === "/__smoke_unknown_route__"
     )
       return;
@@ -2106,7 +2107,7 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (
       route === "/events/past" ||
-      route === "/e/00000000000000000000000001" ||
+      route === `/e/${SMOKE_PROBE_KEY}` ||
       route === "/__smoke_unknown_route__"
     )
       return;
