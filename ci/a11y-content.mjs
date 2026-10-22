@@ -16,7 +16,7 @@ export function contentExpectations(scenario) {
         : [
             { selector: "main dl", includes: "98741" },
             ...(scenario.state === "operator-empty"
-              ? [{ selector: "main", includes: "No operator overrides are set." }]
+              ? [{ selector: "main", includes: "No overrides are set." }]
               : [{ selector: "main table", includes: "TWO_AUTOMOD_MENTION_LIMIT" }]),
           ]),
     ];

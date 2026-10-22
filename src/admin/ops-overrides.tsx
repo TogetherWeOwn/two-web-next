@@ -103,9 +103,7 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
               </div>
             </dl>
             <p>This is a snapshot, not confirmation that the runtime has applied the record.</p>
-            {Object.keys(record.overrides).length === 0 ? (
-              <p>No operator overrides are set.</p>
-            ) : null}
+            {Object.keys(record.overrides).length === 0 ? <p>No overrides are set.</p> : null}
             {keys.length ? (
               <table class="admin-table">
                 <caption>Operator record: override and boot baseline values</caption>
@@ -166,7 +164,7 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
 export function opsOverridesMethodRefused(c: Context<Vars>): Response {
   c.header("cache-control", "private, no-store");
   c.header("allow", "GET, HEAD");
-  return c.text("Method not allowed", 405);
+  return c.json({ error: "method_not_allowed" }, 405);
 }
 
 /** Token-only admission, deliberately before every session/admin middleware. */
