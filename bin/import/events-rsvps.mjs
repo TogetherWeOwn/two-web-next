@@ -46,10 +46,28 @@ const timestampColumns = new Set([
   "updated_at",
 ]);
 
+// The single flag reference for this tool: --help prints it to stdout,
+// usage errors print it to stderr. Connection URLs are env-only, never argv.
+export const EVENTS_RSVPS_USAGE =
+  "Usage: node bin/import/events-rsvps.mjs [--dry-run | --apply] [--help]. Connection URLs come only from LEGACY_DATABASE_URL and DATABASE_URL.";
+
+// Usage errors ("invoked wrong", nothing ran) are a distinct class from import
+// failures ("ran and failed", exit 1): a flag typo must print the usage line,
+// never the import-failure prose. Exit 2 is shared with reportExitCode ("ran,
+// unresolved references"); the two differ by output: a usage error prints only
+// the usage line to stderr and no JSON report to stdout (docs/import-events-rsvps.md).
+export class EventsRsvpsUsageError extends Error {
+  constructor() {
+    super(EVENTS_RSVPS_USAGE);
+    this.name = "EventsRsvpsUsageError";
+  }
+}
+
 export function parseArgs(args) {
   if (args.length === 0 || (args.length === 1 && args[0] === "--dry-run")) return { dryRun: true };
   if (args.length === 1 && args[0] === "--apply") return { dryRun: false };
-  throw new Error("Expected no arguments, --dry-run, or --apply; URLs must come from env.");
+  if (args.length === 1 && args[0] === "--help") return { dryRun: true, help: true };
+  throw new EventsRsvpsUsageError();
 }
 
 // A numeric sort is not enough: legacy parents can have higher IDs than children.
@@ -572,6 +590,12 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   let legacy, target;
   try {
     const options = parseArgs(args);
+    if (options.help) {
+      // Safe discovery: usage to stdout, exit 0, before any env validation
+      // or connection attempt.
+      console.log(EVENTS_RSVPS_USAGE);
+      return 0;
+    }
     if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) throw new Error("Import URLs are unset.");
     assertSeparateUrls(env.LEGACY_DATABASE_URL, env.DATABASE_URL);
     legacy = connectDatabase(env.LEGACY_DATABASE_URL);
@@ -581,6 +605,10 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     return reportExitCode(report);
   } catch (error) {
     // Driver errors can carry URLs, SQL parameters, or member data. Never echo them.
+    if (error instanceof EventsRsvpsUsageError) {
+      console.error(EVENTS_RSVPS_USAGE);
+      return 2;
+    }
     if (error instanceof TargetSeparationError) {
       console.error(
         "events-rsvps: could not establish isolated import tables; no destination writes. Verify separate databases/schemas and identity-probe access.",

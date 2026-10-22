@@ -215,23 +215,31 @@ export function resolveBaseline(root, env = process.env) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../", import.meta.url));
-  try {
-    if (process.argv.length === 3 && process.argv[2] === "--write-lock") {
-      const files = filesystemInventory(root);
-      validateInventory(files);
-      if (stat(root, lockFile)) readRegular(root, lockFile);
-      writeFileSync(resolve(root, lockFile), formatLock(files));
-      console.log(
-        "migration-history: wrote candidate lock; run ci/check-migration-numbers.sh to verify against Git history",
-      );
-    } else if (process.argv.length === 2) {
-      const result = checkMigrations(root, resolveBaseline(root));
-      console.log(
-        `migration-history: ok (${result.total} migrations; ${result.historical} historical paths and SQL hashes protected)`,
-      );
-    } else throw new Error("usage: node ci/check-migration-history.mjs [--write-lock]");
-  } catch (error) {
-    console.error(`migration-history: ${error.message}`);
-    process.exitCode = 1;
+  const args = process.argv.slice(2);
+  const isWriteLock = args.length === 1 && args[0] === "--write-lock";
+  const isCheck = args.length === 0;
+  if (!isWriteLock && !isCheck) {
+    console.error("migration-history: usage: node ci/check-migration-history.mjs [--write-lock]");
+    process.exitCode = 2;
+  } else {
+    try {
+      if (isWriteLock) {
+        const files = filesystemInventory(root);
+        validateInventory(files);
+        if (stat(root, lockFile)) readRegular(root, lockFile);
+        writeFileSync(resolve(root, lockFile), formatLock(files));
+        console.log(
+          "migration-history: wrote candidate lock; run ci/check-migration-numbers.sh to verify against Git history",
+        );
+      } else {
+        const result = checkMigrations(root, resolveBaseline(root));
+        console.log(
+          `migration-history: ok (${result.total} migrations; ${result.historical} historical paths and SQL hashes protected)`,
+        );
+      }
+    } catch (error) {
+      console.error(`migration-history: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
