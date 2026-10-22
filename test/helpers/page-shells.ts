@@ -184,6 +184,10 @@ export function pageShellFixture(status = "published") {
       if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.
       if (sql.includes("count(*)")) return { rows: [[1]] };
       if (sql.includes('"event_key" =') && !params.includes(EVENT_KEY)) return { rows: [] };
+      // pg-proxy rows are positional: the hotzone list selects three columns,
+      // not the full event shape used by detail and calendar reads below.
+      if (sql.startsWith('select "event_key", "title", "starts_at" from "events"'))
+        return { rows: [[event.eventKey, event.title, event.startsAt.toISOString()]] };
       return { rows: [encode(getTableColumns(events), event)] };
     }
     if (sql.includes('from "featured_contents"')) {
