@@ -20,8 +20,8 @@ import { throttleEnvelope } from "./rate-limit";
 // Over-budget refusals are attacker-proportional by definition, so the audit
 // write is sampled (~1%, SHIELD_REFUSAL_AUDIT_RATE, matching the pre-auth warn
 // precedent): flood tests assert exact row counts under a forced sampler, not
-// live randomness. Every refusal still increments the in-memory counters
-// below, and every refusal takes a token from the in-memory log bucket: on
+// live randomness. Every over-budget verdict still increments the in-memory
+// counters below; only final 429s take a token from the in-memory log bucket: on
 // success it warns `agent-events.shield.refused` (bucket class + outcome
 // only), otherwise it folds into the bounded `agent-events.shield.refused.shed`
 // signal carrying the drop count since the previous shed emit. The bucket
@@ -47,8 +47,8 @@ export const SHIELD_REFUSAL_AUDIT_RATE = 0.01;
 
 /**
  * In-memory volume signal for over-budget shield refusals, by bucket class.
- * Incremented on every refusal whether or not the audit row is sampled. The
- * log line no longer carries the running count: every refusal warns
+ * Incremented on every over-budget verdict whether or not the audit row is sampled.
+ * The log line no longer carries the running count: every final 429 warns
  * `agent-events.shield.refused` with the bucket class and outcome only
  * (token-bucketed, with a bounded shed signal), so flood volume stays
  * observable in logs without attacker-proportional table or log growth.
@@ -148,16 +148,6 @@ export async function shield(
   // answers retryable 503 instead of stalling the refusal. No advisory
   // lock, hit write, or grant lookup.
   shieldRefusalCounters[bucketClass.kind] += 1;
-  // Refusal telemetry: bucket class + outcome only — never the credential,
-  // never IP bytes, never body bytes. Every refusal takes a log token;
-  // overflow folds into the bounded shed signal. The ~1% audit-row sampling
-  // below is unchanged.
-  if (takeShieldRefusalLogToken())
-    console.warn("agent-events.shield.refused", {
-      bucket_class: bucketClass.kind,
-      outcome: "rate_limited",
-    });
-  else warnShieldRefusalShed();
   if (Math.random() < SHIELD_REFUSAL_AUDIT_RATE) {
     const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
     const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
@@ -183,5 +173,13 @@ export async function shield(
       throw err;
     }
   }
+  // Only final 429s spend log tokens: a sampled audit failure above can instead
+  // return 503 or throw. Class + outcome only, never identity or body bytes.
+  if (takeShieldRefusalLogToken())
+    console.warn("agent-events.shield.refused", {
+      bucket_class: bucketClass.kind,
+      outcome: "rate_limited",
+    });
+  else warnShieldRefusalShed();
   return throttleEnvelope(retryAfter ?? 1, requestId);
 }
