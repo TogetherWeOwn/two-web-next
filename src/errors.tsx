@@ -15,6 +15,7 @@ export {
 export { registerErrorHandlers } from "./error-registration";
 export {
   badRequest,
+  clampOutageRetryAfter,
   databaseUnavailable,
   databaseUnavailableBuffered,
   forbidden,
@@ -26,6 +27,7 @@ export {
   notFoundHandler,
   notFoundResponse,
   outageRepresentation,
+  OUTAGE_RETRY_AFTER_SECONDS,
   payloadTooLarge,
   prefersHtmlError,
   rateLimitExceeded,
