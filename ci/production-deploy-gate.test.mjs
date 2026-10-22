@@ -17,11 +17,16 @@ import {
   assertRollbackVersionId,
   checkProductionGate,
   isAlreadyLive,
+  pendingLedgerTags,
   pendingMigrationTags,
   pendingProductionMigrations,
+  readLedgerState,
   readLiveProductionCommit,
+  readLiveProductionLedger,
   stagingQualityJob,
   stagingQualitySteps,
+  targetWebEndUnknown,
+  targetWebEntries,
 } from "./production-deploy-gate.mjs";
 
 const enabled = {
@@ -1727,6 +1732,98 @@ test("pending migration lookup compares journals at both commits and passes on u
   );
 });
 
+test("target web entries are the 1000-series journal entries", () => {
+  const entries = [
+    { tag: "0000_init", when: 1 },
+    { tag: "1000_a", when: 1000 },
+    { tag: "1001_b", when: 1001 },
+  ];
+  assert.deepEqual(
+    targetWebEntries(entries).map((entry) => entry.tag),
+    ["1000_a", "1001_b"],
+  );
+  assert.deepEqual(targetWebEntries([]), []);
+  assert.deepEqual(targetWebEntries(null), []);
+});
+
+test("unknown target web end fails closed on timestamp-less web entries", () => {
+  assert.equal(
+    targetWebEndUnknown([
+      { tag: "1000_a", when: 1000 },
+      { tag: "1001_b", when: 1001 },
+    ]),
+    false,
+  );
+  assert.equal(targetWebEndUnknown([]), false);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a" }]), true);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a", when: "1000" }]), true);
+  // Grandfathered non-web entries stay outside the proof.
+  assert.equal(targetWebEndUnknown([{ tag: "0000_init" }]), false);
+});
+
+test("ledger-pending tags are target web entries missing from the applied set", () => {
+  const target = [
+    { tag: "0000_init", when: 1 },
+    { tag: "1000_a", when: 1000 },
+    { tag: "1001_b", when: 1001 },
+    { tag: "1002_c", when: 1002 },
+  ];
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002, 9999999999999]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 9999999999999]), ["1001_b", "1002_c"]);
+  // A newer foreign row cannot hide a missing web migration: inclusion, not a max.
+  assert.deepEqual(pendingLedgerTags(target, [9999999999999]), ["1000_a", "1001_b", "1002_c"]);
+  assert.deepEqual(pendingLedgerTags(target, []), ["1000_a", "1001_b", "1002_c"]);
+  assert.throws(() => pendingLedgerTags(target, null), /migration_ledger/);
+  assert.throws(() => pendingLedgerTags(target, [1000, "1001"]), /migration_ledger/);
+});
+
+test("ledger state requires a current database and the applied set", () => {
+  assert.deepEqual(
+    readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [1000, 1001] }),
+    [1000, 1001],
+  );
+  assert.deepEqual(readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [] }), []);
+  for (const body of [
+    { db: "error", pending_migrations: null, migration_ledger: null },
+    // Isolated db arm: pending and ledger are valid, only db is bad. Deleting
+    // the body?.db !== "ok" disjunct in readLedgerState must turn this red.
+    { db: "error", pending_migrations: 0, migration_ledger: [1000, 1001] },
+    { db: "ok", pending_migrations: 1, migration_ledger: [1000, 1001] },
+    { db: "ok", pending_migrations: 0, migration_ledger: null },
+    { db: "ok", pending_migrations: 0, migration_ledger: [1000, "1001"] },
+    { db: "ok", pending_migrations: 0 },
+    {},
+  ]) {
+    assert.throws(() => readLedgerState(body), /ledger/i);
+  }
+});
+
+test("live ledger read fails closed with a ledger reason on transport errors", async () => {
+  const applied = await readLiveProductionLedger({
+    fetchImpl: async () => ({
+      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
+    }),
+  });
+  assert.deepEqual(applied, [40, 41, 42]);
+  await assert.rejects(
+    readLiveProductionLedger({
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed");
+      },
+    }),
+    /ledger read failed/,
+  );
+  await assert.rejects(
+    readLiveProductionLedger({
+      fetchImpl: async () => ({
+        json: async () => ({ db: "error", pending_migrations: null, migration_ledger: null }),
+      }),
+    }),
+    /ledger/i,
+  );
+});
+
 test("pending migrations stop the promotion with a migrator-blocked error (CLI)", () => {
   // The workflow step message must name db-migrate.yml and the blocker.
   const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
@@ -2003,4 +2100,77 @@ test("check-migrations CLI recovers when an unreadable live commit succeeds on r
   );
   assert.equal(recovered.status, 0);
   assert.match(recovered.stdout, /No pending production migrations/);
+});
+
+test("check-migrations CLI halts closed with a ledger reason when the ledger is unreachable", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const stub = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+    { match: "/up", fail: true },
+  ];
+  const base = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: live,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+  };
+  // Automatic: stays stopped, keeps the migrator-blocked reason, names the ledger failure.
+  const automatic = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, GITHUB_EVENT_NAME: "schedule" },
+    stub,
+  );
+  assert.equal(automatic.status, 1);
+  assert.match(automatic.stderr, /ledger/i);
+  assert.match(automatic.stderr, /0001_b/);
+  assert.match(automatic.stderr, /least-privilege migrator/);
+  // Manual: keeps the db-migrate guidance and the audited continuation.
+  const manual = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, GITHUB_EVENT_NAME: "workflow_dispatch" },
+    stub,
+  );
+  assert.equal(manual.status, 1);
+  assert.match(manual.stderr, /ledger/i);
+  assert.match(manual.stderr, /run db-migrate\.yml \(target production\) first/);
+  assert.match(manual.stderr, /migrations_applied=true/);
+});
+
+test("check-migrations CLI halts closed when the live Worker predates the ledger signal", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const dated = (entries) => ({
+    content: Buffer.from(JSON.stringify({ entries })).toString("base64"),
+    encoding: "base64",
+  });
+  const result = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      LIVE_SHA: live,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "schedule",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [
+      {
+        match: `ref=${target}`,
+        body: dated([
+          { tag: "1000_a", when: 1000 },
+          { tag: "1001_b", when: 1001 },
+        ]),
+      },
+      { match: `ref=${live}`, body: dated([{ tag: "1000_a", when: 1000 }]) },
+      {
+        match: "/up",
+        body: { revision: { commit: live }, db: "ok", pending_migrations: 0 },
+      },
+    ],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /migration_ledger/);
 });
