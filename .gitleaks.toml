@@ -141,3 +141,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/bot-settings\.test\.ts$''']
 regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']
+
+[[allowlists]]
+description = "Two synthetic Discord event ids in the fixture-only public Hono payload acceptance suite, not clients or credentials"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/hono-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']
