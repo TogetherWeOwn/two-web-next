@@ -11,7 +11,7 @@
 //     semicolon; the ONLY DDL the bootstrap may ever emit)
 //   ROLE_STATUS_QUERY: constant single SELECT against pg_roles for the fixed
 //     role, returning at least rolname, rolcanlogin, rolsuper, rolcreatedb,
-//     rolcreaterole, rolreplication, rolbypassrls, rolpassword, rolconnlimit
+//     rolcreaterole, rolreplication, rolbypassrls, rolconnlimit
 //   STATEMENT_TIMEOUT_MS: positive int, at most 60000
 //   LOCK_TIMEOUT_MS: positive int, at most 30000
 //   CONNECT_TIMEOUT_SECONDS: positive int, at most 30
@@ -23,7 +23,8 @@
 //     { state: "absent" } | { state: "compatible" } |
 //     { state: "incompatible", reason: <names the attribute> }
 //     Compatible = NOLOGIN with PostgreSQL CREATE ROLE defaults (no
-//     superuser/createdb/createrole/replication/bypassrls, no password).
+//     superuser/createdb/createrole/replication/bypassrls; passwords are
+//     not classified because pg_roles always masks rolpassword).
 //     See https://www.postgresql.org/docs/current/sql-createrole.html
 //   bootstrapRole(client): client with unsafe(sql) like postgres.js;
 //     check-first; absent -> emit CREATE_ROLE_DDL once, re-read, verify;
@@ -78,7 +79,6 @@ interface RoleRow {
   rolinherit: boolean;
   rolreplication: boolean;
   rolbypassrls: boolean;
-  rolpassword: string | null;
   rolconnlimit: number;
 }
 
@@ -106,6 +106,7 @@ interface BootstrapModule {
 async function bootstrapModule(): Promise<BootstrapModule> {
   let loaded: unknown;
   try {
+    // @ts-expect-error Standalone CI tooling has no declaration file.
     loaded = await import("../ci/staging-role-bootstrap.mjs");
   } catch (error) {
     throw new Error("Failed to load ci/staging-role-bootstrap.mjs.", { cause: error });
@@ -146,7 +147,6 @@ const compatibleRow = (): RoleRow => ({
   rolinherit: true,
   rolreplication: false,
   rolbypassrls: false,
-  rolpassword: null,
   rolconnlimit: -1,
 });
 
@@ -265,7 +265,6 @@ describe("bootstrap module pins the fixed role and constant DDL", () => {
       "rolcreaterole",
       "rolreplication",
       "rolbypassrls",
-      "rolpassword",
     ]) {
       expect(sql).toContain(column);
     }
@@ -398,13 +397,6 @@ describe("bootstrap role classification", () => {
           row.rolbypassrls = true;
         },
         /bypassrls/i,
-      ],
-      [
-        "password",
-        (row) => {
-          row.rolpassword = "md5stub";
-        },
-        /password/i,
       ],
     ];
     for (const [name, mutate, pattern] of variants) {
