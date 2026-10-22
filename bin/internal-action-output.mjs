@@ -1,7 +1,7 @@
 // Versioned JSON plan/report/error documents for the internal-action CLIs
 // (bin/internal-action-smoke.mjs, bin/internal-action-drill.mjs).
 //
-// Every `--json` run prints exactly one document to stdout: a `plan` for a
+// Every non-help `--json` run prints one document to stdout: a `plan` for a
 // preview (exit 0), a `report` for an apply (exit 0/1), an `error` for a
 // misconfiguration (exit 2). Error codes are static UPPER_SNAKE; `next`
 // always names a safe next action. Nothing here prints secrets, argv values,
