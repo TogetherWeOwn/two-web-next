@@ -263,8 +263,8 @@ export async function withdrawRsvp(
       // Unknown keys change nothing, so they cost nothing: return before the
       // throttle prune/charge, mirroring writeRsvp's not_found path.
       if (!ev) return { limited: false, deleted: false, status: null } as const;
-      // Own row, promotion rows and maintenance can all wait on other writers.
-      // Take them before the hit is stamped so an accepted debit stays fresh.
+      // Own-row and promotion locks can wait; the prune skips locked rows but
+      // may still wait on other locks. Finish them before stamping a fresh hit.
       await tx
         .select({ id: rsvps.id })
         .from(rsvps)
