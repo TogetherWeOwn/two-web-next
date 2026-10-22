@@ -9,6 +9,7 @@ import type { checkJoinThrottle } from "../join/service";
 import type { SessionStore } from "../sessions";
 import type { MemberStatsSource } from "./stats";
 import type { ProfileStore } from "./store";
+import type { UpcomingGameNightsSource } from "./upcoming";
 
 export const SNOWFLAKE = /^\d{10,25}$/;
 
@@ -18,6 +19,8 @@ export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
   stats?: MemberStatsSource;
+  /** Self-view upcoming game nights; resolved only when viewer == member. */
+  upcoming?: UpcomingGameNightsSource;
   accessLog?: AccessSink;
   /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;

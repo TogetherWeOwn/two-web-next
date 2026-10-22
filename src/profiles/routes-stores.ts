@@ -16,6 +16,7 @@ import {
   readOwnedMemberStats,
 } from "./stats";
 import { createDbProfileStore, type ProfileStore } from "./store";
+import { readProfileUpcoming, type UpcomingGameNight } from "./upcoming";
 
 export function profileStores(deps: ProfileDeps) {
   const storeFor = async (c: { env: Env }): Promise<ProfileStore | null> => {
@@ -51,7 +52,17 @@ export function profileStores(deps: ProfileDeps) {
     const db = await dbFor(c);
     return db ? (entry) => recordAccess(db, entry) : null;
   };
-  return { storeFor, statsFor, sinkFor };
+  // Self-view upcoming game nights: one bounded joined read of the viewer's
+  // own answers. Null when the database is unavailable hides the section,
+  // like a null stats read hides the stats block.
+  const upcomingFor = async (
+    c: { env: Env },
+    memberId: string,
+  ): Promise<UpcomingGameNight[] | null> => {
+    if (deps.upcoming) return deps.upcoming(memberId);
+    return readProfileUpcoming(await dbFor(c), memberId);
+  };
+  return { storeFor, statsFor, sinkFor, upcomingFor };
 }
 
 export type ProfileStores = ReturnType<typeof profileStores>;

@@ -107,6 +107,8 @@ type LoadSeam = {
   resolveKitProfile: typeof resolveKitProfile;
   storeFor: () => Promise<ReturnType<typeof createMemoryProfileStore>>;
   statsFor: (id: string) => Promise<null>;
+  /** Participation pins pre-upcoming renders: the read resolves unknown, hiding the section. */
+  upcomingFor: (id: string) => Promise<null>;
 };
 type Loader = (event: LoadEvent, seam: LoadSeam) => Promise<Record<string, unknown>>;
 const loaders = new Map<boolean, Promise<Loader>>();
@@ -266,6 +268,7 @@ export async function participationFixture(
             statsReads.push(id);
             return null;
           },
+          upcomingFor: async () => null,
         },
       );
       const render = await compileView();

@@ -10,6 +10,7 @@ let { data }: PageProps = $props();
 <ProfileView
   member={data.member}
   stats={data.stats}
+  upcoming={data.upcoming}
   isOwner={data.isOwner}
   isModerator={data.isModerator}
   appUrl={data.appUrl}

@@ -23,6 +23,8 @@ import {
   profileIsNewMember,
   profileJoinedMonth,
 } from "../../../src/islands/contracts";
+import { fmt } from "../../../src/events/pages";
+import { escapeHtml } from "../../../src/html-escape";
 import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
@@ -35,6 +37,7 @@ import {
   type ProfileFormValues,
 } from "../../../src/profiles/pages";
 import type { MemberStats } from "../../../src/profiles/stats";
+import type { UpcomingGameNight } from "../../../src/profiles/upcoming";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
@@ -44,11 +47,16 @@ import { canonicalUrl } from "../../../src/seo";
 // test ids and copy are shared, so the existing profile tests and islands
 // apply. Member fields render through Svelte interpolation only — never
 // {@html} — so a hostile username, bio or game name stays escaped text, like
-// the Hono JSX render. The edit form posts to the Hono-owned write routes
-// (POST/PATCH /members/:user stay off the manifest until edit parity).
+// the Hono JSX render. The two event-content fields in the upcoming section
+// are the one exception: they render through {@html escapeHtml()} because
+// Svelte interpolation leaves `>` raw while Hono escapes it, and the section
+// must match Hono bytes exactly (escapeHtml is pinned in
+// test/html-escape.test.ts). The edit form posts to the Hono-owned write
+// routes (POST/PATCH /members/:user stay off the manifest until edit parity).
 let {
   member,
   stats = null,
+  upcoming = null,
   isOwner,
   isModerator = false,
   appUrl,
@@ -58,6 +66,8 @@ let {
 }: {
   member: MemberView;
   stats?: MemberStats | null;
+  /** Self-view upcoming game nights; null hides the section. */
+  upcoming?: UpcomingGameNight[] | null;
   isOwner: boolean;
   isModerator?: boolean;
   appUrl: string;
@@ -301,6 +311,39 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           {/if}
         </section>
       {/if}
+    {/if}
+    {#if upcoming}
+      <section
+        class="profile-panel"
+        aria-labelledby="upcoming-heading"
+        data-testid="profile-upcoming"
+      >
+        <h2 id="upcoming-heading">Your upcoming game nights</h2>
+        {#if upcoming.length > 0}
+          <ol class="profile-upcoming-list">
+            {#each upcoming as night}
+              <li data-testid="profile-upcoming-item">
+                <a href={`/e/${night.eventKey}`}>{@html escapeHtml(night.title)}</a>
+                {" "}
+                <time datetime={night.startsAt.toISOString()}>
+                  {fmt(night.startsAt, night.timezone)}
+                </time>
+                <p>{@html escapeHtml(night.location ?? "Venue to be announced")}</p>
+                {#if night.status === "waitlisted"}
+                  <p data-testid="profile-upcoming-position">
+                    Waitlist position {night.waitlistPosition}
+                  </p>
+                {/if}
+              </li>
+            {/each}
+          </ol>
+        {:else}
+          <p data-testid="profile-upcoming-empty">
+            Nothing booked yet. <a href="/events">Browse the schedule</a> to find your next game
+            night.
+          </p>
+        {/if}
+      </section>
     {/if}
     {#if isOwner}
       <section

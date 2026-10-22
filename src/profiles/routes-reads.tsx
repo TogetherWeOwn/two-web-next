@@ -9,7 +9,10 @@ import { ProfilePage } from "./pages";
 import { type Ctx, type ProfileApp, SNOWFLAKE } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 
-export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: ProfileStores) {
+export function registerReadRoutes(
+  app: ProfileApp,
+  { storeFor, statsFor, upcomingFor }: ProfileStores,
+) {
   const render = async (c: Ctx, id: string) => {
     // Same per-isolate, DB-source-scoped cached guest snapshot as ordinary
     // 404s and event-detail 404s: one fill per TTL, never one Postgres
@@ -30,12 +33,17 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
     const viewer = c.get("viewer");
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
+    const isOwner = viewer.id === member.id;
+    // Self-only: another member's page never reads the viewer's answers, so
+    // it renders byte-identical with or without upcoming rows.
+    const upcoming = isOwner ? await upcomingFor(c, member.id) : null;
     return bufferedMemberHtml(
       c,
       <ProfilePage
         member={member}
         stats={stats}
-        isOwner={viewer.id === member.id}
+        upcoming={upcoming}
+        isOwner={isOwner}
         isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}
         joinResult={joinResult}

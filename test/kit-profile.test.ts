@@ -199,6 +199,7 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
       kind: "ok",
       member: expect.objectContaining({ id: ALICE }),
       stats,
+      upcoming: null,
       isOwner: false,
       isModerator: false,
       joinResult: null,

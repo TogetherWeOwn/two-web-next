@@ -46,6 +46,12 @@ const MILESTONE_ROW =
   "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101";
 const SELF_POSITION =
   "select event_id, user_id, position from ( select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position from rsvps where event_id in ($1, $2) and status = 'waitlisted' ) line where user_id = $3";
+// Self-profile upcoming game nights (src/profiles/upcoming.ts): the viewer's
+// own going/waitlisted answers joined to published upcoming events, soonest
+// first, capped at PROFILE_UPCOMING_LIMIT. Kept in sync on purpose — if the
+// read changes shape, this pin must change too.
+const PROFILE_UPCOMING_READ =
+  "select r.user_id as user_id, e.event_key as event_key, e.title as title, e.starts_at as starts_at, e.timezone as timezone, e.location as location, r.status as status, case when r.status = 'waitlisted' then ( select count(*)::int + 1 from rsvps as w where w.event_id = e.id and w.status = 'waitlisted' and (w.created_at, coalesce(w.legacy_id, w.id), w.id) < (r.created_at, coalesce(r.legacy_id, r.id), r.id) ) else null end as waitlist_position from rsvps as r inner join events as e on e.id = r.event_id where r.user_id = $1 and r.status in ('going', 'waitlisted') and e.status = 'published' and e.ends_at >= $2 order by e.starts_at asc, e.id asc limit 10";
 // Relative-scope member board (src/leaderboards/members.ts): exact normalized
 // statements from the query builder, full-filter variants. Kept in sync on
 // purpose — if the read changes shape, these pins must change too.
@@ -229,6 +235,10 @@ describe("rawMemberOwner", () => {
     expect(rawMemberOwner(`  ${MEMBER_ROW.replaceAll(" ", "  \n ")}  `)).toBe("member_id");
   });
 
+  it("returns user_id for the profile upcoming game nights shape", () => {
+    expect(rawMemberOwner(PROFILE_UPCOMING_READ)).toBe("user_id");
+  });
+
   it("returns user_id for the relative-board rank and window shapes", () => {
     expect(rawMemberOwner(RELATIVE_RANK_READ)).toBe("user_id");
     expect(rawMemberOwner(RELATIVE_WINDOW_READ)).toBe("user_id");
@@ -251,6 +261,10 @@ describe("rawMemberOwner", () => {
       rawMemberOwner(RELATIVE_WINDOW_READ.replace("order by ranked.rank asc", "")),
     ).toBeUndefined();
     expect(rawMemberOwner(`with grouped as (${RELATIVE_RANK_READ})`)).toBeUndefined();
+    expect(rawMemberOwner(PROFILE_UPCOMING_READ.replace("limit 10", "limit 11"))).toBeUndefined();
+    expect(
+      rawMemberOwner(PROFILE_UPCOMING_READ.replace("and e.status = 'published'", "")),
+    ).toBeUndefined();
     expect(rawMemberOwner("")).toBeUndefined();
   });
 });
