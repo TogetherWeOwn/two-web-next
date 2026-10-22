@@ -12,7 +12,7 @@
 //   homepage (data-testid="error-home") recovery. Heading mirrors Hono's
 //   "Check the board filters"; theme, active nav and noindex match the board.
 // - A refused filter does no ranking work at all: no dbFor, no ranking read,
-//   no board-view queue, no headers set. (Mock non-calls below prove all four.)
+//   no board-view queue; it sets private, no-store exactly once.
 // - Gating precedes grammar: guests bounce 302 and signed-in non-members get
 //   403 before any filter is parsed, on helper and binding alike.
 // - Grammar, valid rendering and relative scope unchanged; the generic Kit 400
@@ -342,7 +342,10 @@ describe("Kit board-filter 400 (status kept, no read, no log)", () => {
       expect(dbForFn, filter.label).not.toHaveBeenCalled();
       expect(loadRankingFn, filter.label).not.toHaveBeenCalled();
       expect(queueBoardViewFn, filter.label).not.toHaveBeenCalled();
-      expect(setHeaders, filter.label).not.toHaveBeenCalled();
+      expect(setHeaders, filter.label).toHaveBeenCalledTimes(1);
+      expect(setHeaders, filter.label).toHaveBeenCalledWith({
+        "cache-control": "private, no-store",
+      });
     },
   );
 });
@@ -471,7 +474,12 @@ describe("Kit board gating and grammar unchanged", () => {
         loadMembersBoardData(kitArgs({ session, seasonParam: "bogus", loadRankingFn, setHeaders })),
       ).rejects.toMatchObject({ status: expected });
       expect(loadRankingFn).not.toHaveBeenCalled();
-      expect(setHeaders).not.toHaveBeenCalled();
+      if (session.status === "guest") {
+        expect(setHeaders).not.toHaveBeenCalled();
+      } else {
+        expect(setHeaders).toHaveBeenCalledTimes(1);
+        expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
+      }
     }
   });
 
