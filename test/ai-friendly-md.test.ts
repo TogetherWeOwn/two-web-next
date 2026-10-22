@@ -125,7 +125,7 @@ describe("md builders (pure, DB-free)", () => {
 
   it("privacy serves the policy source with its version, never member data", () => {
     const body = mdPrivacy(APP_URL);
-    expect(body).toContain("Version 5");
+    expect(body).toContain("Version 6");
     expect(body).toContain("We never ask Discord for your email address");
     expect(body).toContain(`${APP_URL}/privacy`);
     for (const leak of ["@example.com", "user_id", "discord_event_id", "web_session"])
@@ -350,7 +350,7 @@ describe("static .md routes (DB-free)", () => {
     ["/about.md", ["Voice-first", "Est. 1998"]],
     ["/faq.md", ["How do I join?", "Prospect"]],
     ["/rules.md", ["18+ only", "1 September 2026"]],
-    ["/privacy.md", ["Version 5", "email address"]],
+    ["/privacy.md", ["Version 6", "email address"]],
     ["/join.md", ["Approve once with Discord"]],
     ["/llms.txt", ["about.md", "faq.md", "rules.md", "privacy.md", "join.md", "events.md"]],
   ] as Array<[string, string[]]>)("%s serves markdown with parity copy", async (path, phrases) => {

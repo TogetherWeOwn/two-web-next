@@ -1,8 +1,9 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
-import { safeNext } from "./join/service";
+import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
+import { AUTH_THROTTLE_PER_MINUTE, throttleGuard } from "./throttle";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
 import { recoveryOutcome } from "./recovery-outcome";
@@ -78,14 +79,33 @@ export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Resp
   ) {
     return c.json({ error: "Unauthorized", recovery: recoveryUrl(next) }, 401);
   }
+  // A genuine expired write arms its own pending notice before the 303, so
+  // the landing below never mints one on a mere visit (an attacker link
+  // cannot pre-arm a false restored banner). JSON callers keep the 401 with
+  // no cookie: they handle recovery themselves, never via the banner.
+  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
   return c.redirect(recoveryUrl(next), 303);
 }
 
 /** Explicit recovery: carries only a safe GET destination, never a submitted body. */
 export async function recoveryLanding(c: Ctx): Promise<Response> {
-  const next = safeNext(c.req.query("next")) ?? "/profile";
+  const raw = c.req.query("next");
+  const next = safeNext(raw) ?? "/profile";
+  // Oversized destinations refuse before throttle spend (OAuth-callback
+  // parity): the fallback still renders, but no budget is charged and — like
+  // every landing visit — no pending notice is minted.
+  const oversized =
+    typeof raw === "string" &&
+    new TextEncoder().encode(raw).byteLength > MAX_RETURN_DESTINATION_BYTES;
+  if (!oversized) {
+    const limited = await throttleGuard(c, "login-recover", AUTH_THROTTLE_PER_MINUTE);
+    if (limited) return limited;
+  }
   await setSignedCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
-  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
+  // No pending| here: only a genuine expired-write bounce arms the notice
+  // (expiredWriteBounce above), so a bare link visit can never pre-arm a
+  // false restored banner on the visitor's next login. The retry link below
+  // carries the destination in its own ?next= query.
   // Same model, status (200) and headers as the direct render: the one-use
   // journey writes above stay Hono-owned and ride the buffered response (the
   // injected renderer only changes who turns the model into bytes).
