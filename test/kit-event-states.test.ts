@@ -180,7 +180,10 @@ describe("event-state missing", () => {
     expect(seen).toHaveLength(1);
     if (outcome.kind !== "missing") throw new Error("unreachable");
     expect(outcome.status).toBe(404);
-    expect(outcome.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(outcome.headers).toEqual({
+      "cache-control": "private, no-store",
+      "x-robots-tag": "noindex, nofollow",
+    });
     expect(outcome.model.suggestions).toHaveLength(1);
     expect(outcome.model.suggestions[0]).toMatchObject({
       key: SUGGESTIONS[0]!.key,

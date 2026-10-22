@@ -257,7 +257,10 @@ describe("event-detail gate order", () => {
     expect(seen).toHaveLength(1);
     if (outcome.kind !== "missing") throw new Error("unreachable");
     expect(outcome.status).toBe(404);
-    expect(outcome.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(outcome.headers).toEqual({
+      "cache-control": "private, no-store",
+      "x-robots-tag": "noindex, nofollow",
+    });
     expect(outcome.model.suggestions).toHaveLength(1);
   });
 
@@ -297,7 +300,10 @@ describe("event-detail gate order", () => {
     expect(outcome.kind).toBe("missing");
     if (outcome.kind !== "missing") throw new Error("unreachable");
     expect(outcome.status).toBe(404);
-    expect(outcome.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(outcome.headers).toEqual({
+      "cache-control": "private, no-store",
+      "x-robots-tag": "noindex, nofollow",
+    });
     expect(outcome.model.suggestions).toHaveLength(1);
     expect(seen).toHaveLength(1);
   });

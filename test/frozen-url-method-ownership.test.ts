@@ -268,7 +268,7 @@ describe("frozen Hono behavior without a database", () => {
       const res = await request("/login", env, { method });
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe("/auth/discord");
-      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(res.headers.get("set-cookie")).toBeNull();
       if (method === "HEAD") expect(await res.text()).toBe("");
       expect(dbRead).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ describe("frozen Hono behavior without a database", () => {
     const res = await request("/auth/discord/redirect", env);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/auth/discord");
-    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(dbRead).not.toHaveBeenCalled();
   });

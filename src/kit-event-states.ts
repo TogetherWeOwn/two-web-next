@@ -198,7 +198,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
       // session read, which this sessionless module never performs: the
       // full-detail companion owns that branch.
       if (event.status === "draft") {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { ...NO_STORE };
         setHeaders(headers);
         return { kind: "forbidden", status: 403, headers };
       }
@@ -214,7 +214,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
     suggestions = [];
   }
   missing = { suggestions: suggestions.map(missingSuggestion) };
-  const headers = { "x-robots-tag": NOINDEX };
+  const headers = { ...NO_STORE, "x-robots-tag": NOINDEX };
   setHeaders(headers);
   return { kind: "missing", status: 404, headers, model: missing };
 }
