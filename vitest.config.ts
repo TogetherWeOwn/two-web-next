@@ -57,7 +57,11 @@ export default defineConfig({
         "src/invite.ts": { statements: 92.7, branches: 99, functions: 99, lines: 91.8 },
         "src/return-journey.ts": { statements: 99, branches: 94.4, functions: 99, lines: 99 },
         "src/write-recovery.tsx": { statements: 99, branches: 94.4, functions: 99, lines: 99 },
-        "src/kit-*": { statements: 77.3, branches: 78, functions: 79.5, lines: 77.6 },
+        // Measured 2026-10-21 via `npm run test:coverage`: statements 96.17,
+        // branches 93.87, functions 95.29, lines 97.05 (kit-access-sink.ts is
+        // 0%: it is only imported by web/src/hooks.server.ts, never by root
+        // tests). Floors are baseline minus 1, rounded down to 0.1.
+        "src/kit-*": { statements: 95.1, branches: 92.8, functions: 94.2, lines: 96 },
         "src/counts.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
         "src/seo.ts": { statements: 99, branches: 99, functions: 99, lines: 99 },
       },

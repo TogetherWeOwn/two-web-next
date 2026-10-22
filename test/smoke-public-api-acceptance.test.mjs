@@ -5,7 +5,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
+import { SMOKE_PROBE_KEY, SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Acceptance contract: deploy smoke covers the session-free public API.
 //
@@ -26,7 +28,7 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //     last_page (src/public-data/contracts.ts). An error envelope, a
 //     missing or truncated envelope, non-numeric paging fields, or a
 //     non-JSON body served with HTTP 200 must fail this entry.
-//   - GET /api/public/events/00000000000000000000000001 expects HTTP
+//   - GET /api/public/events/<SMOKE_PROBE_KEY> expects HTTP
 //     404, Content-Type application/json, and the missing-event error
 //     envelope: an `error` object with code "not_found" and a non-empty
 //     message (src/public-data/routes.ts). The fixed probe key is a valid
@@ -172,14 +174,14 @@ const fixtures = {
     "<title>We cannot find that page — Together We Own</title>",
   ],
   "/api/public/events": [200, "application/json", healthyCollection],
-  "/api/public/events/00000000000000000000000001": [404, "application/json", missingSingle],
+  [`/api/public/events/${SMOKE_PROBE_KEY}`]: [404, "application/json", missingSingle],
   "/api/public/community": [200, "application/json", healthyCommunity],
   "/api/public/join": [200, "application/json", healthyJoin],
   "/openapi.json": [200, "application/json", healthyOpenApi],
   // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
   // no database, so like the real handler's notFound() the stub answers the
   // branded missing-event page.
-  "/e/00000000000000000000000001": [
+  [`/e/${SMOKE_PROBE_KEY}`]: [
     404,
     "text/html",
     "<title>We cannot find that page — Together We Own</title>",
@@ -329,7 +331,7 @@ test("healthy stub: all five public API entries are probed exactly once and pass
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
   assert.match(
     result.output,
-    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    new RegExp(`^${escapeRegExp(`PASS /api/public/events/${SMOKE_PROBE_KEY}`)}$`, "m"),
     result.output,
   );
   assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
@@ -341,7 +343,7 @@ test("healthy stub: all five public API entries are probed exactly once and pass
   assert.deepEqual(requests.map((r) => r.path).sort(), EXPECTED_PATHS, JSON.stringify(requests));
   for (const path of [
     "/api/public/events",
-    "/api/public/events/00000000000000000000000001",
+    `/api/public/events/${SMOKE_PROBE_KEY}`,
     "/api/public/community",
     "/api/public/join",
     "/openapi.json",
@@ -471,7 +473,7 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   const brokenBodies = [
     // A success envelope where the missing-event error belongs.
     JSON.stringify({
-      event_key: "00000000000000000000000001",
+      event_key: SMOKE_PROBE_KEY,
       title: "Fixture game night",
       status: "published",
       rsvp_open: true,
@@ -488,12 +490,12 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   for (const body of brokenBodies) {
     const { url } = await stub(
       t,
-      serve("/api/public/events/00000000000000000000000001", (result) => {
+      serve(`/api/public/events/${SMOKE_PROBE_KEY}`, (result) => {
         result.body = body;
       }),
     );
     const result = await run(url);
-    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assertOnlyRouteFails(result, `/api/public/events/${SMOKE_PROBE_KEY}`);
     assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
     assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
     assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
@@ -506,7 +508,7 @@ test("a 200 single-event success or a non-JSON 404 fails only that entry", async
     (result) => {
       result.status = 200;
       result.body = JSON.stringify({
-        event_key: "00000000000000000000000001",
+        event_key: SMOKE_PROBE_KEY,
         title: "Fixture game night",
         status: "published",
         rsvp_open: true,
@@ -520,9 +522,9 @@ test("a 200 single-event success or a non-JSON 404 fails only that entry", async
     },
   ];
   for (const mutate of mutations) {
-    const { url } = await stub(t, serve("/api/public/events/00000000000000000000000001", mutate));
+    const { url } = await stub(t, serve(`/api/public/events/${SMOKE_PROBE_KEY}`, mutate));
     const result = await run(url);
-    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assertOnlyRouteFails(result, `/api/public/events/${SMOKE_PROBE_KEY}`);
     assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
     assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
   }
@@ -531,7 +533,7 @@ test("a 200 single-event success or a non-JSON 404 fails only that entry", async
 test("a not_found message variant still passes (only the code is pinned)", async (t) => {
   const { url } = await stub(
     t,
-    serve("/api/public/events/00000000000000000000000001", (result) => {
+    serve(`/api/public/events/${SMOKE_PROBE_KEY}`, (result) => {
       result.body = JSON.stringify({ error: { code: "not_found", message: "Gone." } });
     }),
   );
@@ -539,7 +541,7 @@ test("a not_found message variant still passes (only the code is pinned)", async
   assert.equal(result.ok, true, result.output);
   assert.match(
     result.output,
-    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    new RegExp(`^${escapeRegExp(`PASS /api/public/events/${SMOKE_PROBE_KEY}`)}$`, "m"),
     result.output,
   );
 });
@@ -617,7 +619,7 @@ test("CLI passes a healthy stub and reports all five public entries, with no ext
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
   assert.match(
     result.output,
-    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    new RegExp(`^${escapeRegExp(`PASS /api/public/events/${SMOKE_PROBE_KEY}`)}$`, "m"),
     result.output,
   );
   assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);

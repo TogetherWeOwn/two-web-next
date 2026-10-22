@@ -37,7 +37,7 @@ describe("Kit privacy port: single policy source", () => {
     };
     walk(join(root, "web/src/routes/privacy"));
     expect(webHits).toEqual([]);
-    expect(POLICY_VERSION).toBe(5);
+    expect(POLICY_VERSION).toBe(6);
     expect(POLICY_MARKDOWN.startsWith("## Who we are")).toBe(true);
   });
 
