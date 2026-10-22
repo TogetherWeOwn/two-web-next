@@ -404,6 +404,7 @@ describe("FAIL_TO_PASS: route-level outage wiring", () => {
     "the global handler renders classified outages with Retry-After 60 for %s",
     async (accept) => {
       const failing = new Hono<{ Bindings: Env }>();
+      failing.use("*", requestLog);
       failing.onError(internalErrorHandler);
       failing.get("/", () => {
         throw new Error("query", {
@@ -454,9 +455,11 @@ describe("PASS_TO_PASS: 429 behavior is untouched", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("60");
     expect(await res.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 60 seconds.",
       retry_after: 60,
+      next: "Wait for Retry-After, then retry.",
     });
   });
 
