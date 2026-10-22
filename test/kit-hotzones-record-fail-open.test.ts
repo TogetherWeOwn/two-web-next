@@ -27,7 +27,10 @@ describe("Kit hot-zone board-view fail-open", () => {
     expect(data.joins.total).toBe(3);
     expect(recordBoardViewFn).toHaveBeenCalledTimes(1);
     expect(setHeaders).toHaveBeenCalledTimes(1);
-    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=300",
+      vary: "Cookie",
+    });
   });
 
   it("a signal still serves when the board-view record rejects", async () => {
@@ -47,6 +50,9 @@ describe("Kit hot-zone board-view fail-open", () => {
     expect(data).toMatchObject({ signal: "joins", total: 3 });
     expect(recordBoardViewFn).toHaveBeenCalledTimes(1);
     expect(setHeaders).toHaveBeenCalledTimes(1);
-    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=300",
+      vary: "Cookie",
+    });
   });
 });

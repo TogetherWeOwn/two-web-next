@@ -501,7 +501,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public API event freshness acceptanc
     const detail = await get(`/api/public/events/${key(93)}`);
     expect(detail.status).toBe(404);
     expect(await detail.json()).toEqual({
-      error: { code: "not_found", message: "No published event with that key." },
+      error: {
+        code: "not_found",
+        message: "No published event with that key.",
+        request_id: expect.any(String),
+        next: expect.any(String),
+      },
     });
   });
 
