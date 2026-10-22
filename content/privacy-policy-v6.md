@@ -38,9 +38,11 @@ Concretely, the website keeps:
   many games you own, refreshed from Steam daily. We also keep three
   sync-diagnostic fields that are stored but never shown: your Steam
   profile visibility state, your account state, and when you were last
-  online on Steam — last-online time is personal data, and it is used
-  only to keep the sync healthy. Steam data is used only to render your
-  profile block and to suggest games when you edit your games list. We
+  online on Steam — last-online time is personal data. Profile-facing
+  Steam data is used only to render your profile block and to suggest
+  games when you edit your games list; the three diagnostic fields and
+  the SteamID64 log entries below are used only to keep the sync
+  healthy and to diagnose failed syncs. We
   never keep your friends list, achievements, real name or playtime
   history. One
   Steam account per member: an additional link attempt is refused with an
@@ -184,16 +186,18 @@ The site runs on Cloudflare, which handles each request (including your IP
 address) to deliver the page. Our own request logs record the page route,
 the response status, how long it took and which Cloudflare data center
 served it — never your IP address or who you are. Separate from those,
-the Steam sync job keeps its own diagnostic logs, which record your
-SteamID64 so a failed sync can be traced — and never the Steam API key
-or the sign-in assertion signatures.
+the Steam sync job keeps its own diagnostic logs in Cloudflare Workers
+Logs, which record your SteamID64 so a failed sync can be traced — and
+never the Steam API key or the sign-in assertion signatures. Those
+entries are kept for up to 7 days, then age out; unlinking Steam or
+asking for erasure does not remove historical entries sooner.
 
 ## Deletion
 
 Ask anytime to be removed — DM a moderator or open a private support ticket —
 and we delete your rows: your member record, profile, RSVPs, sign-in sessions
-and join attempts, plus your linked Steam account data, banner image and
-reports about your profile.
+and join attempts, plus your linked Steam account data, banner image,
+reports about your profile and reports you filed.
 Signing in again later starts a fresh record.
 
 Three evidence records are exceptions, because they are kept tamper-proof as
@@ -203,13 +207,16 @@ after 90 days. The moderator edit history keeps the name of the moderator who
 made each change. Profile-field hides stay in the audit log under the same
 rule: moderation evidence that is never edited per request.
 
-Two further traces also stay, and neither is erased with your rows. Moderator
+Three further traces also stay, and none is erased with your rows. Moderator
 content you authored keeps your Discord ID on the content row as its
 authorship mark (described above): that mark is your identifying data, and it
 lasts as long as the content row does. Residual rate-limit counters keyed to
 your Discord ID (described above) are not deleted with your rows either; they
 are cleaned up lazily when a later request that runs cleanup arrives, so an
-expired counter can linger until such a request arrives.
+expired counter can linger until such a request arrives. Steam sync diagnostic
+entries naming your SteamID64 (described above) age out of Cloudflare Workers
+Logs within 7 days; unlinking Steam or asking for erasure does not remove
+historical entries sooner.
 
 ## Changes to this policy
 
@@ -223,4 +230,4 @@ Version 4 names the two further Deletion traces alongside the two tamper-proof e
 
 Version 5 clarifies that anonymous board-view telemetry and viewer-linked member-data access auditing are separate records. No collection, erasure category or retention period changes.
 
-Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. It also discloses the stored-never-shown Steam sync diagnostics, viewer-IP disclosure to Valve on Steam avatars, and SteamID64 in sync diagnostic logs. Erasure gains linked-account rows, the banner image and profile reports; existing retention periods are unchanged.
+Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. It also discloses the stored-never-shown Steam sync diagnostics, viewer-IP disclosure to Valve on Steam avatars, and SteamID64 in sync diagnostic logs (kept up to 7 days in Workers Logs, not removed by unlink or erasure). Erasure gains linked-account rows, the banner image, reports about you and reports you filed; existing retention periods are unchanged.
