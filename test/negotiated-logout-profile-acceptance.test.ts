@@ -79,7 +79,7 @@ describe("logout revocation failure stays authoritative and offers browser recov
     const body = await branded(response, 503, "We will be right back");
     expect(body).toContain('data-testid="error-support-reference"');
     expect(body).toContain(RAY);
-    expect(body).toMatch(/try again/i);
+    expect(body).toMatch(/back to the homepage/i);
     expect(body).toContain('href="https://discord.gg/invite"');
     expect(body).not.toContain('href="/auth/discord"');
   });

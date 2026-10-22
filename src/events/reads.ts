@@ -48,8 +48,16 @@ export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes">
 
 export type HomeEvent = Pick<
   PublicEvent,
-  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount"
->;
+  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount" | "capacity"
+> & {
+  /** Seat occupancy for the teaser full verdict, like `waitlist.goingCount`.
+   * `listHomeUpcoming` always projects it (no extra query: `withGoing`
+   * already batches both aggregates), so the live teaser never offers a seat
+   * the write path cannot grant. Optional only for older hand-built
+   * fixtures: renderers fall back to the named `goingCount` when absent
+   * (the `GoingCountState.occupancy` precedent). Aggregate only. */
+  goingOccupancy?: number;
+};
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
@@ -308,13 +316,24 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     // The teaser renders `startsAt` unguarded, so unrenderable windows are
     // refused here too (this read never had #232's `isfinite()` guard).
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
-      ({ eventKey, title, startsAt, timezone, location, goingCount }) => ({
+      ({
         eventKey,
         title,
         startsAt,
         timezone,
         location,
         goingCount,
+        goingOccupancy,
+        capacity,
+      }) => ({
+        eventKey,
+        title,
+        startsAt,
+        timezone,
+        location,
+        goingCount,
+        goingOccupancy,
+        capacity,
       }),
     );
   });
