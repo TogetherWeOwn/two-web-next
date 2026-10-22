@@ -788,7 +788,9 @@ describe("Kit detail presentation", () => {
     expect(mount).toMatch(
       /<button type="button" hidden[^>]*>\s*Show in my device timezone\s*<\/button>/,
     );
-    expect(mount).toContain('<p role="status" aria-live="polite"></p>');
+    expect(mount).toContain(
+      '<p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>',
+    );
   });
 
   it("renders the guest contract: pitch, share, discovery, metadata, never attendees", async () => {

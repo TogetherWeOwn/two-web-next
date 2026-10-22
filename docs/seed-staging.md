@@ -45,7 +45,7 @@ metadata through env:
 | --- | --- |
 | `APP_URL` | Exactly `https://next.togetherweown.com` (optional trailing slash) |
 | `SEED_CONFIRM` | Exactly `staging`, for dry-run as well as apply |
-| `DATABASE_URL` | Authorized staging connection, env only |
+| `DATABASE_URL` | Authorized staging connection with `sslmode=verify-full` (or `sslrootcert=system`), env only |
 | `SEED_STAGING_DB_HOST` | Exact staging endpoint hostname (`*.neon.tech` or `*.pg.psdb.cloud`), including `-pooler` if a Neon pooler is used |
 | `SEED_STAGING_DB_NAME` | Exact staging database name |
 | `SEED_PRODUCTION_DB_HOSTS` | Comma-separated verified production endpoint hostnames; include direct **and** pooled endpoints |
@@ -63,14 +63,17 @@ seeding stays operator-gated.
 Both modes refuse missing confirmation, `APP_ENV=production`, production apex
 `APP_URL` (including `www`, case variants and trailing-dot hosts), unknown app
 hosts, invalid PostgreSQL URLs, denied database hosts, and denied database names.
-`prod`/`production` host labels and database names are always denied. Remote
-targets must be the exact allowlisted staging endpoint/name (`*.neon.tech` or
-`*.pg.psdb.cloud`) with the staging app URL and a non-empty production host
-denylist. Local apps may target only
-`agent_test@agent-testdb:5432/two_web_next` with an empty password. Driver URL query
-parameters other than `sslmode=require` or `sslmode=verify-full` are refused, so
-`host`, `dbname`, `options`, or service parameters cannot redirect a checked URL.
-No unknown remote endpoint is accepted by default.
+`NODE_TLS_REJECT_UNAUTHORIZED=0` is refused on every host. `prod`/`production`
+host labels and database names are always denied, detected by the shared
+`bin/operator-db-core.mjs` floor (imported, not copied); there is no production
+escape. Remote targets must be the exact allowlisted staging endpoint/name
+(`*.neon.tech` or `*.pg.psdb.cloud`) with the staging app URL, a non-empty
+production host denylist, and `sslmode=verify-full` (or `sslrootcert=system`);
+`sslmode=require` and missing TLS are refused, never silently defaulted. Local
+apps may target only `agent_test@agent-testdb:5432/two_web_next` with an empty
+password. Driver URL query parameters other than `sslmode` or `sslrootcert=system`
+are refused, so `host`, `dbname`, `options`, or service parameters cannot redirect
+a checked URL. No unknown remote endpoint is accepted by default.
 
 Apply refuses collisions with non-seed event keys, fixture user IDs, or featured
 natural keys, and refuses duplicate featured keys. It changes only its own
@@ -94,9 +97,13 @@ can add extra occurrences; those aren't automatically deleted by this tool.
 - A four-occurrence weekly series: parent `seed-calendar-05`, children 06–08;
   existing numeric IDs and parent links remain stable.
 - Three fixture users with `seed-` usernames, null avatars, and no PII. The first
-  two retain `src/qa.ts`'s reserved synthetic IDs (`900000000000001396` and
+  two retain the reserved synthetic IDs (`900000000000001396` and
   `900000000000001397`) so QA login sees the same RSVP answers. The third is
-  `seed-qa-waitlisted`. Existing `QA Member`/`QA Moderator` names on those exact
+  `seed-qa-waitlisted`. The single source of truth for these IDs is
+  `ci/operator-constants.mjs`, which the seed script imports; `src/qa.ts` keeps
+  its own literals as a fail-closed guard and the parity suite
+  (`test/operator-constants-parity.mjs`, wired into `npm run test:smoke`) fails
+  on drift. Existing `QA Member`/`QA Moderator` names on those exact
   reserved IDs are accepted as synthetic QA fixtures; other usernames fail closed.
   QA sign-in may restore its own `QA Member`/`QA Moderator` display names later.
 - **12** fixture RSVPs: two going plus one waitlisted for each of four capacity-2
@@ -114,7 +121,7 @@ counts for additional rows created manually or by a running recurrence job.
 ```sh
 npm run check
 # Credential-free unit tests plus DB integration using the configured test service:
-npx vitest run test/seed-staging.test.ts
+npx vitest run test/seed-staging.test.ts test/seed-staging-guard-parity-acceptance.test.ts
 ```
 
 The tests verify guards without connecting, the fixture mix and QA ID alignment,

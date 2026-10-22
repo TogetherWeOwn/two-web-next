@@ -154,6 +154,7 @@ describe("homepage theme", () => {
           timezone: "UTC",
           location: "Voice lobby",
           goingCount: 2,
+          capacity: null,
         },
       ],
     });

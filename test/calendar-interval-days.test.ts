@@ -52,7 +52,7 @@ describe("canonicalIntervalDays fallbacks", () => {
 describe("continuation naming fallbacks", () => {
   it("names the displayed day in long form", () => {
     expect(gridContinuationAccessibleName("Multi-day gathering", "2027-02-15")).toBe(
-      "Continues Multi-day gathering, Monday, 15 February 2027",
+      "Continues Multi-day gatherin… Multi-day gathering, Monday, 15 February 2027",
     );
   });
 
