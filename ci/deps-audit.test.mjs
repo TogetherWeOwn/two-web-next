@@ -917,9 +917,12 @@ function completedNpm({ stdout, status = 0, boundary = validBoundary }) {
   };
 }
 
-function failedNpm({ code, killed = false, status = null, signal = null }) {
+// Real spawnSync error shape: { code } only. spawnSync never sets `killed` (a
+// ChildProcess instance property), so fixtures must not either: a fake
+// `killed: true` would let the ETIMEDOUT retry term be deleted unnoticed.
+function failedNpm({ code, status = null, signal = null }) {
   return {
-    error: Object.assign(new Error(`spawn npm ${code ?? signal}`), { code, killed }),
+    error: Object.assign(new Error(`spawn npm ${code ?? signal}`), { code }),
     status,
     signal,
     stdout: "",
@@ -934,7 +937,51 @@ test("audit retries a timed-out npm execution with a fresh cache, then succeeds"
     const caches = [];
     const sleeps = [];
     const runs = [
-      failedNpm({ code: "ETIMEDOUT", killed: true, signal: "SIGTERM" }),
+      failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM" }),
+      completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
+    ];
+    const spawn = (_command, args) => {
+      caches.push(args.find((arg) => arg.startsWith("--cache=")));
+      return runs.splice(0, 1)[0];
+    };
+    const result = auditOneLockfile({
+      label: ".",
+      dir,
+      guard: join(dir, "guard"),
+      allowlist: empty,
+      cacheParent: join(dir, "cache-parent"),
+      spawn,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    assert.deepEqual(result, { blocked: [], allowed: [], nonBlocking: [] });
+    assert.equal(caches.length, 2);
+    assert.equal(new Set(caches).size, 2);
+    assert.deepEqual(sleeps, [5_000]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Real shape of a spawnSync result whose child was killed by a signal (OOM,
+// runner SIGKILL): no error, null status, signal set.
+function signalKilledNpm({ signal = "SIGKILL" }) {
+  return {
+    error: undefined,
+    status: null,
+    signal,
+    stdout: "",
+    stderr: "",
+    output: [null, "", "", null],
+  };
+}
+
+test("audit retries a signal-killed npm execution, then succeeds", () => {
+  const dir = retryHarnessDir();
+  try {
+    const caches = [];
+    const sleeps = [];
+    const runs = [
+      signalKilledNpm({ signal: "SIGKILL" }),
       completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
     ];
     const spawn = (_command, args) => {
