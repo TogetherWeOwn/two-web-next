@@ -53,6 +53,25 @@ describe("homepage inlined critical CSS", () => {
     expect(html).toContain("'Display Fallback'");
   });
 
+  it("emits the Display-700 preload before the inlined style block", async () => {
+    // Staging forensics: the font was discovered at document-end + ~25 ms in
+    // every mobile sample (the preload sat after ~19 KB of inline CSS), so the
+    // simulated font completion hovered at the paint boundary and flipped `/`
+    // LCP between FCP and FCP + ~450 ms. Early discovery keeps LCP at FCP.
+    const assertPreloadBeforeStyle = (html: string) => {
+      const preload = html.indexOf('href="/fonts/display-latin-700.woff2" as="font"');
+      const style = html.indexOf("<style>");
+      expect(preload).toBeGreaterThanOrEqual(0);
+      expect(style).toBeGreaterThanOrEqual(0);
+      expect(preload).toBeLessThan(style);
+    };
+    assertPreloadBeforeStyle(
+      String(Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })),
+    );
+    const servedResponse = await pageShellFixture().request("/");
+    assertPreloadBeforeStyle(await servedResponse.text());
+  });
+
   it("keeps recovery home-theme shells on external stylesheets without the hash", async () => {
     const response = await pageShellFixture().request("/missing-page");
     expect(response.status).toBe(404);
