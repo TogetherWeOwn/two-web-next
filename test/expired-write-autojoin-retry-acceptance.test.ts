@@ -3,9 +3,10 @@
 // route-inventory: GET /auth/discord/callback
 // Acceptance: the expired-write notice survives a failed auto-join retry.
 //
-// Journey: a write bounces on a dead session, so /auth/recover plants a
-// signed "pending|<destination>" expired-write notice plus the intended
-// destination, and the member signs in again. The login callback consumes
+// Journey: a write bounces on a dead session, so the bounce itself plants a
+// signed "pending|<destination>" expired-write notice (the landing only
+// records the intended destination and never arms), and the member signs
+// in again. The login callback consumes
 // the pending notice on entry. When the guild auto-join (Discord PUT
 // member) then fails, the callback signs the member in as a non-member,
 // redirects to /?n=join_failed and re-records the intended destination —
@@ -65,12 +66,27 @@ const liveSetCookies = (res: Response, name: string) =>
 
 type Fixture = ReturnType<typeof recoveryFixture>;
 
-/** GET /auth/recover for DEST: plants the pending notice + intended destination. */
+/** A genuine expired write for DEST: the bounce arms pending|, the landing records intended. */
 async function recoveredJar(f: Fixture): Promise<string> {
-  const landing = await f.request(`/auth/recover?next=${DEST_ENC}`);
+  const dead = await f.login(new Date(0));
+  const bounce = await f.request(`/members/${MEMBER}`, {
+    method: "POST",
+    headers: {
+      cookie: dead.cookie,
+      origin: f.env.APP_URL,
+      referer: f.env.APP_URL + DEST,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "_method=PATCH&bio=Unsaved+secret+draft",
+  });
+  expect(bounce.status).toBe(303);
+  let jar = mergeCookies("", bounce);
+  const landing = await f.request(bounce.headers.get("location")!, {
+    headers: { cookie: jar },
+  });
   expect(landing.status).toBe(200);
-  const jar = mergeCookies("", landing);
-  // Precondition (holds today): the expired write left a pending notice.
+  jar = mergeCookies(jar, landing);
+  // Precondition: the expired write left a pending notice + intended destination.
   expect(payloadOf(pairOf(jar, EXPIRED_WRITE_COOKIE)!)).toBe(`pending|${DEST}`);
   expect(payloadOf(pairOf(jar, INTENDED_COOKIE)!)).toBe(DEST);
   return jar;
@@ -114,7 +130,7 @@ describe("expired-write notice survives failed auto-join retries", () => {
       expect(payloadOf(intended[0]!.split(";")[0]!)).toBe(DEST);
 
       // The consumed notice is re-set alongside it, still pending (not yet
-      // a banner), with the same signed-cookie attributes as /auth/recover.
+      // a banner), with the same signed-cookie attributes as the bounce.
       const notice = liveSetCookies(callback, EXPIRED_WRITE_COOKIE);
       expect(notice).toHaveLength(1);
       expect(notice[0]).toContain("HttpOnly");

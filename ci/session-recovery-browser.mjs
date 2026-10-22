@@ -592,14 +592,11 @@ try {
   await a.keyboard.press("Enter");
   await a.getByRole("link", { name: "Complete mocked authorization" }).click();
   await a.waitForURL(url("/profile?edit=1"));
-  await a.getByTestId("auth-error").waitFor();
-  assert.equal(await a.getByTestId("auth-error").getAttribute("role"), "status");
-  // The restored banner keeps its copy with no recovery link: a signed-in
-  // member must never be sent back to the expired-session landing.
-  const banner = a.getByTestId("auth-error");
-  assert.match(await banner.innerText(), /You signed in again/);
-  assert.equal(await banner.locator('a[href*="/auth/recover"]').count(), 0);
-  assert.equal(await banner.locator("a").count(), 0);
+  // The profile save is a JSON fetch, so its bounce arms no pending notice
+  // (only a genuine form-POST bounce does): the return shows no banner, and
+  // never a recovery link back to the expired-session landing.
+  assert.equal(await a.getByTestId("auth-error").count(), 0);
+  assert.equal(await a.locator('a[href*="/auth/recover"]').count(), 0);
   await a.screenshot({ path: "artifacts/session-recovery/post-login-banner.png", fullPage: true });
   assert.equal(await a.getByRole("textbox", { name: /^Bio\b/ }).inputValue(), "Accepted bio");
   await a.reload();

@@ -10,132 +10,161 @@
 // pair must be the pair bound to the queried guild, so a production pair in
 // a staging config fails. Network-free: it checks resolved config, never
 // Discord, so it cannot target production. Exit 0 when nothing FAILs,
-// 1 otherwise.
+// 1 otherwise; 2 for usage/input refusals (docs/operator-probes.md).
 //
 // With --config alone it reads top-level vars; with --config plus --env it
 // reads env.<name>.vars only, with no fallback to the top level (Wrangler
 // does not inherit top-level vars into named environments, so a fallback
 // would prove nothing about what the named deploy receives).
-import { readFileSync } from "node:fs";
-import { readWranglerConfig } from "../ci/check-config-docs.mjs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { checkModerators, renderModeratorReport } from "../src/probes/check-moderators.ts";
+import {
+  emitProbeError,
+  OPERATOR_PROBE_CONTRACT,
+  OPERATOR_PROBE_MAX_INPUT_BYTES,
+  ProbeInputError,
+} from "./operator-probe-errors.mjs";
 
 const USAGE = `Usage: node --import ./bin/ts-hook.mjs bin/check-moderators.mjs [--require-configured] [--json] [--config=<path> [--env=<name>]] [--help]
 
 Deploy-time moderator role-config probe. Reads DISCORD_MODERATOR_ROLE_IDS plus
 DISCORD_GUILD_ID, or --config top-level vars (with --env, env.<name>.vars only).
---json emits the findings verdict; --help prints this usage to stdout and reads
-nothing. Network-free: it checks resolved config, never Discord.`;
+--json emits the findings verdict; usage/input refusals go only to stderr as
+operator-probe-error.v1. Exit 0 = pass, 1 = failed findings, 2 = usage/input error.
+--help prints this usage to stdout and reads nothing. Network-free: it checks
+resolved config, never Discord. Supply each option at most once.
+Contract, codes and offline examples: ${OPERATOR_PROBE_CONTRACT}`;
 
-if (process.argv.slice(2).includes("--help")) {
-  console.log(USAGE);
-  process.exit(0);
-}
+const refuse = (code) => {
+  throw new ProbeInputError(code);
+};
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-const args = new Set(process.argv.slice(2));
-const configs = [...args].filter((a) => a.startsWith("--config="));
-const envs = [...args].filter((a) => a.startsWith("--env="));
-const unknown = [...args].filter(
-  (a) =>
-    a !== "--require-configured" &&
-    a !== "--json" &&
-    !a.startsWith("--config=") &&
-    !a.startsWith("--env="),
-);
-if (unknown.length > 0) {
-  console.error(`check-moderators: unknown option(s): ${unknown.join(" ")}`);
-  process.exit(2);
-}
-
-let raw = process.env.DISCORD_MODERATOR_ROLE_IDS;
-let guildId = process.env.DISCORD_GUILD_ID || undefined;
-if (envs.length > 0) {
-  // Named-environment read: --env requires exactly one --config, and reads
-  // env.<name>.vars only. Never fall back to top-level vars or to an
-  // independent process/CI value.
-  if (
-    configs.length !== 1 ||
-    configs[0] === "--config=" ||
-    envs.length !== 1 ||
-    envs[0] === "--env="
-  ) {
-    console.error("check-moderators: --env=<name> requires exactly one nonempty --config=<path>");
-    process.exit(2);
-  }
-  const envName = envs[0].slice("--env=".length);
-  let named;
-  try {
-    const config = readWranglerConfig(readFileSync(configs[0].slice("--config=".length), "utf8"));
-    named = config.env?.[envName];
-  } catch {
-    console.error(
-      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
-    );
-    process.exit(2);
-  }
-  if (!named || typeof named !== "object") {
-    console.error(`check-moderators: unknown environment "${envName}" in config`);
-    process.exit(2);
-  }
-  raw = named.vars?.DISCORD_MODERATOR_ROLE_IDS;
-  if (raw !== undefined && typeof raw !== "string") {
-    console.error(
-      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
-    );
-    process.exit(2);
-  }
-  guildId = named.vars?.DISCORD_GUILD_ID || undefined;
-  if (guildId !== undefined && typeof guildId !== "string") {
-    console.error("check-moderators: cannot read a valid Wrangler config with a string guild var");
-    process.exit(2);
-  }
-} else if (configs.length > 0) {
-  if (configs.length !== 1 || configs[0] === "--config=") {
-    console.error("check-moderators: supply exactly one nonempty --config=<path>");
-    process.exit(2);
+export function main(
+  args = process.argv.slice(2),
+  stdout = (t) => process.stdout.write(t),
+  stderr = (t) => process.stderr.write(t),
+) {
+  if (args.includes("--help")) {
+    stdout(`${USAGE}\n`);
+    return 0;
   }
   try {
-    // Read the top-level moderator vars from this config. Deploys may override
-    // unrelated vars, but must not override either moderator var. Never fall
-    // back to an independent process/CI value.
-    const config = readWranglerConfig(readFileSync(configs[0].slice("--config=".length), "utf8"));
-    raw = config.vars?.DISCORD_MODERATOR_ROLE_IDS;
-    if (raw !== undefined && typeof raw !== "string") throw new Error("invalid var");
-    guildId = config.vars?.DISCORD_GUILD_ID || undefined;
-    if (guildId !== undefined && typeof guildId !== "string") throw new Error("invalid var");
-  } catch {
-    console.error(
-      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
-    );
-    process.exit(2);
+    const configs = args.filter((a) => a.startsWith("--config="));
+    const envs = args.filter((a) => a.startsWith("--env="));
+    if (
+      args.some(
+        (a) =>
+          a !== "--require-configured" &&
+          a !== "--json" &&
+          !a.startsWith("--config=") &&
+          !a.startsWith("--env="),
+      )
+    ) {
+      refuse("UNKNOWN_OPTION");
+    }
+    for (const flag of ["--json", "--require-configured"]) {
+      if (args.filter((a) => a === flag).length > 1) refuse("DUPLICATE_OPTION");
+    }
+    if (
+      envs.length > 0 &&
+      (configs.length !== 1 ||
+        configs[0] === "--config=" ||
+        envs.length !== 1 ||
+        envs[0] === "--env=")
+    ) {
+      refuse("ENV_SOURCE_INVALID");
+    }
+    if (configs.length > 0 && (configs.length !== 1 || configs[0] === "--config=")) {
+      refuse("CONFIG_SOURCE_INVALID");
+    }
+
+    let raw = process.env.DISCORD_MODERATOR_ROLE_IDS;
+    let guildId = process.env.DISCORD_GUILD_ID || undefined;
+    if (configs.length > 0) {
+      let text;
+      try {
+        const path = configs[0].slice("--config=".length);
+        const stat = statSync(path);
+        if (!stat.isFile()) refuse("CONFIG_UNREADABLE");
+        if (stat.size > OPERATOR_PROBE_MAX_INPUT_BYTES) refuse("CONFIG_TOO_LARGE");
+        text = readFileSync(path, "utf8");
+      } catch (err) {
+        if (err instanceof ProbeInputError) throw err;
+        refuse("CONFIG_UNREADABLE");
+      }
+      if (Buffer.byteLength(text, "utf8") > OPERATOR_PROBE_MAX_INPUT_BYTES) {
+        refuse("CONFIG_TOO_LARGE");
+      }
+      let config;
+      try {
+        config = readWranglerConfig(text);
+      } catch {
+        refuse("CONFIG_INVALID");
+      }
+      if (!isObject(config)) refuse("CONFIG_INVALID");
+      let selected = config;
+      if (envs.length > 0) {
+        if (config.env !== undefined && !isObject(config.env)) refuse("CONFIG_INVALID");
+        const envName = envs[0].slice("--env=".length);
+        if (!config.env || !Object.hasOwn(config.env, envName)) refuse("ENV_NOT_FOUND");
+        selected = config.env[envName];
+        if (!isObject(selected)) refuse("CONFIG_INVALID");
+      }
+      if (selected.vars !== undefined && !isObject(selected.vars)) refuse("CONFIG_INVALID");
+      // Named vars never fall back to top-level vars or independent process/CI values.
+      raw = selected.vars?.DISCORD_MODERATOR_ROLE_IDS;
+      if (raw !== undefined && typeof raw !== "string") refuse("MODERATOR_VAR_INVALID");
+      guildId = selected.vars?.DISCORD_GUILD_ID;
+      if (guildId !== undefined && typeof guildId !== "string") refuse("GUILD_VAR_INVALID");
+      guildId ||= undefined;
+    }
+    // Missing/blank guilds on required config reads must fail guild-binding,
+    // not silently fall back to the legacy production-pair expectation.
+    const effectiveGuildId =
+      args.includes("--require-configured") && configs.length > 0 && guildId === undefined
+        ? ""
+        : guildId;
+    const probe = checkModerators(raw, {
+      requireConfigured: args.includes("--require-configured"),
+      guildId: effectiveGuildId,
+    });
+    if (args.includes("--json")) {
+      stdout(
+        `${JSON.stringify(
+          {
+            results: probe.findings,
+            failures: probe.failures,
+            unknowns: probe.unknowns,
+            ok: probe.ok,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      stdout(`${renderModeratorReport(probe)}\n`);
+    }
+    return probe.ok ? 0 : 1;
+  } catch (err) {
+    if (err instanceof ProbeInputError) {
+      return emitProbeError("check-moderators", args.includes("--json"), err.code, stderr);
+    }
+    throw err;
   }
 }
-const probe = (() => {
-  // Config-file reads with --require-configured must name a guild: a missing
-  // or blank DISCORD_GUILD_ID would otherwise fall back to the legacy
-  // production-pair expectation with no guild-binding finding, so a config
-  // that lost the guild var looks configured while the worker boots with a
-  // blank guild and matches nobody. Pass the miss through as an unknown
-  // guild so the probe reports FAIL guild-binding instead of skipping it.
-  const configRead = envs.length > 0 || configs.length > 0;
-  const effectiveGuildId =
-    args.has("--require-configured") && configRead && guildId === undefined ? "" : guildId;
-  return checkModerators(raw, {
-    requireConfigured: args.has("--require-configured"),
-    guildId: effectiveGuildId,
-  });
-})();
 
-if (args.has("--json")) {
-  console.log(
-    JSON.stringify(
-      { results: probe.findings, failures: probe.failures, unknowns: probe.unknowns, ok: probe.ok },
-      null,
-      2,
-    ),
-  );
-} else {
-  console.log(renderModeratorReport(probe));
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
 }
 
-process.exit(probe.ok ? 0 : 1);
+if (isDirectRun()) {
+  process.exitCode = main();
+}
