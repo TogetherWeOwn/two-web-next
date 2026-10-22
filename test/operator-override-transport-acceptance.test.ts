@@ -6,6 +6,7 @@
 // route-inventory: OPTIONS /admin/ops-overrides
 // Test Author owned: return corrections instead of editing these on the build card.
 // These mounted-Worker proofs supplement, never replace, the original panel suite.
+import { setTimeout as realDelay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
@@ -36,7 +37,7 @@ const bindings = (patch: Record<string, unknown> = {}): Env =>
     OPS_CONTROL_TOKEN: TOKEN,
     ...patch,
   }) as Env;
-const request = (init: RequestInit = {}, patch: Record<string, unknown> = {}, query = "") =>
+const request = async (init: RequestInit = {}, patch: Record<string, unknown> = {}, query = "") =>
   app.request(
     `/admin/ops-overrides${query}`,
     {
@@ -75,6 +76,22 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+// Admission hashes the real bearer with native crypto. Let the real event loop
+// reach fetch before advancing the fake upstream deadline; never fake authentication.
+async function waitForFetchEntry(entered: Promise<void>) {
+  const timeout = new AbortController();
+  try {
+    await Promise.race([
+      entered,
+      realDelay(5000, undefined, { signal: timeout.signal }).then(() => {
+        throw new Error("operator request did not enter upstream fetch");
+      }),
+    ]);
+  } finally {
+    timeout.abort();
+  }
 }
 
 // Breaks caught: wrong upstream resource/verb/credential; redirect/retry;
@@ -253,13 +270,18 @@ describe("operator override mounted transport contract", () => {
   it("bounds a fetch that never settles at five seconds", async () => {
     vi.useFakeTimers();
     const gate = deferred<Response>();
-    const remote = installFetch(() => gate.promise);
+    const entered = deferred<void>();
+    const remote = installFetch(() => {
+      entered.resolve();
+      return gate.promise;
+    });
     let settled = false;
     const pending = request().then((res) => {
       settled = true;
       return res;
     });
     try {
+      await waitForFetchEntry(entered.promise);
       await vi.advanceTimersByTimeAsync(4999);
       expect(remote).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
@@ -288,13 +310,18 @@ describe("operator override mounted transport contract", () => {
       },
     });
     const upstream = new Response(stream);
-    const remote = installFetch(() => headers.promise);
+    const entered = deferred<void>();
+    const remote = installFetch(() => {
+      entered.resolve();
+      return headers.promise;
+    });
     let settled = false;
     const pending = request().then((res) => {
       settled = true;
       return res;
     });
     try {
+      await waitForFetchEntry(entered.promise);
       await vi.advanceTimersByTimeAsync(4000);
       expect(remote).toHaveBeenCalledTimes(1);
       headers.resolve(upstream);
