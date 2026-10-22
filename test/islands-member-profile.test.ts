@@ -276,17 +276,22 @@ describe("member-profile states rendered", () => {
     for (const c of [
       PROFILE_COPY.saved,
       PROFILE_COPY.saveFailed,
+      PROFILE_COPY.saveUncertain,
       PROFILE_COPY.sessionExpired,
       PROFILE_COPY.logIn,
       PROFILE_COPY.saving,
       PROFILE_COPY.stillSaving,
     ])
       expect(unescaped).toContain(c);
+    // The throttled wait is dynamic, so only its stable prefix is pinned.
+    expect(unescaped).toContain("Too many requests. Your changes are still here — try again in ");
     for (const t of [
       "profile-saved",
       "profile-error",
       "profile-save-failed",
+      "profile-save-throttled",
       "profile-session-expired",
+      "profile-uncertain",
       PROFILE_PENDING_TESTID,
     ])
       expect(js).toContain(t);
@@ -296,6 +301,8 @@ describe("member-profile states rendered", () => {
     expect(profileFocusTarget("invalid")).toBe("profile-error");
     expect(profileFocusTarget("failed")).toBe("profile-save-failed");
     expect(profileFocusTarget("session-expired")).toBe("profile-session-expired");
+    expect(profileFocusTarget("uncertain")).toBe("profile-uncertain");
+    expect(profileFocusTarget("throttled")).toBe("profile-save-throttled");
     expect(profileFocusTarget("cancelled")).toBe("profile-name");
   });
   it("avatar: CDN srcset or null for the initial fallback; joined month", () => {

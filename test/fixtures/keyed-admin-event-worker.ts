@@ -175,7 +175,6 @@ app.get("/fixture/:surface/:mode", async (c) => {
     DISCORD_GUILD_ID: "fixture",
     DISCORD_BOT_TOKEN: "fixture",
     DISCORD_INVITE_URL: "https://discord.gg/fixture",
-    MEMBER_ACCESS_LOG_ENFORCE: "false",
   };
   const router = new Hono<{ Bindings: Env }>();
   registerErrorHandlers(router);
