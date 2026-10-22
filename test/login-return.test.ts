@@ -167,7 +167,7 @@ describe("login_next (legacy ReturnToPageTest)", () => {
       env,
     );
     expect(alias.status).toBe(302);
-    expect(alias.headers.get("cache-control")).toBe("no-store");
+    expect(alias.headers.get("cache-control")).toBe("no-store, private");
     const location = alias.headers.get("location")!;
     expect(location).not.toContain("untrusted");
     const start = await app.request(location, {}, env);

@@ -1,6 +1,7 @@
 import type { Answer, Grant, Row, Tx } from "./types";
 import { isPlainObject, timingSafeEqualHex } from "./payload";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 
 export async function lookupReplay(sql: Tx, grantId: string, key: string): Promise<Row | null> {
   const [row] =
@@ -31,12 +32,11 @@ export async function replayAnswer(
     );
     return {
       status: 409,
-      body: {
-        reason: "idempotency_conflict",
-        message:
-          "This idempotency key was already used with a different payload. A key identifies one operation.",
-        request_id: requestId,
-      },
+      body: ingressDenial(
+        "idempotency_conflict",
+        "This idempotency key was already used with a different payload. A key identifies one operation.",
+        requestId,
+      ),
     };
   }
   // A stored body that cannot be decoded back into the original response
@@ -75,12 +75,11 @@ export async function replayAnswer(
     );
     return {
       status: 409,
-      body: {
-        reason: "idempotency_conflict",
-        message:
-          "This idempotency key was already used with a different payload. A key identifies one operation.",
-        request_id: requestId,
-      },
+      body: ingressDenial(
+        "idempotency_conflict",
+        "This idempotency key was already used with a different payload. A key identifies one operation.",
+        requestId,
+      ),
     };
   }
   // A delivery receipt, not another successful operation: keep stored evidence

@@ -7,7 +7,9 @@ import {
   COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
+  PUBLIC_API_COLLECTION_FIELDS,
   PUBLIC_API_EVENT_FIELDS,
+  PUBLIC_API_META_FIELDS,
 } from "./contracts";
 
 export interface JsonSchema {
@@ -160,9 +162,10 @@ export function getOpenApiDocument(appUrl: string) {
         "Session-free, published-only reads for search and AI assistants: events, one event, " +
         "the community snapshot and the Discord join handoff. No member directory, no " +
         "attendee identities, no model-training permission. Collections cap at 20 rows and " +
-        "32 KiB; errors use { error: { code, message } } with code internal, " +
-        "invalid_request, not_found, rate_limited or unavailable. On internal, " +
-        "retry the read; the envelope never carries exception text. Freshness: a cache " +
+        "32 KiB; errors use { error: { code, message, request_id, next } } with code internal, " +
+        "invalid_request, not_found, rate_limited or unavailable. request_id matches the " +
+        "x-request-id response header for correlation; next names one safe action. " +
+        "On internal, retry the read; the envelope never carries exception text. Freshness: a cache " +
         "hit carries only the remaining freshness of the original 60s window — a hit " +
         "just before expiry answers max-age=1, never a fresh full window — and a " +
         "fresh miss re-arms the full 60s bound. Committed moderator or agent " +
@@ -251,10 +254,10 @@ export function getOpenApiDocument(appUrl: string) {
                 total: { type: "integer" },
                 last_page: { type: "integer" },
               },
-              required: ["current_page", "per_page", "total", "last_page"],
+              required: [...PUBLIC_API_META_FIELDS],
             },
           },
-          required: ["data", "page", "limit", "meta"],
+          required: [...PUBLIC_API_COLLECTION_FIELDS],
         },
         CommunitySnapshot: {
           type: "object",
@@ -282,8 +285,13 @@ export function getOpenApiDocument(appUrl: string) {
                   enum: ["internal", "invalid_request", "not_found", "rate_limited", "unavailable"],
                 },
                 message: { type: "string" },
+                request_id: {
+                  type: "string",
+                  description: "Matches the x-request-id response header, for correlation.",
+                },
+                next: { type: "string", description: "One safe next action for the caller." },
               },
-              required: ["code", "message"],
+              required: ["code", "message", "request_id", "next"],
             },
           },
           required: ["error"],
