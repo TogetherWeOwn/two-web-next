@@ -12,8 +12,9 @@
 // the database, so the probe writes nothing.
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 
-export const STAGING_URL = "https://next.togetherweown.com";
+export const STAGING_URL = STAGING_ORIGIN;
 export const QA_HEADER = "X-TWO-QA-Auth";
 const SESSION_COOKIE = "__Host-two_session=";
 

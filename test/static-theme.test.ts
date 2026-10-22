@@ -141,10 +141,13 @@ it.each(["/events"])(
   async (path) => {
     // The schedule opts into its own theme (base-theme schedule-theme), covered
     // with local fixtures in page-shells.test.ts; it never borrows the content shell.
+    // The no-database refusal is the shared branded 503 (homepage-theme error
+    // shell), which ships the shared theme stylesheet like every branded error page.
     const response = await app.request(path, {}, env);
     expect(response.status).toBe(503);
     const html = await response.text();
     expect(html).not.toContain("content-theme");
-    expect(html).not.toContain('href="/theme.css"');
+    expect(html).toContain('id="error-heading"');
+    expect(html).toContain("We will be right back");
   },
 );
