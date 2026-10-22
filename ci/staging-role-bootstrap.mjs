@@ -38,10 +38,12 @@ export const CREATE_ROLE_DDL = "CREATE ROLE two_web_app NOLOGIN";
 
 // Single hardcoded status read for the fixed role. PostgreSQL CREATE ROLE
 // defaults (NOLOGIN, NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION,
-// NOBYPASSRLS, no password) are what classifyRole accepts as compatible.
+// NOBYPASSRLS) are what classifyRole accepts as compatible. No rolpassword
+// column: pg_roles always reads it as '********', so it cannot distinguish
+// roles; a NOLOGIN role cannot authenticate anyway.
 // See https://www.postgresql.org/docs/current/sql-createrole.html
 export const ROLE_STATUS_QUERY =
-  "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolpassword, rolconnlimit FROM pg_roles WHERE rolname = 'two_web_app'";
+  "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolconnlimit FROM pg_roles WHERE rolname = 'two_web_app'";
 
 export const STATEMENT_TIMEOUT_MS = 30000;
 export const LOCK_TIMEOUT_MS = 10000;
@@ -118,8 +120,10 @@ export function validateStagingUrl(raw) {
 }
 
 // Compatible = exactly the PostgreSQL CREATE ROLE defaults the bootstrap
-// creates: NOLOGIN, no elevated attributes, no password. Anything else is
-// refused without changes; the reason names the offending attribute.
+// creates: NOLOGIN with no elevated attributes. Anything else is refused
+// without changes; the reason names the offending attribute. Passwords are
+// not classified: pg_roles masks rolpassword as '********' for every role,
+// and a NOLOGIN role cannot authenticate.
 export function classifyRole(row) {
   if (!row) return { state: "absent" };
   if (row.rolcanlogin) return { state: "incompatible", reason: "existing role has LOGIN" };
@@ -133,9 +137,6 @@ export function classifyRole(row) {
   }
   if (row.rolbypassrls) {
     return { state: "incompatible", reason: "existing role has BYPASSRLS" };
-  }
-  if (row.rolpassword) {
-    return { state: "incompatible", reason: "existing role has a password" };
   }
   return { state: "compatible" };
 }
@@ -260,7 +261,6 @@ function selftest() {
     rolcreaterole: false,
     rolreplication: false,
     rolbypassrls: false,
-    rolpassword: null,
   };
   if (classifyRole(compatible).state !== "compatible") {
     throw new Error("selftest: NOLOGIN defaults must classify as compatible");
