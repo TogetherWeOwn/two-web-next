@@ -26,7 +26,7 @@ export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.ph
 // Anonymous board views (hot zones + member leaderboard): same 90-day retention
 // as event searches, pruned by occurred_at (see src/hotzones/board-log.ts).
 export const BOARD_VIEW_LOG_RETENTION_DAYS = 90;
-// Event-reminder send log (TOG-35932 spec §3): same 90-day retention,
+// Event-reminder send log: same 90-day retention,
 // pruned by sent_at.
 export const EVENT_REMINDER_DELIVERY_RETENTION_DAYS = 90;
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()

@@ -198,7 +198,7 @@ export const profiles = pgTable("profiles", {
   // Member-leaderboard opt-out: an opted-out member never appears in (or moves)
   // any member-rank aggregate. Default false keeps every existing row ranked.
   leaderboardOptOut: boolean("leaderboard_opt_out").notNull().default(false),
-  // Event-reminder opt-out (TOG-35932 spec §3): an opted-out member gets no
+  // Event-reminder opt-out: an opted-out member gets no
   // T-24h/T-1h nudges. Default false keeps every existing row subscribed.
   reminderOptOut: boolean("reminder_opt_out").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

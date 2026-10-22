@@ -36,7 +36,11 @@ ALTER TABLE "profiles" ADD COLUMN "reminder_opt_out" boolean DEFAULT false NOT N
 ALTER TABLE "event_reminder_deliveries" ADD CONSTRAINT "event_reminder_deliveries_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "event_reminder_mutes" ADD CONSTRAINT "event_reminder_mutes_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "event_reminder_mutes_user_id_idx" ON "event_reminder_mutes" USING btree ("user_id");
+--> statement-breakpoint
 CREATE INDEX "notifications_user_id_read_at_idx" ON "notifications" USING btree ("user_id","read_at");
+--> statement-breakpoint
+CREATE INDEX "event_reminder_deliveries_user_id_idx" ON "event_reminder_deliveries" USING btree ("user_id");
 --> statement-breakpoint
 GRANT DELETE ON TABLE public.event_reminder_mutes TO two_web_app;
 --> statement-breakpoint

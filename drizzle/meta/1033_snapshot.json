@@ -1482,7 +1482,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "event_reminder_deliveries_user_id_idx": {
+          "name": "event_reminder_deliveries_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "event_reminder_deliveries_event_id_events_id_fk": {
           "name": "event_reminder_deliveries_event_id_events_id_fk",
@@ -1552,7 +1568,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "event_reminder_mutes_user_id_idx": {
+          "name": "event_reminder_mutes_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "event_reminder_mutes_event_id_events_id_fk": {
           "name": "event_reminder_mutes_event_id_events_id_fk",

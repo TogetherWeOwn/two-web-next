@@ -305,7 +305,7 @@ export const boardViewLogs = pgTable(
   ],
 );
 
-// Event reminders (TOG-35932 spec §3): per-event mute. user_id is the Discord
+// Event reminders: per-event mute. user_id is the Discord
 // snowflake, plain text with no FK (same reasoning as rsvps.user_id).
 export const eventReminderMutes = pgTable(
   "event_reminder_mutes",
@@ -316,7 +316,12 @@ export const eventReminderMutes = pgTable(
     userId: text("user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.eventId, t.userId] })],
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.userId] }),
+    // Erasure and member reads filter by user_id alone; the composite PK
+    // leads with event_id, so this backs those queries (rsvps_user_id_idx).
+    index("event_reminder_mutes_user_id_idx").on(t.userId),
+  ],
 );
 
 // Generic site-notification inbox; this feature writes kind =
@@ -340,7 +345,7 @@ export const notifications = pgTable(
 
 // Reminder send log: one row per (event, member, lead, channel) attempt.
 // Columns are ids/codes/timestamps only — no username, avatar, email, or
-// message-body columns. Statuses per TOG-35932 spec §§4.2–4.3; pruned at 90
+// message-body columns. Status records the send-attempt outcome; pruned at 90
 // days by sent_at through the model:prune pass.
 export const eventReminderDeliveries = pgTable(
   "event_reminder_deliveries",
@@ -357,6 +362,9 @@ export const eventReminderDeliveries = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    // Erasure and member reads filter by user_id alone; the unique tuple
+    // leads with event_id, so this backs those queries (rsvps_user_id_idx).
+    index("event_reminder_deliveries_user_id_idx").on(t.userId),
     unique("event_reminder_deliveries_event_user_lead_channel_unique").on(
       t.eventId,
       t.userId,

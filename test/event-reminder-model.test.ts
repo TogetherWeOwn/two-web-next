@@ -1,4 +1,4 @@
-// Event-reminder data model (TOG-35932 spec §3, first build slice): the
+// Event-reminder data model: the
 // opt-out column, mute/inbox/delivery tables, 90-day delivery retention in
 // the model:prune pass, and member-read gating for the new tables.
 //
@@ -133,6 +133,19 @@ describe.skipIf(!url)("event reminder data model (real Postgres)", () => {
     const left = (await fixture.client`select count(*)::int as n
       from event_reminder_deliveries`) as { n: number }[];
     expect(left[0]!.n).toBe(0);
+  });
+
+  it("mutes and deliveries index user_id for erasure reads", async () => {
+    for (const [table, index] of [
+      ["event_reminder_mutes", "event_reminder_mutes_user_id_idx"],
+      ["event_reminder_deliveries", "event_reminder_deliveries_user_id_idx"],
+    ] as const) {
+      const indexes = (await fixture.client`select indexname from pg_indexes
+        where schemaname = ${fixture.schemaName} and tablename = ${table}`) as {
+        indexname: string;
+      }[];
+      expect(indexes.map((row) => row.indexname)).toContain(index);
+    }
   });
 
   it("model:prune deletes only deliveries older than 90 days", async () => {
