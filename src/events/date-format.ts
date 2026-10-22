@@ -79,9 +79,15 @@ export const EVENT_UPDATED_SKEW_MS = 60_000;
 
 /** True when the row was edited after creation: updatedAt strictly beyond
  * createdAt plus the skew guard. Fresh rows, within-skew edits, backwards
- * rows, and unparseable instants all read as unedited. Both detail renderers
+ * rows, and missing or unparseable instants all read as unedited, never as
+ * a throw: both renderers call this on every detail render, so a partial
+ * row must hide the stamp rather than break the page. Both detail renderers
  * share this predicate, so the stamp never disagrees between them. */
-export function isEditedEvent(createdAt: Date, updatedAt: Date): boolean {
+export function isEditedEvent(
+  createdAt: Date | null | undefined,
+  updatedAt: Date | null | undefined,
+): boolean {
+  if (!(createdAt instanceof Date) || !(updatedAt instanceof Date)) return false;
   return updatedAt.getTime() - createdAt.getTime() > EVENT_UPDATED_SKEW_MS;
 }
 
