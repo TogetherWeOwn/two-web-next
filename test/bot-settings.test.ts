@@ -331,4 +331,239 @@ describe("createSettingsWriter", () => {
     ).rejects.toBeInstanceOf(BotTerminalError);
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("passes a bot refusal through to the consumer", async () => {
+    const fetcher = (async () =>
+      jsonResponse(
+        { ok: false, error: { code: "action_not_allowed", retryable: false } },
+        400,
+      )) as typeof fetch;
+    const writer = createSettingsWriter(CFG, fetcher);
+    const res = await writer.setSetting(
+      {
+        key: "TWO_AUTOMOD_MENTION_LIMIT",
+        value: "8",
+        expectedVersion: 7,
+        actor: "dashboard:1",
+        guildId: "2",
+      },
+      "123e4567-e89b-12d3-a456-426614174000",
+    );
+    expect(res).toMatchObject({ ok: false, code: "action_not_allowed" });
+  });
+});
+
+describe("settings transport edges (defensive branches)", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function untilFetcherCalled(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+    const deadline = vi.getRealSystemTime() + 2_000;
+    while (fetcher.mock.calls.length === 0 && vi.getRealSystemTime() < deadline) {
+      await realDelay(1);
+    }
+    expect(fetcher.mock.calls.length).toBe(1);
+  }
+
+  async function flushRounds(rounds = 5) {
+    for (let round = 0; round < rounds; round++) await vi.advanceTimersByTimeAsync(0);
+  }
+
+  type ScriptReader = {
+    read: () => Promise<{ done: boolean; value: Uint8Array }>;
+    cancel: () => unknown;
+    releaseLock: () => void;
+  };
+  const streamResponse = (reader: ScriptReader) =>
+    ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: { getReader: () => reader },
+    }) as unknown as Response;
+  const nullBodyResponse = (text: () => Promise<string>) =>
+    ({
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: null,
+      text,
+    }) as unknown as Response;
+
+  it.each(["rejects", "throws"])(
+    "a cleanup hook that %s never changes the settled answer",
+    async (mode) => {
+      const cancel =
+        mode === "rejects"
+          ? () => Promise.reject(new Error("cleanup lost"))
+          : () => {
+              throw new Error("cleanup lost");
+            };
+      const reader: ScriptReader = {
+        read: async () => ({ done: false, value: new Uint8Array(300 * 1024) }),
+        cancel,
+        releaseLock: () => {},
+      };
+      const fetcher = (async () => streamResponse(reader)) as typeof fetch;
+      expect(await readGuildSettings(CFG, fetcher)).toEqual({ ok: false });
+    },
+  );
+
+  it("a late headers arrival after the lost race settles unavailable", async () => {
+    vi.useFakeTimers();
+    const gate = deferred<Response>();
+    void gate.promise.catch(() => {});
+    const fetcher = vi.fn<typeof fetch>(() => gate.promise);
+    const pending = readGuildSettings(CFG, fetcher);
+    const assertion = expect(pending).resolves.toEqual({ ok: false });
+    await untilFetcherCalled(fetcher);
+    await vi.advanceTimersByTimeAsync(10_000);
+    gate.resolve(jsonResponse(SETTINGS_DOC));
+    await flushRounds();
+    await assertion;
+  });
+
+  it("reads a bodyless success without a stream", async () => {
+    const fetcher = (async () =>
+      nullBodyResponse(async () => JSON.stringify(SETTINGS_DOC))) as typeof fetch;
+    const res = await readGuildSettings(CFG, fetcher);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.settings.map((s) => s.key)).toEqual([
+      "TWO_AUTOMOD_MENTION_LIMIT",
+      "TWO_MODERATION",
+    ]);
+  });
+
+  it.each([
+    ["unreadable", () => Promise.reject(new Error("body lost")), ""],
+    ["over-large", async () => "x".repeat(300 * 1024), ""],
+    ["non-JSON", async () => "not json", ""],
+  ])("a bodyless %s body fails closed", async (_name, text) => {
+    const fetcher = (async () => nullBodyResponse(text)) as typeof fetch;
+    expect(await readGuildSettings(CFG, fetcher)).toEqual({ ok: false });
+  });
+
+  it("an aborted null-body read settles unavailable", async () => {
+    vi.useFakeTimers();
+    const gate = deferred<string>();
+    void gate.promise.catch(() => {});
+    const fetcher = vi.fn<typeof fetch>(async () => nullBodyResponse(() => gate.promise));
+    const pending = readGuildSettings(CFG, fetcher);
+    const assertion = expect(pending).resolves.toEqual({ ok: false });
+    await untilFetcherCalled(fetcher);
+    await vi.advanceTimersByTimeAsync(10_000);
+    gate.resolve(JSON.stringify(SETTINGS_DOC));
+    await flushRounds();
+    await assertion;
+  });
+
+  it("an aborted mid-stream read settles unavailable", async () => {
+    vi.useFakeTimers();
+    const gate = deferred<{ done: boolean; value: Uint8Array }>();
+    void gate.promise.catch(() => {});
+    let reads = 0;
+    const reader: ScriptReader = {
+      read: async () => {
+        reads++;
+        if (reads === 1) return { done: false, value: new Uint8Array([1, 2, 3]) };
+        return gate.promise;
+      },
+      cancel: () => {},
+      releaseLock: () => {},
+    };
+    const fetcher = vi.fn<typeof fetch>(async () => streamResponse(reader));
+    const pending = readGuildSettings(CFG, fetcher);
+    const assertion = expect(pending).resolves.toEqual({ ok: false });
+    await untilFetcherCalled(fetcher);
+    const deadline = vi.getRealSystemTime() + 2_000;
+    while (reads < 2 && vi.getRealSystemTime() < deadline) {
+      await realDelay(1);
+    }
+    expect(reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    gate.resolve({ done: false, value: new Uint8Array([4]) });
+    await flushRounds();
+    await assertion;
+  });
+
+  it("an unreadable stream fails closed even when lock release also throws", async () => {
+    const reader: ScriptReader = {
+      read: async () => {
+        throw new Error("stream lost");
+      },
+      cancel: () => {},
+      releaseLock: () => {
+        throw new Error("lock lost");
+      },
+    };
+    const fetcher = (async () => streamResponse(reader)) as typeof fetch;
+    expect(await readGuildSettings(CFG, fetcher)).toEqual({ ok: false });
+  });
+
+  it("an undecodable body fails closed", async () => {
+    const decode = vi.spyOn(TextDecoder.prototype, "decode").mockImplementationOnce(() => {
+      throw new Error("fixture decode failure");
+    });
+    try {
+      const fetcher = (async () => jsonResponse(SETTINGS_DOC)) as typeof fetch;
+      expect(await readGuildSettings(CFG, fetcher)).toEqual({ ok: false });
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
+  it("skips every malformed row shape", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const valid = SETTINGS_DOC.result.settings[0]!;
+    const fetcher = (async () =>
+      jsonResponse({
+        ok: true,
+        result: {
+          settings: [
+            null,
+            "not-an-object",
+            { key: "", value: "x", version: 1, updated_by: "a", updated_at: "b" },
+            { key: "k", value: "v", version: 1.5, updated_by: "a", updated_at: "b" },
+            { key: "k", value: "v", version: 1, updated_by: 5, updated_at: "b" },
+            { key: "k", value: "v", version: 1, updated_by: "a", updated_at: null },
+            valid,
+          ],
+        },
+      })) as typeof fetch;
+    const res = await readGuildSettings(CFG, fetcher);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.settings.map((s) => s.key)).toEqual([valid.key]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("a 429 refusal carries the admitted retry delay, or null without a header", async () => {
+    const refusing = (retryAfter: string | null) => {
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (retryAfter !== null) headers["Retry-After"] = retryAfter;
+      return (async () =>
+        new Response(
+          JSON.stringify({ ok: false, error: { code: "rate_limited", retryable: true } }),
+          { status: 429, headers },
+        )) as typeof fetch;
+    };
+    const req = {
+      key: "TWO_AUTOMOD_MENTION_LIMIT",
+      value: "8",
+      expectedVersion: 7,
+      actor: "dashboard:1",
+      guildId: "2",
+    };
+    const key = "123e4567-e89b-12d3-a456-426614174000";
+    const withHeader = await applyGuildSetting(CFG, req, key, refusing("42"));
+    expect(withHeader.ok).toBe(false);
+    expect(withHeader.ok === false && withHeader.failure.retryAfterSeconds).toBe(42);
+    const withoutHeader = await applyGuildSetting(CFG, req, key, refusing(null));
+    expect(withoutHeader.ok).toBe(false);
+    expect(withoutHeader.ok === false && withoutHeader.failure.retryAfterSeconds).toBeNull();
+  });
 });
