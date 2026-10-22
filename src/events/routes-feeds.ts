@@ -18,6 +18,7 @@ import {
   eventsUnavailable,
   matchesIfNoneMatch,
   publicReadGuard,
+  unavailableFeed,
   type App,
   type Ctx,
   type SessionReader,
@@ -50,10 +51,10 @@ async function calendarFeedResponse(
     return feedResponse(c, build(), headers);
   } catch (error) {
     if (error instanceof IcsTimestampRangeError) {
-      return c.text("Calendar timestamp unavailable", 503, { "cache-control": "no-store" });
+      return unavailableFeed(c, "Calendar timestamp unavailable");
     }
     if (!(error instanceof IcsSequenceRangeError)) throw error;
-    return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
+    return unavailableFeed(c, "Calendar revision unavailable");
   }
 }
 

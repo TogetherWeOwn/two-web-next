@@ -195,9 +195,11 @@ describe("429 JSON envelope request_id", () => {
     expect(res.headers.get("x-request-id")).toBe(RAY);
     const body = await res.text();
     expect(JSON.parse(body)).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 30 seconds.",
       retry_after: 30,
+      next: "Wait for Retry-After, then retry.",
       request_id: RAY,
     });
     assertNoLeak(body);

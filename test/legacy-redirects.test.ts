@@ -386,7 +386,7 @@ describe("legacy login redirect (local fixtures, no DB)", () => {
       );
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe("/auth/discord");
-      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(res.headers.get("set-cookie")).toBeNull();
       expect(dbRead).not.toHaveBeenCalled();
     },

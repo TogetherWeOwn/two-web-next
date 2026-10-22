@@ -91,8 +91,9 @@ export function varyAccept(c: Context) {
 }
 
 // One 429 shape for every throttle (ports ThrottleEnvelope::render): JSON
-// callers get the {reason, message, retry_after} envelope, browsers get the
-// branded page — both with the Retry-After header. Default 60 s, min 1 s.
+// callers get the {code, reason, message, retry_after, next} envelope,
+// browsers get the branded page — both with the Retry-After header. Default
+// 60 s, min 1 s.
 // Wired by the RSVP writes (src/events/routes.tsx, W9). Uses the same
 // quality/specificity/q=0 selector as outageRepresentation so that explicit
 // JSON q=0, mixed-case, wildcard, and machine-only contracts behave
@@ -112,9 +113,11 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
     const requestId = supportReference(c);
     return c.json({
+      code: "rate_limited",
       reason: "rate_limited",
       message: `Too many requests. Try again in ${n} seconds.`,
       retry_after: n,
+      next: "Wait for Retry-After, then retry.",
       ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
@@ -218,20 +221,25 @@ const BAD_REQUEST_MESSAGE = "Check your request and try again.";
 const PAYLOAD_TOO_LARGE_MESSAGE = "Reduce the size of your request and try again.";
 
 // JSON-RPC "Invalid Request": the one static transport code for early /mcp
-// upload refusals (over-cap 413, broken-stream 400), matching the documented
-// batch refusal in mcp/routes.ts. Uploads fail before any id is known, so the
-// id is always null.
-const MCP_TRANSPORT_ERROR_CODE = -32600;
+// refusals (over-cap 413, broken-stream 400, over-budget 429), matching the
+// documented batch refusal in mcp/routes.ts. Transport failures happen before
+// any id is known, so the id is always null; data carries the machine
+// vocabulary's next action plus the request id for correlation.
+export const MCP_TRANSPORT_ERROR_CODE = -32600;
 
 function isMcpTransport(c: Context): boolean {
   return c.req.method.toUpperCase() === "POST" && c.req.path === "/mcp";
 }
 
-function mcpTransportError(c: Context, message: string): Response {
+function mcpTransportError(c: Context, message: string, next: string): Response {
   return c.json({
     jsonrpc: "2.0",
     id: null,
-    error: { code: MCP_TRANSPORT_ERROR_CODE, message },
+    error: {
+      code: MCP_TRANSPORT_ERROR_CODE,
+      message,
+      data: { next, request_id: c.get("requestId") },
+    },
   });
 }
 
@@ -242,7 +250,8 @@ export function badRequest(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(400);
-  if (isMcpTransport(c)) return mcpTransportError(c, BAD_REQUEST_MESSAGE);
+  if (isMcpTransport(c))
+    return mcpTransportError(c, BAD_REQUEST_MESSAGE, "Fix the request and retry.");
   if (isFeedErrorPath(c.req.path)) {
     return memberReadActive()
       ? bufferedMemberText(c, "Bad request", 400)
@@ -338,7 +347,8 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(413);
-  if (isMcpTransport(c)) return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE);
+  if (isMcpTransport(c))
+    return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE, "Reduce the request size and retry.");
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
