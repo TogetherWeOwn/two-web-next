@@ -7,6 +7,7 @@ import type { Db } from "../db/index";
 import type { Env } from "../env";
 import type { checkJoinThrottle } from "../join/service";
 import type { SessionStore } from "../sessions";
+import type { LinksStore } from "./links-store";
 import type { MemberStatsSource } from "./stats";
 import type { ProfileStore } from "./store";
 
@@ -17,6 +18,7 @@ export type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
 export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
+  linksStore?: LinksStore;
   stats?: MemberStatsSource;
   accessLog?: AccessSink;
   /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */

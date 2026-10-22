@@ -24,10 +24,16 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     else if ((path === "/admin" || path.startsWith("/admin/")) && registrations.has("ALL /admin/*"))
       auth = "moderator";
     else if (path === "/profile" && registrations.has("ALL /profile")) auth = "member";
+    // The links editor and saves carry explicit gates (the "/profile" middleware
+    // never covers "/profile/links"); writes are owner-only by construction.
+    else if (path === "/profile/links")
+      auth = method === "PATCH" || method === "POST" ? "member-owner" : "member";
     else if (path === "/leaderboards/members" && registrations.has("ALL /leaderboards/members"))
       auth = "member";
     // Retired index reads stop before the scoped member middleware.
     else if (method === "GET" && (path === "/members" || path === "/members/")) auth = "public";
+    // The link-in-bio page registers before the member gate: public by design.
+    else if (method === "GET" && path === "/members/:user/links") auth = "public";
     else if (path.startsWith("/members/") && registrations.has("ALL /members/*")) {
       auth = method === "PATCH" || method === "POST" ? "member-owner" : "member";
     } else if (path === "/events.json" || (method === "GET" && path === "/events/:key"))

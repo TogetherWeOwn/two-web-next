@@ -9,7 +9,17 @@
 // route-inventory: PATCH /profile/links
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
+import { serializeSigned } from "hono/utils/cookie";
 import type { Db } from "../src/db/index";
+import type { Env } from "../src/env";
+import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
+import { createMemoryProfileStore, type MemberView } from "../src/profiles/store";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 import {
   MEMBER_LINK_DENYLIST,
   MEMBER_LINK_LABEL_MAX,
@@ -136,5 +146,212 @@ describe.skipIf(!process.env.DATABASE_URL)("links database store", () => {
     ]);
     await store.save("100000000000000211", []);
     expect(await store.find("100000000000000211")).toEqual([]);
+  });
+});
+
+const BUILDER_SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
+const BUILDER_APP_URL = "https://next.example.test";
+const builderEnv: Env = {
+  APP_URL: BUILDER_APP_URL,
+  DISCORD_CLIENT_ID: "client-id",
+  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_INVITE_URL: "https://discord.gg/invite",
+  DISCORD_CLIENT_SECRET: "client-secret",
+  DISCORD_BOT_TOKEN: "bot-token",
+  SESSION_SECRET: BUILDER_SESSION_SECRET,
+};
+
+const BUILDER_ALICE = {
+  userId: "100000000000000001",
+  username: "alice",
+  member: true,
+  moderator: false,
+};
+
+function builderHarness(
+  opts: { members?: MemberView[]; links?: [string, { label: string; url: string }[]][] } = {},
+) {
+  const sessions = createMemorySessionStore();
+  const store = createMemoryProfileStore(
+    opts.members ?? [
+      {
+        id: BUILDER_ALICE.userId,
+        username: "alice",
+        avatar: null,
+        bio: "Alice bio",
+        games: [],
+        timezone: null,
+      },
+    ],
+  );
+  const links = createMemoryLinksStore(
+    opts.links ?? [
+      [BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]],
+    ],
+  );
+  const buckets: string[] = [];
+  const deps = {
+    sessionStore: sessions,
+    store,
+    linksStore: links,
+    throttle: async (bucket: string) => {
+      buckets.push(bucket);
+      return { limited: false as const };
+    },
+  } as ProfileDeps;
+  return { app: profilesApp(deps), sessions, store, links, buckets };
+}
+
+async function builderCookieFor(store: SessionStore, row: typeof BUILDER_ALICE): Promise<string> {
+  const token = newSessionToken();
+  await store.create({
+    tokenHash: await hashToken(token),
+    userId: row.userId,
+    username: row.username,
+    avatar: null,
+    member: row.member,
+    moderator: row.moderator,
+    expiresAt: new Date(Date.now() + 3600_000),
+  });
+  const serialized = await serializeSigned("__Host-two_session", token, BUILDER_SESSION_SECRET, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
+  return serialized.split(";")[0]!;
+}
+
+describe("links page document shape", () => {
+  it("the public page carries the standards-gate basics and one h1", async () => {
+    const { app } = builderHarness();
+    const res = await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/^\s*<!doctype html>/i);
+    expect(html).toMatch(/<html\b[^>]*\blang="[a-z]{2}/i);
+    expect(html).toMatch(/<meta\b[^>]*name="viewport"/i);
+    expect(html).toMatch(/<meta\b[^>]*name="description"[^>]*content="[^"]{20,}/i);
+    expect(html.match(/<h1\b/gi)).toHaveLength(1);
+  });
+
+  it("member links open externally with a warning and noopener", async () => {
+    const { app } = builderHarness();
+    const html = await (
+      await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv)
+    ).text();
+    const list = /<ul[^>]*data-testid="member-links-list"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1];
+    expect(list).toBeDefined();
+    expect(list).toContain('target="_blank"');
+    expect(list).toContain('rel="noopener"');
+    expect(list).toContain("opens in a new tab");
+  });
+
+  it("the report link is absolute so it never 404s in production", async () => {
+    const { app } = builderHarness();
+    const html = await (
+      await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv)
+    ).text();
+    const reports = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].filter((m) =>
+      /report/i.test(m[2]!.replace(/<[^>]*>/g, "")),
+    );
+    expect(reports.length).toBeGreaterThanOrEqual(1);
+    for (const m of reports) {
+      expect(/href="([^"]*)"/.exec(m[1]!)?.[1] ?? "").toMatch(/^https:\/\//);
+    }
+  });
+
+  it("an empty list renders an empty list, not a missing one", async () => {
+    const { app } = builderHarness({ links: [] });
+    const html = await (
+      await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv)
+    ).text();
+    const list = /<ul[^>]*data-testid="member-links-list"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1];
+    expect(list).toBeDefined();
+    expect(list).not.toContain("<a ");
+  });
+
+  it("the public page fails closed when no store is configured", async () => {
+    const app = profilesApp({});
+    const res = await app.request(`/members/${BUILDER_ALICE.userId}/links`, {}, builderEnv);
+    expect(res.status).toBe(503);
+  });
+
+  it("the editor fails closed when no session store is configured", async () => {
+    const app = profilesApp({});
+    const token = newSessionToken();
+    const serialized = await serializeSigned("__Host-two_session", token, BUILDER_SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    });
+    const res = await app.request(
+      "/profile/links",
+      { headers: { cookie: serialized.split(";")[0]! } },
+      builderEnv,
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it("the editor 404s when the member row is gone", async () => {
+    const { app, sessions } = builderHarness({ members: [] });
+    const res = await app.request(
+      "/profile/links",
+      { headers: { cookie: await builderCookieFor(sessions, BUILDER_ALICE) } },
+      builderEnv,
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("links crossed save shapes", () => {
+  const attempt = async (
+    method: "POST" | "PATCH",
+    contentType: string,
+    body: string,
+  ): Promise<{ status: number; stored: unknown }> => {
+    const { app, sessions, links } = builderHarness();
+    const res = await app.request(
+      "/profile/links",
+      {
+        method,
+        headers: {
+          cookie: await builderCookieFor(sessions, BUILDER_ALICE),
+          origin: BUILDER_APP_URL,
+          "content-type": contentType,
+          accept: "application/json",
+        },
+        body,
+      },
+      builderEnv,
+    );
+    return { status: res.status, stored: await links.find(BUILDER_ALICE.userId) };
+  };
+
+  it("POST takes the native form, never JSON", async () => {
+    const r = await attempt(
+      "POST",
+      "application/json",
+      JSON.stringify({ links: [{ label: "X", url: "https://example.com/x" }] }),
+    );
+    expect(r.status).toBe(415);
+    expect(r.stored).toHaveLength(1);
+  });
+
+  it("PATCH takes JSON, never the native form", async () => {
+    const r = await attempt(
+      "PATCH",
+      "application/x-www-form-urlencoded",
+      new URLSearchParams({ links_text: "X | https://example.com/x" }).toString(),
+    );
+    expect(r.status).toBe(415);
+    expect(r.stored).toHaveLength(1);
+  });
+
+  it("PATCH with a non-object JSON body is a bad request, changing nothing", async () => {
+    const r = await attempt("PATCH", "application/json", JSON.stringify(["nope"]));
+    expect(r.status).toBe(400);
+    expect(r.stored).toHaveLength(1);
   });
 });

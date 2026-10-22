@@ -20,13 +20,15 @@
 // Barrel: the mount lives here, one module per concern beside it —
 // routes-gate (session gate, access-log boundary, failure handler),
 // routes-admission (write throttle, owner-only), routes-stores (store, stats
-// and sink resolvers), routes-reads, routes-writes, routes-shared (types).
-// Registration order matches the original file exactly.
+// and sink resolvers), routes-reads, routes-writes, routes-links (link-in-bio
+// pages and saves), routes-shared (types). Registration order matches the
+// original file exactly, with the links halves at the documented positions.
 
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { registerMemberLeaderboardRoutes } from "../leaderboards/routes";
 import { profileError, registerGate } from "./routes-gate";
+import { registerLinksEditorRoutes, registerPublicLinksRoutes } from "./routes-links";
 import { registerReadRoutes } from "./routes-reads";
 import type { ProfileDeps, Vars } from "./routes-shared";
 import { profileStores } from "./routes-stores";
@@ -39,9 +41,16 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
   app.onError(profileError);
   const stores = profileStores(deps);
+  // The public links page registers before the gate middleware, so guests get
+  // 200 with no session, no cookie and no access-log row (same ordering rule
+  // as the retired bare /members paths inside registerGate).
+  registerPublicLinksRoutes(app, stores);
   registerGate(app, deps, stores);
   registerReadRoutes(app, stores);
   registerMemberLeaderboardRoutes(app, deps, stores);
   registerWriteRoutes(app, deps, stores);
+  // The links editor and saves carry their own explicit gates: app.use paths
+  // match exactly, so the global "/profile" gate never covers "/profile/links".
+  registerLinksEditorRoutes(app, deps, stores);
   return app;
 }
