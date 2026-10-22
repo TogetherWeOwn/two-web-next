@@ -2,7 +2,18 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { chromium } = require('playwright');
+
+async function screenshotWithRetry(page, file) {
+  try {
+    await page.screenshot({ path: file, fullPage: true });
+  } catch {
+    // Transient Chromium compositor/protocol hiccups (observed: "Page.captureScreenshot:
+    // Unable to capture screenshot" with every DOM check green) fail the whole proof.
+    // One bounded retry absorbs the transient; a persistent failure still throws below.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await page.screenshot({ path: file, fullPage: true });
+  }
+}
 
 async function main() {
   const input = path.resolve(process.argv[2]);
@@ -29,6 +40,8 @@ async function main() {
   try {
     report.playwrightVersion = require('playwright/package.json').version;
     if (report.playwrightVersion !== '1.58.2') throw new Error('Capture requires the container-matched Playwright 1.58.2 module');
+    // Required lazily so the retry helper stays require-safe for the no-dependency guard selftests.
+    const { chromium } = require('playwright');
     browser = await chromium.launch({ headless: true });
     report.browserVersion = browser.version();
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
@@ -132,7 +145,7 @@ async function main() {
           check('external stylesheet applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
           check('no network requests', attemptedRequests.length === 0);
           const screenshot = `${path.basename(fixture.name, '.html')}-${viewport.width}x${viewport.height}.png`;
-          await page.screenshot({ path: path.join(output, screenshot), fullPage: true });
+          await screenshotWithRetry(page, path.join(output, screenshot));
           const scrolledCaptures = [];
           if (fixture.name === 'list.html') {
             for (const column of [{ index: 3, name: 'window' }, { index: 4, name: 'last-changed' }]) {
@@ -150,7 +163,7 @@ async function main() {
                 return rect.left >= region.left - tolerancePx && rect.right <= region.right + tolerancePx;
               }));
               const filename = `list-${column.name}-${viewport.width}x${viewport.height}.png`;
-              await page.screenshot({ path: path.join(output, filename), fullPage: true });
+              await screenshotWithRetry(page, path.join(output, filename));
               scrolledCaptures.push({ column: column.name, screenshot: filename, scrollLeft: await page.locator('[data-testid="featured-table-scroll"]').evaluate(el => el.scrollLeft) });
             }
           }
@@ -170,4 +183,7 @@ async function main() {
   console.log(JSON.stringify({ automatedChecksPassed: passed, screenshots: report.results.reduce((count, result) => count + 1 + result.scrolledCaptures.length, 0), sourceHead: report.sourceHead }));
   if (!passed) process.exitCode = 1;
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (require.main === module) {
+  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+}
+module.exports = { screenshotWithRetry };
