@@ -10,7 +10,7 @@ exports[`machine-doc validator: /faq.md > preserves the public 200 media type, T
 
 exports[`machine-doc validator: /join.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"62bb3fd33fc540aef835f499e72622e0655928ddb3fd382f7d11fb17fd7919e6"`;
 
-exports[`machine-doc validator: /openapi.json > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"fd287caf0504b138c9b4f979b6a8dbb0ccaf42fe7198fdef1052017e743be47c"`;
+exports[`machine-doc validator: /openapi.json > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"5c53769ef3dd5bd0d0adab3a0023d53e254b89cec91c2e0c5fc353e515c65e79"`;
 
 exports[`machine-doc validator: /privacy.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"dd32b20cf52b9f3cd05e09544b9d0d6c2977bb0a06dc6ff700596b04d6053a23"`;
 
