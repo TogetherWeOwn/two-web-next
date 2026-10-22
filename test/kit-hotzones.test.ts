@@ -39,7 +39,10 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
       undefined,
     );
     expect(setHeaders).toHaveBeenCalledTimes(1);
-    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "public, max-age=300" });
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=300",
+      vary: "Cookie",
+    });
   });
 
   it("index maps a refused aggregate read to a branded 503, never a cached 500", async () => {

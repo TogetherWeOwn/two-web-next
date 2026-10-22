@@ -218,6 +218,10 @@ export async function loadPastArchivePage<Row>({
     setHeaders({
       "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
       "x-two-past-cacheable": String(!input.searching && rows.length > 0),
+      // Browsing renders are public and shared, like the Hono twin: name the
+      // Cookie variance so shared caches key anonymous and signed-in shells
+      // apart. Searching renders stay private no-store with no Vary.
+      ...(!input.searching ? { vary: "Cookie" } : {}),
     });
     return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
   } catch (err) {
