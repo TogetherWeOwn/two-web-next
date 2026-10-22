@@ -19,44 +19,11 @@ Concretely, the website keeps:
 - **Your Discord identity** — Discord user ID, display name (or username if
   you have no display name), avatar, and whether you are in our server. This
   is a cache of what Discord told us: it is overwritten from Discord on every
-  sign-in, and it renders read-only — only your profile fields (below)
-  have an edit form.
+  sign-in, and it renders read-only — only your bio, games, timezone and
+  leaderboard switch have an edit form.
 - **What you write yourself** — bio, games list, timezone and leaderboard visibility. This lives in a
   separate place the sign-in sync never touches, so signing in can never eat
   your bio.
-- **Your handle and visibility choices** — your profile lives at
-  `/u/<handle>`; the handle defaults to your Discord username and you can
-  change it. Every profile field has a Public or Members-only toggle:
-  display name, avatar, ladder rank and member-since date start public,
-  while bio, games, timezone, Steam, banner, links, featured games and
-  accent start members-only. Search
-  indexing stays off unless you opt in.
-- **Your linked Steam account, if you link one** — linking is optional and
-  link-only: Discord stays the only way to sign in. We keep your Steam ID,
-  persona name, avatar, profile link, what you are currently playing
-  (hidden while the sync is stale), your top 5 games by playtime and how
-  many games you own, refreshed from Steam daily. We also keep three
-  sync-diagnostic fields that are stored but never shown: your Steam
-  profile visibility state, your account state, and when you were last
-  online on Steam — last-online time is personal data. Profile-facing
-  Steam data is used only to render your profile block and to suggest
-  games when you edit your games list; the three diagnostic fields and
-  the SteamID64 log entries below are used only to keep the sync
-  healthy and to diagnose failed syncs. We
-  never keep your friends list, achievements, real name or playtime
-  history. One
-  Steam account per member: an additional link attempt is refused with an
-  explanation. Unlinking removes all synced Steam data immediately, and
-  moderators can unlink an account too.
-- **Your banner, links and featured games** — a banner image you upload, up
-  to 5 links, up to 6 featured games, and an accent colour. The banner is
-  size-limited and re-encoded to strip metadata, then stored in R2
-  (Cloudflare object storage) and follows your visibility choices,
-  starting members-only.
-- **Profile reports** — when someone reports a public profile, we keep the
-  report: which profile was reported, the reason, and the reporter's
-  Discord ID when they are signed in. Kept for 90 days, then deleted, so
-  moderators can act on it.
 - **Your sign-in session** — a record holding your Discord ID, name, avatar,
   whether you are in our server, and whether you are a moderator (worked out
   from your Discord roles when you sign in). Signing out ends it at once; the
@@ -92,27 +59,9 @@ What we never store, ever — in the website database: email addresses (we never
 
 ## Who can see it
 
-Profiles have two audiences: Public (anyone on the web) or Members
-(signed-in members of our server). Each field carries your choice: display
-name, avatar, ladder rank and member-since date are public by default,
-while bio, games, timezone, Steam, banner, links, featured games and
-accent are members-only by default, and
-every field has its own toggle. Leaving a field empty hides it. The
-public view shows your display name only — never your Discord user ID.
-Two things can still carry your username until you change them: your
-profile address starts as your Discord username, and your display name
-falls back to your username when you have no Discord display name. Change
-the handle before sharing your profile if you do not want your username
-public. The members view adds your username and a Message on Discord
-button.
-Only you can edit your profile. If you leave the server, your public
-profile shows a not-found page while members still see it marked former
-member. Your Steam block follows the same rule: gone from the not-found
-public view, still on the members' former-member view until you ask for
-erasure.
-
-Public profiles tell search engines not to index them. That changes only
-if you opt in to indexing.
+Member profiles are members-only. Signed in with Discord as a member of our
+server, you can view any member's profile; logged out, you get a sign-in
+prompt instead of a profile. Only you can edit your bio, games, timezone and leaderboard visibility.
 
 On an event page, signed-in members see the names of the people going.
 Moderators see every RSVP through the admin panel. RSVPs are not sent to
@@ -125,11 +74,6 @@ down the same way. That access log is kept for 90 days. Changes moderators
 make to events and featured content are kept in an edit history that records
 which moderator made each change and what changed; each content row also keeps
 its author's Discord ID as its authorship mark.
-
-Anyone can report a public profile with its Report button; the report goes
-to a moderator queue and is kept for 90 days. Moderators can hide any
-profile field, and every hide is written to the audit log, which keeps
-moderation evidence and is never edited per request.
 
 Private support-ticket transcripts live in Discord, not in this site's
 database: staff-only, kept for 90 days, then deleted.
@@ -149,7 +93,9 @@ readable by scripts, and sent only to this site over HTTPS.
 - `__Host-two_session` keeps you signed in. It holds a random token, not your
   details. It lasts 120 minutes, and the clock restarts, with a fresh token,
   each time you load a page that uses your sign-in; stay away for two hours
-  and you are signed out. Signing out ends it.
+  and you are signed out. No session lasts more than 24 hours after you sign
+  in: the absolute clock starts at login and page loads never extend past it.
+  Signing out ends it.
 - `__Host-two_session_status` lets other open tabs notice that you signed
   out. It can only check whether a session is still live and can never sign
   anyone in. It lasts as long as the session cookie.
@@ -173,50 +119,36 @@ no third-party scripts. The one third-party embed is the live lobby widget on
 the join page: an iframe served by Discord showing who is online right now,
 loaded only when you scroll to it and sent no referrer. If it is unavailable,
 the page shows a plain line of text from our own site instead. Avatars and
-other pictures load from our own site, straight from Discord's image server
-(`cdn.discordapp.com`), or — on profiles showing a linked Steam account —
-from Steam's image servers, each told only that the request came from this
-site. Any picture load still discloses the viewer's IP address to the
-server it loads from, so viewing a Steam-linked profile discloses your IP
-address to Valve. This policy page itself ships no JavaScript at all — elsewhere on the
+other pictures load from our own site or straight from Discord's image server
+(`cdn.discordapp.com`), which is told only that the request came from this
+site. This policy page itself ships no JavaScript at all — elsewhere on the
 site, interactivity comes from small first-party scripts served from this
 site, such as the copy-link button and the RSVP button on event pages.
 
 The site runs on Cloudflare, which handles each request (including your IP
 address) to deliver the page. Our own request logs record the page route,
 the response status, how long it took and which Cloudflare data center
-served it — never your IP address or who you are. Separate from those,
-the Steam sync job keeps its own diagnostic logs in Cloudflare Workers
-Logs, which record your SteamID64 so a failed sync can be traced — and
-never the Steam API key or the sign-in assertion signatures. Those
-entries are kept for up to 7 days, then age out; unlinking Steam or
-asking for erasure does not remove historical entries sooner.
+served it — never your IP address or who you are.
 
 ## Deletion
 
 Ask anytime to be removed — DM a moderator or open a private support ticket —
 and we delete your rows: your member record, profile, RSVPs, sign-in sessions
-and join attempts, plus your linked Steam account data, banner image,
-reports about your profile and reports you filed.
-Signing in again later starts a fresh record.
+and join attempts. Signing in again later starts a fresh record.
 
-Three evidence records are exceptions, because they are kept tamper-proof as
+Two evidence records are exceptions, because they are kept tamper-proof as
 evidence and are not edited on request. The access log (who looked at whose
 records, described above) is not rewritten for one person; it deletes itself
 after 90 days. The moderator edit history keeps the name of the moderator who
-made each change. Profile-field hides stay in the audit log under the same
-rule: moderation evidence that is never edited per request.
+made each change.
 
-Three further traces also stay, and none is erased with your rows. Moderator
+Two further traces also stay, and neither is erased with your rows. Moderator
 content you authored keeps your Discord ID on the content row as its
 authorship mark (described above): that mark is your identifying data, and it
 lasts as long as the content row does. Residual rate-limit counters keyed to
 your Discord ID (described above) are not deleted with your rows either; they
 are cleaned up lazily when a later request that runs cleanup arrives, so an
-expired counter can linger until such a request arrives. Steam sync diagnostic
-entries naming your SteamID64 (described above) age out of Cloudflare Workers
-Logs within 7 days; unlinking Steam or asking for erasure does not remove
-historical entries sooner.
+expired counter can linger until such a request arrives.
 
 ## Changes to this policy
 
@@ -230,4 +162,4 @@ Version 4 names the two further Deletion traces alongside the two tamper-proof e
 
 Version 5 clarifies that anonymous board-view telemetry and viewer-linked member-data access auditing are separate records. No collection, erasure category or retention period changes.
 
-Version 6 adds public profiles with per-field Public/Members visibility, an indexing opt-in, Steam linking with daily-synced data removed on unlink, banner images, and profile reporting with moderator field hiding. It also discloses the stored-never-shown Steam sync diagnostics, viewer-IP disclosure to Valve on Steam avatars, and SteamID64 in sync diagnostic logs (kept up to 7 days in Workers Logs, not removed by unlink or erasure). Erasure gains linked-account rows, the banner image, reports about you and reports you filed; existing retention periods are unchanged.
+Version 6 caps every sign-in at an absolute 24 hours after login: page loads still restart the sliding window with a fresh token, but renewal never extends past the absolute clock, so a changed Discord role takes effect no later than the next login after the cap. No collection, erasure category or retention period changes.
