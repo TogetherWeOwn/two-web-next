@@ -120,7 +120,7 @@ export const MonthGrid: FC<{
                       return (
                         <li>
                           <a
-                            href={calendarJumpUrl(state.past, rowKey(e))}
+                            href={calendarJumpUrl(state.past, rowKey(e), state.game)}
                             data-cal-jump
                             aria-label={
                               continued

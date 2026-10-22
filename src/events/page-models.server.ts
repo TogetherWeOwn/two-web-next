@@ -8,6 +8,7 @@ import {
   EVENTS_UPCOMING_PAGE_SIZE,
   mergeCalendarRows,
   parseCalendarMonth,
+  resolveGameFilter,
   type CalendarState,
   type DiscordTransient,
 } from "../islands/contracts";
@@ -21,6 +22,7 @@ import {
 import type { DiscordEventsSource } from "./discord-transients-types";
 import {
   listCalendarPast,
+  listPublishedGames,
   listUpcoming,
   listUpcomingForMonth,
   normalizeUpcomingPage,
@@ -32,6 +34,9 @@ import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
 
 export interface CalendarPageInput {
   q: string;
+  /** Raw `game` facet input; the effective game resolves against the distinct
+   * published list at read time (blank/unknown degrades to unfiltered). */
+  game: string;
   searching: boolean;
   view: "list" | "calendar";
   past: boolean;
@@ -46,6 +51,7 @@ export interface CalendarPageInput {
 /** Normalize bounded URL state before a framework-specific route loads data. */
 export function resolveCalendarInput(input: {
   q?: string | null;
+  game?: string | null;
   view?: string | null;
   past?: string | null;
   page?: string | null;
@@ -61,6 +67,7 @@ export function resolveCalendarInput(input: {
 
   return {
     q,
+    game: input.game ?? "",
     searching,
     view,
     past: input.past === "1",
@@ -82,6 +89,10 @@ export interface CalendarPageModel {
   emptyState: ReturnType<typeof calendarEmptyState>;
   robots?: string;
   discordFailed: boolean;
+  /** Distinct published games backing the facet select (one bounded read). */
+  games: string[];
+  /** Effective facet: the canonical stored game, or null when unfiltered. */
+  gameFilter: string | null;
 }
 
 /**
@@ -100,9 +111,16 @@ export async function loadCalendarPageModel(args: {
 }): Promise<CalendarPageModel> {
   const { db, input, includeDrafts, discord, requestId } = args;
   const now = args.now ?? new Date();
-  const { q, searching, view, past, page, jumpKey, jumpRequested } = input;
+  const { q, game: rawGame, searching, view, past, page, jumpKey, jumpRequested } = input;
   const match = matchQuery(q);
-  const opts = { includeDrafts, search: match };
+
+  // The distinct-games list scopes every list read below, so it resolves
+  // before them — overlapped with the Discord read (snapshot store, at most
+  // one live Discord GET), which shares nothing with it. The list reads then
+  // start together like the homepage (perf(home) #856).
+  const [games, discordRows] = await Promise.all([listPublishedGames(db), discord.upcoming(now)]);
+  const gameFilter = resolveGameFilter(games, rawGame);
+  const opts = { includeDrafts, search: match, game: gameFilter };
 
   // Grid day-jumps resolve the list page holding the card, even past page one.
   let listPage = view === "calendar" ? 1 : page;
@@ -112,14 +130,12 @@ export async function loadCalendarPageModel(args: {
   }
 
   // Independent reads start together like the homepage (perf(home) #856):
-  // the upcoming page (web DB), the past drawer (web DB) and the Discord
-  // transients (snapshot store, at most one live Discord GET) share nothing,
-  // so sequential awaits would sum every round trip into /events server time.
+  // the upcoming page and the past drawer (web DB) share nothing, so
+  // sequential awaits would sum every round trip into /events server time.
   // Keep the rows and failure flag on the same resolved source instance.
-  const [upcomingPage, localPast, discordRows] = await Promise.all([
+  const [upcomingPage, localPast] = await Promise.all([
     listUpcoming(db, now, opts, listPage),
     listCalendarPast(db, now, opts),
-    discord.upcoming(now),
   ]);
   const { rows: pageRows, totalPages, total: totalUpcoming } = upcomingPage;
   const persistedIds = await persistedDiscordIds(
@@ -127,7 +143,11 @@ export async function loadCalendarPageModel(args: {
     discordRows.map((row) => row.discordId),
   );
   const term = (match ?? "").toLowerCase();
-  const transients = dedupeTransients(discordRows, persistedIds).filter(
+  // Discord transients carry no game, so they cannot match the facet — while
+  // one is active they drop out instead of breaking its promise.
+  const transients = (
+    gameFilter === null ? dedupeTransients(discordRows, persistedIds) : []
+  ).filter(
     (row) =>
       (row.endsAt === null || row.endsAt >= now) &&
       (term === "" ||
@@ -176,7 +196,7 @@ export async function loadCalendarPageModel(args: {
     );
   }
 
-  const state = { view, month, q, past, page: listPage };
+  const state = { view, month, q, game: rawGame, past, page: listPage };
   // An overlong `?event=` never resolves, but it is still a jump URL — not an
   // indexable copy of page one — so the robots decision sees the request flag.
   const robots = searching || state.page > 1 || jumpRequested ? "noindex, follow" : undefined;
@@ -214,5 +234,7 @@ export async function loadCalendarPageModel(args: {
     emptyState,
     robots,
     discordFailed,
+    games,
+    gameFilter,
   };
 }

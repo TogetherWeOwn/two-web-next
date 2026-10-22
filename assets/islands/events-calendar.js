@@ -337,13 +337,22 @@
   }
 
   // The URL for a settled search: the raw input value (blank means no search),
-  // the drawer stays as it was, and the search forces the list view — so
-  // view/month params are dropped, matching the server's calendarUrl().
+  // the drawer stays as it was, the game facet rides along, and the search
+  // forces the list view — so view/month params are dropped, matching the
+  // server's calendarUrl(). The facet reads the live select (like the input
+  // reads its live value), falling back to the address bar where the form
+  // has no select yet.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
-    if (new URL(window.location.href).searchParams.get("past") === "1") {
+    var current = new URL(window.location.href).searchParams;
+    if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
+    }
+    var gameField = root.querySelector('select[name="game"]');
+    var game = gameField ? gameField.value : current.get("game");
+    if (game !== null && game !== undefined && String(game).trim() !== "") {
+      url.searchParams.set("game", String(game).trim());
     }
     return url;
   }

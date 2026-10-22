@@ -572,6 +572,7 @@ describe("EventsCalendar contract drift", () => {
       view: "list",
       month: "2026-10",
       q: "",
+      game: "",
       past: false,
       page: 1,
       ...o,
