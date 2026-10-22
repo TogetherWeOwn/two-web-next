@@ -185,6 +185,7 @@ export interface PruneStores {
   idempotencyKeys: AgePrunedTable;
   searchLog: AgePrunedTable;
   boardViews: AgePrunedTable;
+  reminderDeliveries: AgePrunedTable;
   sessions: SessionSweeper;
   // Optional so stores built before the lock sweep (older stubs) still run:
   // pruneModelTables drains nothing for a missing sweeper instead of throwing.

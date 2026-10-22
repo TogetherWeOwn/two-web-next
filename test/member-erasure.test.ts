@@ -1,6 +1,6 @@
 // Member erasure (TOG-12548). Proves the operator command backs the
 // published deletion promise: dry-run writes nothing, apply removes exactly
-// one member's rows across all six tables, re-apply is a no-op, and a
+// one member's rows across all nine tables, re-apply is a no-op, and a
 // malformed id is refused before any connection is opened.
 //
 // Live round-trips use a guarded disposable schema on agent-testdb or the
@@ -413,16 +413,25 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
              (${`hash-${id}-2`}, ${id}, ${username}, true, false, ${expiresAt})`;
     await fixture.client`insert into join_attempts (outcome, source, request_id, discord_id)
       values ('added', 'site', ${`request-${id}`}, ${id})`;
+    await fixture.client`insert into event_reminder_mutes (event_id, user_id)
+      values (${eventId}, ${id})`;
+    await fixture.client`insert into notifications (user_id, kind, event_id, title, body, url)
+      values (${id}, 'event_reminder', ${eventId}, 'T', 'B', 'https://example.test/e/1')`;
+    await fixture.client`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status)
+      values (${eventId}, ${id}, '24h', 'site', 'sent')`;
   };
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [s], [g], [j], [m], [n], [d]] = await Promise.all([
       fixture.client`select count(*)::int as n from users where id = ${id}`,
       fixture.client`select count(*)::int as n from profiles where user_id = ${id}`,
       fixture.client`select count(*)::int as n from rsvps where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       fixture.client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
+      fixture.client`select count(*)::int as n from event_reminder_mutes where user_id = ${id}`,
+      fixture.client`select count(*)::int as n from notifications where user_id = ${id}`,
+      fixture.client`select count(*)::int as n from event_reminder_deliveries where user_id = ${id}`,
     ]);
     return {
       users: (u as { n: number }).n,
@@ -431,6 +440,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      event_reminder_mutes: (m as { n: number }).n,
+      notifications: (n as { n: number }).n,
+      event_reminder_deliveries: (d as { n: number }).n,
     };
   };
 
@@ -444,6 +456,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from rsvps`;
+    await fixture.client`delete from event_reminder_mutes`;
+    await fixture.client`delete from notifications`;
+    await fixture.client`delete from event_reminder_deliveries`;
     await fixture.client`delete from profiles`;
     await fixture.client`delete from join_attempts`;
     await fixture.client`delete from events`;
@@ -470,6 +485,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     });
     const preview = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
@@ -481,7 +499,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(await countsFor(MEMBER_B)).toEqual(before);
   });
 
-  it("apply removes exactly member A across all six tables and leaves member B intact", async () => {
+  it("apply removes exactly member A across all nine tables and leaves member B intact", async () => {
     const removed = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
       MEMBER_A,
@@ -494,6 +512,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -504,6 +525,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual({
       users: 1,
@@ -512,6 +536,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     });
     // The event itself survives: erasure removes answers, never content.
     expect(
@@ -535,6 +562,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
       passes: 1,
       deletesPerPass: [0],
     });
@@ -545,6 +575,9 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     });
   });
 });

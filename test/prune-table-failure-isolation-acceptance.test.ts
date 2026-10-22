@@ -121,6 +121,7 @@ function baseStores(overrides: Partial<Record<keyof PruneCounts, Step[]>> = {}):
     idempotencyKeys: age("idempotencyKeys"),
     searchLog: age("searchLog"),
     boardViews: age("boardViews"),
+    reminderDeliveries: age("reminderDeliveries"),
     sessions: sweep("sessions") as unknown as PruneStores["sessions"],
     jobUniqueLocks: sweep("jobUniqueLocks"),
   };
@@ -159,6 +160,7 @@ describe("prune table failure isolation at the drain seam (acceptance)", () => {
       idempotencyKeys: [2],
       searchLog: [2],
       boardViews: [2],
+      reminderDeliveries: [2],
       sessions: [2],
       jobUniqueLocks: [2],
     });
@@ -175,6 +177,7 @@ describe("prune table failure isolation at the drain seam (acceptance)", () => {
       idempotencyKeys: 2,
       searchLog: 2,
       boardViews: 2,
+      reminderDeliveries: 2,
       sessions: 2,
       jobUniqueLocks: 2,
     });
@@ -213,6 +216,7 @@ describe("prune table failure isolation at the drain seam (acceptance)", () => {
         },
       },
       boardViews: scriptedAge([1]),
+      reminderDeliveries: scriptedAge([1]),
       sessions: createMemorySessionStore(() => NOW.getTime()),
       jobUniqueLocks: scriptedSweep([1], cutoffs.jobUniqueLocks),
     };
@@ -258,6 +262,7 @@ describe("prune table failure isolation at the drain seam (acceptance)", () => {
       idempotencyKeys: 1,
       searchLog: 2,
       boardViews: 1,
+      reminderDeliveries: 1,
       sessions: 1,
       jobUniqueLocks: 1,
     });

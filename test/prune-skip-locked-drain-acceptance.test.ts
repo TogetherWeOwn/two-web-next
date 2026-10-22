@@ -45,6 +45,7 @@ const AGE_TABLES = [
   "idempotencyKeys",
   "searchLog",
   "boardViews",
+  "reminderDeliveries",
 ] as const;
 type AgeTable = (typeof AGE_TABLES)[number];
 type StoreName = AgeTable | "sessions";
@@ -97,6 +98,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       idempotencyKeys: seq(400, 600, 250),
       searchLog: seq(400, 600, 250),
       boardViews: seq(400, 600, 250),
+      reminderDeliveries: seq(400, 600, 250),
       sessions: seq(250, 500),
     });
     const { counts, reports, capped } = await runPass(stores);
@@ -154,6 +156,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       idempotencyKeys: full,
       searchLog: full,
       boardViews: full,
+      reminderDeliveries: full,
       sessions: seq(PRUNE_DELETE_BATCH_SIZE, 5),
     });
     const { counts, reports, capped } = await runPass(stores);
@@ -167,6 +170,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       idempotencyKeys: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
       searchLog: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
       boardViews: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
+      reminderDeliveries: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
       sessions: PRUNE_DELETE_BATCH_SIZE + 5,
       jobUniqueLocks: 0,
     });
@@ -186,6 +190,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       idempotencyKeys: 0,
       searchLog: 0,
       boardViews: 0,
+      reminderDeliveries: 0,
       sessions: 0,
       jobUniqueLocks: 0,
     });

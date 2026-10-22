@@ -2,7 +2,7 @@
 // the job_unique_locks sweep on the separate dispatch pool — one short
 // per-statement transaction per batch — never inside the flight transaction.
 // Inside the flight, the sweep's DELETE would hold row locks until the whole
-// eight-table pass commits, blocking a concurrent acquire (INSERT ..
+// nine-table pass commits, blocking a concurrent acquire (INSERT ..
 // ON CONFLICT) on the deleting transaction. Uses the established
 // worker-harness pattern: fake postgres driver, real cron / single-flight /
 // prune stores / scheduled handler.

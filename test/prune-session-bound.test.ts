@@ -58,6 +58,7 @@ function emptyAgeTables(): Omit<PruneStores, "sessions"> {
     idempotencyKeys: empty,
     searchLog: empty,
     boardViews: empty,
+    reminderDeliveries: empty,
     jobUniqueLocks: {
       async sweepExpired(_now: Date): Promise<number> {
         return 0;

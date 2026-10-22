@@ -164,6 +164,8 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       await migrate.begin(async (tx) => {
         for (const migration of migrations)
           for (const statement of migration.sql) {
+            // Live ACLs stay out of fixtures (see test/helpers/member-data-db.ts).
+            if (/^\s*GRANT\b/i.test(statement)) continue;
             if (statement.trim()) await tx.unsafe(statement);
           }
       });

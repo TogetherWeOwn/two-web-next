@@ -18,6 +18,7 @@ const scoped = [
   { table: "agent_event_idempotency_keys", key: "idempotencyKeys", clock: "created_at" },
   { table: "event_search_logs", key: "searchLog", clock: "occurred_at" },
   { table: "board_view_logs", key: "boardViews", clock: "occurred_at" },
+  { table: "event_reminder_deliveries", key: "reminderDeliveries", clock: "sent_at" },
 ] as const;
 type Failure = { table: keyof PruneCounts; error: unknown };
 
@@ -27,6 +28,9 @@ async function seed(sql: postgres.Sql, now: Date) {
   const fresh = new Date(now.getTime() - DAY);
   const [grant] = await sql`insert into agent_event_grants
     (agent_id, company_id, guild_id, verifier_hash) values ('a','co','g','fixture-hash') returning id`;
+  const [event] = await sql<{ id: number }[]>`insert into events
+    (event_key, title, starts_at, ends_at)
+    values ('lock-free-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
   // The free row precedes the held row: a partial DELETE must roll back too.
   for (const at of [old, old, edge, fresh]) {
     await sql`insert into agent_event_audits (operation, request_id, result, created_at)
@@ -41,6 +45,8 @@ async function seed(sql: postgres.Sql, now: Date) {
       values ('fixture',0,${at})`;
     await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
       values ('fixture','overall','all',0,${at})`;
+    await sql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+      values (${event!.id},${crypto.randomUUID()},'24h','site','sent',${at})`;
   }
   await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
     values ('added','site','old','1',${old}),('added','site','edge','1',${edge}),
@@ -61,6 +67,7 @@ const zeros: PruneCounts = {
   idempotencyKeys: 0,
   searchLog: 0,
   boardViews: 0,
+  reminderDeliveries: 0,
   sessions: 0,
   jobUniqueLocks: 0,
 };
@@ -131,6 +138,7 @@ describe.skipIf(!DB)("scoped prune bounded deferral (test Postgres, acceptance)"
           idempotencyKeys: 2,
           searchLog: 2,
           boardViews: 2,
+          reminderDeliveries: 2,
           sessions: 1,
           jobUniqueLocks: 1,
           [held.key]: 0,

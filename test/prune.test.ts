@@ -57,6 +57,7 @@ function memStores(now: Date): Omit<PruneStores, "sessions"> & {
     idempotencyKeys: memTable(),
     searchLog: memTable(),
     boardViews: memTable(),
+    reminderDeliveries: memTable(),
   };
   return {
     ...tables,
@@ -106,6 +107,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       searchLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       boardViews: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      reminderDeliveries: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
     };
     const stores: PruneStores = {
       ...tables,
@@ -124,6 +126,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: PRUNE_DELETE_BATCH_SIZE + 3,
       searchLog: PRUNE_DELETE_BATCH_SIZE + 3,
       boardViews: PRUNE_DELETE_BATCH_SIZE + 3,
+      reminderDeliveries: PRUNE_DELETE_BATCH_SIZE + 3,
       jobUniqueLocks: 0,
     });
   });
@@ -148,6 +151,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         idempotencyKeys: endless,
         searchLog: endless,
         boardViews: endless,
+        reminderDeliveries: endless,
         sessions: createMemorySessionStore(() => now.getTime()),
         jobUniqueLocks: {
           async sweepExpired(_at: Date): Promise<number> {
@@ -164,10 +168,11 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         idempotencyKeys: perTable,
         searchLog: perTable,
         boardViews: perTable,
+        reminderDeliveries: perTable,
         jobUniqueLocks: 0,
       });
-      // Each of the six tables stopped after exactly the max batches.
-      expect(callCounts.n).toBe(6 * PRUNE_DELETE_MAX_BATCHES);
+      // Each of the seven tables stopped after exactly the max batches.
+      expect(callCounts.n).toBe(7 * PRUNE_DELETE_MAX_BATCHES);
       // The capped pass pages once for the whole pass instead of warning.
       expect(warn).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledTimes(1);
@@ -218,6 +223,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: 1,
       searchLog: 1,
       boardViews: 1,
+      reminderDeliveries: 1,
     });
     for (const [name, t] of Object.entries(stores.tables)) {
       expect(t.at, name).toEqual([edge, fresh]);
@@ -271,6 +277,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: 0,
       searchLog: 0,
       boardViews: 0,
+      reminderDeliveries: 0,
       sessions: 0,
       jobUniqueLocks: 0,
     });
@@ -350,6 +357,12 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       values ('old q',3,${old}),('edge q',1,${edge}),('fresh q',0,${fresh})`;
     await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
       values ('hotzones','overall','all',3,${old}),('hotzones','overall','all',1,${edge}),('hotzones','overall','all',0,${fresh})`;
+    const [ageEvent] = await sql<
+      { id: number }[]
+    >`insert into events (event_key, title, starts_at, ends_at)
+      values ('prune-age-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
+    await sql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+      values (${ageEvent!.id},'rm-old','24h','site','sent',${old}),(${ageEvent!.id},'rm-edge','24h','site','sent',${edge}),(${ageEvent!.id},'rm-fresh','24h','site','sent',${fresh})`;
     await sql`insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at)
       values ('gone','1','a',true,false,${new Date(now.getTime() - 1000)}),
              ('edge','2','b',true,false,${now}),
@@ -364,6 +377,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       idempotencyKeys: 1,
       searchLog: 1,
       boardViews: 1,
+      reminderDeliveries: 1,
       sessions: 2,
       jobUniqueLocks: 0,
     });
@@ -395,6 +409,10 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       { result_count: number }[]
     >`select result_count from board_view_logs order by id`;
     expect(boardViews.map((r) => r.result_count)).toEqual([1, 0]);
+    const deliveries = await sql<
+      { user_id: string }[]
+    >`select user_id from event_reminder_deliveries order by id`;
+    expect(deliveries.map((r) => r.user_id)).toEqual(["rm-edge", "rm-fresh"]);
     const sessions = await sql<{ token_hash: string }[]>`select token_hash from web_sessions`;
     expect(sessions.map((r) => r.token_hash)).toEqual(["live"]);
 
@@ -405,6 +423,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       idempotencyKeys: 0,
       searchLog: 0,
       boardViews: 0,
+      reminderDeliveries: 0,
       sessions: 0,
       jobUniqueLocks: 0,
     });
@@ -448,6 +467,14 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       values ('cap q edge',1,${edge}),('cap q fresh',0,${fresh})`;
     await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
       values ('hotzones','overall','all',1,${edge}),('hotzones','overall','all',0,${fresh})`;
+    const [capEvent] = await sql<
+      { id: number }[]
+    >`insert into events (event_key, title, starts_at, ends_at)
+      values ('prune-cap-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
+    await sql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+      select ${capEvent!.id}, 'cap-u' || g, '24h', 'site', 'sent', ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+      values (${capEvent!.id},'cap-u-edge','24h','site','sent',${edge}),(${capEvent!.id},'cap-u-fresh','24h','site','sent',${fresh})`;
 
     // Each table holds `extra` expired rows of its own (91 days old: past
     // both the 90-day cutoff and the audit database-clock guard by a full day,
@@ -473,6 +500,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     expect(first.idempotencyKeys).toBeGreaterThanOrEqual(extra);
     expect(first.searchLog).toBeGreaterThanOrEqual(extra);
     expect(first.boardViews).toBeGreaterThanOrEqual(extra);
+    expect(first.reminderDeliveries).toBeGreaterThanOrEqual(extra);
 
     // A re-run is clean: the backlog drained in the single pass above.
     expect(await pruneModelTables(pgPruneStores(sql), now)).toEqual({
@@ -482,6 +510,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       idempotencyKeys: 0,
       searchLog: 0,
       boardViews: 0,
+      reminderDeliveries: 0,
       sessions: 0,
       jobUniqueLocks: 0,
     });
@@ -516,6 +545,12 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     expect(
       await gone(sql`select count(*)::int as n from board_view_logs where occurred_at < ${old}`),
     ).toBe(0);
+    expect(
+      await gone(
+        sql`select count(*)::int as n from event_reminder_deliveries
+          where user_id like 'cap-u%' and user_id not in ('cap-u-edge', 'cap-u-fresh')`,
+      ),
+    ).toBe(0);
     // Access logs carry no text marker; every row this test inserted at `old`
     // (91 days, a full day past cutoff and guard) is gone. The earlier test's
     // leftovers are newer than `old`, so they cannot match.
@@ -542,6 +577,10 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       { normalized_query: string }[]
     >`select normalized_query from event_search_logs where normalized_query like 'cap q%' order by id`;
     expect(searches.map((r) => r.normalized_query)).toEqual(["cap q edge", "cap q fresh"]);
+    const capDeliveries = await sql<
+      { user_id: string }[]
+    >`select user_id from event_reminder_deliveries where user_id like 'cap-u%' order by id`;
+    expect(capDeliveries.map((r) => r.user_id)).toEqual(["cap-u-edge", "cap-u-fresh"]);
   });
 
   it("each age-pruned statement obeys its per-statement batch bound", async () => {
@@ -596,6 +635,14 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
         select 'per-board', 'overall', 'all', 0, ${old} from generate_series(1, ${extra}) g`;
       await psql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
         values ('per-board-edge','overall','all',1,${edge}),('per-board-fresh','overall','all',0,${fresh})`;
+      const [perEvent] = await psql<
+        { id: number }[]
+      >`insert into events (event_key, title, starts_at, ends_at)
+        values ('prune-per-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
+      await psql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+        select ${perEvent!.id}, 'per-delivery-' || g, '24h', 'site', 'sent', ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+        values (${perEvent!.id},'per-delivery-edge','24h','site','sent',${edge}),(${perEvent!.id},'per-delivery-fresh','24h','site','sent',${fresh})`;
 
       const remaining = async (q: Promise<{ n: number }[]>) => (await q)[0]!.n;
 
@@ -752,6 +799,30 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
           >`select normalized_board_key from board_view_logs order by id`
         ).map((r) => r.normalized_board_key),
       ).toEqual(["per-board-edge", "per-board-fresh"]);
+
+      // reminderDeliveries.
+      expect(await stores.reminderDeliveries.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from event_reminder_deliveries
+            where user_id like 'per-delivery-%' and user_id not in ('per-delivery-edge', 'per-delivery-fresh')`,
+        ),
+      ).toBe(3);
+      expect(await stores.reminderDeliveries.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from event_reminder_deliveries
+            where user_id like 'per-delivery-%' and user_id not in ('per-delivery-edge', 'per-delivery-fresh')`,
+        ),
+      ).toBe(0);
+      expect(await stores.reminderDeliveries.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { user_id: string }[]
+          >`select user_id from event_reminder_deliveries where user_id like 'per-delivery-%' order by id`
+        ).map((r) => r.user_id),
+      ).toEqual(["per-delivery-edge", "per-delivery-fresh"]);
     } finally {
       await iso.dispose();
     }

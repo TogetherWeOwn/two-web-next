@@ -300,7 +300,7 @@ export async function handleScheduled(
             ...pgPruneStores(db),
             // The lock sweep deletes the exact rows acquire targets, so it
             // must not sit inside the flight transaction: an uncommitted sweep
-            // DELETE holds row locks until the whole eight-table pass commits,
+            // DELETE holds row locks until the whole nine-table pass commits,
             // and a concurrent acquire (INSERT .. ON CONFLICT) blocks on the
             // deleting transaction instead of superseding or inserting. Like
             // reconcile, run it on the separate dispatch pool: each DELETE

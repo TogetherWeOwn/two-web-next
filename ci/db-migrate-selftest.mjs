@@ -77,6 +77,15 @@ async function fixture(callback) {
   try {
     await admin.unsafe(`create database "${name}"`);
     created = true;
+    // New-table migrations GRANT to two_web_app; the cluster-global role
+    // must exist before any apply. Concurrent fixtures race safely on
+    // duplicate_object, and the role is never dropped: it is NOLOGIN with
+    // no privileges, and CI clusters are per-job.
+    try {
+      await admin.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    } catch (error) {
+      if (error?.code !== "42710") throw error;
+    }
     url.pathname = `/${name}`;
     client = postgres(url.href, options);
     const output = [];
@@ -496,12 +505,10 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    // The fixture guarantees two_web_app exists (applies need it); adopt it
+    // instead of owning its lifecycle, and revoke (never drop) afterwards.
+    const [role] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
+    assert.ok(role, "fixture must ensure the two_web_app role");
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -524,12 +531,12 @@ test("runtime-role connection is refused while the reviewed sequence default pas
         await client.unsafe("RESET ROLE");
       }
     } finally {
+      // Shared role: revoke the test's defaults, never drop the role itself.
       await client
         .unsafe(
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
     }
   });
 });

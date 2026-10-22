@@ -101,6 +101,11 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
     await client.begin(async (tx) => {
       for (const migration of migrations)
         for (const statement of migration.sql) {
+          // Live ACLs stay out of fixtures: GRANTs target the two_web_app
+          // role, which exists on live databases (CI/local migrate flows
+          // ensure it). The runtime-rights guard validates them statically
+          // and CI's Apply-migrations step executes them for real.
+          if (/^\s*GRANT\b/i.test(statement)) continue;
           if (statement.trim())
             await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
         }

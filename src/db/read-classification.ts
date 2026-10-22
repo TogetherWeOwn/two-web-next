@@ -80,7 +80,12 @@ export function validateNonSensitiveRead(
   // may use member tables in a non-sensitive record read, even as a subquery.
   const checked =
     classification === "events" ? query.replace(fillCount, "fixed_going_count") : query;
-  if (/\b(?:users|profiles|rsvps|join_attempts)\b/i.test(checked)) refuseMemberRead();
+  if (
+    /\b(?:users|profiles|rsvps|join_attempts|event_reminder_mutes|notifications|event_reminder_deliveries)\b/i.test(
+      checked,
+    )
+  )
+    refuseMemberRead();
 }
 
 /** Fixed self-position projection also returns its actual RSVP owner. */

@@ -192,6 +192,9 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         // A -> B was replaced by B -> C: only the immediate predecessor remains.
         web_session_grace: 1,
         join_attempts: 0,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(chained.passes).toBe(chained.deletesPerPass.length);
       expect(chained.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -211,6 +214,9 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         web_sessions: 0,
         web_session_grace: 0,
         join_attempts: 0,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
         passes: 1,
         deletesPerPass: [0],
       });
@@ -221,6 +227,9 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         web_sessions: 0,
         web_session_grace: 0,
         join_attempts: 0,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
     } finally {
       sourceHold.release();

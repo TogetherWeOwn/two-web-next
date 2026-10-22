@@ -176,10 +176,34 @@ describe("PII-bearing reads never classify as public", () => {
     );
   });
 
+  it("events refuses reminder tables outside the reviewed aggregate", () => {
+    const fields = eventFields("id");
+    refuses(
+      "events",
+      'select "id" from "events" where "events"."id" in (select "event_id" from "event_reminder_mutes" where "event_reminder_mutes"."user_id" = $1)',
+      fields,
+    );
+    refuses(
+      "events",
+      'select "id" from "events" join "notifications" on "notifications"."event_id" = "events"."id" where "events"."status" = $1',
+      fields,
+    );
+    refuses(
+      "events",
+      'select "id" from "events" where "events"."id" in (select "event_id" from "event_reminder_deliveries" where "event_reminder_deliveries"."status" = $1)',
+      fields,
+    );
+  });
+
   it("featured refuses member tables", () => {
     refuses(
       "featured",
       'select "id" from "featured_contents" join "profiles" on true where "featured_contents"."id" = $1',
+      featuredFields("id"),
+    );
+    refuses(
+      "featured",
+      'select "id" from "featured_contents" join "notifications" on true where "featured_contents"."id" = $1',
       featuredFields("id"),
     );
   });

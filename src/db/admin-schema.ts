@@ -2,11 +2,13 @@ import { isNull, sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
   pgTable,
   type AnyPgColumn,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -300,6 +302,73 @@ export const boardViewLogs = pgTable(
   (t) => [
     index("board_view_logs_board_occurred_idx").on(t.normalizedBoardKey, t.occurredAt),
     index("board_view_logs_occurred_at_idx").on(t.occurredAt),
+  ],
+);
+
+// Event reminders (TOG-35932 spec §3): per-event mute. user_id is the Discord
+// snowflake, plain text with no FK (same reasoning as rsvps.user_id).
+export const eventReminderMutes = pgTable(
+  "event_reminder_mutes",
+  {
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId] })],
+);
+
+// Generic site-notification inbox; this feature writes kind =
+// 'event_reminder', future notice types reuse the table. user_id is the
+// Discord snowflake, plain text with no FK (same reasoning as rsvps.user_id).
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    eventId: integer("event_id").references(() => events.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    url: text("url").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("notifications_user_id_read_at_idx").on(t.userId, t.readAt)],
+);
+
+// Reminder send log: one row per (event, member, lead, channel) attempt.
+// Columns are ids/codes/timestamps only — no username, avatar, email, or
+// message-body columns. Statuses per TOG-35932 spec §§4.2–4.3; pruned at 90
+// days by sent_at through the model:prune pass.
+export const eventReminderDeliveries = pgTable(
+  "event_reminder_deliveries",
+  {
+    id: serial("id").primaryKey(),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    lead: text("lead").notNull(),
+    channel: text("channel").notNull(),
+    status: text("status").notNull(),
+    errorCode: text("error_code"),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("event_reminder_deliveries_event_user_lead_channel_unique").on(
+      t.eventId,
+      t.userId,
+      t.lead,
+      t.channel,
+    ),
+    check("event_reminder_deliveries_lead_check", sql`${t.lead} IN ('24h', '1h')`),
+    check("event_reminder_deliveries_channel_check", sql`${t.channel} IN ('site', 'dm')`),
+    check(
+      "event_reminder_deliveries_status_check",
+      sql`${t.status} IN ('sent', 'skipped_muted', 'skipped_optout', 'skipped_cap', 'skipped_rsvp', 'skipped_window', 'failed', 'dm_blocked')`,
+    ),
   ],
 );
 

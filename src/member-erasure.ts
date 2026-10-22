@@ -1,9 +1,10 @@
 // Member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): one Discord id, one transaction,
-// six member tables: users, profiles, rsvps, web_sessions, the session
-// predecessor-grace table, and join_attempts. Authorship columns (events.created_by,
-// featured_contents.created_by) and the append-only audit tables are
-// deliberately out of scope — see docs/member-erasure.md.
+// nine member tables: users, profiles, rsvps, web_sessions, the session
+// predecessor-grace table, join_attempts, and the three event-reminder
+// tables (mutes, notifications, deliveries). Authorship columns
+// (events.created_by, featured_contents.created_by) and the append-only
+// audit tables are deliberately out of scope — see docs/member-erasure.md.
 export const DISCORD_ID_RE = /^[1-9]\d{0,19}$/;
 
 export class InvalidMemberIdError extends Error {
@@ -33,6 +34,9 @@ export type ErasureCounts = {
   web_sessions: number;
   web_session_grace: number;
   join_attempts: number;
+  event_reminder_mutes: number;
+  notifications: number;
+  event_reminder_deliveries: number;
 };
 
 /**
@@ -55,6 +59,9 @@ export const ERASURE_TABLES = [
   "web_sessions",
   "web_session_grace",
   "join_attempts",
+  "event_reminder_mutes",
+  "notifications",
+  "event_reminder_deliveries",
 ] as const;
 
 export type ErasureTable = (typeof ERASURE_TABLES)[number];
@@ -76,6 +83,9 @@ const zeroCounts = (): ErasureCounts => ({
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  event_reminder_mutes: 0,
+  notifications: 0,
+  event_reminder_deliveries: 0,
 });
 
 /** Per-table row counts for one member. Reads only; never row contents. */
@@ -100,18 +110,30 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
   const [j] = await sql<
     { n: number }[]
   >`select count(*)::int as n from join_attempts where discord_id = ${discordId}`;
+  const [m] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from event_reminder_mutes where user_id = ${discordId}`;
+  const [n] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from notifications where user_id = ${discordId}`;
+  const [d] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from event_reminder_deliveries where user_id = ${discordId}`;
   counts.users = u?.n ?? 0;
   counts.profiles = p?.n ?? 0;
   counts.rsvps = r?.n ?? 0;
   counts.web_sessions = s?.n ?? 0;
   counts.web_session_grace = g?.n ?? 0;
   counts.join_attempts = j?.n ?? 0;
+  counts.event_reminder_mutes = m?.n ?? 0;
+  counts.notifications = n?.n ?? 0;
+  counts.event_reminder_deliveries = d?.n ?? 0;
   return counts;
 }
 
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all six member tables in one transaction and returns rows removed
+ * deletes all nine member tables in one transaction and returns rows removed
  * plus the session-chase pass forensics. The id is validated before any
  * query runs.
  */
@@ -157,12 +179,20 @@ export async function eraseMember(
     const grace = await tx`delete from web_session_grace where user_id = ${discordId} returning 1`;
     const attempts =
       await tx`delete from join_attempts where discord_id = ${discordId} returning 1`;
+    const mutes =
+      await tx`delete from event_reminder_mutes where user_id = ${discordId} returning 1`;
+    const inbox = await tx`delete from notifications where user_id = ${discordId} returning 1`;
+    const deliveries =
+      await tx`delete from event_reminder_deliveries where user_id = ${discordId} returning 1`;
     counts.users = users.length;
     counts.profiles = profiles.length;
     counts.rsvps = rsvps.length;
     counts.web_sessions = sessions;
     counts.web_session_grace = grace.length;
     counts.join_attempts = attempts.length;
+    counts.event_reminder_mutes = mutes.length;
+    counts.notifications = inbox.length;
+    counts.event_reminder_deliveries = deliveries.length;
     return { ...counts, passes: deletesPerPass.length, deletesPerPass };
   });
 }

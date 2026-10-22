@@ -54,6 +54,12 @@ async function seedAgeTables(
   await client`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
     values ('lock-board','overall','all',0,${old}),('free-board','overall','all',0,${old}),
            ('edge-board','overall','all',1,${edge}),('fresh-board','overall','all',0,${fresh})`;
+  const [event] = await client<{ id: number }[]>`insert into events
+    (event_key, title, starts_at, ends_at)
+    values ('skip-lock-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
+  await client`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+    values (${event!.id},'lock-delivery','24h','site','sent',${old}),(${event!.id},'free-delivery','24h','site','sent',${old}),
+           (${event!.id},'edge-delivery','24h','site','sent',${edge}),(${event!.id},'fresh-delivery','24h','site','sent',${fresh})`;
 }
 
 async function seedSessions(client: postgres.Sql, now: Date) {
@@ -198,7 +204,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
       ).toBe(1);
 
       // Release happened when the locker transaction ended: the next pass
-      // drains the three deferred rows and the five untouched scoped tables.
+      // drains the three deferred rows and the six untouched scoped tables.
       const second = {
         agentEventAudits: await stores.agentEventAudits.pruneOlderThan(cutoff),
         accessLog: await stores.accessLog.pruneOlderThan(cutoff),
@@ -206,6 +212,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         idempotencyKeys: await stores.idempotencyKeys.pruneOlderThan(cutoff),
         searchLog: await stores.searchLog.pruneOlderThan(cutoff),
         boardViews: await stores.boardViews.pruneOlderThan(cutoff),
+        reminderDeliveries: await stores.reminderDeliveries.pruneOlderThan(cutoff),
         sessions: await stores.sessions.sweepExpired(now),
         jobUniqueLocks: await stores.jobUniqueLocks!.sweepExpired(now),
       };
@@ -216,6 +223,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         idempotencyKeys: 2,
         searchLog: 2,
         boardViews: 2,
+        reminderDeliveries: 2,
         sessions: 1,
         jobUniqueLocks: 1,
       });
@@ -272,6 +280,11 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         values ('free q',0,${old}),('edge q',1,${edge}),('fresh q',0,${fresh})`;
       await observer`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
         values ('free-board','overall','all',0,${old}),('edge-board','overall','all',1,${edge}),('fresh-board','overall','all',0,${fresh})`;
+      const [schedEvent] = await observer<{ id: number }[]>`insert into events
+        (event_key, title, starts_at, ends_at)
+        values ('skip-lock-sched-event', 'Synthetic prune event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z') returning id`;
+      await observer`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status, sent_at)
+        values (${schedEvent!.id},'free-delivery','24h','site','sent',${old}),(${schedEvent!.id},'edge-delivery','24h','site','sent',${edge}),(${schedEvent!.id},'fresh-delivery','24h','site','sent',${fresh})`;
       await observer`insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at)
         values ('free-sess','2','b',true,false,${new Date(now.getTime() - 60_000)}),
                ('edge-sess','3','c',true,false,${now}),
@@ -341,6 +354,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         idempotencyKeys: 1,
         searchLog: 1,
         boardViews: 1,
+        reminderDeliveries: 1,
         sessions: 2,
         jobUniqueLocks: 1,
       });
@@ -364,6 +378,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         jobUniqueLocks: 0,
         searchLog: 0,
         boardViews: 0,
+        reminderDeliveries: 0,
         sessions: 0,
       });
     } finally {

@@ -81,6 +81,9 @@ function makeEraseDouble(opts: {
   rsvps?: number;
   grace?: number;
   attempts?: number;
+  mutes?: number;
+  inbox?: number;
+  deliveries?: number;
   sessionDeletes?: number[];
   sessionRemainings?: number[];
   failOnSessionPass?: number;
@@ -99,6 +102,9 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
+    if (text.startsWith("delete from event_reminder_mutes")) return rows(opts.mutes ?? 0);
+    if (text.startsWith("delete from notifications")) return rows(opts.inbox ?? 0);
+    if (text.startsWith("delete from event_reminder_deliveries")) return rows(opts.deliveries ?? 0);
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
       const remaining = opts.sessionRemainings?.[pass] ?? 0;
       pass++;
@@ -114,6 +120,12 @@ function makeEraseDouble(opts: {
       return [{ n: opts.grace ?? 0 }];
     if (text.startsWith("select count") && text.includes("from join_attempts"))
       return [{ n: opts.attempts ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from event_reminder_mutes"))
+      return [{ n: opts.mutes ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from notifications"))
+      return [{ n: opts.inbox ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from event_reminder_deliveries"))
+      return [{ n: opts.deliveries ?? 0 }];
     throw new Error(`unexpected statement: ${text.slice(0, 120)}`);
   };
   (tag as unknown as Record<string, unknown>).begin = (fn: (tx: unknown) => Promise<unknown>) =>

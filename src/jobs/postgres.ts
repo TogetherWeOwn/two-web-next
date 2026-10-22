@@ -171,6 +171,15 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   );
+  const reminderDeliveries = ageTable(
+    async (client, cutoff) =>
+      (
+        await client`delete from event_reminder_deliveries where id in (
+          select id from event_reminder_deliveries where sent_at < ${cutoff}
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
+  );
   // Scheduled session adapter: per-statement bounded expiry sweep. Deletes
   // only rows expired by BOTH clocks — `expires_at <= now` (the read-visibility
   // predicate: expiry-exact rows go, live rows stay) AND expired by the
@@ -234,6 +243,7 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
     idempotencyKeys,
     searchLog,
     boardViews,
+    reminderDeliveries,
     sessions,
     jobUniqueLocks,
   };

@@ -47,6 +47,7 @@ function memStores(now: Date, jobUniqueLocks: LockSweeper): StoresWithLocks {
     idempotencyKeys: emptyAgeTable(),
     searchLog: emptyAgeTable(),
     boardViews: emptyAgeTable(),
+    reminderDeliveries: emptyAgeTable(),
     sessions: createMemorySessionStore(() => now.getTime()),
     jobUniqueLocks,
   };
