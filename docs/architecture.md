@@ -161,7 +161,10 @@ from the bot-owned read-only views `web_v1.live_counts` and
 `web_v1.rank_counts`, consumed frozen-column-only per the
 [web-v1 contract](./web-v1-contract.md): single-row live counts with a
 10-minute absolute freshness rule and a 60-second cache, ranks ordered by
-`rank_order`, failures degrading to hidden counts rather than errors. The
+`rank_order`, failures degrading to hidden counts rather than errors. Rank
+cards also left-join the optional `web_v1.rank_ladder` view for Discord role
+ids, retrying counts-only when the ladder side is unpublished or ungranted,
+so roles render only once the producer ships the view. The
 web never migrates bot tables or queries member-level bot data.
 
 ## 6. Auth and sessions

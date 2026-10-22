@@ -9,6 +9,7 @@ import type { Context, Hono } from "hono";
 import type { Env } from "../env";
 import { dbFor } from "../admin/db";
 import { alertRequestError } from "../alerts";
+import { readRanks } from "../counts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
@@ -122,8 +123,16 @@ const toMdEvent = (e: {
 
 export function registerAiFriendlyRoutes(app: App): void {
   app.get("/llms.txt", (c) => mdOk(c, llmsTxt(c.env.APP_URL), STATIC_MD_CACHE));
-  app.get("/about.md", (c) => mdOk(c, mdAbout(c.env.APP_URL), STATIC_MD_CACHE));
-  app.get("/faq.md", (c) => mdOk(c, mdFaq(c.env.APP_URL), STATIC_MD_CACHE));
+  // The ladder alternates read the same bot-owned ranks as their HTML leaves,
+  // so the Markdown never serves frozen ladder facts once HTML goes live. The
+  // read never throws and empty ranks render the same static bytes, so the
+  // outage floor and the shared-cache TTLs are unchanged.
+  app.get("/about.md", async (c) =>
+    mdOk(c, mdAbout(c.env.APP_URL, await readRanks(c.env)), STATIC_MD_CACHE),
+  );
+  app.get("/faq.md", async (c) =>
+    mdOk(c, mdFaq(c.env.APP_URL, await readRanks(c.env)), STATIC_MD_CACHE),
+  );
   app.get("/rules.md", (c) =>
     mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
   );

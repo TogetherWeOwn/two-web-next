@@ -175,23 +175,26 @@ describe("readCounts contract", () => {
     });
   });
 
-  it("retries counts-only when the ladder side of the join is unavailable", async () => {
-    const missingColumn = new Error("column l.role_id does not exist") as Error & {
-      code: string;
-    };
-    missingColumn.code = "42703";
-    state.ladderError = missingColumn;
-    expect(await counts.readCounts(env)).toEqual({
-      memberCount: 84,
-      onlineCount: 12,
-      ranks: [{ key: "prospect", label: "Prospect", memberCount: 24 }],
-    });
-    expect(state.queries).toHaveLength(3); // Live, failed join, counts-only retry.
-    expect(state.queries[1]).toContain("rank_ladder");
-    expect(state.queries[2]).not.toContain("rank_ladder");
-    expect(state.queries[2]).toContain("FROM web_v1.rank_counts");
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["42P01", "42501", "42703", "42702"])(
+    "retries counts-only when the ladder side of the join is unavailable (%s)",
+    async (code) => {
+      const ladderError = new Error(`ladder unavailable (${code})`) as Error & {
+        code: string;
+      };
+      ladderError.code = code;
+      state.ladderError = ladderError;
+      expect(await counts.readCounts(env)).toEqual({
+        memberCount: 84,
+        onlineCount: 12,
+        ranks: [{ key: "prospect", label: "Prospect", memberCount: 24 }],
+      });
+      expect(state.queries).toHaveLength(3); // Live, failed join, counts-only retry.
+      expect(state.queries[1]).toContain("rank_ladder");
+      expect(state.queries[2]).not.toContain("rank_ladder");
+      expect(state.queries[2]).toContain("FROM web_v1.rank_counts");
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("60-second isolate cache", () => {
