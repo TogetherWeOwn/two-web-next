@@ -44,8 +44,16 @@ const lighthouserc = require("../ci/lighthouserc.cjs").ci;
 // exist to stop the fix (or any later change) from regrowing homepage weight
 // while headroom is being restored. Gzip is deliberately not asserted: the
 // repetitive face bytes compress away (7 B), so a gzip ratchet would be noise.
-const MAX_HOMEPAGE_HTML_RAW_BYTES = 24650;
-const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18850;
+//
+// Re-baselined 2026-10-22 for grouped teaser headers (Tonight / This week /
+// Later): the fixture renders one header row (+109 B HTML: a header li with
+// the shared .strap eyebrow style) plus one grid-span CSS rule (+38 B,
+// inlined, so it lands in both budgets). Deliberate feature bytes, minimized
+// (typography reuses .strap; grouping helper ships no CSS); measured
+// 24,739 / 18,856 with gzip +11 B HTML. Staging e2e mobile LCP remains the
+// final acceptance; these ratchets keep guarding against unrelated regrowth.
+const MAX_HOMEPAGE_HTML_RAW_BYTES = 24800;
+const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18900;
 
 const context = {
   waitUntil: vi.fn(),
