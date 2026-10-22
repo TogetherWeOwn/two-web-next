@@ -75,6 +75,7 @@ import type { AccessEntry } from "../src/access-log";
 import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { routeInventory } from "./helpers/route-inventory";
+import { stripTags } from "./helpers/html-text";
 import type { Env } from "../src/env";
 import app from "../src/index";
 import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
@@ -271,7 +272,7 @@ function liveStatusText(html: string): string | null {
 function reportAnchors(html: string): { href: string; text: string }[] {
   const out: { href: string; text: string }[] = [];
   for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
-    const text = m[2]!.replace(/<[^>]*>/g, "").trim();
+    const text = stripTags(m[2]!).trim();
     if (/report/i.test(text)) {
       const href = /href="([^"]*)"/.exec(m[1]!)?.[1] ?? "";
       out.push({ href, text });
@@ -287,7 +288,7 @@ function listAnchors(listInner: string): { href: string; rel: string; text: stri
     out.push({
       href: /href="([^"]*)"/.exec(attrs)?.[1] ?? "",
       rel: /rel="([^"]*)"/.exec(attrs)?.[1] ?? "",
-      text: m[2]!.replace(/<[^>]*>/g, "").trim(),
+      text: stripTags(m[2]!).trim(),
     });
   }
   return out;
