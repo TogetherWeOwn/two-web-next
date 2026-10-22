@@ -36,7 +36,7 @@ import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { isValidZone } from "./date-format";
-import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
@@ -111,6 +111,9 @@ export interface KitEventDetailModel {
    * renders only when set, mirroring the served detail page. */
   accessibilityNotes: string | null;
   location: string | null;
+  /** Maps search URL for the venue; null when no venue is set. The view
+   * renders this verbatim and never builds URLs from location itself. */
+  directionsUrl: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
@@ -495,6 +498,7 @@ export async function resolveKitEventDetail(
           // page's section rule (src/events/pages-detail.tsx).
           accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
+          directionsUrl: event.location ? directionsUrl(event.location) : null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
