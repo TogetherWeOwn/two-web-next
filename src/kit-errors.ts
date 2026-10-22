@@ -83,7 +83,8 @@ function isMachinePath(path: string, method: string): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);

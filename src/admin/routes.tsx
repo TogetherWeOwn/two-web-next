@@ -11,6 +11,7 @@
 // - POST /admin/events/:key          update
 // - POST /admin/events/:key/publish  draft → published (write-back due)
 // - POST /admin/events/:key/cancel   draft|published → cancelled
+// - POST /admin/events/:key/duplicate  draft|published|cancelled → new draft copy (never mirrored)
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/activity-log         read-only activity-log viewer (R11)
@@ -58,6 +59,7 @@ import {
   createEvent,
   createFeatured,
   deleteFeatured,
+  duplicateEvent,
   getEvent,
   getFeatured,
   getFeaturedIdByLegacyId,
@@ -572,6 +574,44 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       },
     );
   }
+
+  // Duplicate-as-draft (S4): same action-class stack as publish/cancel (cap,
+  // then throttle, then the moderator guard's admission), but the redirect
+  // lands on the fresh copy and there is never a write-back: a draft is
+  // never mirrored, so no queue row and no fan-out leave this handler.
+  admin.post(
+    "/events/:key/duplicate",
+    requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const db = await dbOr503(c);
+      if (!db) return writeUnavailable(c);
+      const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+      try {
+        const { row } = await duplicateEvent(db, c.get("adminActor"), key);
+        return c.redirect(`/admin/events/${row.eventKey}`, 303);
+      } catch (err) {
+        if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof ValidationError) {
+          // The source's stored fields fail the current form rules: re-render
+          // the source editor so the no-JS moderator sees the error next to
+          // the flagged control and can fix it, like the publish-location
+          // refusal in the action loop above.
+          const row = await getEvent(db, key);
+          if (!row) return errorPage(c, 404, "Event not found");
+          return formError(
+            c,
+            err,
+            (errors, v) =>
+              c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+            eventValues(row),
+          );
+        }
+        throw err;
+      }
+    },
+  );
 
   admin.get("/featured", async (c) => {
     declareAccess(c, {

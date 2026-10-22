@@ -153,6 +153,7 @@ const WAYBACK_CASES = [
   ["event create", "/admin/events", "/admin/events/new", FORM_BODY],
   ["event update", `/admin/events/${EVENT_KEY}`, `/admin/events/${EVENT_KEY}`, FORM_BODY],
   ["lifecycle publish", `/admin/events/${EVENT_KEY}/publish`, `/admin/events/${EVENT_KEY}`, ""],
+  ["lifecycle duplicate", `/admin/events/${EVENT_KEY}/duplicate`, `/admin/events/${EVENT_KEY}`, ""],
   ["featured create", "/admin/featured", "/admin/featured/new", FORM_BODY],
 ] as const;
 

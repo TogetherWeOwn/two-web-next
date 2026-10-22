@@ -113,7 +113,7 @@ const writes = [
 const paths = [
   "/admin/events",
   `/admin/events/${KEY}`,
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map(
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map(
     (action) => `/admin/events/${KEY}/${action}`,
   ),
   "/admin/featured",
