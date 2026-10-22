@@ -1,14 +1,9 @@
 // Member-access audit primitives (W7, ports RecordMemberDataAccess). The
 // request-local declaration plus keyed read boundary in src/member-reads.ts
 // is the only production audit path since PR #145: a read that cannot be
-// recorded is never served, whatever MEMBER_ACCESS_LOG_ENFORCE says. The old
-// declare-subjects Hono middleware was retired with its degrade branch —
+// recorded is never served, and there is no setting that changes that. The old
+// declare-subjects Hono middleware and its enforcement flag were retired —
 // production never serves unaudited, so no serve-unaudited page exists.
-// enforceOn survives only for the informational /up enforcement label; full
-// flag retirement is a separate slice (it changes a dashboard-consumed
-// public endpoint).
-
-import type { Env } from "./env";
 
 export type AccessDecl = {
   resource: string;
@@ -45,12 +40,6 @@ export type AccessSink = (entry: AccessEntry) => Promise<boolean>;
  * exactly once (no retry/replay); late settlement is inert.
  */
 export const MEMBER_ACCESS_AUDIT_TIMEOUT_MS = 5000;
-
-export function enforceOn(env: Env): boolean {
-  const raw = env.MEMBER_ACCESS_LOG_ENFORCE?.trim().toLowerCase();
-  if (raw === undefined || raw === "") return true;
-  return raw !== "false" && raw !== "0" && raw !== "no";
-}
 
 /**
  * Bound an audit write by MEMBER_ACCESS_AUDIT_TIMEOUT_MS. Late settlement is
