@@ -14,10 +14,12 @@ test("the required check keeps full coverage in isolated serial threads inside m
   assert.equal(manifest.scripts["test:coverage"], `vitest ${args.join(" ")}`);
   assert.equal(manifest.scripts["pretest:coverage"], undefined);
   assert.equal(manifest.scripts["posttest:coverage"], undefined);
-  // main owns the budget (raised 10 -> 20 -> 40 for shared-runner container setup);
+  // main owns the budget (raised 10 -> 20 -> 40 for shared-runner
+  // container setup, then 40 -> 60 when the full suite reached 38m and
+  // runner noise started cancelling green runs at the 40m ceiling);
   // isolated threads must fit inside it, never widen it.
   const budget = Number(check.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-  assert.ok(budget > 0 && budget <= 40, `check timeout-minutes ${budget} exceeds main's 40`);
+  assert.ok(budget > 0 && budget <= 60, `check timeout-minutes ${budget} exceeds main's 60`);
   const step = check.match(
     /      - name: Check \(lint \+ typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/,
   );

@@ -241,6 +241,12 @@ jobs:
         run: |
           npx vitest run test/member-profile-native-422-baseline.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/member-profile-native-422-baseline.json
           node ci/a11y-require-executed.mjs artifacts/a11y/member-profile-native-422-baseline.json "native 422 baseline in a real browser" 4
+      - name: Profile composition feedback regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
@@ -328,9 +334,11 @@ jobs:
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
-    # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
-    # seeded property suite retains its hard 10s limit.
-    timeout-minutes: 40
+    # runners, so 20m cancelled green runs (TOG-12177). The full suite now
+    # runs 29-38m on main; 40m left no headroom for runner noise, so the
+    # ceiling moves to 60m (worst observed 37m51s keeps a ~37% margin).
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
+    timeout-minutes: 60
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -750,9 +758,11 @@ jobs:
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    # Same lint + typecheck + unit-test sequence as `check`, so the same
-    # 40m bound: the suite outgrew 30m and the leg cancelled green runs.
-    timeout-minutes: 40
+    # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
+    # green runs on runner noise (worst observed pass 29m32s, 28s of
+    # margin). 45m keeps a ~34% margin; the progress sidecar samples the
+    # first 43m (MAX_SAMPLES in ci/node22-progress.mjs tracks this ceiling).
+    timeout-minutes: 45
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.

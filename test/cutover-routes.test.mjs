@@ -44,8 +44,8 @@ for (const phase of ["before", "after"]) {
     const target = phase === "before" ? "next.togetherweown.com" : "togetherweown.com";
     const options = parseArgs(["--phase", phase, "--target", target, "--event-key", "fixture"]);
     const cases = [
-      { path: "/auth/discord/redirect", location: "/auth/discord", cache: "no-store" },
-      { path: "/login", location: "/auth/discord", cache: "no-store" },
+      { path: "/auth/discord/redirect", location: "/auth/discord", cache: "no-store, private" },
+      { path: "/login", location: "/auth/discord", cache: "no-store, private" },
       { path: "/community", location: "/", cache: "no-store, private" },
     ];
     const byPath = Object.fromEntries(cases.map((entry) => [entry.path, entry]));

@@ -21,6 +21,7 @@ export {
   gone,
   internalErrorHandler,
   maintenanceHandler,
+  MCP_TRANSPORT_ERROR_CODE,
   nonOwnerProfileWrite,
   notFoundHandler,
   notFoundResponse,
