@@ -34,7 +34,12 @@ export {
   withHealthReadTimeout,
 } from "./up-database";
 export type { DatabaseReadiness } from "./up-database";
-export { WEB_MIGRATIONS, pendingWebMigrations } from "./up-migrations";
+export {
+  WEB_MIGRATIONS,
+  appliedMigrationTimestamps,
+  migrationLedger,
+  pendingWebMigrations,
+} from "./up-migrations";
 export {
   QUEUE_CRITICAL_AT,
   QUEUE_WARN_AT,

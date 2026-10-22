@@ -37,7 +37,7 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // `/community` drops every query.
   app.get("/login", (c) => {
     const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store");
+    c.header("cache-control", "no-store, private");
     return c.redirect(
       next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
       302,
