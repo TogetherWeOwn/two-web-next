@@ -232,6 +232,13 @@
       "when": 1792547478687,
       "tag": "1032_event-public-join-details",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792628221524,
+      "tag": "1033_overlay",
+      "breakpoints": true
     }
   ]
 }
