@@ -48,7 +48,7 @@ function assertFixtureContent(path, response, html, before, after) {
     populated = html.match(/<ul\b[^>]*data-testid="home-events-list"[^>]*>([\s\S]*?)<\/ul>/)?.[1];
     assert.ok(populated, "Homepage populated teaser required");
     assert.match(populated, new RegExp(`href="/e/${key}"`), "Homepage fixture link");
-    assert.match(populated, /3 going/, "Homepage aggregate required");
+    assert.match(populated, /3 of 20 going/, "Homepage aggregate required");
     const featured = html.match(
       /<section\b[^>]*data-testid="featured-content"[^>]*>([\s\S]*?)<\/section>/,
     )?.[1];
