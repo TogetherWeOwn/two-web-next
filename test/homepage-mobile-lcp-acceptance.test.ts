@@ -121,9 +121,9 @@ describe("homepage mobile LCP acceptance", () => {
     const { html } = await homepageHtml();
     const css = inlineCss(html);
     expect(css).toContain("@font-face { font-family: 'Display Fallback'");
-    expect(css).toContain("size-adjust: 77%");
-    expect(css).toContain("ascent-override: 123%");
-    expect(css).toContain("descent-override: 46%");
+    expect(css).toContain("size-adjust: 98%");
+    expect(css).toContain("ascent-override: 103%");
+    expect(css).toContain("descent-override: 32%");
   });
 
   it("keeps homepage images non-blocking and the inline lockup sized", async () => {

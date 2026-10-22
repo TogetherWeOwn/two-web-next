@@ -7,9 +7,9 @@
 @font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-latin-400-normal.woff2') format('woff2'); }
 @font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-latin-700-normal.woff2') format('woff2'); }
 /* Latin-only, Arial-metric fallback; arrows (U+2192) keep prior rendering.
-   Overrides = Display's 93%/34.6% ascent/descent at 77% + margin: fallback
+   Overrides = Chakra Petch Bold 99.2%/30.8% at 98% + margin: fallback
    hero paints >= swapped-in text (no larger repaint). */
-@font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('Liberation Sans'), local('Arimo'), local('Arial'); size-adjust: 77%; ascent-override: 123%; descent-override: 46%; line-gap-override: 0%; unicode-range: U+0000-00FF; }
+@font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('Liberation Sans'), local('Arimo'), local('Arial'); size-adjust: 98%; ascent-override: 103%; descent-override: 32%; line-gap-override: 0%; unicode-range: U+0000-00FF; }
 .base-theme { min-height: 100vh; background: var(--color-page); color: var(--color-text); font: 17px/1.65 system-ui, sans-serif; }
 /* Inter body outside the content leaves: /about, /faq, /rules and /privacy
    fetch no webfont at all (their staging LCP budget cannot spare the swap),

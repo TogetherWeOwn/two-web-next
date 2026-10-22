@@ -37,15 +37,18 @@ describe("homepage inlined critical CSS", () => {
   it("uses an Arial-metric fallback ahead of Arial Narrow for delayed font swaps", () => {
     // The preload alone cannot close the cold-mobile FCP/font gap; the
     // size-adjusted fallback uses the measured uppercase heading ratio.
-    // Ascent/descent overrides normalize to Display's 93%/34.6% em metrics
-    // (at the 77% size-adjust) plus margin, so the fallback hero paints at
-    // least as large as the swapped-in text and the swap is not a larger
-    // repaint that re-times LCP after FCP.
+    // Ascent/descent overrides normalize to Chakra Petch Bold's 99.2%/30.8%
+    // em metrics (at the 98% size-adjust: 101.2%/31.4%) plus margin, so the
+    // fallback hero paints at least as large as the swapped-in text and the
+    // swap is not a larger repaint that re-times LCP after FCP. 98% is the
+    // measured match for the wide Chakra face: 97-99 hold the 2-line mobile
+    // hero with swap CLS <= 0.0013, while 96 drops the hero to one line at
+    // 412px (e2e/home-font-swap.spec.ts gates both directions).
     expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
     expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
-    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 77%");
-    expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 123%");
-    expect(LEAF_CRITICAL_CSS).toContain("descent-override: 46%");
+    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 98%");
+    expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 103%");
+    expect(LEAF_CRITICAL_CSS).toContain("descent-override: 32%");
     expect(LEAF_CRITICAL_CSS).toContain("line-gap-override: 0%");
     expect(LEAF_CRITICAL_CSS).toContain("var(--two-font-display");
     expect(LEAF_CRITICAL_CSS).toContain(
