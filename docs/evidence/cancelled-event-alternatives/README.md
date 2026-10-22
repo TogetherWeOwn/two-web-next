@@ -28,7 +28,7 @@ The [browser report](browser-report.json) records all eight fixture visits: no h
 
 ## Regression proof
 
-The acceptance-owned `test/kit-gone-alternatives-acceptance.test.ts` was consumed at `9be20305` (SHA-256 `0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3`). Its initial run had 5 expected failures and 3 passing controls; after implementation all 8 passed. A later helper-only edit replaced the regex tag-strip with an output-equivalent token-walk to clear CodeQL (assertions unchanged); the file now hashes to `ba725090c128d814e135f68afdad55e8cae64aea46535b7e047074f6c21c2d29`. The Hono 410 fixture still hashes to `a0fb41f7d8f241a514fe373690a03377e48838eb2d95c22e1ac0744a1b467878`; missing suggestions and empty recovery controls pass.
+The acceptance-owned `test/kit-gone-alternatives-acceptance.test.ts` was consumed at `9be20305` (SHA-256 `0a81ca9bb88441c9b015e325ce71ec5f3c639a67c9d3a4262654a11021ebabf3`). Its initial run had 5 expected failures and 3 passing controls; after implementation all 8 passed. A later helper-only edit replaced the regex tag-strip with an output-equivalent token-walk to clear CodeQL (assertions unchanged); a further pin-only edit re-captured the Hono 410 baseline after main's deliberate mirror (cases unchanged). The file now hashes to `d6fae8bb657d7d0f543b1ebabccead21d67888c32ed7e99399e728d407c47b12`. The Hono 410 fixture now hashes to `3eab9ef334293582d9ce31fb082e9c2dd0e97172e2f9e99da7e8af0f14b82792` (re-captured with main `71c0ec4e0` merged; Hono source unchanged from that main commit); missing suggestions and empty recovery controls pass.
 
 Run the focused regression set with database variables unset:
 
