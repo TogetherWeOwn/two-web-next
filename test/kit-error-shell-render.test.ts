@@ -1,9 +1,9 @@
 // Rendered accessibility evidence for the Kit error shell: the real
 // ErrorShell.svelte, compiled with the web workspace's svelte/compiler and
 // bundled by esbuild (same harness shape as test/kit-rsvp-refusal-render.test.ts),
-// SSR-rendered per Kit status and loaded into Chromium so heading structure,
-// recovery-link accessible names, focus order and axe results are asserted on
-// the rendered DOM — not on source text. The source-text pins in
+// SSR-rendered per Kit status (plus the 429 admin way-back) and loaded into
+// Chromium so heading structure, recovery-link accessible names, focus order
+// and axe results are asserted on the rendered DOM — not on source text. The source-text pins in
 // test/kit-errors-outcome.test.ts stay as the import/branch contract; this
 // suite proves what a member's browser and assistive tech actually receive.
 //
@@ -69,10 +69,17 @@ const INVITE_LINK: ExpectedLink = {
   href: INVITE,
 };
 
-const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
+// The executed admin way-back: the 429 shell names the refused save and links
+// the form first. The derivation itself (429-only, /admin-only) is unit-pinned
+// in test/admin-wayback.test.ts; this suite proves what the browser receives.
+const ADMIN_BACK = { href: "/admin/events/game-night", label: "Back to the event editor" };
+const ADMIN_BACK_NOTE = "Your submission was not saved. Reopen the form and try again.";
+
+const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[]; searchForm?: boolean }> = [
   {
     code: 400,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+    searchForm: true,
   },
   {
     code: 404,
@@ -81,6 +88,7 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
       HOME,
       { testid: "error-all-events", name: "Browse all events", href: "/events" },
     ],
+    searchForm: true,
   },
   {
     code: 403,
@@ -93,16 +101,27 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
   {
     code: 410,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
+    searchForm: true,
   },
   { code: 429, links: [INVITE_LINK, HOME] },
   { code: 500, links: [INVITE_LINK, HOME] },
   {
     code: 503,
-    links: [INVITE_LINK, { testid: "error-retry", name: "Try again", href: "/" }],
+    links: [INVITE_LINK, { testid: "error-retry", name: "Back to the homepage", href: "/" }],
   },
 ];
 
-type RenderErrorShell = (code: KitErrorStatus) => { head: string; body: string };
+// The static EventMissing search form rendered in the 400/404/410 shells, in
+// DOM order: visible text lines are the label then the submit button (the
+// input holds no text and its placeholder is not innerText); tab stops are
+// the input then the submit.
+const SEARCH_FORM_TEXT_LINES = ["Search events", "Search events"];
+const SEARCH_FORM_TAB_ORDER = ["error-events-search", "error-events-search-submit"];
+
+type RenderErrorShell = (
+  code: KitErrorStatus,
+  adminBack?: { href: string; label: string } | null,
+) => { head: string; body: string };
 
 // Opt in with KIT_ERROR_SHELL_BROWSER_TESTS=true after installing Playwright
 // Chromium and the Kit workspace dependencies. The a11y CI job sets the
@@ -131,8 +150,8 @@ describe.skipIf(process.env.KIT_ERROR_SHELL_BROWSER_TESTS !== "true")(
         `
 import { render } from "svelte/server";
 import ErrorShell from ${JSON.stringify(join(worktree, "web/src/lib/ErrorShell.svelte"))};
-export function renderErrorShell(code) {
-  const { head, body } = render(ErrorShell, { props: { code, inviteUrl: ${JSON.stringify(INVITE)} } });
+export function renderErrorShell(code, adminBack) {
+  const { head, body } = render(ErrorShell, { props: { code, inviteUrl: ${JSON.stringify(INVITE)}, adminBack: adminBack ?? null } });
   return { head, body };
 }
 `,
@@ -184,6 +203,17 @@ export function renderErrorShell(code) {
           }
         }
       }
+      // The admin way-back markup renders outside CASES; fold one 429 render
+      // with it into the candidates so the compiled stylesheet covers the note
+      // and link exactly as the Kit build generates them.
+      {
+        const { head, body } = renderErrorShell(429, ADMIN_BACK);
+        for (const match of `${head}\n${body}`.matchAll(/class="([^"]+)"/g)) {
+          for (const token of (match[1] ?? "").split(/\s+/).filter(Boolean)) {
+            candidates.add(token);
+          }
+        }
+      }
       const kitCompiler = await compileTailwind(
         readFileSync(join(worktree, "web/src/app.css"), "utf8"),
         { base: join(worktree, "web/src"), onDependency: () => {} },
@@ -203,7 +233,10 @@ export function renderErrorShell(code) {
 
     registerPastArchiveBrowserAcceptance(() => browser);
 
-    async function loadShell(code: KitErrorStatus): Promise<void> {
+    async function loadShell(
+      code: KitErrorStatus,
+      adminBack?: { href: string; label: string } | null,
+    ): Promise<void> {
       // The shell offers recovery with no session, DB or network reads: rendering
       // must succeed with fetch refusing every call, and never invoke it.
       const fetchSpy = vi.fn(() => {
@@ -212,7 +245,7 @@ export function renderErrorShell(code) {
       vi.stubGlobal("fetch", fetchSpy);
       let rendered: { head: string; body: string };
       try {
-        rendered = renderErrorShell(code);
+        rendered = renderErrorShell(code, adminBack);
       } finally {
         vi.unstubAllGlobals();
       }
@@ -224,7 +257,7 @@ export function renderErrorShell(code) {
       );
     }
 
-    for (const { code, links } of CASES) {
+    for (const { code, links, searchForm } of CASES) {
       it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
         await loadShell(code);
         const copy = kitErrorCopy(code);
@@ -301,7 +334,8 @@ export function renderErrorShell(code) {
         }
 
         // No echoed failure: the section's visible text is exactly the static
-        // code, title, lead and link names — nothing else can be leaking in.
+        // code, title, lead, link names and — on the search-form statuses —
+        // the form's label and submit text. Nothing else can be leaking in.
         // innerText reflects the CSS text-transform, so compare case-folded;
         // exact-case copy is already pinned via textContent above.
         expect(
@@ -310,27 +344,108 @@ export function renderErrorShell(code) {
             .map((line) => line.trim().toLowerCase())
             .filter(Boolean),
         ).toEqual(
-          [copy.code, copy.title, copy.lead, ...links.map((link) => link.name)].map((line) =>
-            line.toLowerCase(),
-          ),
+          [
+            copy.code,
+            copy.title,
+            copy.lead,
+            ...links.map((link) => link.name),
+            ...(searchForm ? SEARCH_FORM_TEXT_LINES : []),
+          ].map((line) => line.toLowerCase()),
         );
 
-        // Focus order: tabbing through the page reaches the recovery links in
-        // the same order they are read.
+        // Focus order: tabbing through the page reaches the recovery links —
+        // then the search form's input and submit on the search-form
+        // statuses — in the same order they are read.
         await page.evaluate("document.activeElement?.blur()");
+        const expectedTabOrder = [
+          ...links.map((link) => link.testid),
+          ...(searchForm ? SEARCH_FORM_TAB_ORDER : []),
+        ];
         const tabbed: string[] = [];
-        for (let i = 0; i < 20 && tabbed.length < links.length; i++) {
+        for (let i = 0; i < 20 && tabbed.length < expectedTabOrder.length; i++) {
           await page.keyboard.press("Tab");
           const testid = await page.evaluate<string | null>(
             "document.activeElement?.getAttribute('data-testid') ?? null",
           );
           if (testid?.startsWith("error-")) tabbed.push(testid);
         }
-        expect(tabbed).toEqual(links.map((link) => link.testid));
+        expect(tabbed).toEqual(expectedTabOrder);
 
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         assertNoViolations(results, `kit error shell ${code}`);
       });
     }
+
+    it("429 with adminBack: names the refused save, links the form first, axe clean", async () => {
+      await loadShell(429, ADMIN_BACK);
+      const copy = kitErrorCopy(429);
+
+      // String evaluate (the featured-native-length pattern): the root
+      // tsconfig has no DOM lib, so the callback runs untyped in the page
+      // and its shape is declared here.
+      const dom = await page.evaluate<{
+        note: string | null;
+        mainLinks: Array<{ testid: string | null; href: string | null; text: string }>;
+        sectionText: string;
+      }>(`(() => {
+        const section = document.querySelector("main section");
+        return {
+          note: document.querySelector(".admin-back-note")?.textContent?.trim() ?? null,
+          mainLinks: [...document.querySelectorAll("main a[href]")].map((el) => ({
+            testid: el.getAttribute("data-testid"),
+            href: el.getAttribute("href"),
+            text: el.textContent?.trim().replace(/\\s+/g, " ") ?? "",
+          })),
+          sectionText: section?.innerText ?? "",
+        };
+      })()`);
+
+      // The note names the loss honestly, and the way-back link carries the
+      // pinned testid, the form href and its label, ahead of invite/home.
+      expect(dom.note).toBe(ADMIN_BACK_NOTE);
+      expect(dom.mainLinks).toEqual([
+        { testid: "error-admin-back", href: ADMIN_BACK.href, text: ADMIN_BACK.label },
+        { testid: INVITE_LINK.testid, href: INVITE_LINK.href, text: INVITE_LINK.name },
+        { testid: HOME.testid, href: HOME.href, text: HOME.name },
+      ]);
+      // The label resolves as an accessible name to exactly that link.
+      const byRole = page.getByRole("link", { name: ADMIN_BACK.label, exact: true });
+      expect(await byRole.count()).toBe(1);
+      expect(await byRole.getAttribute("data-testid")).toBe("error-admin-back");
+
+      // No echoed failure: the section's visible text is exactly the static
+      // code, title, lead, note and link names — nothing else can leak in.
+      // innerText reflects the CSS text-transform, so compare case-folded.
+      expect(
+        dom.sectionText
+          .split("\n")
+          .map((line) => line.trim().toLowerCase())
+          .filter(Boolean),
+      ).toEqual(
+        [
+          copy.code,
+          copy.title,
+          copy.lead,
+          ADMIN_BACK_NOTE,
+          ADMIN_BACK.label,
+          ...[INVITE_LINK, HOME].map((link) => link.name),
+        ].map((line) => line.toLowerCase()),
+      );
+
+      // Focus order: tabbing reaches the way-back link first.
+      await page.evaluate("document.activeElement?.blur()");
+      const tabbed: string[] = [];
+      for (let i = 0; i < 20 && tabbed.length < 3; i++) {
+        await page.keyboard.press("Tab");
+        const testid = await page.evaluate<string | null>(
+          "document.activeElement?.getAttribute('data-testid') ?? null",
+        );
+        if (testid?.startsWith("error-")) tabbed.push(testid);
+      }
+      expect(tabbed).toEqual(["error-admin-back", "error-invite", "error-home"]);
+
+      const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
+      assertNoViolations(results, "kit error shell 429 with admin way back");
+    });
   },
 );

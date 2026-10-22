@@ -23,6 +23,31 @@ const only = (cookies: string, name: string) =>
 const signed = async (name: string, value: string) =>
   (await serializeSigned(name, value, SECRET, { path: "/", secure: true })).split(";")[0]!;
 
+/** A genuine expired write: native form POST on a dead session, arming pending|. */
+async function genuineBounceJar(
+  f: ReturnType<typeof recoveryFixture>,
+  refererPath: string | null,
+): Promise<string> {
+  const dead = await f.login(new Date(0));
+  const bounce = await f.request(`/members/${MEMBER}`, {
+    method: "POST",
+    headers: {
+      cookie: dead.cookie,
+      origin: f.env.APP_URL,
+      ...(refererPath === null ? {} : { referer: f.env.APP_URL + refererPath }),
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "_method=PATCH&bio=Unsaved+secret+draft",
+  });
+  expect(bounce.status).toBe(303);
+  let jar = mergeCookies("", bounce);
+  const landing = await f.request(bounce.headers.get("location")!, {
+    headers: { cookie: jar },
+  });
+  expect(landing.status).toBe(200);
+  return mergeCookies(jar, landing);
+}
+
 describe("read-only bool-only auth status", () => {
   it("guests and members disclose no identity, rotate nothing and forbid caches", async () => {
     const f = recoveryFixture();
@@ -144,15 +169,23 @@ describe("explicit expired-write recovery, never replay", () => {
     const response = await app.request(
       `https://next.example.test/members/${MEMBER}`,
       { method: "POST", headers: test.headers },
-      { APP_URL: "https://next.example.test" },
+      { APP_URL: "https://next.example.test", SESSION_SECRET: SECRET },
     );
     expect(response.status).toBe(test.status);
     expect(response.headers.get("cache-control")).toBe("no-store, private");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(response.headers.getSetCookie()).toEqual([]);
     if (test.status === 303) {
       expect(response.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
+      // The genuine HTML bounce arms its own pending notice before the 303.
+      const armed = response.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+      expect(armed).toHaveLength(1);
+      const pair = armed[0]!.split(";")[0]!;
+      const payload = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(".")[0]!);
+      expect(payload).toBe("pending|/profile");
     } else {
+      expect(response.headers.getSetCookie()).toEqual([]);
       expect(response.headers.get("location")).toBeNull();
       expect(await response.json()).toEqual({
         error: "Unauthorized",
@@ -196,7 +229,12 @@ describe("explicit expired-write recovery, never replay", () => {
     expect(native.status).toBe(303);
     expect(native.headers.get("cache-control")).toBe("no-store, private");
     expect(native.headers.get("vary")).toBe("Cookie");
-    expect(native.headers.getSetCookie()).toEqual([]);
+    // The genuine bounce arms pending| for the fallback destination (the
+    // hostile referer is refused); the JSON 401 above arms nothing.
+    const armed = native.headers
+      .getSetCookie()
+      .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+    expect(armed).toHaveLength(1);
     expect(native.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
     const landing = await f.request(native.headers.get("location")!);
     expect(landing.status).toBe(200);
@@ -227,7 +265,8 @@ describe("explicit expired-write recovery, never replay", () => {
   it("OAuth returns to the safe original page, banner is consumed once, HEAD and audit failures leave it pending", async () => {
     vi.stubGlobal("fetch", fixtureDiscord);
     const f = recoveryFixture();
-    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile%3Fedit%3D1"));
+    // A genuine expired write arms pending|; a bare landing visit no longer does.
+    let jar = await genuineBounceJar(f, "/profile?edit=1");
     const start = await f.request("/auth/discord?next=%2Fprofile%3Fedit%3D1", {
       headers: { cookie: jar },
     });
@@ -262,7 +301,8 @@ describe("explicit expired-write recovery, never replay", () => {
   it("the restored banner never returns a signed-in member to the expired-session page", async () => {
     vi.stubGlobal("fetch", fixtureDiscord);
     const f = recoveryFixture();
-    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile%3Fedit%3D1"));
+    // A genuine expired write arms pending|; a bare landing visit no longer does.
+    let jar = await genuineBounceJar(f, "/profile?edit=1");
     const start = await f.request("/auth/discord?next=%2Fprofile%3Fedit%3D1", {
       headers: { cookie: jar },
     });
@@ -310,7 +350,8 @@ describe("explicit expired-write recovery, never replay", () => {
     "stray failure %s leaves the pending notice for the real hit",
     async (query) => {
       const f = recoveryFixture();
-      const jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile"));
+      // A genuine expired write arms pending|; a bare landing visit no longer does.
+      const jar = await genuineBounceJar(f, null);
       const stray = await f.request("/auth/discord/callback?" + query, {
         headers: { cookie: jar },
       });
@@ -327,7 +368,8 @@ describe("explicit expired-write recovery, never replay", () => {
 
   it("an admitted denial clears the pending notice and cannot flash success later", async () => {
     const f = recoveryFixture();
-    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile"));
+    // A genuine expired write arms pending|; a bare landing visit no longer does.
+    let jar = await genuineBounceJar(f, null);
     const start = await f.request("/auth/discord?next=%2Fprofile", {
       headers: { cookie: jar },
     });
