@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { build } from "esbuild";
 import {
@@ -10,6 +13,7 @@ import {
   SMOKE_SECURITY_TXT_EXPIRES,
   securityTxtAssertions,
   smoke,
+  writeSmokeLedger,
 } from "../bin/smoke.mjs";
 
 // Producer-derived security.txt body: buildSecurityTxt bundled once from
@@ -372,6 +376,95 @@ test("CLI refuses a present version override without a value", async (t) => {
     assert.match(result.output, /version-override/);
   }
   assert.equal(requests.length, 0);
+});
+
+test("CLI --help prints the single flag reference without probing", async () => {
+  const result = await cli(["--help"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /Usage: node bin\/smoke\.mjs/);
+  for (const flag of [
+    "--allow-indexable",
+    "--fail-on-ready-wait-critical",
+    "--version-override",
+    "--expected-version-id",
+    "--failed-baseline",
+    "--allow-missing-baseline",
+    "--json",
+    "--ledger",
+  ]) {
+    assert.ok(result.output.includes(flag), flag);
+  }
+});
+
+test("CLI refuses a present ledger flag without a path", async (t) => {
+  const { url, requests } = await stub(t);
+  const result = await cli([url, "--ledger"]);
+  assert.equal(result.code, 2, result.output);
+  assert.match(result.output, /--ledger/);
+  assert.equal(requests.length, 0);
+});
+
+function verdictsOf(output) {
+  return output
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line));
+}
+
+test("CLI --json appends a machine verdict without changing a passing exit", async (t) => {
+  const { url } = await stub(t);
+  const result = await cli([url, "--json"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+  assert.deepEqual(verdictsOf(result.output), [{ ok: true, routes: 24, failed: 0 }]);
+});
+
+test("CLI --json verdict tracks a failing probe", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") result.status = 503;
+  });
+  const result = await cli([url, "--json"]);
+  assert.equal(result.code, 1, result.output);
+  assert.deepEqual(verdictsOf(result.output), [{ ok: false, routes: 24, failed: 1 }]);
+});
+
+test("CLI --ledger writes a json-smoke-shaped evidence file", async (t) => {
+  const { url } = await stub(t);
+  const ledgerPath = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "ledger.json");
+  const result = await cli([url, "--ledger", ledgerPath]);
+  assert.equal(result.code, 0, result.output);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(ledger.ledger, "smoke/1");
+  assert.equal(ledger.origin, url);
+  assert.equal(ledger.checks.length, 24);
+  assert.ok(ledger.checks.every((entry) => entry.status === "pass"));
+  assert.deepEqual(ledger.summary, { total: 24, passed: 24, failed: 0, skipped: 0 });
+});
+
+test("CLI --ledger to an unwritable path keeps the probe result", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") result.status = 503;
+  });
+  const missing = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "missing", "ledger.json");
+  const result = await cli([url, "--ledger", missing]);
+  assert.equal(result.code, 1, result.output);
+  assert.match(result.output, /ledger unwritten/);
+});
+
+test("writeSmokeLedger summarizes pass/fail/skip entries", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "ledger.json");
+  const entries = [
+    { check: "/a", status: "pass" },
+    { check: "/b", status: "fail", reason: "1 failed assertion" },
+    { check: "/c", status: "skip", reason: "fixture" },
+  ];
+  writeSmokeLedger(path, "http://127.0.0.1:9", entries);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    ledger: "smoke/1",
+    origin: "http://127.0.0.1:9",
+    checks: entries,
+    summary: { total: 3, passed: 1, failed: 1, skipped: 1 },
+  });
 });
 
 for (const path of Object.keys(fixtures)) {

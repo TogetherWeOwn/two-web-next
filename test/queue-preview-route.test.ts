@@ -265,19 +265,12 @@ describe("staging one-row operational preview admission", () => {
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
     expect(send).not.toHaveBeenCalled();
   });
-  it.each(["false", "true"])(
-    "audit failure always refuses advice with legacy enforce=%s, and closes resources",
-    async (enforce) => {
-      mocks.audit.mockRejectedValue(new Error("private audit failure"));
-      const store = createMemorySessionStore();
-      const res = await request(
-        store,
-        { headers: { cookie: await cookie(store) } },
-        { ...env, MEMBER_ACCESS_LOG_ENFORCE: enforce },
-      );
-      expect(res.status).toBe(503);
-      expect(await res.json()).toEqual({ error: "preview_unavailable" });
-      expect(mocks.end).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("audit failure refuses advice and closes resources", async () => {
+    mocks.audit.mockRejectedValue(new Error("private audit failure"));
+    const store = createMemorySessionStore();
+    const res = await request(store, { headers: { cookie: await cookie(store) } }, { ...env });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "preview_unavailable" });
+    expect(mocks.end).toHaveBeenCalledTimes(1);
+  });
 });

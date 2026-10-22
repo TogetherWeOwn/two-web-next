@@ -112,7 +112,9 @@ invite fallback. Do not reload, bookmark, share or replay `/join/callback`.
 | **Join didn't complete** | "Discord didn't complete the approval. Try again, or use the invite link below." | Discord returned another approval error. Try once afresh; repeated or widespread failures go to engineering. |
 | **Join link expired** | "That join link expired. Approvals last ten minutes — try again below." | Missing, mismatched or expired state/code; often a stale callback or lost journey cookie. Start again in the same browser and approve promptly. |
 | **Discord is unreachable** | "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below." | Token exchange or user lookup failed; this recovery page returns 503. It does not establish the root cause. Try once later or use the invite. |
+| **Discord throttled the approval** | "Discord is rate-limiting approvals right now. Wait a moment, then try again below, or use the invite link." | Token exchange or user lookup was throttled (429); this recovery page returns 503 with `Retry-After` when Discord sent a usable backoff. Wait, then try once afresh or use the invite. |
 | **We couldn't add you automatically** | "You're nearly there — use the invite link below to join the server directly." | The automatic add was refused or failed. Use the invite; do not keep replaying the approval. |
+| **Discord throttled the automatic add** | "Discord is rate-limiting automatic adds right now. Wait a moment, then try again below, or use the invite link." | The automatic add was throttled (429); this recovery page returns 503 with `Retry-After` when Discord sent a usable backoff. Wait, then start a fresh journey or use the invite. |
 
 An expired Discord authorization code can also produce **Discord is
 unreachable**; Next does not expose a separate `invalid_grant` message.
@@ -126,13 +128,13 @@ admission: the join budget was exceeded before Discord was contacted. It
 carries `Retry-After` from the website, records no join-attempt row, and
 never implies a session.
 
-A Discord automatic-add backoff renders the 200
-**We couldn't add you automatically** recovery and records the distinct
+A Discord automatic-add backoff renders the 503
+**Discord throttled the automatic add** recovery and records the distinct
 `rate_limited` attempt outcome. It carries the provider's `Retry-After`
-when the provider sent a usable backoff; the 200 status does not mean joined.
+when the provider sent a usable backoff.
 
 A Discord 429 during token exchange renders the 503
-**Discord is unreachable** recovery and records an `error` attempt.
+**Discord throttled the approval** recovery and records an `error` attempt.
 It carries `Retry-After` when the provider sent a usable backoff.
 
 In all three cases, wait for `Retry-After` if present (otherwise at least a
@@ -180,7 +182,7 @@ The join attempt outcomes are **not** the homepage notice names:
 | `denied` | Discord returned an approval error, including cancelled consent. |
 | `error` | State/code validation or token exchange/user lookup failed. |
 | `degraded` | Automatic server entry failed or was refused after identity lookup. |
-| `rate_limited` | Discord rate-limited the automatic add. The callback still renders the 200 **We couldn't add you automatically** recovery (with `Retry-After` when the provider sent a usable backoff); the 200 does not mean joined. Wait, then start a fresh journey or use the invite. |
+| `rate_limited` | Discord rate-limited the automatic add. The callback renders the 503 **Discord throttled the automatic add** recovery (with `Retry-After` when the provider sent a usable backoff). Wait, then start a fresh journey or use the invite. |
 
 The table is not a complete sign-in history: `/auth/discord/callback` does not
 write join-attempt rows, website-throttled (429 admission) requests do not reach
@@ -192,8 +194,8 @@ absent row. List and detail reads attribute the returned rows' recorded Discord
 IDs directly, excluding the viewer, without requiring a current users row or
 membership flag. Missing, invalid or partial member keys refuse the contents;
 they are not silently omitted from attribution. Empty lists and self-only reads
-create no access row. Audit-write failures always refuse protected contents,
-even with the legacy enforcement setting disabled. Any reported audit failure
+create no access row. Audit-write failures always refuse protected contents;
+no setting changes that. Any reported audit failure
 or 503 on member data is a stop condition, not a reason to find another access path.
 
 Escalate to the site maintainers/engineering with:
