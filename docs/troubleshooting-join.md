@@ -194,8 +194,8 @@ absent row. List and detail reads attribute the returned rows' recorded Discord
 IDs directly, excluding the viewer, without requiring a current users row or
 membership flag. Missing, invalid or partial member keys refuse the contents;
 they are not silently omitted from attribution. Empty lists and self-only reads
-create no access row. Audit-write failures always refuse protected contents,
-even with the legacy enforcement setting disabled. Any reported audit failure
+create no access row. Audit-write failures always refuse protected contents;
+no setting changes that. Any reported audit failure
 or 503 on member data is a stop condition, not a reason to find another access path.
 
 Escalate to the site maintainers/engineering with:

@@ -298,9 +298,15 @@ describe("throttle bucket inventory", () => {
 
   it("pins in-handler guard buckets to their call sites", () => {
     const found = guardBuckets();
-    expect([...found.keys()].sort()).toEqual(["events-read", "login-callback", "login-redirect"]);
+    expect([...found.keys()].sort()).toEqual([
+      "events-read",
+      "login-callback",
+      "login-recover",
+      "login-redirect",
+    ]);
     expect(found.get("login-redirect")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-callback")).toEqual(["src/auth/routes.ts"]);
+    expect(found.get("login-recover")).toEqual(["src/write-recovery.tsx"]);
     expect(found.get("events-read")).toEqual(["src/events/routes-shared.ts"]);
   });
 
@@ -348,6 +354,7 @@ describe("throttle bucket inventory", () => {
     for (const bucket of [
       "login-redirect",
       "login-callback",
+      "login-recover",
       "qa-login",
       "alert-probe",
       "join",
@@ -362,6 +369,7 @@ describe("throttle bucket inventory", () => {
     }
     for (const file of [
       "src/auth/routes.ts",
+      "src/write-recovery.tsx",
       "src/alert-probe.ts",
       "src/join/service.ts",
       "src/join/route-shared.ts",

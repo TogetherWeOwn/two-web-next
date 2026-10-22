@@ -976,7 +976,6 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   it("expiry is judged after the event-lock wait: a PUT queued behind the event row is refused once the event ends", async () => {
     const ev = await seed();
     const who = "expire-prunelock";
-    await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-hold', clock_timestamp() - interval '10 minutes')`;
     await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
     let release!: () => void;
     let ready!: () => void;
@@ -1008,7 +1007,6 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
         { n: number },
       ];
     expect(n).toBe(0);
-    await client`delete from web_throttle_hits where bucket = 'unrelated-expired-hold'`;
   });
   it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
     for (const verb of ["DELETE", "PUT"] as const) {

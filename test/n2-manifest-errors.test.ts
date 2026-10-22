@@ -167,11 +167,11 @@ describe("branded error handlers on a scratch app", () => {
     expect(res.status).toBe(503);
     const html = await res.text();
     expect(html).toContain("We will be right back");
-    expect(html).toContain("The Discord server never closes");
+    expect(html).toContain("The site is temporarily unavailable");
     expect(html).toContain('href="https://discord.gg/invite"');
     expect(html).toContain("Use the Discord invite instead");
     expect(html).not.toContain('href="/auth/discord"');
-    expect(html).toContain("Try again");
+    expect(html).toContain("Back to the homepage");
   });
 });
 
