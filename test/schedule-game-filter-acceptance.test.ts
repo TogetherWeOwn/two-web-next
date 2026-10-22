@@ -269,17 +269,20 @@ function selectFor(html: string): string | null {
 }
 
 function optionsOf(selectHtml: string): { value: string; label: string; selected: boolean }[] {
+  const entities: Record<string, string> = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#x27;": "'",
+  };
   return [...selectHtml.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/g)].map((m) => {
     const attrs = m[1] ?? "";
     const value = /value="([^"]*)"/.exec(attrs)?.[1] ?? "";
-    // Labels arrive HTML-escaped; decode the entities JSX emits so assertions
-    // read stored names while the raw-HTML assertions below still pin escaping.
+    // Decode JSX entities once, preserving literal entity text in stored names.
+    // Raw-HTML assertions below still pin escaping.
     const label = (m[2] ?? "")
-      .replaceAll("&amp;", "&")
-      .replaceAll("&lt;", "<")
-      .replaceAll("&gt;", ">")
-      .replaceAll("&quot;", '"')
-      .replaceAll("&#x27;", "'")
+      .replace(/&(?:amp|lt|gt|quot|#x27);/g, (entity) => entities[entity] ?? entity)
       .trim();
     return { value, label, selected: /\bselected\b/.test(attrs) };
   });
@@ -582,7 +585,9 @@ describe("Hono list: hostile game strings", () => {
     const hostileGame = '"><img src=x onerror=alert(1)>';
     const hostile = eventRow({ title: "Hostile Game Night", game: hostileGame });
     const chess = eventRow({ title: "Chess Night Calm", game: "Chess" });
-    const src = gameScheduleFixture({ upcoming: [hostile, chess] });
+    const literalEntities = "&lt; &amp; &gt; &quot; &#x27;";
+    const entityGame = eventRow({ title: "Literal Entity Night", game: literalEntities });
+    const src = gameScheduleFixture({ upcoming: [hostile, chess, entityGame] });
     const res = await src.request("/events");
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -592,6 +597,8 @@ describe("Hono list: hostile game strings", () => {
     const select = selectFor(html);
     expect(select).not.toBeNull();
     expect(optionsOf(select!).map((o) => o.label)).toContain(hostileGame);
+    expect(select!).toContain("&amp;lt; &amp;amp; &amp;gt; &amp;quot; &amp;#x27;");
+    expect(optionsOf(select!).map((o) => o.label)).toContain(literalEntities);
   });
 
   it("filters an ampersand game without breaking markup", async () => {
