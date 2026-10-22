@@ -1,5 +1,8 @@
 import { env, waitUntil } from "cloudflare:workers";
+import { dbFor } from "../../../../src/admin/db";
 import { discordWidgetHealth, toPublicWidgetSnapshot } from "../../../../src/discord-widget";
+import { discordEventsSource } from "../../../../src/events/discord-transients-source";
+import { cachedHomeUpcoming } from "../../../../src/home-cache";
 import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../../../../src/home-copy";
 import { inviteDestination } from "../../../../src/invite";
 import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
@@ -13,7 +16,7 @@ import type { PageServerLoad } from "./$types";
 // fallback copy in the raw fetch body) holds byte-for-byte.
 
 // Same reads and cache policy as the Hono handler (src/index.tsx joinPage
-// render with src/join/route-page.ts inputs): database-free leaf, safe next,
+// render with src/join/route-page.ts inputs): outage-proof leaf, safe next,
 // one-use join-result flash, background widget-health refresh, invite
 // fallback. /join/discord and /join/callback stay Hono-owned.
 export const csr = false;
@@ -25,7 +28,6 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // request-scoped primitive web/src/lib/server/hono.ts rebuilds the Hono
   // execution context from); the verdict singleton is the isolate-shared one
   // from src/discord-widget.ts, so Hono and Kit traffic warm the same cache.
-  // No binding is read here beyond env: /join stays a persistence-free leaf.
   const widgetUrl = discordWidgetHealth.url(env.DISCORD_GUILD_ID, (work) => waitUntil(work));
   // The presence snapshot rides the same verdict: it answers from the last
   // background probe and never waits on Discord, so the response path stays
@@ -52,6 +54,24 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
     cookies,
     setHeaders,
   });
+  // The next-game-night card reuses the homepage teaser's merged read (the
+  // same cachedHomeUpcoming the Hono handler and the Kit home load use):
+  // one list select plus its batched aggregates, never per-row reads. Only
+  // the soonest row rides the load data; an empty or unreadable schedule is
+  // null, which renders the page exactly as before. The read never throws,
+  // so /join stays 200 when the database or Discord is down. Public fields
+  // only (eventKey/title/startsAt/timezone/location/counts), so the row is
+  // safe to serialize into __data.json on this logged-out page.
+  const homeUpcoming = await cachedHomeUpcoming(
+    env,
+    () => dbFor({ env }),
+    () => discordEventsSource(env),
+    new Date(),
+    undefined,
+    // Same validated cf-ray correlation as the Kit home load (safeRequestId
+    // inside the reader drops anything else).
+    request.headers.get("cf-ray") ?? undefined,
+  );
   // Sanitized like the Hono data source: a bad DISCORD_INVITE_URL renders
   // the hardcoded fallback, never a dead, relative or hostile href. The
   // banner and intro copy ride as load data (the Kit home homeCopy channel),
@@ -75,5 +95,6 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
             : "/join/discord",
     appUrl: env.APP_URL,
     joinResult,
+    nextEvent: homeUpcoming.items[0] ?? null,
   };
 };

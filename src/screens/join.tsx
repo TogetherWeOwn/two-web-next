@@ -1,6 +1,8 @@
 import type { FC } from "hono/jsx";
 import type { DiscordWidgetSnapshot } from "../discord-widget";
+import type { HomeUpcomingRow } from "../events/reads";
 import { JOIN_INTRO } from "../home-copy";
+import { cardTimeLabel, isValidZone } from "../islands/contracts";
 import type { JOIN_START_FAILED_NOTICE } from "../join/route-shared";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
@@ -25,7 +27,20 @@ export const Join: FC<{
   // Already allowlisted by the route (JOIN_START_FAILED_NOTICE or null).
   // Display-only: explains a failed start, never echoed into the one-click href.
   notice?: typeof JOIN_START_FAILED_NOTICE | null;
-}> = ({ inviteUrl, widgetUrl, widgetSnapshot, next, source, appUrl, joinResult, notice }) => {
+  // The soonest merged upcoming row (the homepage teaser's read, first item).
+  // Null/absent renders the page exactly as before: no hollow card.
+  nextEvent?: HomeUpcomingRow | null;
+}> = ({
+  inviteUrl,
+  widgetUrl,
+  widgetSnapshot,
+  next,
+  source,
+  appUrl,
+  joinResult,
+  notice,
+  nextEvent,
+}) => {
   const oneClickHref =
     next && source
       ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
@@ -142,6 +157,45 @@ export const Join: FC<{
             )}
           </div>
         </section>
+        {/* The next game night: the same teaser's-row shape the homepage
+            renders (time label, zone, venue-or-Online, /e/:key link), pinned
+            below the join panel so the CTA keeps the top of the page.
+            Discord-source rows keep the invite link like the teaser. Null
+            renders nothing: an empty or unreadable schedule is byte-identical
+            to the page without this block. The Kit page mirrors this block
+            (same testids, same copy). */}
+        {nextEvent ? (
+          <section
+            data-testid="join-next-event"
+            data-source={nextEvent.source}
+            aria-labelledby="join-next-event-heading"
+          >
+            <h2 id="join-next-event-heading">Next game night</h2>
+            <a
+              class="join-next-event-link"
+              href={
+                nextEvent.source === "discord"
+                  ? inviteUrl
+                  : `/e/${encodeURIComponent(nextEvent.eventKey)}`
+              }
+              data-testid={
+                nextEvent.source === "discord" ? "join-next-event-discord" : "join-next-event-link"
+              }
+            >
+              <p>
+                <time
+                  data-testid="join-next-event-time"
+                  datetime={nextEvent.startsAt.toISOString()}
+                >
+                  {cardTimeLabel(nextEvent.startsAt, nextEvent.timezone)} (
+                  {isValidZone(nextEvent.timezone) ? nextEvent.timezone : "UTC"})
+                </time>
+              </p>
+              <h3 data-testid="join-next-event-title">{nextEvent.title}</h3>
+              <p data-testid="join-next-event-venue">{nextEvent.location ?? "Online"}</p>
+            </a>
+          </section>
+        ) : null}
       </main>
       <SiteFooter />
     </Layout>
