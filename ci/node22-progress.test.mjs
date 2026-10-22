@@ -171,7 +171,7 @@ test("workflow retains the exact suite, scope gate, hosted runner, timeout and r
     /if: \(needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'\)/,
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
-  assert.match(job, /timeout-minutes: 30\n/);
+  assert.match(job, /timeout-minutes: 40\n/);
   assert.match(job, /!github.event.repository.private && '\["ubuntu-latest"\]'/);
   assert.match(job, /image: node:22\.23\.0-bookworm/);
   assert.match(job, /run: node --test ci\/node22-progress\.test\.mjs/);
