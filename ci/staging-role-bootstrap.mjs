@@ -9,8 +9,9 @@
 // bootstrap may ever emit is the byte-exact CREATE_ROLE_DDL constant below
 // (no grants, membership, ownership, ALTER, LOGIN, password, default ACL,
 // schema/data changes or migration journal changes). Check first: a present
-// compatible role is a no-op, an incompatible existing role is refused
-// without any DDL. Staging-endpoint pin (same PlanetScale staging
+// compatible role is a no-op, an incompatible existing role — including one
+// carrying any role membership — is refused without any DDL.
+// Staging-endpoint pin (same PlanetScale staging
 // host/branch pins as ci/db-migrate.mjs), TLS required, max one connection,
 // bounded statement/lock/connect timeouts; a duplicate-object (42710) race
 // resolves to whatever is actually present. The secret value is never
@@ -38,12 +39,14 @@ export const CREATE_ROLE_DDL = "CREATE ROLE two_web_app NOLOGIN";
 
 // Single hardcoded status read for the fixed role. PostgreSQL CREATE ROLE
 // defaults (NOLOGIN, NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION,
-// NOBYPASSRLS) are what classifyRole accepts as compatible. No rolpassword
-// column: pg_roles always reads it as '********', so it cannot distinguish
-// roles; a NOLOGIN role cannot authenticate anyway.
+// NOBYPASSRLS, no memberships) are what classifyRole accepts as compatible.
+// No rolpassword column: pg_roles always reads it as '********', so it cannot
+// distinguish roles; a NOLOGIN role cannot authenticate anyway. The
+// has_memberships flag reads pg_auth_members so a pre-existing role carrying
+// any grant is refused rather than silently adopted.
 // See https://www.postgresql.org/docs/current/sql-createrole.html
 export const ROLE_STATUS_QUERY =
-  "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolconnlimit FROM pg_roles WHERE rolname = 'two_web_app'";
+  "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, rolconnlimit, EXISTS (SELECT 1 FROM pg_auth_members WHERE member = pg_roles.oid) AS has_memberships FROM pg_roles WHERE rolname = 'two_web_app'";
 
 export const STATEMENT_TIMEOUT_MS = 30000;
 export const LOCK_TIMEOUT_MS = 10000;
@@ -120,10 +123,12 @@ export function validateStagingUrl(raw) {
 }
 
 // Compatible = exactly the PostgreSQL CREATE ROLE defaults the bootstrap
-// creates: NOLOGIN with no elevated attributes. Anything else is refused
+// creates: NOLOGIN with no elevated attributes and no role memberships
+// (a member role inherits its groups' privileges). Anything else is refused
 // without changes; the reason names the offending attribute. Passwords are
 // not classified: pg_roles masks rolpassword as '********' for every role,
-// and a NOLOGIN role cannot authenticate.
+// and a NOLOGIN role cannot authenticate. A missing membership signal is
+// refused as unknown rather than assumed absent.
 export function classifyRole(row) {
   if (!row) return { state: "absent" };
   if (row.rolcanlogin) return { state: "incompatible", reason: "existing role has LOGIN" };
@@ -137,6 +142,12 @@ export function classifyRole(row) {
   }
   if (row.rolbypassrls) {
     return { state: "incompatible", reason: "existing role has BYPASSRLS" };
+  }
+  if (row.has_memberships === undefined || row.has_memberships === null) {
+    return { state: "incompatible", reason: "existing role membership state is unknown" };
+  }
+  if (row.has_memberships) {
+    return { state: "incompatible", reason: "existing role has memberships" };
   }
   return { state: "compatible" };
 }
@@ -201,10 +212,10 @@ export function safeBootstrapError(error) {
   return "Bootstrap failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
 }
 
-export async function runBootstrap(env = process.env) {
-  const url = validateStagingUrl(env[SECRET_NAME]);
-  assertBootstrapDdl(CREATE_ROLE_DDL);
-  const client = postgres(url.href, {
+// Client options are factored out so the acceptance contract pins the TLS,
+// single-connection and timeout wiring without opening a connection.
+export function buildClientOptions(url) {
+  return {
     port: 5432,
     max: 1,
     idle_timeout: 0,
@@ -219,7 +230,15 @@ export async function runBootstrap(env = process.env) {
       datestyle: "ISO, YMD",
     },
     onnotice: () => {},
-  });
+  };
+}
+
+export async function runBootstrap(env = process.env, { createClient = postgres } = {}) {
+  const url = validateStagingUrl(env[SECRET_NAME]);
+  assertBootstrapDdl(CREATE_ROLE_DDL);
+  // createClient is a test seam only; the workflow always connects through
+  // postgres with the pinned secret, so no caller can redirect the target.
+  const client = createClient(url.href, buildClientOptions(url));
   try {
     const evidence = await bootstrapRole(client);
     console.log(JSON.stringify(evidence));
@@ -261,6 +280,7 @@ function selftest() {
     rolcreaterole: false,
     rolreplication: false,
     rolbypassrls: false,
+    has_memberships: false,
   };
   if (classifyRole(compatible).state !== "compatible") {
     throw new Error("selftest: NOLOGIN defaults must classify as compatible");
@@ -268,6 +288,10 @@ function selftest() {
   const login = classifyRole({ ...compatible, rolcanlogin: true });
   if (login.state !== "incompatible" || !/login/i.test(login.reason ?? "")) {
     throw new Error("selftest: LOGIN must classify as incompatible");
+  }
+  const member = classifyRole({ ...compatible, has_memberships: true });
+  if (member.state !== "incompatible" || !/membership/i.test(member.reason ?? "")) {
+    throw new Error("selftest: memberships must classify as incompatible");
   }
   if (
     !/^select\b/i.test(ROLE_STATUS_QUERY.trim()) ||
