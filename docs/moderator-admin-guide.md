@@ -361,6 +361,30 @@ leave-page warning for unsaved changes (including after a rejected Save).
   recurrence fields afterward. Escalate needs outside the visible controls
   instead of invoking other APIs.
 
+### How cancelled events read on the public schedule
+
+Cancelled events stay listed so members can see what changed; the listing is
+informational, never an invitation. What both moderators and members see:
+
+- The list card keeps its title, scheduled time range, location, and a
+  **Cancelled** badge. The title is plain text: the detail page answers 410,
+  so there is intentionally no link to follow.
+- The card shows **no sign-in or RSVP invitation**. The general
+  **Join the Discord** navigation stays: joining the community is still
+  possible, answering the cancelled event is not.
+- The retained count reads **N existing responses**: answers members left
+  before cancellation. It is not attendance, not available places, and not a
+  reason to attend. Capacity is not shown on cancelled cards.
+- Month-grid entries carry the same **Cancelled** badge word in text (never
+  color alone) and name the cancellation to assistive technology. The entry
+  still jumps to the retained list card; like the card title, it never links
+  to the 410 detail page.
+
+To notify the people behind the existing responses, use the read-only RSVP
+roster for planning and the [event cancellation and reschedule communication
+checklist](events-communications.md) for the message. Do not report the
+existing-responses count as attendance.
+
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
