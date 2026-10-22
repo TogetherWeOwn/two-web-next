@@ -232,6 +232,13 @@
       "when": 1792547478687,
       "tag": "1032_event-public-join-details",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792628486890,
+      "tag": "1033_member-links",
+      "breakpoints": true
     }
   ]
 }

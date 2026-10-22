@@ -204,6 +204,19 @@ export const profiles = pgTable("profiles", {
 
 export type ProfileRow = typeof profiles.$inferSelect;
 
+// S1 link-in-bio: one row per member, an ordered [{label, url}] list validated
+// in src/profiles/links-validation.ts (max 12, https-only, host denylist).
+// Free to every member; only the live banner is subscriber-gated (S5).
+export const memberLinks = pgTable("member_links", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  links: jsonb("links").notNull().$type<{ label: string; url: string }[]>().default([]),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type MemberLinksRow = typeof memberLinks.$inferSelect;
+
 // W13: ShouldBeUnique lock rows for queued jobs (Cache::lock equivalent). Acquired atomically with a
 // conditional upsert that only wins over expired rows; see src/jobs/postgres.ts.
 export const jobUniqueLocks = pgTable("job_unique_locks", {
