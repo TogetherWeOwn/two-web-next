@@ -136,13 +136,210 @@ test("the patch coverage step has no file-presence skip so a missing input fails
   assert.equal(guards.length, 1);
   assert.equal(
     guards[0],
-    "        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
+    "        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
   );
   assert.equal(
     step.match(/^        run: (.+)$/m)?.[1],
     "npm run patch:coverage:selftest && npm run patch:coverage",
   );
 });
+
+// Post-install gates must not add secondary noise (vitest not found, missing
+// coverage report) after an earlier step already failed the job. These cases
+// evaluate the real `if:` guards of the check job with a small GitHub Actions
+// expression evaluator that supports only what the guards use and throws on
+// anything else, so a new construct cannot silently pass.
+const checkJob = check.split(/\n  [a-z][a-z0-9-]*:\n/)[1];
+const checkSteps = checkJob
+  .split(/\n      - /)
+  .slice(1)
+  .map((entry) => ({
+    label: entry.match(/^name: (.+)$/m)?.[1] ?? entry.split("\n", 1)[0],
+    guard: entry.match(/^        if: (.+)$/m)?.[1] ?? "success()",
+  }));
+const AUDIT = "Dependency audit (lockfile, including dev dependencies)";
+const INSTALL = "run: npm ci --no-audit --no-fund";
+const COVERAGE = "Check (lint + typecheck + coverage gate)";
+const TIER0 = "Tier-0 check (validators + authz + EXPLAIN)";
+const PATCH = "Patch coverage (WARN)";
+const SUMMARY = "Coverage job summary";
+const UPLOAD = "Upload coverage report";
+
+function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
+  const expression = guard.replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
+  const tokens = expression.match(/'[^']*'|[A-Za-z_][\w.]*\(?|!=|==|&&|\|\||[()!]|\)/g) ?? [];
+  assert.equal(tokens.join(""), expression.replace(/\s+/g, ""), `unsupported guard: ${guard}`);
+  // Actions wraps an `if:` that names no status function in an implicit success().
+  const implicitSuccess = !tokens.some((token) =>
+    ["success(", "failure(", "always(", "cancelled("].includes(token),
+  );
+  let at = 0;
+  const peek = () => tokens[at];
+  const primary = () => {
+    const token = tokens[at++];
+    if (token === "!") return !primary();
+    if (token === "(") {
+      const value = or();
+      assert.equal(tokens[at++], ")", `unbalanced guard: ${guard}`);
+      return value;
+    }
+    if (token === "success(") return close(!jobFailed);
+    if (token === "failure(") return close(jobFailed);
+    if (token === "always(") return close(true);
+    if (token === "cancelled(") return close(false);
+    if (token === "hashFiles(") {
+      assert.equal(
+        tokens[at++],
+        "'coverage/coverage-summary.json'",
+        `unsupported hashFiles: ${guard}`,
+      );
+      return close(reportPresent ? "present-hash" : "");
+    }
+    const output = token.match(/^needs\.scope\.outputs\.(\w+)$/);
+    assert(output, `unsupported guard token ${token}: ${guard}`);
+    return scope[output[1]] ?? "";
+  };
+  const close = (value) => {
+    assert.equal(tokens[at++], ")", `unbalanced guard: ${guard}`);
+    return value;
+  };
+  const comparison = () => {
+    const left = primary();
+    if (peek() === "!=" || peek() === "==") {
+      const operator = tokens[at++];
+      const literal = tokens[at++];
+      assert(/^'[^']*'$/.test(literal), `unsupported comparison: ${guard}`);
+      const equal = left === literal.slice(1, -1);
+      return operator === "==" ? equal : !equal;
+    }
+    return left;
+  };
+  const and = () => {
+    let value = comparison();
+    while (peek() === "&&") {
+      at++;
+      const right = comparison();
+      value = value && right;
+    }
+    return value;
+  };
+  const or = () => {
+    let value = and();
+    while (peek() === "||") {
+      at++;
+      const right = and();
+      value = value || right;
+    }
+    return value;
+  };
+  const result = or();
+  assert.equal(at, tokens.length, `trailing guard tokens: ${guard}`);
+  return Boolean(result) && (!implicitSuccess || !jobFailed);
+}
+
+// Walk the check job's steps in order. `failing` names the one step that fails
+// when it runs; a step whose guard is false is skipped without failing the job.
+function simulateCheckJob({ failing, scope, reportPresent = true }) {
+  const outcomes = new Map();
+  let jobFailed = false;
+  for (const { label, guard } of checkSteps) {
+    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent })) {
+      outcomes.set(label, "skipped");
+      continue;
+    }
+    const failed = label === failing;
+    outcomes.set(label, failed ? "failure" : "success");
+    if (failed) jobFailed = true;
+  }
+  if (failing) assert.equal(outcomes.get(failing), "failure", `${failing} must run to fail`);
+  return outcomes;
+}
+
+const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+
+test("the check job models the guarded steps the simulation relies on", () => {
+  const labels = checkSteps.map((step) => step.label);
+  for (const label of [AUDIT, INSTALL, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+    assert(labels.includes(label), `check job must keep the "${label}" step`);
+  }
+  assert(labels.indexOf(AUDIT) < labels.indexOf(INSTALL));
+  assert(labels.indexOf(INSTALL) < labels.indexOf(COVERAGE));
+  assert(labels.indexOf(COVERAGE) < labels.indexOf(TIER0));
+  assert(labels.indexOf(TIER0) < labels.indexOf(PATCH));
+  assert(labels.indexOf(PATCH) < labels.indexOf(SUMMARY));
+  assert(labels.indexOf(SUMMARY) < labels.indexOf(UPLOAD));
+});
+
+test("the Tier-0 check guard requires success and keeps the docs-only/draft scope", () => {
+  const guard = checkSteps.find((step) => step.label === TIER0)?.guard;
+  assert.equal(
+    guard,
+    "success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
+  );
+});
+
+test("the coverage summary and upload keep collecting evidence after a failure", () => {
+  for (const label of [SUMMARY, UPLOAD]) {
+    const guard = checkSteps.find((step) => step.label === label)?.guard;
+    assert.equal(
+      guard,
+      "always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''",
+    );
+  }
+});
+
+for (const [label, failing] of [
+  ["a failed dependency audit (npm install skipped)", AUDIT],
+  ["a failed npm install", INSTALL],
+  ["a failed coverage run", COVERAGE],
+]) {
+  test(`Tier-0 and patch coverage are skipped after ${label}`, () => {
+    const outcomes = simulateCheckJob({ failing, scope: codeScope });
+    assert.equal(outcomes.get(TIER0), "skipped");
+    assert.equal(outcomes.get(PATCH), "skipped");
+  });
+}
+
+test("a failed dependency audit skips npm install and every later success-guarded step", () => {
+  const outcomes = simulateCheckJob({ failing: AUDIT, scope: codeScope, reportPresent: false });
+  assert.equal(outcomes.get(INSTALL), "skipped");
+  assert.equal(outcomes.get(COVERAGE), "skipped");
+  assert.equal(outcomes.get(SUMMARY), "skipped");
+  assert.equal(outcomes.get(UPLOAD), "skipped");
+});
+
+test("Tier-0 and patch coverage run when every earlier step succeeded", () => {
+  const outcomes = simulateCheckJob({ scope: codeScope });
+  assert.equal(outcomes.get(TIER0), "success");
+  assert.equal(outcomes.get(PATCH), "success");
+  // A missing report is the patch gate's own fail-closed case: it still runs.
+  const noReport = simulateCheckJob({ scope: codeScope, reportPresent: false });
+  assert.equal(noReport.get(PATCH), "success");
+});
+
+test("a patch coverage failure on a good run does not hide the evidence steps", () => {
+  const outcomes = simulateCheckJob({ failing: PATCH, scope: codeScope });
+  assert.equal(outcomes.get(SUMMARY), "success");
+  assert.equal(outcomes.get(UPLOAD), "success");
+});
+
+test("the coverage summary and upload still run after a failed coverage run that wrote a report", () => {
+  const outcomes = simulateCheckJob({ failing: COVERAGE, scope: codeScope });
+  assert.equal(outcomes.get(SUMMARY), "success");
+  assert.equal(outcomes.get(UPLOAD), "success");
+  const noReport = simulateCheckJob({ failing: COVERAGE, scope: codeScope, reportPresent: false });
+  assert.equal(noReport.get(SUMMARY), "skipped");
+  assert.equal(noReport.get(UPLOAD), "skipped");
+});
+
+for (const scopeName of ["docs_only", "draft"]) {
+  test(`Tier-0 and patch coverage are skipped on a ${scopeName} scope`, () => {
+    const outcomes = simulateCheckJob({ scope: { ...codeScope, [scopeName]: "true" } });
+    for (const label of [AUDIT, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
+      assert.equal(outcomes.get(label), "skipped", label);
+    }
+  });
+}
 
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking
 // summary must not turn a failed coverage invocation into a passing required gate.
