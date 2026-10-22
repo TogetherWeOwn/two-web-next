@@ -188,7 +188,14 @@ describe("OAuth throttle envelope (DB-free)", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toMatch(/^[1-9]\d*$/);
     const body = (await limited.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id", "retry_after"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+      "retry_after",
+    ]);
     expect(body).toMatchObject({ reason: "rate_limited" });
     expect(body.request_id).toBe(limited.headers.get("x-request-id"));
     expect(typeof body.message).toBe("string");
