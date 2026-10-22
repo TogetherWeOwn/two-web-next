@@ -169,7 +169,11 @@ const BUILDER_ALICE = {
 };
 
 function builderHarness(
-  opts: { members?: MemberView[]; links?: [string, { label: string; url: string }[]][] } = {},
+  opts: {
+    members?: MemberView[];
+    links?: [string, { label: string; url: string }[]][];
+    linksStore?: ReturnType<typeof createMemoryLinksStore>;
+  } = {},
 ) {
   const sessions = createMemorySessionStore();
   const store = createMemoryProfileStore(
@@ -184,11 +188,13 @@ function builderHarness(
       },
     ],
   );
-  const links = createMemoryLinksStore(
-    opts.links ?? [
-      [BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]],
-    ],
-  );
+  const links =
+    opts.linksStore ??
+    createMemoryLinksStore(
+      opts.links ?? [
+        [BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]],
+      ],
+    );
   const buckets: string[] = [];
   const deps = {
     sessionStore: sessions,
@@ -353,5 +359,88 @@ describe("links crossed save shapes", () => {
     const r = await attempt("PATCH", "application/json", JSON.stringify(["nope"]));
     expect(r.status).toBe(400);
     expect(r.stored).toHaveLength(1);
+  });
+});
+
+describe("links save failures", () => {
+  it("a JSON save for a deleted member is 404, never an orphan row", async () => {
+    const { app, sessions, links } = builderHarness({ members: [] });
+    const res = await app.request(
+      "/profile/links",
+      {
+        method: "PATCH",
+        headers: {
+          cookie: await builderCookieFor(sessions, BUILDER_ALICE),
+          origin: BUILDER_APP_URL,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ links: [{ label: "X", url: "https://example.com/x" }] }),
+      },
+      builderEnv,
+    );
+    expect(res.status).toBe(404);
+    expect(await links.find(BUILDER_ALICE.userId)).toHaveLength(1);
+  });
+
+  it("a store outage is 500 on both save shapes", async () => {
+    for (const shape of ["form", "json"] as const) {
+      const failing = createMemoryLinksStore([
+        [BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]],
+      ]);
+      failing.save = async () => {
+        throw new Error("db down");
+      };
+      const { app, sessions } = builderHarness({ linksStore: failing });
+      const cookie = await builderCookieFor(sessions, BUILDER_ALICE);
+      const res = await app.request(
+        "/profile/links",
+        shape === "form"
+          ? {
+              method: "POST" as const,
+              headers: {
+                cookie,
+                origin: BUILDER_APP_URL,
+                "content-type": "application/x-www-form-urlencoded",
+              },
+              body: new URLSearchParams({ links_text: "X | https://example.com/x" }),
+            }
+          : {
+              method: "PATCH" as const,
+              headers: {
+                cookie,
+                origin: BUILDER_APP_URL,
+                "content-type": "application/json",
+                accept: "application/json",
+              },
+              body: JSON.stringify({ links: [{ label: "X", url: "https://example.com/x" }] }),
+            },
+        builderEnv,
+      );
+      expect(res.status, shape).toBe(500);
+    }
+  });
+
+  it("a JSON save without a JSON accept redirects to the links page", async () => {
+    const { app, sessions, links } = builderHarness();
+    const res = await app.request(
+      "/profile/links",
+      {
+        method: "PATCH",
+        headers: {
+          cookie: await builderCookieFor(sessions, BUILDER_ALICE),
+          origin: BUILDER_APP_URL,
+          "content-type": "application/json",
+          accept: "text/html",
+        },
+        body: JSON.stringify({ links: [{ label: "X", url: "https://example.com/x" }] }),
+      },
+      builderEnv,
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`/members/${BUILDER_ALICE.userId}/links`);
+    expect(await links.find(BUILDER_ALICE.userId)).toEqual([
+      { label: "X", url: "https://example.com/x" },
+    ]);
   });
 });

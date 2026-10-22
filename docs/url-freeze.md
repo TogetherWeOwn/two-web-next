@@ -237,10 +237,12 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/` | public | profiles: retired trailing-slash path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
+| `GET /members/:user/links` | public | profiles: link-in-bio page; avatar, bio, ordered links, offline live stub, report link; no session, no scripts |
 | `GET /openapi.json` | public | public-data: OpenAPI 3.1 for the public read API, static |
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /privacy.md` | public | ai-friendly-md: policy-source Markdown alternate, static TTL, staging noindex |
 | `GET /profile` | member | profiles: current member |
+| `GET /profile/links` | member | profiles: links editor; guest 302 → OAuth, non-member 403 |
 | `GET /robots.txt` | public | seo: frozen robots |
 | `GET /rules` | public | seo: frozen funnel leaf |
 | `GET /rules.md` | public | ai-friendly-md: curated Markdown alternate with last-updated stamp, static TTL, staging noindex |
@@ -251,6 +253,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `PATCH /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
+| `PATCH /profile/links` | member-owner | profiles: links JSON save; whole-list replace, guest 303 → recovery |
 | `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
@@ -270,6 +273,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /logout` | public | app: optional session revoke + origin check |
 | `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
+| `POST /profile/links` | member-owner | profiles: links native-form save; 303 to the links page, guest 303 → recovery |
 | `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 

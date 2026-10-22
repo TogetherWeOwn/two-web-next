@@ -326,6 +326,11 @@
   },
   {
     "method": "GET",
+    "path": "/members/:user/links",
+    "auth": "public"
+  },
+  {
+    "method": "GET",
     "path": "/openapi.json",
     "auth": "public"
   },
@@ -342,6 +347,11 @@
   {
     "method": "GET",
     "path": "/profile",
+    "auth": "member"
+  },
+  {
+    "method": "GET",
+    "path": "/profile/links",
     "auth": "member"
   },
   {
@@ -392,6 +402,11 @@
   {
     "method": "PATCH",
     "path": "/members/:user",
+    "auth": "member-owner"
+  },
+  {
+    "method": "PATCH",
+    "path": "/profile/links",
     "auth": "member-owner"
   },
   {
@@ -512,6 +527,11 @@
   {
     "method": "POST",
     "path": "/members/:user",
+    "auth": "member-owner"
+  },
+  {
+    "method": "POST",
+    "path": "/profile/links",
     "auth": "member-owner"
   },
   {

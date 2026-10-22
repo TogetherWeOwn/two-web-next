@@ -8,7 +8,16 @@ const qualityBudget = require("../ci/quality-budget.json");
 const admission = require("../ci/lighthouse-admission.cjs");
 
 const origin = "http://127.0.0.1:8787";
-const expected = ["/", "/events", "/join", "/about", "/faq", "/rules", "/privacy"];
+const expected = [
+  "/",
+  "/events",
+  "/join",
+  "/about",
+  "/faq",
+  "/rules",
+  "/privacy",
+  "/members/100000000000000111/links",
+];
 
 // The worker allowlist (ci/lighthouse-paths.ts), the LHCI collect list and the
 // admission probe list are three copies of one inventory. Returns what disagrees.
@@ -36,11 +45,11 @@ function inventoryMismatches(inventory: {
 const real = { worker: auditPaths, config: ci.collect.url, admission: admission.paths };
 
 describe("Lighthouse path inventory", () => {
-  it("audits the five existing pages and the three static leaves", () => {
-    expect(auditPaths).toHaveLength(8);
+  it("audits the six fixture pages and the three static leaves", () => {
+    expect(auditPaths).toHaveLength(9);
     for (const path of expected) expect(auditPaths).toContain(path);
     expect(auditPaths.filter((path: string) => path.startsWith("/e/"))).toHaveLength(1);
-    expect(ci.collect.url).toHaveLength(8);
+    expect(ci.collect.url).toHaveLength(9);
   });
 
   it("keeps the worker allowlist, LHCI config and admission probe in agreement", () => {

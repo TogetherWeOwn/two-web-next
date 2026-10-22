@@ -11,6 +11,7 @@ const paths = [
   "/faq",
   "/rules",
   "/privacy",
+  "/members/100000000000000111/links",
 ];
 
 module.exports = {

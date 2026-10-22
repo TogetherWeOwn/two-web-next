@@ -7,13 +7,13 @@ import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 // Pinned matrix: docs/a11y-ci.md states these same numbers. Any route, case,
 // or viewport add/remove changes the derived total and fails the pin; update
 // the docs and this pin together in one PR.
-const EXPECTED_CASES = 73;
-const EXPECTED_EXPLICIT_CASES = 64;
+const EXPECTED_CASES = 76;
+const EXPECTED_EXPLICIT_CASES = 67;
 const EXPECTED_AUTO_CASES = 9;
 const EXPECTED_VIEWPORTS = 2;
 const EXPECTED_SCANS = EXPECTED_CASES * EXPECTED_VIEWPORTS;
 
-assert.equal(EXPECTED_SCANS, 146);
+assert.equal(EXPECTED_SCANS, 152);
 
 const worker = await loadAuditWorkerRoutes();
 

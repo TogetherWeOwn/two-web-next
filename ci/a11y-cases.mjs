@@ -152,6 +152,15 @@ export const coverage = {
       { path: "/members/999999999999999999", identity: "member", status: 404 },
     ],
   },
+  "/members/:user/links": {
+    cases: [
+      { path: `/members/${member}/links` },
+      { path: "/members/999999999999999999/links", status: 404 },
+    ],
+  },
+  "/profile/links": {
+    cases: [{ path: "/profile/links", identity: "member" }],
+  },
   "/e/:key": {
     cases: [
       { path: `/e/${event}` },

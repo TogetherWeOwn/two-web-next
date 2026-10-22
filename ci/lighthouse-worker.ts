@@ -9,7 +9,7 @@ import type { Env } from "../src/env";
 import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
-import { auditPaths, fixtureKey } from "./lighthouse-paths";
+import { auditPaths, fixtureKey, linksMember } from "./lighthouse-paths";
 
 const eventColumns = getTableColumns(events);
 const columns = Object.keys(eventColumns) as (keyof typeof events.$inferSelect)[];
@@ -33,6 +33,13 @@ const goingSql =
   'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2 and "users"."username" <> $3) group by "rsvps"."event_id"';
 const occupancySql =
   'select "event_id", count(*) from "rsvps" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2) group by "rsvps"."event_id"';
+// Audited link-in-bio page: the fixture member row plus their fixture links.
+// Field order matches the profile-store select (id, profile user, username,
+// avatar, bio, games, timezone, leaderboard opt-out, joined).
+const linksMemberSql =
+  'select "users"."id", "profiles"."user_id", "users"."username", "users"."avatar", "profiles"."bio", "profiles"."games", "profiles"."timezone", "profiles"."leaderboard_opt_out", "users"."created_at" from "users" left join "profiles" on "profiles"."user_id" = "users"."id" where "users"."id" = $1 limit $2';
+const linksListSql =
+  'select "links" from "member_links" where "member_links"."user_id" = $1 limit $2';
 const localOrigin = "http://127.0.0.1:8787";
 
 function neighborSql(comparison: "<" | ">", direction: "asc" | "desc"): string {
@@ -116,6 +123,28 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
           return { rows: [[fixture.id, 3]] };
         if (sql === occupancySql && sameParams(params, [fixture.id, "going"]))
           return { rows: [[fixture.id, 3]] };
+        if (sql === linksMemberSql && sameParams(params, [linksMember, 1]))
+          return {
+            rows: [
+              [
+                linksMember,
+                linksMember,
+                "Lighthouse Linker",
+                null,
+                "A local-only link-in-bio member used to measure the real links page.",
+                [],
+                null,
+                false,
+                new Date(nowMs).toISOString(),
+              ],
+            ],
+          };
+        if (sql === linksListSql && sameParams(params, [linksMember, 1]))
+          return {
+            rows: [
+              [[{ label: "Lighthouse stream", url: "https://example.com/lighthouse-live" }]],
+            ],
+          };
         if (
           sql === `${eventSelect} where "events"."event_key" = $1` &&
           sameParams(params, [fixtureKey])
