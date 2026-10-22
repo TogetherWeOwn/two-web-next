@@ -154,9 +154,11 @@ describe("refusal envelopes carry request_id", () => {
     );
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 60 seconds.",
       retry_after: 60,
+      next: "Wait for Retry-After, then retry.",
       request_id: RAY,
     });
   });

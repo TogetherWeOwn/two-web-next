@@ -65,7 +65,7 @@ let n = 0;
 const key = () => `ingress-429-request-id-${++n}`;
 
 /** The full 429 key set once the admission ID rides the envelope. */
-const KEYS_429 = ["message", "reason", "request_id", "retry_after"];
+const KEYS_429 = ["code", "message", "next", "reason", "request_id", "retry_after"];
 
 function expectCorrelated429(answer: { status: number; body: Record<string, unknown> }) {
   expect(answer.status).toBe(429);
@@ -317,7 +317,13 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
       "127.0.0.1",
     );
     expect(denied.status).toBe(401);
-    expect(Object.keys(denied.body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(denied.body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
     expect(typeof denied.body.request_id).toBe("string");
   });
 
