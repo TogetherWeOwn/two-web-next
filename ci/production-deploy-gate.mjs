@@ -108,14 +108,53 @@ export function pendingMigrationTags(targetTags, liveTags) {
   return (Array.isArray(targetTags) ? targetTags : []).filter((tag) => !live.has(tag));
 }
 
-function decodeJournalTags(content, encoding) {
+function decodeJournalEntries(content, encoding) {
   const text =
     encoding === "base64"
       ? Buffer.from(String(content ?? "").replace(/\s+/g, ""), "base64").toString("utf8")
       : String(content ?? "");
   const journal = JSON.parse(text);
   if (!Array.isArray(journal?.entries)) throw new Error("Invalid migration journal");
-  return journal.entries.map((entry) => entry.tag);
+  return journal.entries.map((entry) => ({ tag: entry?.tag, when: entry?.when }));
+}
+
+async function journalEntriesAt({ repository, ref, token, fetchImpl }) {
+  const response = await fetchImpl(
+    `https://api.github.com/repos/${repository}/contents/drizzle/meta/_journal.json?ref=${ref}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!response.ok) throw new Error(`Migration journal lookup failed (HTTP ${response.status})`);
+  const body = await response.json();
+  return decodeJournalEntries(body.content, body.encoding);
+}
+
+function assertJournalRefs(targetSha, liveSha) {
+  if (!/^[0-9a-f]{40}$/.test(targetSha ?? "") || !/^[0-9a-f]{40}$/.test(liveSha ?? "")) {
+    throw new Error("Migration comparison needs full 40-hex target and live commits");
+  }
+}
+
+export async function productionJournalEntries({
+  repository,
+  targetSha,
+  liveSha,
+  token,
+  fetchImpl = fetch,
+}) {
+  assertJournalRefs(targetSha, liveSha);
+  const [target, live] = await Promise.all([
+    journalEntriesAt({ repository, ref: targetSha, token, fetchImpl }),
+    journalEntriesAt({ repository, ref: liveSha, token, fetchImpl }),
+  ]);
+  return { target, live };
 }
 
 export async function pendingProductionMigrations({
@@ -126,28 +165,85 @@ export async function pendingProductionMigrations({
   fetchImpl = fetch,
 }) {
   if (!liveSha) return [];
-  if (!/^[0-9a-f]{40}$/.test(targetSha ?? "") || !/^[0-9a-f]{40}$/.test(liveSha ?? "")) {
-    throw new Error("Migration comparison needs full 40-hex target and live commits");
-  }
+  assertJournalRefs(targetSha, liveSha);
   async function journalAt(ref) {
-    const response = await fetchImpl(
-      `https://api.github.com/repos/${repository}/contents/drizzle/meta/_journal.json?ref=${ref}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!response.ok) throw new Error(`Migration journal lookup failed (HTTP ${response.status})`);
-    const body = await response.json();
-    return decodeJournalTags(body.content, body.encoding);
+    const entries = await journalEntriesAt({ repository, ref, token, fetchImpl });
+    return entries.map((entry) => entry.tag);
   }
   const [target, live] = await Promise.all([journalAt(targetSha), journalAt(liveSha)]);
   return pendingMigrationTags(target, live);
+}
+
+// Web journal entries: the same 1000-series filter as WEB_MIGRATIONS in
+// src/up-migrations.ts. Grandfathered 0000/0001 tags are outside the
+// readiness gate there and outside the ledger proof here.
+const WEB_MIGRATION_TAG_PATTERN = /^1\d{3}_/;
+
+export function targetWebEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) =>
+    WEB_MIGRATION_TAG_PATTERN.test(entry?.tag ?? ""),
+  );
+}
+
+// True when any target web entry lacks a usable timestamp: the ledger cannot
+// prove such an entry applied, so unknown fails closed, it never clears.
+export function targetWebEndUnknown(entries) {
+  return targetWebEntries(entries).some(
+    (entry) => typeof entry?.when !== "number" || !Number.isSafeInteger(entry.when),
+  );
+}
+
+// Target web entries the production ledger lacks: `when` not in the applied
+// set. Set inclusion, never a high-water mark: a max would let a newer bot
+// row (or any foreign row) mask a missing web migration, the exact
+// comparison ci/db-migrate.mjs refuses. Pure, so the CLI and the tests share
+// one definition.
+export function pendingLedgerTags(targetEntries, applied) {
+  if (!Array.isArray(applied) || !applied.every((when) => Number.isSafeInteger(when))) {
+    throw new Error("Ledger comparison needs the applied migration_ledger set");
+  }
+  const have = new Set(applied);
+  return targetWebEntries(targetEntries)
+    .filter((entry) => !have.has(entry.when))
+    .map((entry) => entry.tag);
+}
+
+// Live production ledger state from a /up body: db ok, zero pending, and the
+// applied migration_ledger set. Anything else fails closed with a ledger
+// reason — an unknown, unreadable or stale ledger never clears a promotion.
+export function readLedgerState(body) {
+  if (body?.db !== "ok" || body?.pending_migrations !== 0) {
+    throw new Error(
+      `production ledger is not provably current (db ${JSON.stringify(body?.db)}, pending_migrations ${JSON.stringify(body?.pending_migrations)})`,
+    );
+  }
+  const ledger = body?.migration_ledger;
+  if (!Array.isArray(ledger) || !ledger.every((when) => Number.isSafeInteger(when))) {
+    throw new Error(
+      `production ledger set is missing or invalid (migration_ledger ${JSON.stringify(ledger)}); the live Worker may predate the ledger signal`,
+    );
+  }
+  return ledger;
+}
+
+export async function readLiveProductionLedger({
+  origin = PRODUCTION_ORIGIN,
+  fetchImpl = fetch,
+} = {}) {
+  let body;
+  try {
+    const response = await fetchImpl(new URL("/up", origin), {
+      redirect: "manual",
+      headers: { "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    body = await response.json();
+  } catch (error) {
+    throw new Error(
+      `production ledger read failed (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  return readLedgerState(body);
 }
 
 export function assertProductionCredentials(env) {
@@ -452,24 +548,29 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // This step runs from the tip checkout (before the target re-checkout
       // in deploy-production.yml), so an older target can never shadow it
       // with a script that lacks this flag. When the target journal has
-      // entries production lacks, automatic promotion stops here, and manual
-      // dispatch stops unless the operator confirms the migrations were
-      // applied out of band (db-migrate.yml, target production) with
-      // migrations_applied=true. The confirmation travels in the workflow
-      // inputs and is repeated in the log line below, so the continuation
-      // stays audited. Unknown live (unreadable /up) cannot prove pending:
-      // the read is retried, then automatic runs halt for a later retry
-      // while manual dispatch requires the same audited confirmation.
+      // entries the live Worker's journal lacks, the live production ledger
+      // (/up migration_ledger) decides by set inclusion: a ledger holding
+      // every target web entry clears automatic promotion without any manual
+      // dispatch, because db-migrate.yml (target production) applied the
+      // entries out of band. Otherwise automatic promotion stops here, and
+      // manual dispatch stops unless the operator confirms the migrations
+      // were applied out of band with migrations_applied=true. The
+      // confirmation travels in the workflow inputs and is repeated in the
+      // log line below, so the continuation stays audited. A ledger that
+      // cannot be read fails closed with a ledger reason. Unknown live
+      // (unreadable /up) cannot prove pending: the read is retried, then
+      // automatic runs halt for a later retry while manual dispatch requires
+      // the same audited confirmation.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
       }
       const eventName = process.env.GITHUB_EVENT_NAME ?? "";
       const automatic = eventName === "workflow_run" || eventName === "schedule";
+      const origin =
+        (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
       let liveSha = (process.env.LIVE_SHA ?? "").replace(/\s+/g, "").toLowerCase() || null;
       if (!liveSha) {
-        const origin =
-          (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
         for (let attempt = 0; attempt < 3 && !liveSha; attempt += 1) {
           if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
           liveSha = await readLiveProductionCommit({ origin });
@@ -493,24 +594,62 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           `Manual continuation with live production commit unknown after 3 /up reads: db-migrate.yml (target production) must have applied the target's migrations already — proceeding on operator confirmation (migrations_applied=true) for ${deploySha} vs live unknown`,
         );
       } else {
-        const pending = await pendingProductionMigrations({
+        const { target, live } = await productionJournalEntries({
           repository: process.env.GITHUB_REPOSITORY,
           targetSha: deploySha,
           liveSha,
           token: process.env.GITHUB_TOKEN,
         });
+        const pending = pendingMigrationTags(
+          target.map((entry) => entry.tag),
+          live.map((entry) => entry.tag),
+        );
         if (pending.length) {
           if (!automatic && (process.env.MIGRATIONS_APPLIED ?? "") === "true") {
             console.log(
               `Manual continuation with ${pending.length} pending production migration(s) (${pending.join(", ")}): db-migrate.yml (target production) must have applied them already — proceeding on operator confirmation (migrations_applied=true) for ${deploySha} vs live ${liveSha}`,
             );
-          } else if (automatic) {
-            throw new Error(
-              `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
-            );
           } else {
-            throw new Error(
-              `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true — automatic production migration is blocked until the least-privilege migrator lands`,
+            // The live Worker's journal lags the target: ask the live ledger
+            // whether production was already migrated out of band. Equal
+            // journals and manual confirmations never reach this read.
+            let applied;
+            try {
+              applied = await readLiveProductionLedger({ origin });
+            } catch (error) {
+              if (automatic) {
+                throw new Error(
+                  `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); the production ledger read failed (${error.message}), so this promotion stops here — automatic production migration is blocked until the least-privilege migrator lands`,
+                );
+              }
+              throw new Error(
+                `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); the production ledger read failed (${error.message}) — run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
+              );
+            }
+            if (targetWebEndUnknown(target)) {
+              if (automatic) {
+                throw new Error(
+                  `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); a target web entry lacks a usable timestamp, so the production ledger cannot prove it applied — automatic production migration is blocked until the least-privilege migrator lands`,
+                );
+              }
+              throw new Error(
+                `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); a target web entry lacks a usable timestamp, so the production ledger cannot prove it applied — run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
+              );
+            }
+            const ledgerPending = pendingLedgerTags(target, applied);
+            if (ledgerPending.length) {
+              if (automatic) {
+                throw new Error(
+                  `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}); automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
+                );
+              }
+              throw new Error(
+                `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}); run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true — automatic production migration is blocked until the least-privilege migrator lands`,
+              );
+            }
+            const proven = targetWebEntries(target).length;
+            console.log(
+              `Production ledger holds all ${proven} target web migration(s) (applied set of ${applied.length}); clearing ${automatic ? "automatic" : "manual"} promotion for ${deploySha} vs live ${liveSha}`,
             );
           }
         } else {
