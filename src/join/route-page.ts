@@ -1,21 +1,25 @@
 // GET /join (structural split; zero behavior change).
 //
-// The journey page. Database-free leaf like /about: it must stay 200 when
-// everything behind it is down (a 500 here loses the member).
+// The journey page. Outage-proof leaf like /about: it must stay 200 when
+// everything behind it is down (a 500 here loses the member). The one read
+// is the homepage teaser's cached merged-upcoming list, which degrades to
+// no card instead of failing the page.
 import type { Hono } from "hono";
+import { dbFor } from "../admin/db";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
+import { discordEventsSource } from "../events/discord-transients-source";
+import { cachedHomeUpcoming } from "../home-cache";
 import { inviteDestination } from "../invite";
 import { safeNext, sanitizeSource } from "./service";
 import { background, JOIN_START_FAILED_NOTICE, type JoinRender } from "./route-shared";
 
 export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: JoinRender) {
-  app.get("/join", (c) => {
+  app.get("/join", async (c) => {
     // The widget verdict is read, never awaited: a Discord outage or a hung
     // probe swaps the preview link for the static fallback without touching the
     // response path. Re-probes ride waitUntil, so they need an execution
-    // context; without one (local requests) the last verdict stands. No
-    // binding is read here: /join stays a persistence-free leaf.
+    // context; without one (local requests) the last verdict stands.
     const widgetUrl = discordWidgetHealth.url(c.env.DISCORD_GUILD_ID, background(c));
     // The presence snapshot rides the same verdict: it answers from the last
     // background probe and never waits on Discord, so the response path stays
@@ -38,6 +42,18 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // Sanitized like /discord and the join callback: a bad
     // DISCORD_INVITE_URL renders the hardcoded fallback, never a dead,
     // relative or hostile href.
+    // The next-game-night card reuses the homepage teaser's merged read
+    // (same helper, same cache entry, same deadline/degrade contract): one
+    // list select plus its batched aggregates, never per-row reads. Only the
+    // soonest row renders; an empty or unreadable schedule is null, which
+    // renders the page exactly as before. The read never throws, so /join
+    // stays 200 when the database or Discord is down.
+    const homeUpcoming = await cachedHomeUpcoming(
+      c.env,
+      () => dbFor(c),
+      () => discordEventsSource(c.env),
+      new Date(),
+    );
     return render.joinPage(c, {
       inviteUrl: inviteDestination(c.env.DISCORD_INVITE_URL),
       widgetUrl,
@@ -46,6 +62,7 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
       source,
       appUrl: c.env.APP_URL,
       notice,
+      nextEvent: homeUpcoming.items[0] ?? null,
     });
   });
 }

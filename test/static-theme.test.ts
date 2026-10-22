@@ -4,7 +4,11 @@ import type { Env } from "../src/env";
 import { POLICY_MARKDOWN } from "../src/privacy-content";
 import { renderPolicyMarkdown } from "../src/privacy";
 
-const paths = ["/about", "/faq", "/rules", "/privacy", "/join"] as const;
+// /join is not listed here: it renders the next-game-night card from the
+// homepage teaser's cached merged read, so unlike these static leaves it may
+// touch the event binding. Its shell assertions live in the dedicated test
+// below, without the no-binding-read pin.
+const paths = ["/about", "/faq", "/rules", "/privacy"] as const;
 const env: Env = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "fixture",
@@ -55,42 +59,57 @@ it.each(paths)(
     expect(readStore).not.toHaveBeenCalled();
     expect(response.headers.getSetCookie()).toHaveLength(0);
     const html = await response.text();
-    expect(html).toContain(
-      `<body class="base-theme ${path === "/join" ? "join" : "content"}-theme"><a class="skip-link"`,
-    );
-    if (path === "/join") {
-      expect(html).toContain('rel="stylesheet" href="/theme.css"');
-    } else {
-      // Content leaves inline the stylesheets: no render-blocking CSS
-      // requests, with the real rules verifiable inside the style block.
-      expect(html).toContain("<style>");
-      expect(html).toContain(".content-page");
-      expect(html).not.toContain('rel="stylesheet"');
-    }
-    // Only the join shell still preloads Display; content
-    // leaves render no Display text so they preload no font.
-    if (path === "/join") {
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
-    } else {
-      expect(html).not.toContain('.woff2" as="font"');
-    }
+    expect(html).toContain('<body class="base-theme content-theme"><a class="skip-link"');
+    // Content leaves inline the stylesheets: no render-blocking CSS
+    // requests, with the real rules verifiable inside the style block.
+    expect(html).toContain("<style>");
+    expect(html).toContain(".content-page");
+    expect(html).not.toContain('rel="stylesheet"');
+    // Content leaves render no Display text so they preload no font.
+    expect(html).not.toContain('.woff2" as="font"');
     expect(html).toContain('class="bar site-header"');
     expect(html).toContain('src="/logo.svg" width="64" height="64"');
     expect(html).toContain('aria-label="Primary"');
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);
     expect(html).not.toContain('<meta name="robots"');
-    expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual(
-      path === "/join" ? ['<script src="/islands/join-widget.js" defer="">'] : [],
-    );
+    expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual([]);
     expect(html).not.toContain('action="/logout"');
-    if (path !== "/join") {
-      expect(html).toContain(`<a href="${path}" aria-current="page">`);
-      expect(html).not.toContain("<iframe");
-      expect(response.headers.get("content-security-policy")).toContain("frame-src 'none'");
-    }
+    expect(html).toContain(`<a href="${path}" aria-current="page">`);
+    expect(html).not.toContain("<iframe");
+    expect(response.headers.get("content-security-policy")).toContain("frame-src 'none'");
   },
 );
+
+it("/join shares the base theme", async () => {
+  // The no-binding-read pin above does not apply here: /join renders the
+  // next-game-night card from the homepage teaser's cached merged read. With
+  // no binding configured the read degrades to today's static page, which is
+  // what this env asserts: same shell, no session, no event content.
+  const response = await app.request(
+    "/join",
+    { headers: { cookie: "__Host-two_session=forged" } },
+    env,
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.getSetCookie()).toHaveLength(0);
+  const html = await response.text();
+  expect(html).toContain('<body class="base-theme join-theme"><a class="skip-link"');
+  expect(html).toContain('rel="stylesheet" href="/theme.css"');
+  // Only the join shell still preloads Display.
+  expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+  expect(html).toContain('class="bar site-header"');
+  expect(html).toContain('src="/logo.svg" width="64" height="64"');
+  expect(html).toContain('aria-label="Primary"');
+  expect(html).toContain('aria-label="Site"');
+  expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}/join"`);
+  expect(html).not.toContain('<meta name="robots"');
+  expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual([
+    '<script src="/islands/join-widget.js" defer="">',
+  ]);
+  expect(html).not.toContain('action="/logout"');
+  expect(html).not.toContain('data-testid="join-next-event"');
+});
 
 it("keeps versioned privacy HTML and the rules date unchanged inside the content shell", async () => {
   const privacy = await (await app.request("/privacy", {}, env)).text();

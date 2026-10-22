@@ -609,7 +609,8 @@ registerSeoLeaves(app);
 // above link out with `rel=alternate` and staging noindexes the .md surface.
 registerAiFriendlyRoutes(app);
 
-// The one-click join journey (W6: TOG-9685). /join is the database-free page;
+// The one-click join journey (W6: TOG-9685). /join is the outage-proof page
+// (its one read, the teaser's cached upcoming list, degrades to no card);
 // /join/discord + /join/callback run the throttled OAuth round trip with the
 // synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
 // set; without it the journey degrades to no persistence (never a 500).
@@ -645,6 +646,7 @@ registerJoinRoutes(
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
           notice={props.notice}
+          nextEvent={props.nextEvent ?? null}
         />,
       );
     },

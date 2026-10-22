@@ -1,5 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { cardTimeLabel, isValidZone } from "../../../../src/islands/contracts";
 import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -11,7 +12,8 @@ import type { PageProps } from "./$types";
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
 // The server load builds /join/discord from the sanitized query inputs.
-const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult } = $derived(data);
+const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult, nextEvent } =
+  $derived(data);
 const { HOME_JOIN_RESULT_COPY, JOIN_INTRO } = $derived(data.joinCopy);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
@@ -117,4 +119,39 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       {/if}
     </div>
   </section>
+  <!-- The next game night: same block, copy and testids as the Hono screen
+    (src/screens/join.tsx). The load carries the teaser's soonest merged row
+    as nextEvent; null renders nothing, so an empty or unreadable schedule
+    is byte-identical to the page without this block. Discord-source rows
+    keep the invite link like the homepage teaser. -->
+  {#if nextEvent}
+    <section
+      data-testid="join-next-event"
+      data-source={nextEvent.source}
+      aria-labelledby="join-next-event-heading"
+    >
+      <h2 id="join-next-event-heading">Next game night</h2>
+      <a
+        class="join-next-event-link"
+        href={nextEvent.source === "discord"
+          ? inviteUrl
+          : `/e/${encodeURIComponent(nextEvent.eventKey)}`}
+        data-testid={nextEvent.source === "discord"
+          ? "join-next-event-discord"
+          : "join-next-event-link"}
+      >
+        <p>
+          <time data-testid="join-next-event-time" datetime={nextEvent.startsAt.toISOString()}>
+            {cardTimeLabel(nextEvent.startsAt, nextEvent.timezone)} ({isValidZone(
+              nextEvent.timezone,
+            )
+              ? nextEvent.timezone
+              : "UTC"})
+          </time>
+        </p>
+        <h3 data-testid="join-next-event-title">{nextEvent.title}</h3>
+        <p data-testid="join-next-event-venue">{nextEvent.location ?? "Online"}</p>
+      </a>
+    </section>
+  {/if}
 </Shell>

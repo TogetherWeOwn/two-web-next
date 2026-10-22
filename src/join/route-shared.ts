@@ -128,6 +128,10 @@ export type JoinPageProps = {
   // request carried exactly that ?notice= value; otherwise null and the
   // page renders plain. Display-only: never echoed into the one-click href.
   notice?: typeof JOIN_START_FAILED_NOTICE | null;
+  // The soonest merged upcoming row (the homepage teaser's read, first item)
+  // or null when the schedule is empty or unreadable. Absent/null renders
+  // the page exactly as before (no hollow card); public fields only.
+  nextEvent?: import("../events/reads").HomeUpcomingRow | null;
 };
 export type RecoveryProps = {
   title: string;
