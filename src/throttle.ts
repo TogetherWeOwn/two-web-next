@@ -105,6 +105,43 @@ function exceptionClass(err: unknown): string {
   return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
 }
 
+const THROTTLE_REFUSAL_LOG_BURST = 20;
+const THROTTLE_REFUSAL_LOG_REFILL_MS = 3_000;
+let refusalLogTokens = THROTTLE_REFUSAL_LOG_BURST;
+let lastRefusalLogRefill = 0;
+
+// Fixed-size isolate state, no client keys or timers. Consume synchronously
+// just before logging so concurrent refusals cannot overspend the budget.
+// Same shape as takeCspLogToken (src/csp-reports.ts): a 429 storm must stay
+// visible in logs without letting the storm dictate log volume.
+function takeThrottleRefusalLogToken(): boolean {
+  const now = Date.now();
+  const elapsed = Math.max(0, now - lastRefusalLogRefill);
+  refusalLogTokens = Math.min(
+    THROTTLE_REFUSAL_LOG_BURST,
+    refusalLogTokens + elapsed / THROTTLE_REFUSAL_LOG_REFILL_MS,
+  );
+  lastRefusalLogRefill = Math.max(lastRefusalLogRefill, now);
+  if (refusalLogTokens < 1) return false;
+  refusalLogTokens -= 1;
+  return true;
+}
+
+// Bounded shed signal: at most one warn per refill window, fixed keys only,
+// no request content. Counts log-budget drops since the previous shed emit so
+// operators can tell a shedding guard from a quiet one without flooding.
+let refusalShedDropped = 0;
+let lastRefusalShedEmit = 0;
+function warnThrottleRefusalShed(): void {
+  refusalShedDropped += 1;
+  const now = Date.now();
+  if (now - lastRefusalShedEmit < THROTTLE_REFUSAL_LOG_REFILL_MS) return;
+  lastRefusalShedEmit = now;
+  const dropped = refusalShedDropped;
+  console.warn("throttle.refused.shed", { dropped });
+  refusalShedDropped -= dropped;
+}
+
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
   c: Context<{ Bindings: Env }>,
@@ -127,7 +164,15 @@ export async function throttleGuard(
       });
       return { limited: false } as const;
     });
-  return verdict.limited ? await rateLimitExceeded(c, verdict.retryAfter) : null;
+  if (!verdict.limited) return null;
+  // Refusal telemetry: route class + outcome only — never the "<name>:<client>"
+  // bucket (the client segment is a member IP), never body bytes. One site
+  // covers the middleware and in-handler forms, over-budget and busy-path
+  // verdicts alike; the 429 itself is unchanged.
+  if (takeThrottleRefusalLogToken())
+    console.warn("throttle.refused", { throttle: name, outcome: "rate_limited" });
+  else warnThrottleRefusalShed();
+  return rateLimitExceeded(c, verdict.retryAfter);
 }
 
 /**

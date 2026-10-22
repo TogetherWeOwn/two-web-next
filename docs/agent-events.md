@@ -40,9 +40,10 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   per credential hash (anonymous per IP) before auth and the audit write; refused hits write no hit row.
   Over-budget 429s audit on a ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE`): each sampled row carries the
   refusal's own request_id, bucket class only (credential sha256 vs anonymous marker, never raw identity),
-  `denied`/`rate_limited`. Every refusal increments an in-memory per-class counter surfaced on the sampled
-  `agent-events.shield.refusal_sampled` warn (`bucket_class`, running `refusals`, `request_id`); to estimate
-  flood volume, multiply sampled rows by ~100 or read the latest warn count. Grantless (missing/unknown
+  `denied`/`rate_limited`. Every refusal increments an in-memory per-class counter and takes a token from
+  the isolate's log bucket: on success it warns `agent-events.shield.refused` (`bucket_class`, `outcome`),
+  otherwise it folds into the bounded `agent-events.shield.refused.shed` signal (`dropped` count); to estimate
+  flood volume, multiply sampled rows by ~100 or sum refused warns plus shed drops. Grantless (missing/unknown
   grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s keep an exact audit.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
