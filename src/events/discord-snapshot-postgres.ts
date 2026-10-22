@@ -97,8 +97,19 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
     }
   };
   return {
-    claim: (key) =>
-      run(key, async (tx, check) => {
+    claim: (key) => {
+      // Armed immediately before the admission UPDATE/INSERT and cleared when
+      // it succeeds. A 55P03 while armed means another claimant holds the row
+      // lock past our lock_timeout, so the race is lost, not failed. The
+      // transaction is aborted, so the loss returns this already-read view
+      // instead of re-reading (any query in the aborted transaction would fail
+      // with 25P02, and a fresh transaction would double the store opens the
+      // race test pins to one). 55P03 anywhere else — the initial read, the
+      // capacity path — still throws, preserving the lock-cancellation pin.
+      let contentionFallback:
+        | (SnapshotView & { exists: boolean; nowQueryStartedAt: number })
+        | null = null;
+      return run(key, async (tx, check) => {
         let initial = await read(tx, key);
         check();
         if (refreshHeld(initial)) return { ...initial, token: null };
@@ -134,6 +145,7 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
         // https://www.postgresql.org/docs/17/sql-insert.html#SQL-ON-CONFLICT
         // Anchor before the same RETURNING clock sample; never strand a lease on a second query.
         const nowQueryStartedAt = performance.now();
+        contentionFallback = initial;
         const [claimed] = initial.exists
           ? await tx`
         update discord_event_snapshots set lease_token = ${token}::uuid,
@@ -152,13 +164,23 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
           and discord_event_snapshots.retry_at <= clock_timestamp()
           and coalesce(discord_event_snapshots.lease_expires_at, '-infinity'::timestamptz) <= clock_timestamp()
         returning payload, succeeded_at, retry_at, lease_expires_at, clock_timestamp() as now`;
+        contentionFallback = null;
         check();
         return {
           ...(claimed ? view(claimed) : await read(tx, key)),
           token: claimed ? token : null,
           ...(claimed ? { nowQueryStartedAt } : {}),
         };
-      }),
+      }).catch((err: unknown) => {
+        const fallback = contentionFallback;
+        contentionFallback = null;
+        // Contended admission only: without an armed fallback this is a lock
+        // wait elsewhere (initial read, capacity) and must keep throwing.
+        if (fallback && (err as { code?: string }).code === "55P03")
+          return { ...fallback, token: null };
+        throw err;
+      });
+    },
     complete: (key, token, result: SnapshotCompletion) =>
       run(key, async (tx, check) => {
         const payload = "payload" in result ? JSON.parse(result.payload) : null;
