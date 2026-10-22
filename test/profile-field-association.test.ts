@@ -36,7 +36,9 @@ describe("profile SSR field association", () => {
     expect(html).toContain('id="profile-bio"');
     expect(html).toContain('id="profile-bio-error"');
     expect(html).toContain('aria-invalid="true"');
-    expect(html).toContain('aria-describedby="profile-bio-error"');
+    expect(html).toContain(
+      'aria-describedby="profile-bio-hint profile-bio-count profile-bio-error"',
+    );
     expect(html).toContain('href="#profile-bio"');
     expect(html).toContain("Keep your bio to 1000 characters or fewer.");
   });
@@ -45,7 +47,9 @@ describe("profile SSR field association", () => {
     const html = render({ games: "Keep each game name to 80 characters or fewer." });
     expect(html).toContain('id="profile-games-text"');
     expect(html).toContain('id="profile-games-text-error"');
-    expect(html).toContain('aria-describedby="profile-games-text-error"');
+    expect(html).toContain(
+      'aria-describedby="profile-games-text-hint profile-games-text-count profile-games-text-error"',
+    );
     expect(html).toContain('href="#profile-games-text"');
     expect(html).toContain("Keep each game name to 80 characters or fewer.");
     expect(html).not.toContain('id="profile-games-error"');

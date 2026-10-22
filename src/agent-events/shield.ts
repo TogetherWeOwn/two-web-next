@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import type { Answer, IngressConfig } from "./types";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 import { pruneAgentEventHits } from "./prune-hits";
 import { throttleEnvelope } from "./rate-limit";
 
@@ -92,11 +93,11 @@ export async function shield(
       await audit(sql, null, "unknown", null, null, null, requestId, "error", "operation_busy");
       return {
         status: 503,
-        body: {
-          reason: "operation_busy",
-          message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "operation_busy",
+          "The ingress is busy admitting requests. Retry with the same idempotency key.",
+          requestId,
+        ),
       };
     }
     throw err;
@@ -134,11 +135,11 @@ export async function shield(
       if (code === "55P03" || code === "57014") {
         return {
           status: 503,
-          body: {
-            reason: "operation_busy",
-            message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
-            request_id: requestId,
-          },
+          body: ingressDenial(
+            "operation_busy",
+            "The ingress is busy admitting requests. Retry with the same idempotency key.",
+            requestId,
+          ),
         };
       }
       throw err;

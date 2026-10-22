@@ -395,8 +395,11 @@ describe("agent-events failures carry a named exception", () => {
     const response = await app.request(request, undefined, ingressEnv, ctx);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
+      code: "internal_error",
       reason: "internal_error",
       message: "The agent event ingress failed.",
+      request_id: expect.any(String),
+      next: "Retry shortly; report if it persists.",
     });
 
     const lines = errorsFor(AGENT_FAILED);
@@ -420,8 +423,11 @@ describe("agent-events failures carry a named exception", () => {
     const response = await app.request(request, undefined, ingressEnv, ctx);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
+      code: "internal_error",
       reason: "internal_error",
       message: "The agent event ingress failed.",
+      request_id: expect.any(String),
+      next: "Retry shortly; report if it persists.",
     });
 
     const lines = errorsFor(AGENT_FAILED);
@@ -452,7 +458,13 @@ describe("agent-events failures carry a named exception", () => {
     expect(response.status).toBe(500);
     expect(seen).toEqual([
       {
-        body: { reason: "internal_error", message: "The agent event ingress failed." },
+        body: {
+          code: "internal_error",
+          reason: "internal_error",
+          message: "The agent event ingress failed.",
+          request_id: "test-request-id-acceptance",
+          next: "Retry shortly; report if it persists.",
+        },
         status: 500,
       },
     ]);
