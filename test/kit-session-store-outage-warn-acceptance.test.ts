@@ -34,6 +34,7 @@ import {
   hashToken,
   newSessionToken,
   type SessionStore,
+  type Sql,
 } from "../src/sessions";
 import { kitEventsSessionFor, kitSessionBridge, resolveRequestSession } from "../src/kit-session";
 import type { HookEventLike } from "../src/route-ownership";
@@ -58,7 +59,21 @@ const KIT_EVENTS_DOWN = "kit events session store unavailable";
 const AUTH_STATUS_ROUTE = "/auth/status";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
-const baseEnv: Env = {
+/** An admitting budget store: GET /auth/status passes the shared read guard (which warns when no store is bound) so only the session-store legs under test write a line. */
+const admittingThrottleSql = Object.assign(
+  async (strings: TemplateStringsArray, ..._values: unknown[]) => {
+    const statement = strings.join("?");
+    if (statement.includes("SELECT count(*)")) return [{ n: 0, wait: 0 }];
+    return [];
+  },
+  {
+    begin: (run: (tx: Sql) => Promise<unknown>) => run(admittingThrottleSql as unknown as Sql),
+    unsafe: async () => [],
+  },
+) as unknown as Sql;
+
+const baseEnv = {
+  THROTTLE_STORE: async () => admittingThrottleSql,
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "client-id",
   DISCORD_GUILD_ID: "326474832151838730",
@@ -66,7 +81,7 @@ const baseEnv: Env = {
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET,
-};
+} as Env;
 
 const isolated = () => {
   const store = createMemorySessionStore();
