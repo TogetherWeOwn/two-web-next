@@ -183,7 +183,15 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
       });
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(init.location);
-      expect(res.headers.getSetCookie()).toEqual([]);
+      // The genuine bounce arms its own pending notice for the recovery
+      // destination; the landing below mints nothing further.
+      const armed = res.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+      expect(armed).toHaveLength(1);
+      const pair = armed[0]!.split(";")[0]!;
+      const payload = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(".")[0]!);
+      expect(payload).toBe(`pending|${decodeURIComponent(init.location.split("next=")[1]!)}`);
     }
     expect(f.state.writes).toBe(0);
     expect(f.profiles.rows.get(MEMBER)?.bio).toBe("Accepted bio");
@@ -199,20 +207,26 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
     try {
       const f = recoveryFixture();
       const dead = await f.login(new Date(0));
+      // A native form POST: the genuine bounce arms pending| itself (a JSON
+      // 401 or a bare landing visit arms nothing).
       const bounce = await f.request(`/members/${MEMBER}`, {
-        method: "PATCH",
+        method: "POST",
         headers: {
           cookie: dead.cookie,
           origin: f.env.APP_URL,
-          "content-type": "application/json",
-          accept: "application/json",
+          referer: `${f.env.APP_URL}/profile?edit=1`,
+          "content-type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({ bio: DRAFT_INPUT }),
+        body: `_method=PATCH&bio=${encodeURIComponent(DRAFT_INPUT)}`,
       });
-      expect(bounce.status).toBe(401);
-      const recovery = (await bounce.json()) as { recovery: string };
+      expect(bounce.status).toBe(303);
+      const location = bounce.headers.get("location")!;
+      expect(location).toBe("/auth/recover?next=%2Fprofile%3Fedit%3D1");
 
-      let jar = mergeCookies("", await f.request(recovery.recovery));
+      let jar = mergeCookies("", bounce);
+      const landing = await f.request(location, { headers: { cookie: jar } });
+      expect(landing.status).toBe(200);
+      jar = mergeCookies(jar, landing);
       expect(jar).not.toContain("Unsaved");
       const start = await f.request("/auth/discord?next=%2Fprofile%3Fedit%3D1", {
         headers: { cookie: jar },
@@ -280,7 +294,16 @@ describe("admin: every POST bounces on a dead session with no write and no echo"
       });
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(`/auth/recover?next=${encodeURIComponent(next)}`);
-      expect(res.headers.getSetCookie()).toEqual([]);
+      // The genuine bounce arms its own pending notice for the mapped GET
+      // form page (never the write URL, never the submitted draft).
+      const armed = res.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+      expect(armed).toHaveLength(1);
+      const pair = armed[0]!.split(";")[0]!;
+      const payload = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(".")[0]!);
+      expect(payload).toBe(`pending|${next}`);
+      expect(payload).not.toContain("Unsaved");
       expect(res.headers.get("location")).not.toContain("Unsaved");
     },
   );

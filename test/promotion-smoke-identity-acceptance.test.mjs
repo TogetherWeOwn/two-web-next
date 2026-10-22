@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SECURITY_TXT_EXPIRES } from "../bin/smoke.mjs";
+import { SMOKE_PROBE_KEY, SMOKE_SECURITY_TXT_EXPIRES } from "../bin/smoke.mjs";
 
 // Acceptance: the post-promotion verification proves the promoted UUID serves
 // ordinary traffic, not just healthy content from an unwanted version.
@@ -56,7 +56,7 @@ const healthyOpenApi = JSON.stringify({
 const fixtures = {
   "/up": [200, "application/json", healthyUp(PROMOTED)],
   "/api/public/events": [200, "application/json", healthyCollection],
-  "/api/public/events/00000000000000000000000001": [
+  [`/api/public/events/${SMOKE_PROBE_KEY}`]: [
     404,
     "application/json",
     '{"error":{"code":"not_found","message":"No published event with that key."}}',
@@ -108,7 +108,7 @@ const fixtures = {
   // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
   // no database, so like the real handler's notFound() the stub answers the
   // branded missing-event page.
-  "/e/00000000000000000000000001": [
+  [`/e/${SMOKE_PROBE_KEY}`]: [
     404,
     "text/html",
     "<title>We cannot find that page — Together We Own</title>",

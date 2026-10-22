@@ -4,8 +4,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 
-export const STAGING_URL = "https://next.togetherweown.com";
+export const STAGING_URL = STAGING_ORIGIN;
 export const ALERT_PROBE_HEADER = "X-TWO-Alert-Probe";
 const PROBE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const PROBE_FINGERPRINT = createHash("sha256")
