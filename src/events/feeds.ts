@@ -264,3 +264,11 @@ export function googleCalendarUrl(e: EventRow): string {
   if (e.location) params.push(["location", e.location]);
   return `https://calendar.google.com/calendar/render?${params.map(([k, v]) => `${q(k)}=${q(v)}`).join("&")}`;
 }
+
+/** Google Maps Universal URL for a venue: api version plus the venue query,
+ * nothing else. The venue is untrusted text; RFC3986 encoding keeps quotes,
+ * ampersands and markup inside the single query value. Both renderers share
+ * this helper so the served hrefs are byte-identical. */
+export function directionsUrl(venue: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${q(venue)}`;
+}
