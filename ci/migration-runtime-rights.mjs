@@ -32,6 +32,11 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.web_throttle_hits": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_sessions": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_oauth_journeys": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  // Overlay tokens: the store mints (INSERT), rotates/revokes (UPDATE),
+  // resolves with telemetry (SELECT + UPDATE) and prunes aged history
+  // (DELETE). Configs are member-upserted only; nothing deletes them.
+  "public.overlay_tokens": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  "public.overlay_configs": ["INSERT", "SELECT", "UPDATE"],
 });
 
 export const SEQUENCE_RIGHTS = Object.freeze(

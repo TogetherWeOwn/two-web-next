@@ -132,6 +132,10 @@
     {
       "path": "drizzle/1032_event-public-join-details.sql",
       "sha256": "221bcc30d0b183ccc1e4b7b72d9bb90cd97a4dd323ec829c7ca92151567a69fd"
+    },
+    {
+      "path": "drizzle/1033_overlay.sql",
+      "sha256": "0aaa21e81d6c40238e52e260c04549b92036a21bfd2c0fb7ceb0b2539f3e02e7"
     }
   ]
 }
