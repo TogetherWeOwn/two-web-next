@@ -21,6 +21,7 @@
 
 import type { Context } from "hono";
 import type { Env } from "./env";
+import { warnInvalidConfigOnce } from "./config-warn";
 import { readCappedBody } from "./csp-report-body";
 import { redactCspReportUri } from "./csp-report-uri";
 
@@ -110,12 +111,16 @@ export function cspReportLogFields(report: CspReportFields): {
  * `CSP_REPORT_SAMPLE_RATE` (default 1.0). Out-of-range values clamp; a
  * missing or unparseable value falls back to 1.0. Deliberate divergence from
  * legacy: PHP's `(float)` cast turns a typo'd value into 0.0 (silently blinds
- * the sink); here a typo keeps logging and the operator sees the reports.
+ * the sink); here a typo warns once per isolate, keeps logging, and the
+ * operator sees the reports.
  */
 export function parseCspSampleRate(raw: string | undefined): number {
   if (raw === undefined) return 1.0;
   const rate = Number.parseFloat(raw);
-  if (!Number.isFinite(rate)) return 1.0;
+  if (!Number.isFinite(rate)) {
+    if (raw.trim() !== "") warnInvalidConfigOnce("CSP_REPORT_SAMPLE_RATE", raw);
+    return 1.0;
+  }
   return Math.min(1, Math.max(0, rate));
 }
 

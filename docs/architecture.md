@@ -270,6 +270,7 @@ exactly once.
 | `src/auth-status.ts` | auth |
 | `src/body-limit.ts` | http-guard |
 | `src/bot/` | bot |
+| `src/config-warn.ts` | observability |
 | `src/counts.ts` | content |
 | `src/csp-report-body.ts` | http-guard |
 | `src/csp-report-uri.ts` | http-guard |

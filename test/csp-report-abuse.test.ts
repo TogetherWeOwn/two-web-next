@@ -233,8 +233,13 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       ),
     );
     for (const res of responses) await expectFunnel(res);
-    expect(warn).toHaveBeenCalledTimes(21);
+    // 21 log-budget lines (20 bucket + 1 shed) plus the once-per-isolate
+    // warn for the "typo" sample rate, which sits outside the log budget.
+    expect(warn).toHaveBeenCalledTimes(22);
     expectShedLines(warn, 1);
+    expect(
+      warn.mock.calls.filter((call) => JSON.stringify(call).includes("CSP_REPORT_SAMPLE_RATE")),
+    ).toHaveLength(1);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.violation")).toBe(true);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.dropped_oversize")).toBe(true);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);

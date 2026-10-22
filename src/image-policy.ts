@@ -1,6 +1,8 @@
 // Shared by featured-image validation and CSP: exact HTTPS hosts, never
 // wildcards or user-supplied CSP source expressions. Discord avatars retain
 // their existing CDN permission even when no featured hosts are configured.
+import { warnInvalidConfigOnce } from "./config-warn";
+
 const DISCORD_IMAGE_HOST = "cdn.discordapp.com";
 const PRIVATE_SUFFIXES = [
   "localhost",
@@ -28,12 +30,14 @@ function isPublicHostname(host: string): boolean {
   return labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
-/** Additional approved DNS hosts, comma-separated. Invalid entries fail closed. */
+/** Additional approved DNS hosts, comma-separated. Invalid entries fail closed with a once-per-isolate warn. */
 export function imageHosts(configured?: string): string[] {
   const hosts = new Set([DISCORD_IMAGE_HOST]);
   for (const entry of (configured ?? "").split(",")) {
     const host = entry.trim().toLowerCase();
+    if (host === "") continue;
     if (isPublicHostname(host)) hosts.add(host);
+    else warnInvalidConfigOnce("FEATURED_IMAGE_HOSTS", entry.trim());
   }
   return [...hosts];
 }

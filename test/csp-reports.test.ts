@@ -255,7 +255,13 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const res = await post(classicBody(), { ...env, CSP_REPORT_SAMPLE_RATE: "typo" });
     expect(res.status).toBe(204);
-    expect(warn).toHaveBeenCalledTimes(1);
+    // The violation still logs, and the typo itself warns once per isolate.
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "csp.report.violation",
+      expect.objectContaining({ blocked_uri: "inline" }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).toContain("CSP_REPORT_SAMPLE_RATE");
   });
 
   it("selects the Reporting API endpoint in the CSP and drops the deprecated report-uri", async () => {

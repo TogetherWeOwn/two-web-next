@@ -62,6 +62,7 @@ jobs:
             "src/admin/routes.tsx" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/config-warn.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
