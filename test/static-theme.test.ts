@@ -97,7 +97,7 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
   expect(privacy).toContain(
     `<div data-testid="privacy-policy">${renderPolicyMarkdown(POLICY_MARKDOWN)}</div>`,
   );
-  expect(privacy).toContain('data-testid="privacy-version">Version 5');
+  expect(privacy).toContain('data-testid="privacy-version">Version 6');
   const rules = await (await app.request("/rules", {}, env)).text();
   expect(rules).toContain('<time datetime="2026-09-01">1 September 2026</time>');
   expect(rules.match(/<li class="card">/g)).toHaveLength(5);
@@ -141,10 +141,13 @@ it.each(["/events"])(
   async (path) => {
     // The schedule opts into its own theme (base-theme schedule-theme), covered
     // with local fixtures in page-shells.test.ts; it never borrows the content shell.
+    // The no-database refusal is the shared branded 503 (homepage-theme error
+    // shell), which ships the shared theme stylesheet like every branded error page.
     const response = await app.request(path, {}, env);
     expect(response.status).toBe(503);
     const html = await response.text();
     expect(html).not.toContain("content-theme");
-    expect(html).not.toContain('href="/theme.css"');
+    expect(html).toContain('id="error-heading"');
+    expect(html).toContain("We will be right back");
   },
 );

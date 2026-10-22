@@ -225,6 +225,7 @@ describe("Kit home SSR render: independently degraded panels", () => {
             timezone: "Europe/London",
             location: null,
             goingCount: 3,
+            capacity: null,
           },
         ],
       }),
@@ -259,5 +260,76 @@ describe("Kit home SSR render: one escaped structured-data block and one head id
     const html = renderPage(baseData());
     expect(html.match(/rel="canonical"/g)).toHaveLength(1);
     expect(html.match(/property="og:url"/g)).toHaveLength(1);
+  });
+});
+
+function fullnessEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    source: "canonical",
+    eventKey: "game-night-1",
+    title: "Game night",
+    startsAt: new Date(Date.UTC(2030, 6, 20, 19, 0, 0)),
+    timezone: "Europe/London",
+    location: null,
+    goingCount: 1,
+    goingOccupancy: 1,
+    capacity: 4,
+    ...overrides,
+  };
+}
+
+/** The one teaser row linking `key`, so a sibling's marker cannot satisfy the pin. */
+function fullnessRow(html: string, key: string): string {
+  const hit = html.split('<li class="card"').find((chunk) => chunk.includes(`/e/${key}"`));
+  if (!hit) throw new Error(`no teaser row for ${key}`);
+  return hit.split("</li>")[0]!;
+}
+
+describe("Kit home SSR render: teaser fullness verdict (owned pins)", () => {
+  it("marks a teaser row full from occupancy even when the named count has room", () => {
+    // One nameless going row holds the last seat: the verdict reads
+    // occupancy, never the attributable count alone, so the Kit teaser
+    // matches the Hono teaser, the card and the detail lineup.
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [fullnessEvent({ goingCount: 1, goingOccupancy: 2, capacity: 2 })],
+      }),
+    );
+    const row = fullnessRow(html, "game-night-1");
+    expect(row).toContain("1 of 2 going");
+    expect(row).toContain('data-testid="event-spots-left"');
+    expect(row).toContain(">Full<");
+  });
+
+  it("leaves an open capped teaser row unmarked: count only, no marker node", () => {
+    // Kills the dropped-verdict mutant (capacity check without the >=
+    // comparison renders "3 of 4 spots left" on this row), and the full
+    // sibling proves the negative is scoped, not vacuous.
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          fullnessEvent({ eventKey: "open-night", goingCount: 1, goingOccupancy: 1, capacity: 4 }),
+          fullnessEvent({ eventKey: "full-night", goingCount: 2, goingOccupancy: 2, capacity: 2 }),
+        ],
+      }),
+    );
+    expect(fullnessRow(html, "full-night")).toContain(">Full<");
+    const row = fullnessRow(html, "open-night");
+    expect(row).toContain("1 of 4 going");
+    expect(row).not.toContain("event-spots-left");
+  });
+
+  it("falls back to the named count for older fixtures without occupancy", () => {
+    // The live load always projects occupancy; hand-built rows predating it
+    // keep the old verdict instead of crashing (the GoingCountState
+    // occupancy precedent). The acceptance Kit suite relies on this.
+    const { goingOccupancy: _dropped, ...older } = fullnessEvent({
+      goingCount: 2,
+      capacity: 2,
+    });
+    const html = renderPage(baseData({ upcomingEvents: [older] }));
+    const row = fullnessRow(html, "game-night-1");
+    expect(row).toContain("2 of 2 going");
+    expect(row).toContain(">Full<");
   });
 });

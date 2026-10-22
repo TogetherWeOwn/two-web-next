@@ -1,6 +1,7 @@
 // WARN-first, DB-free subset of the nightly signal. No configurable inventory:
 // exactly R4–R7 + W1–W3, sharing nightly anchors and targeted/hash-verified restore.
-// Exit 0: completed report (survivors are coverage gaps); 1: infrastructure error.
+// Exit 0: completed report (survivors are coverage gaps); 1: infrastructure error;
+// 2: usage error (bad argv refuses before any report side effect).
 // CI keeps both outcomes advisory and preserves JSON, Markdown and Vitest reports.
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -201,9 +202,11 @@ export function runFocused(root, { kill, argumentError } = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  process.exitCode = runFocused(root, {
-    argumentError:
-      process.argv.length > 2 ? "Usage: node ci/mutation-roles-wall-time.mjs (no options)" : null,
-  });
+  if (process.argv.length > 2) {
+    console.error("Usage: node ci/mutation-roles-wall-time.mjs (no options)");
+    process.exitCode = 2;
+  } else {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    process.exitCode = runFocused(root);
+  }
 }
