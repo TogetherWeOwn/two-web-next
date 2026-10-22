@@ -103,40 +103,45 @@ export async function loadJoinsGrid(
       inWindow ? gte(events.startsAt, inWindow.start) : undefined,
       inWindow ? lt(events.startsAt, inWindow.end) : undefined,
     );
-  const { buckets, eventCount, gatherings } = await db.transaction(async (tx) => {
-    // SET LOCAL takes a literal, not a bind param; the value is the numeric
-    // constant above, so there is no injection surface.
-    await tx.execute(
-      sql.raw(`SET LOCAL statement_timeout = '${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms'`),
-    );
-    const buckets = await tx
-      .select({ dow, hr, n: sql`count(*)::int` })
-      .from(joinAttempts)
-      .leftJoin(profiles, eq(profiles.userId, joinAttempts.discordId))
-      .where(
-        and(
-          inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
-          or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
-          inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
-          inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
-        ),
-      )
-      .groupBy(dow, hr);
-    const counted = await tx
-      .select({ n: sql`count(*)::int` })
-      .from(events)
-      .where(publishedInWindow());
-    // The bounded list behind the count: the same filter, soonest first
-    // (ties by key), capped at HOTZONE_GATHERINGS_LIMIT. One extra read, no
-    // per-row queries; the events_status_starts_at_idx index answers it.
-    const gatherings = await tx
-      .select({ eventKey: events.eventKey, title: events.title, startsAt: events.startsAt })
-      .from(events)
-      .where(publishedInWindow())
-      .orderBy(asc(events.startsAt), asc(events.eventKey))
-      .limit(HOTZONE_GATHERINGS_LIMIT);
-    return { buckets, eventCount: Number(counted[0]?.n ?? 0), gatherings };
-  });
+  // Count and list must see one snapshot even if a gathering is published
+  // or cancelled between their reads; READ COMMITTED snapshots per statement.
+  const { buckets, eventCount, gatherings } = await db.transaction(
+    async (tx) => {
+      // SET LOCAL takes a literal, not a bind param; the value is the numeric
+      // constant above, so there is no injection surface.
+      await tx.execute(
+        sql.raw(`SET LOCAL statement_timeout = '${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms'`),
+      );
+      const buckets = await tx
+        .select({ dow, hr, n: sql`count(*)::int` })
+        .from(joinAttempts)
+        .leftJoin(profiles, eq(profiles.userId, joinAttempts.discordId))
+        .where(
+          and(
+            inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
+            or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
+            inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
+            inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
+          ),
+        )
+        .groupBy(dow, hr);
+      const counted = await tx
+        .select({ n: sql`count(*)::int` })
+        .from(events)
+        .where(publishedInWindow());
+      // The bounded list behind the count: the same filter, soonest first
+      // (ties by key), capped at HOTZONE_GATHERINGS_LIMIT. One extra read, no
+      // per-row queries; the events_status_starts_at_idx index answers it.
+      const gatherings = await tx
+        .select({ eventKey: events.eventKey, title: events.title, startsAt: events.startsAt })
+        .from(events)
+        .where(publishedInWindow())
+        .orderBy(asc(events.startsAt), asc(events.eventKey))
+        .limit(HOTZONE_GATHERINGS_LIMIT);
+      return { buckets, eventCount: Number(counted[0]?.n ?? 0), gatherings };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
   for (const row of buckets) {
     const dow = Number(row.dow);
     const hr = Number(row.hr);
