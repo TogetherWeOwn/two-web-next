@@ -6,7 +6,7 @@
 // through to the session guard: 302/303 bounces for guests, 404 for
 // moderators, 403 for non-moderators).
 // Refusal-shape and no-PUT assertions are guards: green now, must stay
-// green after the build. Owned by the Test Author (TOG-36215): do not
+// green after the build. Owned by the Test Author: do not
 // edit this file on the build card — return incorrect tests instead.
 //
 // Contract the build implements:
