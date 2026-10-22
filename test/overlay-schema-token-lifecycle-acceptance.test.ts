@@ -40,7 +40,7 @@ import rawApp from "../src/index";
 import type { Env } from "../src/env";
 import type { Sql } from "../src/sessions";
 import app from "./app";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { routeInventory } from "./helpers/route-inventory";
 
 type OverlayModule = typeof import("../src/overlay-tokens");
@@ -554,10 +554,10 @@ describe("no overlay routes yet (hermetic controls)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("overlay slice 1 on postgres (disposable DB)", () => {
-  let fixture: MemberDataFixture;
+  let fixture: JobsFixture;
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL as string);
+    fixture = await createJobsFixture(process.env.DATABASE_URL as string);
   });
 
   afterAll(async () => {
