@@ -80,8 +80,9 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/login", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/community", status: 302, location: "/" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
-  // Stale-tab liveness probe and expired-write recovery (main #239): neither
-  // reads the DB without a session cookie, so both stay 200 during an outage.
+  // Stale-tab liveness probe and expired-write recovery (main #239): the
+  // probe reads no DB without a session cookie, and the recovery landing's
+  // throttle fails open, so both stay 200 during an outage.
   { method: "GET", route: "/auth/status", status: 200, format: "json" },
   { method: "GET", route: "/auth/recover", status: 200, format: "html" },
   // Bare /members is the retired frozen 404: answered before the member gate,
@@ -594,9 +595,11 @@ it.each([
       expect(typeof headerId).toBe("string");
       const body = (await res.json()) as { reason: string; message: string; request_id: string };
       expect(body).toEqual({
+        code: "ingress_unavailable",
         reason: "ingress_unavailable",
         message: "The agent event store is temporarily unavailable. Try again shortly.",
         request_id: headerId,
+        next: "Retry shortly.",
       });
     } finally {
       await Promise.allSettled(pending);
@@ -618,9 +621,11 @@ it("enabled agent ingress retains its reason envelope without a configured bindi
   expect(typeof headerId).toBe("string");
   const body = (await res.json()) as { reason: string; message: string; request_id: string };
   expect(body).toEqual({
+    code: "ingress_unavailable",
     reason: "ingress_unavailable",
     message: "The agent event store is not configured.",
     request_id: headerId,
+    next: "Retry shortly.",
   });
   expect(clients).toHaveLength(0);
 });

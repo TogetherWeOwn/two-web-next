@@ -50,6 +50,35 @@ export function readApiPublicCache(key: string, now = Date.now()): ApiPublicCach
   return entry;
 }
 
+/**
+ * Find a same-limit entry cached at its own `meta.last_page`, so past-the-end
+ * aliases replay that final page without another count query. Entries can
+ * disagree after a cross-isolate mutation within the TTL: never infer a
+ * target from one page's metadata and replay another snapshot's non-final
+ * page. Only the entry at the target itself can prove it is the last page.
+ * Returns null when no unexpired final-page entry proves a clamp.
+ */
+export function findCachedClampTarget(
+  limit: number,
+  rawPage: number,
+  now = Date.now(),
+): number | null {
+  const prefix = `GET /api/public/events?limit=${limit}&page=`;
+  for (const [key, entry] of entries) {
+    if (!key.startsWith(prefix)) continue;
+    if (entry.expiresAt <= now) continue;
+    let lastPage: unknown;
+    try {
+      lastPage = (JSON.parse(entry.body) as { meta?: { last_page?: unknown } }).meta?.last_page;
+    } catch {
+      continue;
+    }
+    if (typeof lastPage !== "number" || !Number.isSafeInteger(lastPage) || lastPage < 1) continue;
+    if (rawPage > lastPage && key === `${prefix}${lastPage}`) return lastPage;
+  }
+  return null;
+}
+
 export function writeApiPublicCache(
   key: string,
   value: Omit<ApiPublicCacheEntry, "expiresAt">,

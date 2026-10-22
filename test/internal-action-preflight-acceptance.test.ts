@@ -13,12 +13,12 @@ import { runInternalActionDrill } from "../src/probes/internal-action-drill";
 // Two defects are pinned here.
 //
 // 1. Both CLIs (bin/internal-action-smoke.mjs, bin/internal-action-drill.mjs)
-//    pick individual options out of argv and ignore everything else. An
-//    unsupported --dry-run, an unknown flag, a duplicate option, positional
-//    garbage or a malformed option form therefore does not stop a configured
-//    live run: the tool proceeds exactly as if the extra tokens were absent.
+//    pick individual options out of argv and ignore everything else. A
+//    valued or duplicate --dry-run, an unknown flag, a duplicate option,
+//    positional garbage or a malformed option form therefore does not stop a
+//    configured live run: the tool proceeds as if the extra tokens were absent.
 //    The contract is exit 2 with bounded usage, before any fetch, for every
-//    such token. --dry-run is refused, not turned into a preview mode.
+//    such token. Bare --dry-run selects the effect-free plan.
 //
 // 2. The orchestration (runBotSmoke, runInternalActionDrill) performs
 //    effects in sequence and only validates each payload inside the client
@@ -295,8 +295,8 @@ const SMOKE_VALID_NO_EVENT = SMOKE_VALID.slice(0, 3);
 
 describe("internal-action-smoke CLI rejects ambiguous arguments before fetching", () => {
   it.each([
-    ["unsupported --dry-run", [...SMOKE_VALID, "--dry-run"]],
-    ["unsupported --dry-run with a value", [...SMOKE_VALID, "--dry-run=true"]],
+    ["a duplicated --dry-run flag", [...SMOKE_VALID, "--dry-run", "--dry-run"]],
+    ["--dry-run with a value", [...SMOKE_VALID, "--dry-run=true"]],
     ["an unknown flag", [...SMOKE_VALID, "--bogus=1"]],
     ["a bare unknown flag", [...SMOKE_VALID, "--bogus"]],
     ["positional garbage", [...SMOKE_VALID, "garbage"]],
@@ -330,7 +330,7 @@ const DRILL_VALID = [
 
 describe("internal-action-drill CLI rejects ambiguous arguments before fetching", () => {
   it.each([
-    ["unsupported --dry-run", [...DRILL_VALID, "--dry-run"]],
+    ["--dry-run with a value", [...DRILL_VALID, "--dry-run=true"]],
     ["an unknown flag", [...DRILL_VALID, "--bogus=1"]],
     ["positional garbage", [...DRILL_VALID, "garbage"]],
     [

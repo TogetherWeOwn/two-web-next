@@ -11,7 +11,7 @@ export function contentExpectations(scenario) {
       },
       {
         selector: '[data-testid="past-events-out-of-range"]',
-        text: "Page 99 is outside the archive. There is 1 page.",
+        text: "Page 99 is outside the archive. There is 1 page. Back to page 1",
       },
       { selector: '[data-testid="past-events-list"] > li', count: 0 },
     ];

@@ -41,16 +41,16 @@ describe("troubleshooting-join guide contract", () => {
     }
   });
 
-  it("distinguishes local admission 429 from Discord backoff on a 200 recovery", () => {
+  it("distinguishes local admission 429 from Discord backoff on a 503 throttle recovery", () => {
     // Local admission: website budget, no attempt row.
     expect(guide).toMatch(/website 429 is local\s+admission/i);
     expect(guide).toMatch(/records no join-attempt row/s);
-    // Provider backoff: 200 recovery with Retry-After, distinct outcome.
+    // Provider backoff: 503 throttle recovery with Retry-After, distinct outcome.
     expect(guide).toMatch(/Discord automatic-add backoff/);
+    expect(guide).toMatch(/renders the 503\s+\*\*Discord throttled the automatic add\*\* recovery/);
     expect(guide).toMatch(/`rate_limited`.*recorded|records.*`rate_limited`/s);
     expect(guide).toContain("Retry-After");
-    // The 200 status must never read as a successful join.
-    expect(guide).toMatch(/the 200 (status )?does not mean joined/i);
+    // A 200 on another recovery page must never read as a successful join.
     expect(guide).toMatch(/A 200 response on another recovery page is not a successful join/);
   });
 
@@ -62,9 +62,9 @@ describe("troubleshooting-join guide contract", () => {
     expect(paragraph).not.toContain("has two different causes");
   });
 
-  it("identifies token-exchange backoff as a 503 error, not an automatic-add rate_limited row", () => {
+  it("identifies token-exchange backoff as a 503 throttle, not an automatic-add rate_limited row", () => {
     const paragraph = guide.match(/A Discord 429 during token exchange[^]*?(?=\n\n)/)?.[0] ?? "";
-    expect(paragraph).toMatch(/renders the 503\s+\*\*Discord is unreachable\*\* recovery/);
+    expect(paragraph).toMatch(/renders the 503\s+\*\*Discord throttled the approval\*\* recovery/);
     expect(paragraph).toMatch(/records an `error` attempt/);
     expect(paragraph).toMatch(/`Retry-After` when the provider sent a usable backoff/);
     expect(paragraph).not.toContain("`rate_limited`");

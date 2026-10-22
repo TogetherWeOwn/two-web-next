@@ -197,11 +197,10 @@ describe("SESSION_SECRET strength gate: valid and rotation-shaped secrets stay r
     const { res, text, body, logs } = await upWith(secret);
     try {
       expect(res.status).toBe(200);
-      // A ready Worker adds nothing to the body besides informational
-      // signals: no `config` key, same shape plus `member_access_log_enforcement`.
+      // A ready Worker carries the additive migration ledger signal, with no `config` key.
       expect(Object.keys(body).sort()).toEqual([
         "db",
-        "member_access_log_enforcement",
+        "migration_ledger",
         "pending_migrations",
         "queue",
         "status",

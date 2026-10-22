@@ -48,8 +48,16 @@ export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes">
 
 export type HomeEvent = Pick<
   PublicEvent,
-  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount"
->;
+  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount" | "capacity"
+> & {
+  /** Seat occupancy for the teaser full verdict, like `waitlist.goingCount`.
+   * `listHomeUpcoming` always projects it (no extra query: `withGoing`
+   * already batches both aggregates), so the live teaser never offers a seat
+   * the write path cannot grant. Optional only for older hand-built
+   * fixtures: renderers fall back to the named `goingCount` when absent
+   * (the `GoingCountState.occupancy` precedent). Aggregate only. */
+  goingOccupancy?: number;
+};
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
@@ -308,13 +316,24 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     // The teaser renders `startsAt` unguarded, so unrenderable windows are
     // refused here too (this read never had #232's `isfinite()` guard).
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
-      ({ eventKey, title, startsAt, timezone, location, goingCount }) => ({
+      ({
         eventKey,
         title,
         startsAt,
         timezone,
         location,
         goingCount,
+        goingOccupancy,
+        capacity,
+      }) => ({
+        eventKey,
+        title,
+        startsAt,
+        timezone,
+        location,
+        goingCount,
+        goingOccupancy,
+        capacity,
       }),
     );
   });
@@ -520,17 +539,24 @@ export async function listCalendarPast(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), lt(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, lt(events.endsAt, now)))
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(EVENTS_PAST_DRAWER_LIMIT);
   // Ended rows are normally renderable by construction (ends_at < now), but
   // imports can violate the end-after-start invariant with an unrenderable
-  // starts_at, and the drawer/`EmptyGap` render it unguarded.
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+  // starts_at, and the drawer/`EmptyGap` render it unguarded. The SQL finite
+  // guard keeps infinity rows from occupying limit slots (like the sibling
+  // upcoming reads); the JS filter stays as defence for JS-overflow timestamps
+  // that `isfinite()` cannot see. Truncation is judged on the pre-filter
+  // fetched count (like `listUpcoming`/`listPast` `hasMore`): a post-filter
+  // length would misread a drawer that dropped an overflow row as complete.
+  const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
+  const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
+  return Object.assign(visible, { mayBeTruncated: truncated });
 }
 
 /** Invalid HTML archive pages/offsets retain the page-one fallback. */
