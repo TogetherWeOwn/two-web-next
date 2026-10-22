@@ -124,11 +124,23 @@ function listJobsSecretJson(envName) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let envName;
+  let usageError = null;
   try {
-    const present = checkJobsSecrets(listJobsSecretJson(parseEnv(process.argv.slice(2))));
-    console.log(`Jobs Worker secrets present: ${present.join(", ")}`);
+    envName = parseEnv(process.argv.slice(2));
   } catch (error) {
-    console.error(`::error::${error.message}`);
-    process.exitCode = 1;
+    usageError = error;
+  }
+  if (usageError) {
+    console.error(`::error::${usageError.message}`);
+    process.exitCode = 2;
+  } else {
+    try {
+      const present = checkJobsSecrets(listJobsSecretJson(envName));
+      console.log(`Jobs Worker secrets present: ${present.join(", ")}`);
+    } catch (error) {
+      console.error(`::error::${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
