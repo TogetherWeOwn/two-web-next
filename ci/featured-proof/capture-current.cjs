@@ -2,9 +2,21 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { chromium } = require('playwright');
+// Chromium emits this exact protocol error when its captured image is empty.
+// Retry only that capture, once, without changing the page, clip or proof checks.
+async function captureScreenshot(page, screenshotPath, recoveries) {
+  const options = { path: screenshotPath, fullPage: true };
+  try {
+    await page.screenshot(options);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message.split('\n')[0] !== 'page.screenshot: Protocol error (Page.captureScreenshot): Unable to capture screenshot') throw error;
+    recoveries.push({ screenshot: path.basename(screenshotPath), error: error.message, retry: 1 });
+    await page.screenshot(options);
+  }
+}
 
 async function main() {
+  const { chromium } = require('playwright');
   const input = path.resolve(process.argv[2]);
   const output = path.resolve(process.argv[3]);
   const manifest = JSON.parse(await fs.readFile(path.join(input, 'manifest.json'), 'utf8'));
@@ -23,7 +35,7 @@ async function main() {
   const report = {
     ...manifest, capturedAt: new Date().toISOString(), runUrl: process.env.PROOF_RUN_URL,
     containerImage: process.env.PROOF_CONTAINER_IMAGE, javascriptEnabled: false, offline: true,
-    visualInspection: 'REQUIRED: independent QA must inspect all primary and scrolled-column captures', results: [], errors: [],
+    visualInspection: 'REQUIRED: independent QA must inspect all primary and scrolled-column captures', results: [], errors: [], captureRecoveries: [],
   };
   let browser;
   try {
@@ -132,7 +144,7 @@ async function main() {
           check('external stylesheet applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
           check('no network requests', attemptedRequests.length === 0);
           const screenshot = `${path.basename(fixture.name, '.html')}-${viewport.width}x${viewport.height}.png`;
-          await page.screenshot({ path: path.join(output, screenshot), fullPage: true });
+          await captureScreenshot(page, path.join(output, screenshot), report.captureRecoveries);
           const scrolledCaptures = [];
           if (fixture.name === 'list.html') {
             for (const column of [{ index: 3, name: 'window' }, { index: 4, name: 'last-changed' }]) {
@@ -150,7 +162,7 @@ async function main() {
                 return rect.left >= region.left - tolerancePx && rect.right <= region.right + tolerancePx;
               }));
               const filename = `list-${column.name}-${viewport.width}x${viewport.height}.png`;
-              await page.screenshot({ path: path.join(output, filename), fullPage: true });
+              await captureScreenshot(page, path.join(output, filename), report.captureRecoveries);
               scrolledCaptures.push({ column: column.name, screenshot: filename, scrollLeft: await page.locator('[data-testid="featured-table-scroll"]').evaluate(el => el.scrollLeft) });
             }
           }
@@ -170,4 +182,5 @@ async function main() {
   console.log(JSON.stringify({ automatedChecksPassed: passed, screenshots: report.results.reduce((count, result) => count + 1 + result.scrolledCaptures.length, 0), sourceHead: report.sourceHead }));
   if (!passed) process.exitCode = 1;
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+module.exports = { captureScreenshot };
