@@ -70,9 +70,7 @@ const linkItemError = (
     }
     if (host === null) {
       errors[`links[${index}].url`] = "Links must use https.";
-    } else if (
-      MEMBER_LINK_DENYLIST.some((seed) => host === seed || host.endsWith(`.${seed}`))
-    ) {
+    } else if (MEMBER_LINK_DENYLIST.some((seed) => host === seed || host.endsWith(`.${seed}`))) {
       errors[`links[${index}].url`] = "That link host is not allowed.";
     } else {
       // Store the trimmed original, never the URL-normalized href (which
@@ -116,20 +114,25 @@ export function parseLinksFormText(value: unknown): LinksResult {
   if (value === undefined || value === null) return { ok: true, links: [] };
   if (typeof value !== "string")
     return { ok: false, errors: { links_text: "Links text must be text." } };
-  const items: unknown[] = [];
+  const lines = value.split(/\r\n|\r|\n/).filter((line) => line.trim() !== "");
+  if (lines.length > MEMBER_LINKS_MAX)
+    return { ok: false, errors: { links: "Add no more than 12 links." } };
+  // Shape and item errors merge, so one submit surfaces every broken line.
   const errors: Record<string, string> = {};
-  let index = 0;
-  for (const line of value.split(/\r\n|\r|\n/)) {
-    if (line.trim() === "") continue;
+  const links: MemberLink[] = [];
+  lines.forEach((line, index) => {
     const pipe = line.indexOf("|");
     if (pipe === -1) {
       errors[`links[${index}]`] = `Line ${index + 1} needs "Label | https://...".`;
-      index += 1;
-      continue;
+      return;
     }
-    items.push({ label: line.slice(0, pipe), url: line.slice(pipe + 1) });
-    index += 1;
-  }
+    const result = linkItemError(
+      { label: line.slice(0, pipe), url: line.slice(pipe + 1) },
+      index,
+    );
+    Object.assign(errors, result.errors);
+    if (result.link) links.push(result.link);
+  });
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return validateLinksList(items);
+  return { ok: true, links };
 }

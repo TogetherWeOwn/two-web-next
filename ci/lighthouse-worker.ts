@@ -141,9 +141,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
           };
         if (sql === linksListSql && sameParams(params, [linksMember, 1]))
           return {
-            rows: [
-              [[{ label: "Lighthouse stream", url: "https://example.com/lighthouse-live" }]],
-            ],
+            rows: [[[{ label: "Lighthouse stream", url: "https://example.com/lighthouse-live" }]]],
           };
         if (
           sql === `${eventSelect} where "events"."event_key" = $1` &&

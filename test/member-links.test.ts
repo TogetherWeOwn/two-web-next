@@ -41,9 +41,7 @@ describe("links validator bounds", () => {
   });
 
   it("accepts a trimmed list and stores the trimmed form", () => {
-    const result = validateLinksList([
-      { label: "  Twitch  ", url: "  https://twitch.tv/alice  " },
-    ]);
+    const result = validateLinksList([{ label: "  Twitch  ", url: "  https://twitch.tv/alice  " }]);
     expect(result).toEqual({
       ok: true,
       links: [{ label: "Twitch", url: "https://twitch.tv/alice" }],
@@ -104,6 +102,15 @@ describe("links validator bounds", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.errors).toMatchObject({ "links[0]": expect.stringContaining("1") });
   });
+
+  it("reports shape and item errors together, not one at a time", () => {
+    const result = parseLinksFormText("no separator here\nBlog | http://example.com/nope");
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.errors).toMatchObject({
+      "links[0]": expect.stringContaining("1"),
+      "links[1].url": expect.any(String),
+    });
+  });
 });
 
 describe("links memory store", () => {
@@ -138,9 +145,7 @@ describe.skipIf(!process.env.DATABASE_URL)("links database store", () => {
     );
     const store = createDbLinksStore(db);
     expect(await store.find("100000000000000211")).toBeNull();
-    await store.save("100000000000000211", [
-      { label: "Twitch", url: "https://twitch.tv/saver" },
-    ]);
+    await store.save("100000000000000211", [{ label: "Twitch", url: "https://twitch.tv/saver" }]);
     expect(await store.find("100000000000000211")).toEqual([
       { label: "Twitch", url: "https://twitch.tv/saver" },
     ]);
@@ -191,9 +196,7 @@ function builderHarness(
   const links =
     opts.linksStore ??
     createMemoryLinksStore(
-      opts.links ?? [
-        [BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]],
-      ],
+      opts.links ?? [[BUILDER_ALICE.userId, [{ label: "Twitch", url: "https://twitch.tv/alice" }]]],
     );
   const buckets: string[] = [];
   const deps = {
