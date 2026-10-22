@@ -137,7 +137,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("60");
     expect(await res.json()).toEqual({
-      error: { code: "rate_limited", message: "Too many requests. Try again in 60 seconds." },
+      error: {
+        code: "rate_limited",
+        message: "Too many requests. Try again in 60 seconds.",
+        request_id: expect.any(String),
+        next: "Wait for Retry-After, then retry.",
+      },
     });
   });
 });
