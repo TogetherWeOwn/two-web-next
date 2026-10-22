@@ -13,8 +13,10 @@
 // (400 + invalid_grant, or a lost/replayed state) gets the immediate-retry
 // sentence with status 200; a provider outage gets the discord-down sentence
 // with 503 (legacy JoinCallbackFailureTest: status governs — a 5xx body can
-// never reclassify as expired). Logs carry the exception class, the failure
-// kind and the outcome — never a message, never a body.
+// never reclassify as expired). A throttled exchange, user fetch or bot add
+// (429, status governs the body) gets its own 503 throttle page with the
+// bounded provider backoff as Retry-After. Logs carry the exception class,
+// the failure kind and the outcome — never a message, never a body.
 import type { Hono } from "hono";
 import { deleteCookie, getSignedCookie } from "hono/cookie";
 import { DiscordError, exchangeCode, failureMeta, fetchUser } from "../discord";
@@ -167,8 +169,9 @@ export function registerJoinCallbackRoutes(
     if (admitted) clearJourney();
 
     // They pressed Cancel on the consent screen, or Discord answered the
-    // admitted approval with an error: nothing to exchange. Unadmitted errors
-    // use the generic expired recovery below, never provider details.
+    // admitted approval with an error: nothing to exchange. Unadmitted
+    // denials reuse this cancelled copy below; other unadmitted errors keep
+    // the generic expired recovery, never provider details.
     if (admitted && oauthError) {
       const denied = oauthError === "access_denied";
       await recordAttempt(sql, {
@@ -202,6 +205,17 @@ export function registerJoinCallbackRoutes(
           requestId: safeRequestId(c.get("requestId")) ?? null,
           discordId: null,
         });
+      // A Cancel without an admitted journey is still a Cancel: the expiry
+      // sentence would blame the ten-minute clock for their action (E1). Same
+      // cancelled-consent copy as the admitted denial above, still with no
+      // provider details; admission side effects stay untouched (no attempt
+      // row, no cookie clearing), so a newer tab's journey survives intact.
+      if (oauthError === "access_denied") {
+        return recover(
+          "Join cancelled",
+          "You cancelled the Discord approval, so we couldn't add you to the server. Try again, or use the invite link below.",
+        );
+      }
       return recover(
         "Join link expired",
         "That join link expired. Approvals last ten minutes — try again below.",
@@ -246,16 +260,23 @@ export function registerJoinCallbackRoutes(
           "That Discord approval expired. Try again or use the invite below.",
         );
       }
+      // A throttled exchange or user fetch is not an outage: status governs
+      // (even a body saying invalid_grant), so the copy names the throttle
+      // and the wait instead of "unreachable" (E1). A true outage (5xx,
+      // transport throw) keeps the unreachable copy below.
+      const discordErr = err instanceof DiscordError ? err : null;
+      const throttled = discordErr?.kind === "rate_limited";
       const recovery = await recover(
-        "Discord is unreachable",
-        "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
+        throttled ? "Discord throttled the approval" : "Discord is unreachable",
+        throttled
+          ? "Discord is rate-limiting approvals right now. Wait a moment, then try again below, or use the invite link."
+          : "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
         503,
       );
-      // Header only: status and copy never change. A usable 429 backoff flows
-      // into `Retry-After`; absent/unusable values and every non-429 path keep
-      // today's headerless response.
-      const retryAfter =
-        err instanceof DiscordError && err.kind === "rate_limited" ? err.retryAfter : undefined;
+      // Header only on the 429 path: a usable backoff flows into
+      // `Retry-After`; absent/unusable values and every non-429 path keep
+      // the headerless response.
+      const retryAfter = throttled ? discordErr?.retryAfter : undefined;
       if (retryAfter !== undefined) recovery.headers.set("Retry-After", String(retryAfter));
       return recovery;
     }
@@ -272,17 +293,24 @@ export function registerJoinCallbackRoutes(
         requestId: done.requestId,
         discordId: user.id,
       });
-      const recovery = await recover(
+      // A rate-limited add is an honored throttle, not a refusal (E1): 503 so
+      // clients and caches wait instead of reading success, the bounded
+      // provider backoff as `Retry-After`, and copy that names the throttle.
+      // Every other classified refusal keeps the 200 blocked copy, headerless.
+      if (done.outcome === "rate_limited") {
+        const recovery = await recover(
+          "Discord throttled the automatic add",
+          "Discord is rate-limiting automatic adds right now. Wait a moment, then try again below, or use the invite link.",
+          503,
+        );
+        if (done.retryAfter !== undefined)
+          recovery.headers.set("Retry-After", String(done.retryAfter));
+        return recovery;
+      }
+      return recover(
         "We couldn't add you automatically",
         "You're nearly there — use the invite link below to join the server directly.",
       );
-      // Header only: status and copy never change. A usable rate-limited bot-add
-      // backoff flows into `Retry-After` (same admission as the exchange 429
-      // branch); absent/unusable values and every non-rate-limited path keep
-      // today's headerless response.
-      if (done.outcome === "rate_limited" && done.retryAfter !== undefined)
-        recovery.headers.set("Retry-After", String(done.retryAfter));
-      return recovery;
     }
 
     await recordAttempt(sql, {

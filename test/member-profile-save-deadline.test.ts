@@ -24,6 +24,7 @@ type ResponseFixture = {
   ok: boolean;
   status: number;
   type?: string;
+  headers?: { get: (name: string) => string | null };
   json?: () => Promise<unknown>;
 };
 const success = () => ({
@@ -385,6 +386,89 @@ describe("member-profile save deadline", () => {
     expect(f.uncertain()).not.toBeNull();
     expect(f.bio.textContent).toBe("Original bio");
   });
+
+  it.each([429, 503])("keeps the guard and deadline while a %s body is pending", async (status) => {
+    const f = fixture(false);
+    const body = deferred<unknown>();
+    f.enter({ bio: "Draft awaiting the outcome" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve({ ok: false, status, json: () => body.promise });
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    expect(f.timers.some((timer) => timer.delay === PROFILE_SAVE_DEADLINE_MS)).toBe(true);
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    f.advance(PROFILE_SAVE_DEADLINE_MS);
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    expect(f.uncertain()?.textContent).toMatch(/may still have gone through/i);
+    expect(f.form.elements.bio!.value).toBe("Draft awaiting the outcome");
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    body.resolve({ error: "db_unavailable", retry_after: 999 });
+    await flush();
+    expect(f.notice("profile-save-failed")).toBeNull();
+    expect(f.notice("profile-save-throttled")).toBeNull();
+    expect(f.uncertain()).not.toBeNull();
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(f.bio.textContent).toBe("Draft awaiting the outcome");
+  });
+
+  it.each([429, 503])(
+    "ignores a %s body that completes after Cancel without stealing focus",
+    async (status) => {
+      const f = fixture(false);
+      const body = deferred<unknown>();
+      f.enter({ bio: "Cancelled draft" });
+      f.form.dispatch("submit");
+      f.requests[0]!.resolve({ ok: false, status, json: () => body.promise });
+      await flush();
+      f.cancel();
+      body.resolve({ error: "profile_save_uncertain", retry_after: 999 });
+      await flush();
+      expect(f.notice("profile-save-throttled")).toBeNull();
+      expect(f.notice("profile-save-failed")).toBeNull();
+      expect(f.uncertain()).toBeNull();
+      expect(f.form.elements.bio!.value).toBe("Original bio");
+      expect(f.bio.textContent).toBe("Original bio");
+      expect(f.document.activeElement).toBe(f.name);
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+      expect(f.timers).toHaveLength(0);
+    },
+  );
+
+  it.each(["conflicting", "rejected", "pending"] as const)(
+    "uses the Retry-After header without waiting for a %s body",
+    async (kind) => {
+      const f = fixture(false);
+      const body = deferred<unknown>();
+      f.enter({ bio: "Throttled draft" });
+      f.form.dispatch("submit");
+      f.requests[0]!.resolve({
+        ok: false,
+        status: 429,
+        headers: { get: (name) => (name === "Retry-After" ? "30" : null) },
+        json: () => {
+          if (kind === "rejected") return Promise.reject(new Error("Not JSON"));
+          if (kind === "pending") return body.promise;
+          return Promise.resolve({ retry_after: 999 });
+        },
+      });
+      await flush();
+      const notice = f.notice("profile-save-throttled");
+      expect(notice?.textContent).toContain("30 seconds");
+      expect(notice?.textContent).not.toContain("999");
+      expect(f.form.getAttribute("aria-busy")).toBeNull();
+      expect(f.timers).toHaveLength(0);
+      expect(f.form.elements.bio!.value).toBe("Throttled draft");
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+      body.resolve({ retry_after: 999 });
+      await flush();
+      expect(f.notice("profile-save-throttled")).toBe(notice);
+    },
+  );
 
   it("recovers ordinary controls after the deadline without resending on its own", async () => {
     const f = fixture(true);

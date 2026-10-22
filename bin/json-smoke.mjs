@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { STAGING_ORIGIN as CANONICAL_STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 // Staging-only post-deploy probe for the session-gated event JSON contract:
@@ -21,7 +22,7 @@ import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 // output names attributes and states only, never a token or cookie value.
 //
 
-export const STAGING_ORIGIN = "https://next.togetherweown.com";
+export const STAGING_ORIGIN = CANONICAL_STAGING_ORIGIN;
 const QA_IDENTITY = "qa-member";
 const QA_HEADER = "X-TWO-QA-Auth";
 const SESSION_COOKIE = "__Host-two_session";

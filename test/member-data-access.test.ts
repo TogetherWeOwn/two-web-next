@@ -1,10 +1,9 @@
 // W15 ports AccessRecorder arm/flush and RecordMemberDataAccess. The old
 // declare-subjects Hono middleware was retired (production audits only
-// through the keyed read boundary since PR #145); this file keeps the legacy
-// enforcement-flag parsing pins plus the DB-backed recorder contract.
+// through the keyed read boundary since PR #145); this file keeps the
+// DB-backed recorder contract.
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { enforceOn } from "../src/access-log";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -26,24 +25,6 @@ import {
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 afterEach(() => vi.restoreAllMocks());
-
-// The legacy flag feeds the informational /up label only; no production
-// read honors it (the keyed boundary always fails closed).
-describe("legacy enforcement flag parsing", () => {
-  it.each([
-    [undefined, true],
-    ["", true],
-    [" true ", true],
-    ["garbage", true],
-    [" false ", false],
-    ["FALSE", false],
-    ["0", false],
-    [" No ", false],
-  ])("enforcement flag parsing for %s => %s", (flag, expected) => {
-    const bindings = { ...env, MEMBER_ACCESS_LOG_ENFORCE: flag };
-    expect(enforceOn(bindings)).toBe(expected);
-  });
-});
 
 describe.skipIf(!process.env.DATABASE_URL)(
   "member data access (real recorder on agent-testdb)",
