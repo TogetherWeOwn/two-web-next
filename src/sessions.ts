@@ -23,6 +23,14 @@ import {
  * DB expiry and cookie Max-Age; the status probe cookie follows the same value. */
 export const SESSION_TTL_SECONDS = 60 * 120;
 
+/** Absolute session age cap: 24 hours from the login that minted the lineage
+ * (K2). A row is live only while its sliding expiry is future AND its lineage
+ * age is under this cap AND it is unrevoked. Boundary is exclusive like
+ * expires_at: age == cap reads dead. Rotation preserves the lineage start (the
+ * successor does NOT restart the clock); renewal never extends authority past
+ * lineage start + cap. Fresh login (`replace`) mints a new lineage. */
+export const SESSION_ABSOLUTE_MAX_AGE_SECONDS = 24 * 3600;
+
 /** Immediate-predecessor grace: 10s from winning rotation, bounded also by the
  * predecessor's original expiry. Exact deadline is guest. Lets two overlapping
  * tab requests both authenticate; logout and revoke kill it inside the window. */
@@ -180,13 +188,16 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
         Record<string, unknown>[]
       >`select user_id, username, avatar, member, moderator
         from web_sessions
-        where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()`;
+        where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()
+          and created_at > now() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       const row = rows[0];
       if (row) return toRow(row);
       // Immediate-predecessor grace: same member and lineage, only while the
       // successor is live, unexpired and unrevoked. Fixed 10s deadline from the
       // winning rotation plus the predecessor's own expiry; exact deadline is
       // guest (`>` throughout). No status-key fallback and no history walk.
+      // The successor liveness check carries the absolute age cap, so grace
+      // dies with the lineage past the cap without its own age column.
       const grace = await sql<
         Record<string, unknown>[]
       >`select g.user_id, g.username, g.avatar, g.member, g.moderator
@@ -198,6 +209,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
             select 1 from web_sessions s
             where s.token_hash = g.successor_hash
               and s.revoked_at is null and s.expires_at > clock_timestamp()
+              and s.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
               and s.user_id = g.user_id
               and coalesce(s.status_hash, s.token_hash) = g.status_hash
           )`;
@@ -207,13 +219,15 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     async renew(tokenHash, expiresAt) {
       // Check wall-clock liveness after the lock wait, just like rotation. Never
       // recreate a revoked/expired row or let an older request shorten renewal.
+      // Past the absolute cap the row refuses renewal without writing.
       const rows = await sql<{ renewed: number }[]>`with locked as materialized (
-          select token_hash, revoked_at, expires_at from web_sessions
+          select token_hash, revoked_at, expires_at, created_at from web_sessions
           where token_hash = ${tokenHash} for update
         )
         update web_sessions set expires_at = greatest(web_sessions.expires_at, ${expiresAt})
         from locked where web_sessions.token_hash = locked.token_hash
           and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+          and locked.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
         returning 1 as renewed`;
       return rows.length > 0;
     },
@@ -222,13 +236,15 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
         { status_hash: string }[]
       >`select coalesce(status_hash, token_hash) as status_hash
         from web_sessions where token_hash = ${tokenHash}
-          and revoked_at is null and expires_at > clock_timestamp()`;
+          and revoked_at is null and expires_at > clock_timestamp()
+          and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       return rows[0]?.status_hash ?? null;
     },
     async isActive(statusHash) {
       const rows = await sql<{ active: boolean }[]>`select exists (
         select 1 from web_sessions where coalesce(status_hash, token_hash) = ${statusHash}
           and revoked_at is null and expires_at > clock_timestamp()
+          and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
       ) as active`;
       return rows[0]?.active === true;
     },
@@ -238,11 +254,12 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // pinned to transaction start and could renew an expired session.
       if (oldTokenHash === replacement.tokenHash) {
         const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
-            select token_hash, revoked_at, expires_at from web_sessions
+            select token_hash, revoked_at, expires_at, created_at from web_sessions
             where token_hash = ${oldTokenHash} for update
           )
           select count(*)::int as n from locked
-          where revoked_at is null and expires_at > clock_timestamp()`;
+          where revoked_at is null and expires_at > clock_timestamp()
+            and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
         return Number(rows[0]?.n ?? 0) > 0;
       }
       // One winner: only the deleter inserts the successor and its grace row.
@@ -251,32 +268,39 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // is pruned so only the immediate predecessor stays valid. Reads never
       // extend the deadline and never mint siblings: get() only follows the
       // stored successor while it is live.
+      // The successor carries the source's created_at: rotation preserves the
+      // lineage clock instead of restarting it, so the lineage dies with the
+      // cap. Past the cap the source refuses rotation and plants nothing.
       const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
-          select token_hash, revoked_at, expires_at, user_id, username, avatar, member, moderator,
+          select token_hash, revoked_at, expires_at, created_at, user_id, username, avatar, member, moderator,
             coalesce(status_hash, token_hash) as status_hash
           from web_sessions where token_hash = ${oldTokenHash} for update
         ), deleted as (
           delete from web_sessions using locked
           where web_sessions.token_hash = locked.token_hash
             and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+            and locked.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
           returning web_sessions.token_hash as old_hash,
             coalesce(web_sessions.status_hash, web_sessions.token_hash) as status_hash,
             web_sessions.user_id, web_sessions.username, web_sessions.avatar,
-            web_sessions.member, web_sessions.moderator, web_sessions.expires_at
+            web_sessions.member, web_sessions.moderator, web_sessions.expires_at,
+            web_sessions.created_at
         ), pruned as (
           delete from web_session_grace using deleted
           where web_session_grace.successor_hash = deleted.old_hash
           returning 1
         ), inserted as (
-          insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+          insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, created_at)
           select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
-            ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt}
+            ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt},
+            deleted.created_at
           from deleted
           on conflict (token_hash) do update set
             status_hash = excluded.status_hash,
             user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
             member = excluded.member, moderator = excluded.moderator,
-            expires_at = excluded.expires_at, revoked_at = null
+            expires_at = excluded.expires_at, revoked_at = null,
+            created_at = excluded.created_at
           returning 1
         ), grace as (
           insert into web_session_grace
@@ -344,8 +368,11 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // in `src/jobs/postgres.ts` instead, so daily holds stay capped.
       // Grace drains when either its fixed 10s deadline or the predecessor's
       // own expiry passes.
+      // Absolutely-aged rows go too: reads require age < cap, so a row aged
+      // exactly the cap is already invisible (`created_at <= now - cap`).
+      const ageCutoff = new Date(now.getTime() - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000);
       const rows = await sql<Record<string, unknown>[]>`delete from web_sessions
-        where expires_at <= ${now} returning 1`;
+        where expires_at <= ${now} or created_at <= ${ageCutoff} returning 1`;
       const grace = await sql<Record<string, unknown>[]>`delete from web_session_grace
         where grace_expires_at <= ${now} or expires_at <= ${now} returning 1`;
       return rows.length + grace.length;
@@ -355,7 +382,10 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
 
 /** Test/memory helper. Same contract, no I/O. */
 export function createMemorySessionStore(clock: () => number = Date.now): SessionStore {
-  const rows = new Map<string, DbSessionRow & { expiresAt: number; statusHash: string }>();
+  const rows = new Map<
+    string,
+    DbSessionRow & { expiresAt: number; statusHash: string; createdAt: number }
+  >();
   const grace = new Map<
     string,
     DbSessionRow & {
@@ -365,9 +395,17 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       graceExpiresAt: number;
     }
   >();
+  // createdAt is the lineage start (login mint); rotation inherits it, so the
+  // clock never restarts. Exclusive boundary like expires_at: age == cap reads
+  // dead (`createdAt <= now - cap`). Grace carries no age column: it dies
+  // with the lineage because its successor liveness check runs through here.
   const live = (hash: string) => {
     const r = rows.get(hash);
-    if (!r || r.expiresAt <= clock()) {
+    if (
+      !r ||
+      r.expiresAt <= clock() ||
+      r.createdAt <= clock() - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000
+    ) {
       rows.delete(hash);
       return null;
     }
@@ -387,15 +425,25 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       }
       rows.delete(oldHash);
       dropGraceForToken(oldHash);
+      // Fresh login mints a new lineage: the clock starts now.
       rows.set(replacement.tokenHash, {
         ...replacement,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: replacement.tokenHash,
+        createdAt: clock(),
       });
     },
     async create(s) {
       grace.delete(s.tokenHash);
-      rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });
+      // Postgres `on conflict` preserves created_at while resetting the status
+      // lineage; mirror it so a re-created hash keeps its lineage clock.
+      const prior = rows.get(s.tokenHash);
+      rows.set(s.tokenHash, {
+        ...s,
+        expiresAt: s.expiresAt.getTime(),
+        statusHash: s.tokenHash,
+        createdAt: prior?.createdAt ?? clock(),
+      });
     },
     async get(hash) {
       const r = live(hash);
@@ -442,6 +490,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       return false;
     },
     async rotate(oldHash, replacement) {
+      // live() enforces the absolute cap, so a past-cap source refuses here
+      // and plants nothing.
       const source = live(oldHash);
       if (!source) return false;
       if (oldHash === replacement.tokenHash) return true;
@@ -460,10 +510,13 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         graceExpiresAt: clock() + SESSION_PREDECESSOR_GRACE_SECONDS * 1000,
       });
       rows.delete(oldHash);
+      // The successor inherits the lineage start: rotation never restarts the
+      // absolute clock, so it dies with the lineage at the cap.
       rows.set(replacement.tokenHash, {
         ...replacement,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: source.statusHash,
+        createdAt: source.createdAt,
       });
       return true;
     },
@@ -492,9 +545,10 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async sweepExpired(now) {
       const t = now.getTime();
+      const ageCutoff = t - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000;
       let n = 0;
       for (const [k, r] of rows) {
-        if (r.expiresAt <= t) {
+        if (r.expiresAt <= t || r.createdAt <= ageCutoff) {
           rows.delete(k);
           n++;
         }

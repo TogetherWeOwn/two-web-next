@@ -70,8 +70,7 @@ become stale-discard advice. SQL/connection failures return a redacted 503.
 5. The application must be able to append the operational read receipt to the
    existing `activity_log`. It writes one `queue.failed.preview` receipt with
    actor, failure ID, disposition and snapshot time before releasing a successful
-   buffered response. Audit failure always returns 503, including when
-   `MEMBER_ACCESS_LOG_ENFORCE=false`. No fabricated member subjects are recorded.
+   buffered response. Audit failure always returns 503. No fabricated member subjects are recorded.
 
 **Single-row invocation after those prerequisites only:**
 
