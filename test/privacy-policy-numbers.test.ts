@@ -18,7 +18,7 @@ import { OAUTH_JOURNEY_TTL_SECONDS } from "../src/oauth-journeys";
 import { MEMBER_STATS_BUDGET_MS } from "../src/profiles/stats";
 import { POLICY_FILE, POLICY_VERSION } from "../src/privacy";
 import { POLICY_MARKDOWN } from "../src/privacy-content";
-import { SESSION_TTL_SECONDS } from "../src/sessions";
+import { SESSION_ABSOLUTE_MAX_AGE_SECONDS, SESSION_TTL_SECONDS } from "../src/sessions";
 import { STATE_TTL_SECONDS as OAUTH_STATE_TTL_SECONDS } from "../src/index";
 import { JOURNEY_TTL_SECONDS as RETURN_JOURNEY_TTL_SECONDS } from "../src/return-journey";
 import { WRITE_RECOVERY_TTL_SECONDS } from "../src/write-recovery";
@@ -154,6 +154,18 @@ const CLAIMS: Claim[] = [
     anchor: "`__Host-two_session` keeps you signed in",
     phrase: `${spell(SESSION_TTL_SECONDS / 3600)} hours`,
     pin: "SESSION_TTL_SECONDS, src/sessions.ts",
+  },
+  {
+    label: "Absolute session age cap",
+    anchor: "`__Host-two_session` keeps you signed in",
+    phrase: `${SESSION_ABSOLUTE_MAX_AGE_SECONDS / 3600} hours`,
+    pin: "SESSION_ABSOLUTE_MAX_AGE_SECONDS, src/sessions.ts",
+  },
+  {
+    label: "Absolute cap changelog",
+    anchor: "Version 6 caps every sign-in",
+    phrase: `${SESSION_ABSOLUTE_MAX_AGE_SECONDS / 3600} hours`,
+    pin: "SESSION_ABSOLUTE_MAX_AGE_SECONDS, src/sessions.ts",
   },
   {
     label: "Journey cookies",

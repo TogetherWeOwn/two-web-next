@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import { SESSION_ABSOLUTE_MAX_AGE_SECONDS } from "../sessions";
 import { PRUNE_DELETE_BATCH_SIZE } from "./constants";
 import type { SingleFlight } from "./cron";
 import type {
@@ -178,15 +179,21 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // mirroring the audit-table guard above. A caller clock running ahead skips
   // the skew-window rows instead of over-deleting them, and never raises; a
   // caller clock running behind stays caller-bounded (AND, not DB-clock-only).
-  // Deletes at most one batch per statement; the cron pass drains via
-  // `drainPruneTable` and reports exact totals plus the cap. The predecessor
-  // grace table drains in the same budget: expired grace rows (either its
-  // fixed 10s deadline or the predecessor's own expiry, by both clocks) go
-  // with the leftover batch slots, so one call never exceeds the batch cap.
+  // Absolutely-aged rows go under the same both-clocks shape: past the lineage
+  // cap by the caller clock (`created_at <= now - cap`) AND by the database
+  // clock, so skew never over-deletes a live lineage. Deletes at most one
+  // batch per statement; the cron pass drains via `drainPruneTable` and
+  // reports exact totals plus the cap. The predecessor grace table drains in
+  // the same budget: expired grace rows (either its fixed 10s deadline or the
+  // predecessor's own expiry, by both clocks) go with the leftover batch
+  // slots, so one call never exceeds the batch cap.
   const sessions = expiryTable(async (client, now) => {
+    const ageCutoff = new Date(now.getTime() - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000);
     const live = await client`delete from web_sessions where token_hash in (
-        select token_hash from web_sessions where expires_at <= ${now}
-          and expires_at <= clock_timestamp()
+        select token_hash from web_sessions
+        where (expires_at <= ${now} and expires_at <= clock_timestamp())
+          or (created_at <= ${ageCutoff}
+            and created_at <= clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS}))
         order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
         for update skip locked
       ) returning 1`;

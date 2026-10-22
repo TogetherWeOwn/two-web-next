@@ -3,6 +3,10 @@ import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { headerIndexingRules } from "../ci/robots-directives.mjs";
 
+// The fixed missing-event probe key, defined once here: routes below and the
+// smoke fixtures import it by name instead of repeating the literal.
+export const SMOKE_PROBE_KEY = "00000000000000000000000001";
+
 const html = [
   ["/", /The lobby is open/],
   ["/about", /About Together We Own/],
@@ -18,7 +22,7 @@ const html = [
 // asserts the X-Robots-Tag header only on the indexable leaves.
 const nonIndexableHtml = new Set([
   "/events/past",
-  "/e/00000000000000000000000001",
+  `/e/${SMOKE_PROBE_KEY}`,
   "/__smoke_unknown_route__",
 ]);
 
@@ -38,8 +42,9 @@ const routes = [
   // event, the community snapshot, the join handoff, and the discovery
   // document. No auth, no cookies, no flags; the session-gated /events.json
   // stays out (staging-only bin/json-smoke.mjs covers it). The single-event
-  // probe uses an all-digit ULID so no secret scanner trips; the same
-  // literal must appear in the test fixtures. That key is a valid
+  // probe uses an all-digit ULID so no secret scanner trips; the probe key
+  // is defined once as SMOKE_PROBE_KEY above and the test fixtures import
+  // it by name. That key is a valid
   // PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
   // database has it and the real handler answers 404 not_found
   // (src/public-data/routes.ts): the probe asserts that real contract —
@@ -47,7 +52,7 @@ const routes = [
   // error envelope — instead of a success body no environment serves.
   { path: "/api/public/events", statuses: [200], type: "application/json" },
   {
-    path: "/api/public/events/00000000000000000000000001",
+    path: `/api/public/events/${SMOKE_PROBE_KEY}`,
     statuses: [404],
     type: "application/json",
   },
@@ -62,7 +67,7 @@ const routes = [
   // the missing-page contract — HTTP 404 plus the branded marker — with no
   // live Discord data and no fixture seeding.
   {
-    path: "/e/00000000000000000000000001",
+    path: `/e/${SMOKE_PROBE_KEY}`,
     statuses: [404],
     type: "text/html",
     body: /We cannot find that page[\s\S]*Together We Own/,
