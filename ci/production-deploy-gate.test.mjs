@@ -25,7 +25,8 @@ import {
   readLiveProductionLedger,
   stagingQualityJob,
   stagingQualitySteps,
-  targetJournalEnd,
+  targetWebEndUnknown,
+  targetWebEntries,
 } from "./production-deploy-gate.mjs";
 
 const enabled = {
@@ -1731,42 +1732,63 @@ test("pending migration lookup compares journals at both commits and passes on u
   );
 });
 
-test("target journal end is the maximum entry timestamp, unknown without one", () => {
+test("target web entries are the 1000-series journal entries", () => {
+  const entries = [
+    { tag: "0000_init", when: 1 },
+    { tag: "1000_a", when: 1000 },
+    { tag: "1001_b", when: 1001 },
+  ];
+  assert.deepEqual(
+    targetWebEntries(entries).map((entry) => entry.tag),
+    ["1000_a", "1001_b"],
+  );
+  assert.deepEqual(targetWebEntries([]), []);
+  assert.deepEqual(targetWebEntries(null), []);
+});
+
+test("unknown target web end fails closed on timestamp-less web entries", () => {
   assert.equal(
-    targetJournalEnd([
+    targetWebEndUnknown([
       { tag: "1000_a", when: 1000 },
       { tag: "1001_b", when: 1001 },
     ]),
-    1001,
+    false,
   );
-  assert.equal(targetJournalEnd([{ tag: "1000_a", when: 1000 }]), 1000);
-  assert.equal(targetJournalEnd([]), null);
-  assert.equal(targetJournalEnd([{ tag: "1000_a" }]), null);
-  assert.equal(targetJournalEnd([{ tag: "1000_a", when: "1000" }]), null);
-  assert.equal(targetJournalEnd(null), null);
+  assert.equal(targetWebEndUnknown([]), false);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a" }]), true);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a", when: "1000" }]), true);
+  // Grandfathered non-web entries stay outside the proof.
+  assert.equal(targetWebEndUnknown([{ tag: "0000_init" }]), false);
 });
 
-test("ledger-pending tags are target entries past the ledger max", () => {
+test("ledger-pending tags are target web entries missing from the applied set", () => {
   const target = [
+    { tag: "0000_init", when: 1 },
     { tag: "1000_a", when: 1000 },
     { tag: "1001_b", when: 1001 },
     { tag: "1002_c", when: 1002 },
   ];
-  assert.deepEqual(pendingLedgerTags(target, 1002), []);
-  assert.deepEqual(pendingLedgerTags(target, 1005), []);
-  assert.deepEqual(pendingLedgerTags(target, 1000), ["1001_b", "1002_c"]);
-  assert.throws(() => pendingLedgerTags(target, null), /migration_ledger_max/);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002, 9999999999999]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 9999999999999]), ["1001_b", "1002_c"]);
+  // A newer foreign row cannot hide a missing web migration: inclusion, not a max.
+  assert.deepEqual(pendingLedgerTags(target, [9999999999999]), ["1000_a", "1001_b", "1002_c"]);
+  assert.deepEqual(pendingLedgerTags(target, []), ["1000_a", "1001_b", "1002_c"]);
+  assert.throws(() => pendingLedgerTags(target, null), /migration_ledger/);
+  assert.throws(() => pendingLedgerTags(target, [1000, "1001"]), /migration_ledger/);
 });
 
-test("ledger state requires a current database and a numeric ledger max", () => {
-  assert.equal(
-    readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger_max: 1002 }),
-    1002,
+test("ledger state requires a current database and the applied set", () => {
+  assert.deepEqual(
+    readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [1000, 1001] }),
+    [1000, 1001],
   );
+  assert.deepEqual(readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [] }), []);
   for (const body of [
-    { db: "error", pending_migrations: null, migration_ledger_max: null },
-    { db: "ok", pending_migrations: 1, migration_ledger_max: 1002 },
-    { db: "ok", pending_migrations: 0, migration_ledger_max: null },
+    { db: "error", pending_migrations: null, migration_ledger: null },
+    { db: "ok", pending_migrations: 1, migration_ledger: [1000, 1001] },
+    { db: "ok", pending_migrations: 0, migration_ledger: null },
+    { db: "ok", pending_migrations: 0, migration_ledger: [1000, "1001"] },
     { db: "ok", pending_migrations: 0 },
     {},
   ]) {
@@ -1775,12 +1797,12 @@ test("ledger state requires a current database and a numeric ledger max", () => 
 });
 
 test("live ledger read fails closed with a ledger reason on transport errors", async () => {
-  const max = await readLiveProductionLedger({
+  const applied = await readLiveProductionLedger({
     fetchImpl: async () => ({
-      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger_max: 42 }),
+      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
     }),
   });
-  assert.equal(max, 42);
+  assert.deepEqual(applied, [40, 41, 42]);
   await assert.rejects(
     readLiveProductionLedger({
       fetchImpl: async () => {
@@ -1792,7 +1814,7 @@ test("live ledger read fails closed with a ledger reason on transport errors", a
   await assert.rejects(
     readLiveProductionLedger({
       fetchImpl: async () => ({
-        json: async () => ({ db: "error", pending_migrations: null, migration_ledger_max: null }),
+        json: async () => ({ db: "error", pending_migrations: null, migration_ledger: null }),
       }),
     }),
     /ledger/i,
@@ -2147,5 +2169,5 @@ test("check-migrations CLI halts closed when the live Worker predates the ledger
     ],
   );
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /migration_ledger_max/);
+  assert.match(result.stderr, /migration_ledger/);
 });

@@ -23,12 +23,13 @@ export function pendingWebMigrations(rows: readonly { created_at: unknown }[]): 
   return WEB_MIGRATIONS.filter((entry) => !applied.has(entry.when)).length;
 }
 
-// Maximum `created_at` across the whole ledger (web and grandfathered rows
-// alike), or null when the ledger holds no rows. The production deploy gate
-// compares this against the target journal's end to prove a manually migrated
-// production already contains the target's migrations. Shares the validated
-// parse above, so a malformed row fails both signals together.
-export function migrationLedgerMax(rows: readonly { created_at: unknown }[]): number | null {
-  const applied = appliedMigrationTimestamps(rows);
-  return applied.length ? Math.max(...applied) : null;
+// Sorted applied `created_at` set for the production deploy gate: the gate
+// proves a manually migrated production contains the target's migrations by
+// set inclusion, never by high-water mark. A max is not a proof — a newer
+// bot row (or any foreign row) would mask a missing web migration, the exact
+// comparison ci/db-migrate.mjs refuses ("edited SQL, missing history, bot
+// entries, or a newer release cannot hide work"). Shares the validated parse
+// above, so a malformed row fails both signals together.
+export function migrationLedger(rows: readonly { created_at: unknown }[]): number[] {
+  return appliedMigrationTimestamps(rows).sort((a, b) => a - b);
 }

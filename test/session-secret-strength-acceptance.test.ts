@@ -147,24 +147,8 @@ describe("SESSION_SECRET strength gate: weak secrets refuse /up readiness", () =
       expect(typeof body.config).toBe("string");
       expect(body.config as string).not.toBe("");
       expect(body.queue).toMatchObject({ status: "healthy", pending: 3, failed: 2 });
-      // The public body names neither the secret nor its value. Value-based:
-      // single-character secrets collide with field-name substrings (the
-      // pinned `migration_ledger_max` field contains "x"), so a leak is a
-      // value that equals the secret — or embeds it, for longer secrets.
-      const values: unknown[] = [];
-      const collect = (node: unknown): void => {
-        if (typeof node === "string") values.push(node);
-        else if (Array.isArray(node)) node.forEach(collect);
-        else if (node !== null && typeof node === "object")
-          Object.values(node as Record<string, unknown>).forEach(collect);
-      };
-      collect(body);
-      expect(values).not.toContain(secret.trim());
-      if (secret.trim().length > 1) {
-        for (const value of values) {
-          if (typeof value === "string") expect(value).not.toContain(secret.trim());
-        }
-      }
+      // The public body names neither the secret nor its value.
+      expect(text).not.toContain(secret.trim());
       expect(text).not.toContain("SESSION_SECRET");
       expect(text).not.toContain("PLANTED");
       // Server-side only: the log names the secret and the requirement it
@@ -218,7 +202,7 @@ describe("SESSION_SECRET strength gate: valid and rotation-shaped secrets stay r
       expect(Object.keys(body).sort()).toEqual([
         "db",
         "member_access_log_enforcement",
-        "migration_ledger_max",
+        "migration_ledger",
         "pending_migrations",
         "queue",
         "status",

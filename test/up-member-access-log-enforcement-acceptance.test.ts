@@ -20,7 +20,7 @@ import { WEB_MIGRATIONS } from "../src/up";
 import app from "./app";
 import { healthSql } from "./helpers/up";
 
-const ledgerMax = Math.max(...WEB_MIGRATIONS.map((entry) => entry.when));
+const ledgerAll = WEB_MIGRATIONS.map((entry) => entry.when).sort((a, b) => a - b);
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -76,7 +76,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
-      migration_ledger_max: ledgerMax,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -89,7 +89,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
-      migration_ledger_max: ledgerMax,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -107,7 +107,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
-      migration_ledger_max: ledgerMax,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
       member_access_log_enforcement: "log_only",
     });
@@ -142,7 +142,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       [
         "db",
         "pending_migrations",
-        "migration_ledger_max",
+        "migration_ledger",
         "queue",
         "status",
         "member_access_log_enforcement",
@@ -184,7 +184,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "degraded",
       db: "error",
       pending_migrations: null,
-      migration_ledger_max: null,
+      migration_ledger: null,
       queue: healthyQueue,
       member_access_log_enforcement: "log_only",
     });
@@ -216,7 +216,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
         status: "degraded",
         db: "ok",
         pending_migrations: 0,
-        migration_ledger_max: ledgerMax,
+        migration_ledger: ledgerAll,
         config: "missing",
         queue: healthyQueue,
         member_access_log_enforcement: "log_only",

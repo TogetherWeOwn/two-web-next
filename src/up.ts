@@ -37,7 +37,7 @@ export type { DatabaseReadiness } from "./up-database";
 export {
   WEB_MIGRATIONS,
   appliedMigrationTimestamps,
-  migrationLedgerMax,
+  migrationLedger,
   pendingWebMigrations,
 } from "./up-migrations";
 export {

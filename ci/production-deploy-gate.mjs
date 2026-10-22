@@ -174,32 +174,42 @@ export async function pendingProductionMigrations({
   return pendingMigrationTags(target, live);
 }
 
-// Target journal end: the maximum entry `when` in the target journal, or null
-// when any entry lacks a usable timestamp (unknown, never zero: an unknown
-// end fails closed, it never clears against the ledger).
-export function targetJournalEnd(entries) {
-  if (!Array.isArray(entries) || !entries.length) return null;
-  let end = null;
-  for (const entry of entries) {
-    if (typeof entry?.when !== "number" || !Number.isSafeInteger(entry.when)) return null;
-    if (end === null || entry.when > end) end = entry.when;
-  }
-  return end;
+// Web journal entries: the same 1000-series filter as WEB_MIGRATIONS in
+// src/up-migrations.ts. Grandfathered 0000/0001 tags are outside the
+// readiness gate there and outside the ledger proof here.
+const WEB_MIGRATION_TAG_PATTERN = /^1\d{3}_/;
+
+export function targetWebEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) =>
+    WEB_MIGRATION_TAG_PATTERN.test(entry?.tag ?? ""),
+  );
 }
 
-// Target entries the production ledger lacks: `when` past the ledger max.
-// Pure, so the CLI and the tests share one definition.
-export function pendingLedgerTags(targetEntries, ledgerMax) {
-  if (!Number.isSafeInteger(ledgerMax)) {
-    throw new Error("Ledger comparison needs a numeric migration_ledger_max");
+// True when any target web entry lacks a usable timestamp: the ledger cannot
+// prove such an entry applied, so unknown fails closed, it never clears.
+export function targetWebEndUnknown(entries) {
+  return targetWebEntries(entries).some(
+    (entry) => typeof entry?.when !== "number" || !Number.isSafeInteger(entry.when),
+  );
+}
+
+// Target web entries the production ledger lacks: `when` not in the applied
+// set. Set inclusion, never a high-water mark: a max would let a newer bot
+// row (or any foreign row) mask a missing web migration, the exact
+// comparison ci/db-migrate.mjs refuses. Pure, so the CLI and the tests share
+// one definition.
+export function pendingLedgerTags(targetEntries, applied) {
+  if (!Array.isArray(applied) || !applied.every((when) => Number.isSafeInteger(when))) {
+    throw new Error("Ledger comparison needs the applied migration_ledger set");
   }
-  return (Array.isArray(targetEntries) ? targetEntries : [])
-    .filter((entry) => typeof entry?.when === "number" && entry.when > ledgerMax)
+  const have = new Set(applied);
+  return targetWebEntries(targetEntries)
+    .filter((entry) => !have.has(entry.when))
     .map((entry) => entry.tag);
 }
 
-// Live production ledger state from a /up body: db ok, zero pending, and a
-// numeric migration_ledger_max. Anything else fails closed with a ledger
+// Live production ledger state from a /up body: db ok, zero pending, and the
+// applied migration_ledger set. Anything else fails closed with a ledger
 // reason — an unknown, unreadable or stale ledger never clears a promotion.
 export function readLedgerState(body) {
   if (body?.db !== "ok" || body?.pending_migrations !== 0) {
@@ -207,13 +217,13 @@ export function readLedgerState(body) {
       `production ledger is not provably current (db ${JSON.stringify(body?.db)}, pending_migrations ${JSON.stringify(body?.pending_migrations)})`,
     );
   }
-  const ledgerMax = body?.migration_ledger_max;
-  if (!Number.isSafeInteger(ledgerMax)) {
+  const ledger = body?.migration_ledger;
+  if (!Array.isArray(ledger) || !ledger.every((when) => Number.isSafeInteger(when))) {
     throw new Error(
-      `production ledger max is missing or invalid (migration_ledger_max ${JSON.stringify(ledgerMax)}); the live Worker may predate the ledger signal`,
+      `production ledger set is missing or invalid (migration_ledger ${JSON.stringify(ledger)}); the live Worker may predate the ledger signal`,
     );
   }
-  return ledgerMax;
+  return ledger;
 }
 
 export async function readLiveProductionLedger({
@@ -539,8 +549,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // in deploy-production.yml), so an older target can never shadow it
       // with a script that lacks this flag. When the target journal has
       // entries the live Worker's journal lacks, the live production ledger
-      // (/up migration_ledger_max) decides: a ledger already migrated to the
-      // target's journal end clears automatic promotion without any manual
+      // (/up migration_ledger) decides by set inclusion: a ledger holding
+      // every target web entry clears automatic promotion without any manual
       // dispatch, because db-migrate.yml (target production) applied the
       // entries out of band. Otherwise automatic promotion stops here, and
       // manual dispatch stops unless the operator confirms the migrations
@@ -603,9 +613,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
             // The live Worker's journal lags the target: ask the live ledger
             // whether production was already migrated out of band. Equal
             // journals and manual confirmations never reach this read.
-            let ledgerMax;
+            let applied;
             try {
-              ledgerMax = await readLiveProductionLedger({ origin });
+              applied = await readLiveProductionLedger({ origin });
             } catch (error) {
               if (automatic) {
                 throw new Error(
@@ -616,30 +626,30 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
                 `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); the production ledger read failed (${error.message}) — run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
               );
             }
-            const targetEnd = targetJournalEnd(target);
-            if (targetEnd === null) {
+            if (targetWebEndUnknown(target)) {
               if (automatic) {
                 throw new Error(
-                  `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); the target journal end is unknown (missing entry timestamps), so the production ledger cannot prove them applied — automatic production migration is blocked until the least-privilege migrator lands`,
+                  `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); a target web entry lacks a usable timestamp, so the production ledger cannot prove it applied — automatic production migration is blocked until the least-privilege migrator lands`,
                 );
               }
               throw new Error(
-                `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); the target journal end is unknown (missing entry timestamps), so the production ledger cannot prove them applied — run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
+                `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); a target web entry lacks a usable timestamp, so the production ledger cannot prove it applied — run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true`,
               );
             }
-            if (ledgerMax < targetEnd) {
-              const ledgerPending = pendingLedgerTags(target, ledgerMax);
+            const ledgerPending = pendingLedgerTags(target, applied);
+            if (ledgerPending.length) {
               if (automatic) {
                 throw new Error(
-                  `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}, ledger max ${ledgerMax}, target end ${targetEnd}); automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
+                  `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}); automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
                 );
               }
               throw new Error(
-                `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}, ledger max ${ledgerMax}, target end ${targetEnd}); run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true — automatic production migration is blocked until the least-privilege migrator lands`,
+                `Target has ${ledgerPending.length} production migration(s) the production ledger lacks (${ledgerPending.join(", ")}); run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true — automatic production migration is blocked until the least-privilege migrator lands`,
               );
             }
+            const proven = targetWebEntries(target).length;
             console.log(
-              `Production ledger already migrated to the target journal end (ledger max ${ledgerMax} >= target end ${targetEnd}); clearing ${automatic ? "automatic" : "manual"} promotion for ${deploySha} vs live ${liveSha}`,
+              `Production ledger holds all ${proven} target web migration(s) (applied set of ${applied.length}); clearing ${automatic ? "automatic" : "manual"} promotion for ${deploySha} vs live ${liveSha}`,
             );
           }
         } else {

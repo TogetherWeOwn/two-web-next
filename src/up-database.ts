@@ -1,15 +1,16 @@
 import type { Sql, TransactionSql } from "postgres";
-import { migrationLedgerMax, pendingWebMigrations } from "./up-migrations";
+import { migrationLedger, pendingWebMigrations } from "./up-migrations";
 import { QUEUE_READ_TIMEOUT_MS, withTimeout } from "./up-timeout";
 
 export type DatabaseReadiness = {
   db: "ok" | "error";
   pending_migrations: number | null;
   // Informational like `revision`, never part of the readiness verdict: the
-  // maximum `created_at` in the migration ledger, or null when the database
-  // read fails (or the ledger is empty). The production deploy gate reads it
-  // to auto-promote when production was migrated out of band.
-  migration_ledger_max: number | null;
+  // sorted applied `created_at` set, or null when the database read fails
+  // (an empty ledger is `[]`, not null). The production deploy gate proves a
+  // manually migrated production contains the target's migrations by set
+  // inclusion against this array.
+  migration_ledger: number[] | null;
 };
 
 export const HEALTH_STATEMENT_TIMEOUT_MS = 1000;
@@ -42,10 +43,10 @@ export async function withHealthReadTimeout<T>(
 
 export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadiness> {
   let db: DatabaseReadiness["db"] = "error";
-  if (!sql) return { db, pending_migrations: null, migration_ledger_max: null };
+  if (!sql) return { db, pending_migrations: null, migration_ledger: null };
   try {
     const deadline = Date.now() + QUEUE_READ_TIMEOUT_MS;
-    const { pending_migrations, migration_ledger_max } = await withTimeout(
+    const { pending_migrations, migration_ledger } = await withTimeout(
       (async () => {
         // Volatile clock_timestamp() prevents Hyperdrive query caching from
         // turning a cached ping/ledger into false readiness after an outage:
@@ -69,16 +70,16 @@ export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadin
         // One ledger read feeds both signals; a malformed row fails both together.
         return {
           pending_migrations: pendingWebMigrations(rows),
-          migration_ledger_max: migrationLedgerMax(rows),
+          migration_ledger: migrationLedger(rows),
         };
       })(),
       QUEUE_READ_TIMEOUT_MS,
     );
-    return { db, pending_migrations, migration_ledger_max };
+    return { db, pending_migrations, migration_ledger };
   } catch (err) {
     console.warn("Health check could not establish database/schema readiness.", {
       exception: err instanceof Error ? err.name : typeof err,
     });
-    return { db, pending_migrations: null, migration_ledger_max: null };
+    return { db, pending_migrations: null, migration_ledger: null };
   }
 }
