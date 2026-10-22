@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
+import { exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import { keyedMemberRead } from "../member-reads";
 import { memberReadDb } from "../db/member-reads";
+import { safeRequestId } from "../request-log";
 import { MEMBER_MILESTONES_CAP, MEMBER_STATS_BUDGET_MS } from "./stats-limits";
 
 export type Milestone = { type: string; occurredAt: Date; detail: string | null };
@@ -68,6 +70,28 @@ const abortableQuery = <T>(signal: AbortSignal, query: Promise<T>): Promise<T> =
     else signal.addEventListener("abort", aborted, { once: true });
   });
 
+const STATS_UNAVAILABLE_MESSAGE = "Member stats unavailable; showing the unavailable state.";
+const MILESTONES_UNAVAILABLE_MESSAGE = "Member milestones unavailable; keeping membership facts.";
+
+// Class-only warn shared by the stats legs: the exception class tells slow
+// from down from broken, `aborted` tells a budget-trip settle from a live
+// failure, and the validated request_id joins Hono-served lines to
+// `http.request` (Kit callers have no request ID and omit it). Never a driver
+// message (it can carry a connection string) or a member id.
+const warnStatsUnavailable = (
+  message: string,
+  err: unknown,
+  aborted: boolean,
+  requestId: unknown,
+): void => {
+  const validated = safeRequestId(requestId);
+  console.warn(message, {
+    exception: exceptionClass(err),
+    aborted,
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  });
+};
+
 // One budget for connection setup and both optional reads, not one per query.
 // The budget aborts; the source decides: expiry trips the signal and the
 // source settles its timeout outcome (partial facts or unavailable), so no
@@ -76,13 +100,14 @@ const abortableQuery = <T>(signal: AbortSignal, query: Promise<T>): Promise<T> =
 export async function memberStatsWithBudget(
   source: MemberStatsSource,
   id: string,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MEMBER_STATS_BUDGET_MS);
   try {
     return await source(id, controller.signal);
-  } catch {
-    console.warn("Member stats unavailable; showing the unavailable state.");
+  } catch (err) {
+    warnStatsUnavailable(STATS_UNAVAILABLE_MESSAGE, err, controller.signal.aborted, requestId);
     return statsUnavailable();
   } finally {
     clearTimeout(timer);
@@ -96,6 +121,7 @@ export async function readOwnedMemberStats(
   db: Pick<Db, "execute" | "$client">,
   id: string,
   signal: AbortSignal,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   let closing: Promise<void> | undefined;
   const close = () => {
@@ -104,7 +130,7 @@ export async function readOwnedMemberStats(
   signal.addEventListener("abort", close, { once: true });
   try {
     signal.throwIfAborted();
-    return await readMemberStats(db, id, signal);
+    return await readMemberStats(db, id, signal, requestId);
   } finally {
     signal.removeEventListener("abort", close);
     close();
@@ -131,10 +157,15 @@ export async function readMemberStats(
   db: Pick<Db, "execute"> | null,
   id: string,
   signal?: AbortSignal,
+  requestId?: unknown,
 ): Promise<MemberStats | null> {
   if (!db) return null;
   if (!signal)
-    return memberStatsWithBudget((memberId, budget) => readMemberStats(db, memberId, budget), id);
+    return memberStatsWithBudget(
+      (memberId, budget) => readMemberStats(db, memberId, budget, requestId),
+      id,
+      requestId,
+    );
   const connection = memberReadDb(db as Db);
   try {
     signal.throwIfAborted();
@@ -189,11 +220,11 @@ export async function readMemberStats(
             : [];
         }),
       };
-    } catch {
+    } catch (err) {
       // Milestones are optional: a missing view, a failed query, or a budget
       // trip that destroys the owned client keeps the membership facts and
       // reads the milestones as unavailable, never as an empty list.
-      console.warn("Member milestones unavailable; keeping membership facts.");
+      warnStatsUnavailable(MILESTONES_UNAVAILABLE_MESSAGE, err, signal.aborted, requestId);
       return {
         ...membership,
         milestones: [],
@@ -201,8 +232,8 @@ export async function readMemberStats(
         milestonesUnavailable: true,
       };
     }
-  } catch {
-    console.warn("Member stats unavailable; showing the unavailable state.");
+  } catch (err) {
+    warnStatsUnavailable(STATS_UNAVAILABLE_MESSAGE, err, signal.aborted, requestId);
     return statsUnavailable();
   }
 }

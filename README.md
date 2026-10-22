@@ -224,9 +224,11 @@ to execute the same Chromium proof.
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
+| `test/profile-refused-draft-recovery-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts` |
 | `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
@@ -318,12 +320,19 @@ manually authorized dispatch for explicit redeploys; it never deploys on push,
 PR or release. Automatic runs promote only a staging green that soaked 30
 minutes with no newer red staging run, skip cleanly when production already
 serves the target (`/up` revision marker) or there is nothing soaked and green,
-and stop with a clear error when the target journal has entries production
-lacks (automatic migration waits on the least-privilege migrator). An unknown
-live commit after three `/up` reads also stops promotion. A manual re-dispatch
-with `migrations_applied: true` records an audited continuation past either stop
-once `db-migrate.yml` (target production) has applied the target's migrations;
-automatic runs ignore that input and halt on either condition. Repo
+and read the live production ledger via `/up` when the target journal has
+entries production lacks: when the ledger holds every target web entry (set
+inclusion), the run clears automatically; otherwise it stops with a clear
+error (ledger lacks entries, ledger read failed, unusable target timestamp,
+non-ok database, or a live Worker that predates the ledger signal —
+automatic migration otherwise waits on the least-privilege migrator). An
+unknown live commit after three `/up` reads also stops promotion. A manual
+re-dispatch with `migrations_applied: true` records an audited continuation
+past any stop once `db-migrate.yml` (target production) has applied the
+target's migrations; automatic runs ignore that input and halt on those stops
+unless the ledger already proves the target applied. The first promotion
+after the ledger signal ships needs one manual dispatch because the live
+Worker predates it. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
 promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
@@ -499,7 +508,11 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
 ```
 
 `npm run check:moderators -- --help` prints usage to stdout and reads nothing;
-`--json` emits the findings verdict. `npm run check:worker-moderators` parses
+`--json` emits the findings verdict. Both this probe and `audit:moderator-roles`
+use the [offline operator-probe contract](docs/operator-probes.md): usage/input
+refusals with `--json` are one versioned safe error on stderr, stdout empty,
+exit 2. Comparison verdicts and exits 0/1 are unchanged.
+`npm run check:worker-moderators` parses
 the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
 `web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
 `env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
@@ -527,13 +540,10 @@ Pass `--announcement-only` (workflow input `announcement_only`) to run only
 implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
 
-The smoke and drill accept only the documented `--name=value` options and the
-smoke's bare `--announcement-only` flag. Unknown flags (including `--dry-run`),
-duplicates, positional arguments, bare value options and empty values exit 2
-with bounded usage before any action or fetch. There is no preview mode. Each
-run validates all applicable payloads with the bot client's validators before
-its first action or queued carrier; announcement-only validates only its
-announcement. Invalid inputs therefore cannot leave earlier steps applied.
+For smoke/drill help, effect-free preview (default or `--dry-run`), explicit
+apply, JSON errors and repeat-run identities, use the single
+[bot probe staging procedure](docs/bot-probe-staging.md). Both tools' `--help`
+links there without reading target or credential configuration.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
 drill-only half of `docs/parity.md` §6: production web never dispatches
