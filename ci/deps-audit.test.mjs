@@ -19,7 +19,7 @@ import registry from "./deps-audit-registry.cjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluateAudit } from "./deps-audit.mjs";
+import { auditOneLockfile, evaluateAudit } from "./deps-audit.mjs";
 
 const fixture = (name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/deps-audit/${name}.json`, import.meta.url), "utf8"));
@@ -888,6 +888,256 @@ exit 0
     });
     assert.equal(run.status, 1);
     assert.match(run.stderr, /web/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const validBoundary = JSON.stringify({ version: 1, valid: true, responses: 1, pending: 0 });
+
+function retryHarnessDir() {
+  const dir = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "deps-audit-retry-",
+    ),
+  );
+  writeFileSync(join(dir, "package-lock.json"), "{}");
+  return dir;
+}
+
+function completedNpm({ stdout, status = 0, boundary = validBoundary }) {
+  return {
+    error: undefined,
+    status,
+    signal: null,
+    stdout,
+    stderr: "",
+    output: [null, stdout, "", boundary],
+  };
+}
+
+// Real spawnSync error shape: { code } only. spawnSync never sets `killed` (a
+// ChildProcess instance property), so fixtures must not either: a fake
+// `killed: true` would let the ETIMEDOUT retry term be deleted unnoticed.
+function failedNpm({ code, status = null, signal = null }) {
+  return {
+    error: Object.assign(new Error(`spawn npm ${code ?? signal}`), { code }),
+    status,
+    signal,
+    stdout: "",
+    stderr: "",
+    output: [null, "", "", null],
+  };
+}
+
+test("audit retries a timed-out npm execution with a fresh cache, then succeeds", () => {
+  const dir = retryHarnessDir();
+  try {
+    const caches = [];
+    const sleeps = [];
+    const runs = [
+      failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM" }),
+      completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
+    ];
+    const spawn = (_command, args) => {
+      caches.push(args.find((arg) => arg.startsWith("--cache=")));
+      return runs.splice(0, 1)[0];
+    };
+    const result = auditOneLockfile({
+      label: ".",
+      dir,
+      guard: join(dir, "guard"),
+      allowlist: empty,
+      cacheParent: join(dir, "cache-parent"),
+      spawn,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    assert.deepEqual(result, { blocked: [], allowed: [], nonBlocking: [] });
+    assert.equal(caches.length, 2);
+    assert.equal(new Set(caches).size, 2);
+    assert.deepEqual(sleeps, [5_000]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Real shape of a spawnSync result whose child was killed by a signal (OOM,
+// runner SIGKILL): no error, null status, signal set.
+function signalKilledNpm({ signal = "SIGKILL" }) {
+  return {
+    error: undefined,
+    status: null,
+    signal,
+    stdout: "",
+    stderr: "",
+    output: [null, "", "", null],
+  };
+}
+
+test("audit retries a signal-killed npm execution, then succeeds", () => {
+  const dir = retryHarnessDir();
+  try {
+    const caches = [];
+    const sleeps = [];
+    const runs = [
+      signalKilledNpm({ signal: "SIGKILL" }),
+      completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
+    ];
+    const spawn = (_command, args) => {
+      caches.push(args.find((arg) => arg.startsWith("--cache=")));
+      return runs.splice(0, 1)[0];
+    };
+    const result = auditOneLockfile({
+      label: ".",
+      dir,
+      guard: join(dir, "guard"),
+      allowlist: empty,
+      cacheParent: join(dir, "cache-parent"),
+      spawn,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    assert.deepEqual(result, { blocked: [], allowed: [], nonBlocking: [] });
+    assert.equal(caches.length, 2);
+    assert.equal(new Set(caches).size, 2);
+    assert.deepEqual(sleeps, [5_000]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("audit fails fast when npm cannot be spawned", () => {
+  const dir = retryHarnessDir();
+  try {
+    let calls = 0;
+    const sleeps = [];
+    const spawn = () => {
+      calls++;
+      return failedNpm({ code: "ENOENT" });
+    };
+    assert.throws(
+      () =>
+        auditOneLockfile({
+          label: ".",
+          dir,
+          guard: join(dir, "guard"),
+          allowlist: empty,
+          cacheParent: join(dir, "cache-parent"),
+          spawn,
+          sleep: (ms) => sleeps.push(ms),
+        }),
+      /did not complete successfully/,
+    );
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("audit retries bad npm exit statuses, then fails closed", () => {
+  const dir = retryHarnessDir();
+  try {
+    const caches = [];
+    const sleeps = [];
+    const spawn = (_command, args) => {
+      caches.push(args.find((arg) => arg.startsWith("--cache=")));
+      return {
+        error: undefined,
+        status: 2,
+        signal: null,
+        stdout: "",
+        stderr: "npm ERR! boom",
+        output: [null, "", "npm ERR! boom", null],
+      };
+    };
+    assert.throws(
+      () =>
+        auditOneLockfile({
+          label: ".",
+          dir,
+          guard: join(dir, "guard"),
+          allowlist: empty,
+          cacheParent: join(dir, "cache-parent"),
+          spawn,
+          sleep: (ms) => sleeps.push(ms),
+        }),
+      /did not complete successfully/,
+    );
+    assert.equal(caches.length, 3);
+    assert.equal(new Set(caches).size, 3);
+    assert.deepEqual(sleeps, [5_000, 15_000]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("audit does not retry completed runs with findings", () => {
+  const dir = retryHarnessDir();
+  try {
+    let calls = 0;
+    const sleeps = [];
+    const spawn = () => {
+      calls++;
+      return completedNpm({ stdout: JSON.stringify(fixture("high")), status: 1 });
+    };
+    const result = auditOneLockfile({
+      label: ".",
+      dir,
+      guard: join(dir, "guard"),
+      allowlist: empty,
+      cacheParent: join(dir, "cache-parent"),
+      spawn,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    assert.equal(result.blocked.length, 1);
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI retries a failed npm invocation and succeeds on the next attempt", () => {
+  const dir = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "deps-audit-cli-retry-",
+    ),
+  );
+  try {
+    const npm = join(dir, "npm");
+    const count = join(dir, "count");
+    writeFileSync(
+      npm,
+      `#!/bin/sh
+read n x < "$AUDIT_COUNT" 2>/dev/null
+n=\${n:-0}
+n=$((n + 1))
+printf '%s' "$n" > "$AUDIT_COUNT"
+if [ "$n" -eq 1 ]; then exit 2; fi
+printf '%s' "$AUDIT_FIXTURE"
+printf '%s' "$AUDIT_BOUNDARY" >&3
+exit 0
+`,
+    );
+    chmodSync(npm, 0o700);
+    const script = fileURLToPath(new URL("./deps-audit.mjs", import.meta.url));
+    const run = spawnSync(process.execPath, [script], {
+      env: {
+        ...process.env,
+        PATH: dir,
+        PAPERCLIP_RUN_SCRATCH_DIR: dir,
+        AUDIT_COUNT: count,
+        AUDIT_FIXTURE: JSON.stringify(fixture("clean")),
+        AUDIT_BOUNDARY: validBoundary,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stderr, /attempt 1 of 3 did not complete; retrying/);
+    // Root attempt 1 fails, root attempt 2 succeeds, web attempt 1 succeeds.
+    assert.equal(readFileSync(count, "utf8"), "3");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

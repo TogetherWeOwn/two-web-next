@@ -48,6 +48,8 @@ for matching rules, empty-state recovery and cache boundaries.
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
+- [RSVP states and safe recovery](docs/rsvp-recovery.md): seats, waitlist positions,
+  pending Discord mirrors, uncertain writes, and bounded support steps.
 
 ## Develop and test safely
 
@@ -228,6 +230,7 @@ to execute the same Chromium proof.
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
+| `test/profile-composition-browser.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-composition-browser.test.ts` |
 | `test/profile-refused-draft-recovery-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts` |
 | `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
