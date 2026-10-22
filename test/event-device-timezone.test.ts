@@ -44,7 +44,6 @@ type TestEnv = Env & { ADMIN_DB?: Db };
 const ORIGIN = "https://events.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const WORKTREE = fileURLToPath(new URL("../", import.meta.url));
-const BUTTON = /^show in my device timezone$/i;
 const VIEWS = ["Hono", "Kit"] as const;
 type View = (typeof VIEWS)[number];
 
@@ -512,7 +511,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       };
     }
     async function activate(page: Page) {
-      const button = page.getByRole("button", { name: BUTTON });
+      const button = page.getByTestId("event-device-timezone-starts-button");
       expect(await button.count(), "missing explicit device-timezone activation").toBe(1);
       expect(await button.isVisible()).toBe(true);
       expect(await button.isEnabled()).toBe(true);
@@ -577,7 +576,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           const initial = await invariant(page, clock);
           const before = await visibleText(page);
           const assertNoEffects = await guardSideEffects(page);
-          const button = page.getByRole("button", { name: BUTTON });
+          const button = page.getByTestId("event-device-timezone-starts-button");
           const canActivate = (await button.count()) === 1 && (await button.isEnabled());
           // Early capability detection may disable/hide the action and give guidance
           // immediately. Otherwise the actual keyboard activation must surface it.

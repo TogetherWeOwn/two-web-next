@@ -201,9 +201,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
+        // Past drawer: finite-window guard keeps infinity rows from occupying
+        // limit slots (like the sibling upcoming reads), so the pinned
+        // statement carries the same isfinite pair.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
           params.length === 2 &&
           isInstant(params[0]) &&
           params[1] === 20

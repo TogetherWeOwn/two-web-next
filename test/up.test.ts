@@ -242,7 +242,6 @@ describe("GET /up", () => {
       db: "ok",
       pending_migrations: 0,
       queue: healthyQueue,
-      member_access_log_enforcement: "enforcing",
     });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -275,7 +274,6 @@ describe("GET /up", () => {
       db: "ok",
       pending_migrations: 0,
       queue: unknownQueue,
-      member_access_log_enforcement: "enforcing",
     });
   });
   it("answers 503 without DB configuration", async () => {
@@ -287,7 +285,6 @@ describe("GET /up", () => {
       db: "error",
       pending_migrations: null,
       queue: { ...unknownQueue, detail: "queue ledger is not configured." },
-      member_access_log_enforcement: "enforcing",
     });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -305,7 +302,6 @@ describe("GET /up", () => {
       db: "ok",
       pending_migrations: 1,
       queue: healthyQueue,
-      member_access_log_enforcement: "enforcing",
     });
   });
   it("answers 503 when the migration repository will not answer, preserving a successful ping", async () => {
@@ -320,7 +316,6 @@ describe("GET /up", () => {
       db: "ok",
       pending_migrations: null,
       queue: healthyQueue,
-      member_access_log_enforcement: "enforcing",
     });
   });
   it("answers 503 db:error for a failed DB ping and never leaks error messages", async () => {
@@ -342,7 +337,6 @@ describe("GET /up", () => {
         db: "error",
         pending_migrations: null,
         queue: unknownQueue,
-        member_access_log_enforcement: "enforcing",
       });
       // Emission proof: the redaction assert below is vacuous when nothing is
       // logged, so pin the expected warn first (silencing the logger fails here).
@@ -389,19 +383,12 @@ describe("/up required Worker secrets", () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual([
-      "db",
-      "member_access_log_enforcement",
-      "pending_migrations",
-      "queue",
-      "status",
-    ]);
+    expect(Object.keys(body).sort()).toEqual(["db", "pending_migrations", "queue", "status"]);
     expect(body).toEqual({
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
       queue: healthyQueue,
-      member_access_log_enforcement: "enforcing",
     });
   });
   it.each(
@@ -428,7 +415,6 @@ describe("/up required Worker secrets", () => {
           pending_migrations: 0,
           config: "missing",
           queue: healthyQueue,
-          member_access_log_enforcement: "enforcing",
         });
         for (const secret of [...REQUIRED_SECRETS, ...secretValues])
           expect(text).not.toContain(secret);
@@ -458,7 +444,6 @@ describe("/up required Worker secrets", () => {
         db: "error",
         pending_migrations: null,
         queue: healthyQueue,
-        member_access_log_enforcement: "enforcing",
       });
     } finally {
       warning.mockRestore();
@@ -477,7 +462,6 @@ describe("/up required Worker secrets", () => {
         pending_migrations: null,
         config: "missing",
         queue: { ...unknownQueue, detail: "queue ledger is not configured." },
-        member_access_log_enforcement: "enforcing",
       });
       for (const name of REQUIRED_SECRETS) expect(text).not.toContain(name);
       expect(warning).toHaveBeenCalledWith("Health check found required Worker secrets missing.", {
@@ -522,7 +506,6 @@ describe("/up revision marker", () => {
     const res = await app.request("/up", {}, ready());
     expect(Object.keys((await res.json()) as object).sort()).toEqual([
       "db",
-      "member_access_log_enforcement",
       "pending_migrations",
       "queue",
       "status",
@@ -538,7 +521,6 @@ describe("/up revision marker", () => {
       db: "ok",
       pending_migrations: 0,
       queue: healthyQueue,
-      member_access_log_enforcement: "enforcing",
       revision: { version_id: versionId, commit: sha },
     });
   });
@@ -728,7 +710,6 @@ describe("/up bounded reads", () => {
           db: stage === "ping" ? "error" : "ok",
           pending_migrations: null,
           queue: unknownQueue,
-          member_access_log_enforcement: "enforcing",
         });
         expect(vi.getTimerCount()).toBe(0);
       } finally {
