@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  EVENT_UPDATED_SKEW_MS,
   cardTimeLabel,
   isEditedEvent,
+  updatedStampLabel,
   wallDateIso,
   wallTimeHm,
 } from "../src/events/date-format";
@@ -22,15 +22,26 @@ describe("server event date formatters", () => {
   });
 });
 
+describe("edited-event stamp label", () => {
+  const updated = new Date("2029-11-20T15:30:00.000Z");
+
+  it.each([
+    ["UTC", "Tuesday, 20 November 2029 at 15:30 GMT+00:00"],
+    ["Pacific/Auckland", "Wednesday, 21 November 2029 at 04:30 GMT+13:00"],
+    ["not/a-zone", "2029-11-20T15:30:00.000Z"],
+  ])("formats the complete edit date in %s", (zone, expected) => {
+    expect(updatedStampLabel(updated, zone)).toBe(expected);
+  });
+});
+
 describe("edited-event stamp predicate", () => {
   const created = new Date("2028-05-01T12:00:00.000Z");
 
-  it("treats an edit past the skew guard as edited and nothing else", () => {
-    expect(isEditedEvent(created, new Date(created.getTime() + EVENT_UPDATED_SKEW_MS + 1))).toBe(
-      true,
-    );
+  it("treats only edits strictly past 60 seconds as edited", () => {
+    expect(isEditedEvent(created, new Date(created.getTime() + 60_001))).toBe(true);
     expect(isEditedEvent(created, created)).toBe(false);
-    expect(isEditedEvent(created, new Date(created.getTime() + EVENT_UPDATED_SKEW_MS))).toBe(false);
+    expect(isEditedEvent(created, new Date(created.getTime() + 59_999))).toBe(false);
+    expect(isEditedEvent(created, new Date(created.getTime() + 60_000))).toBe(false);
     expect(isEditedEvent(created, new Date(created.getTime() - 1))).toBe(false);
   });
 
