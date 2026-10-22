@@ -80,8 +80,9 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/login", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/community", status: 302, location: "/" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
-  // Stale-tab liveness probe and expired-write recovery (main #239): neither
-  // reads the DB without a session cookie, so both stay 200 during an outage.
+  // Stale-tab liveness probe and expired-write recovery (main #239): the
+  // probe reads no DB without a session cookie, and the recovery landing's
+  // throttle fails open, so both stay 200 during an outage.
   { method: "GET", route: "/auth/status", status: 200, format: "json" },
   { method: "GET", route: "/auth/recover", status: 200, format: "html" },
   // Bare /members is the retired frozen 404: answered before the member gate,

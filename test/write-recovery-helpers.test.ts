@@ -126,7 +126,7 @@ describe("recoveryLanding", () => {
   const app = new Hono();
   app.get("/auth/recover", (c) => recoveryLanding(c));
 
-  it("carries a safe destination into signed cookies and the login link", async () => {
+  it("carries a safe destination into the intended cookie and the login link, arming no pending notice", async () => {
     const res = await app.request("/auth/recover?next=%2Fprofile%3Fedit%3D1", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store, private");
@@ -136,7 +136,9 @@ describe("recoveryLanding", () => {
     expect(html).not.toContain("Unsaved");
     const set = res.headers.getSetCookie();
     expect(set.some((c) => c.startsWith("__Host-two_login_intended="))).toBe(true);
-    expect(set.some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toBe(true);
+    // A bare landing visit never mints pending|: only a genuine
+    // expired-write bounce arms the notice (expiredWriteBounce).
+    expect(set.some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toBe(false);
   });
 
   it.each(["https://evil.example/", "//evil.example/", ""])(
