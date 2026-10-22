@@ -99,6 +99,25 @@ paths = ['''^test/event-gone-alternatives-acceptance\.test\.ts$''']
 regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FA9$''']`,
     ]);
   });
+
+  it("keeps the bot-settings fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Deterministic RFC example-UUID idempotency fixture in the bot settings"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Deterministic RFC example-UUID idempotency fixture in the bot settings tests, asserted literally in expected headers and bodies, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/bot-settings\.test\.ts$''']
+regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']`,
+    ]);
+  });
 });
 
 describe("gitleaks job wiring", () => {
