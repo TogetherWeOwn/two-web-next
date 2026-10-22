@@ -1,5 +1,5 @@
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
-import { fmt } from "../events/pages";
 import { JoinResultBanner, Layout } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
@@ -30,6 +30,7 @@ import {
 import type { MemberView } from "./store";
 import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
 import type { UpcomingGameNight } from "./upcoming";
+import { profileUpcomingMarkup } from "./upcoming-markup";
 import {
   PROFILE_BIO_COUNT_ID,
   PROFILE_BIO_HINT_COPY,
@@ -202,39 +203,6 @@ const MemberStatsBlock: FC<{
     </section>
   );
 };
-
-// Your upcoming game nights (S4): the viewer's own going answers plus
-// waitlisted answers with their position, soonest first. Rendered only on the
-// self-view (the route resolves rows only when viewer == member); a null read
-// hides the section like a null stats read hides the stats block. Titles and
-// venues render through JSX interpolation only, never raw HTML.
-const UpcomingGameNightsBlock: FC<{ upcoming: UpcomingGameNight[] }> = ({ upcoming }) => (
-  <section class="profile-panel" aria-labelledby="upcoming-heading" data-testid="profile-upcoming">
-    <h2 id="upcoming-heading">Your upcoming game nights</h2>
-    {upcoming.length > 0 ? (
-      <ol class="profile-upcoming-list">
-        {upcoming.map((night) => (
-          <li data-testid="profile-upcoming-item">
-            <a href={`/e/${night.eventKey}`}>{night.title}</a>{" "}
-            <time datetime={night.startsAt.toISOString()}>
-              {fmt(night.startsAt, night.timezone)}
-            </time>
-            <p>{night.location ?? "Venue to be announced"}</p>
-            {night.status === "waitlisted" ? (
-              <p data-testid="profile-upcoming-position">
-                Waitlist position {night.waitlistPosition}
-              </p>
-            ) : null}
-          </li>
-        ))}
-      </ol>
-    ) : (
-      <p data-testid="profile-upcoming-empty">
-        Nothing booked yet. <a href="/events">Browse the schedule</a> to find your next game night.
-      </p>
-    )}
-  </section>
-);
 
 // Share tags (TOG-6793): the canonical is always the shareable member URL,
 // so /profile and /members/{user} never present as duplicates. The
@@ -443,7 +411,7 @@ export const ProfilePage: FC<{
             draftWarning={statsDraftWarning}
           />
         ) : null}
-        {upcoming ? <UpcomingGameNightsBlock upcoming={upcoming} /> : null}
+        {upcoming ? raw(profileUpcomingMarkup(upcoming)) : null}
         {isOwner ? (
           <section
             class="profile-panel profile-editor"

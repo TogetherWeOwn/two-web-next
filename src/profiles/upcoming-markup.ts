@@ -2,9 +2,9 @@ import { fmt } from "../events/pages";
 import { escapeHtml } from "../html-escape";
 import type { UpcomingGameNight } from "./upcoming";
 
-/** Static SSR markup for the csr=false Kit profile routes. Escape every stored
- * value, including attributes, before the view admits this through {@html}.
- * Keep the Hono UpcomingGameNightsBlock's markup/copy contract. */
+/** Shared SSR markup for Hono and the csr=false Kit profile routes. Escape every
+ * stored value, including attributes, before Hono raw() or Kit {@html} admits
+ * it. One renderer keeps both views' markup, copy and escaping in sync. */
 export function profileUpcomingMarkup(upcoming: UpcomingGameNight[]): string {
   const content = upcoming.length
     ? `<ol class="profile-upcoming-list">${upcoming
