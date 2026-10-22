@@ -10,6 +10,13 @@ const knownSeverities = new Set(["info", "low", "moderate", "high", "critical"])
 // "web" is the Kit workspace at web/. Keys in the printed result and the
 // optional allowlist `lockfile` scope use exactly these labels.
 const lockfileLabels = [".", "web"];
+// A single attempt can catch a registry-edge stall that a fresh attempt sails
+// through (npm normally answers in seconds), so retry the *execution* of
+// `npm audit` a bounded number of times. Findings, invalid reports and
+// registry-boundary failures still fail immediately, and the gate still fails
+// closed after the last attempt. Attempts = delays + 1.
+const auditTimeoutMs = 120_000;
+const auditRetryDelaysMs = [5_000, 15_000];
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value) => typeof value === "string" && value.trim().length > 0;
 
@@ -178,64 +185,104 @@ export function evaluateAudit(
   return result;
 }
 
-function auditOneLockfile({ label, dir, guard, allowlist, cacheParent }) {
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isTransientExecutionFailure(audit) {
+  // npm produced no verdict: the attempt was killed by our timeout (or
+  // externally), crashed, or exited outside npm's 0/1 audit contract. Other
+  // spawn errors (ENOENT, EACCES) are deterministic environment bugs:
+  // retrying cannot help, so fail fast.
+  if (audit.error !== undefined) {
+    return audit.error.code === "ETIMEDOUT" || audit.error.killed === true;
+  }
+  return ![0, 1].includes(audit.status);
+}
+
+export function auditOneLockfile({
+  label,
+  dir,
+  guard,
+  allowlist,
+  cacheParent,
+  spawn = spawnSync,
+  sleep = sleepSync,
+  timeoutMs = auditTimeoutMs,
+  retryDelaysMs = auditRetryDelaysMs,
+}) {
   const lockfilePath = join(dir, "package-lock.json");
   if (!existsSync(lockfilePath)) {
     throw new Error(`Missing lockfile for "${label}" at ${lockfilePath}`);
   }
-  // No install scripts, node_modules or application/database credentials needed.
-  // npm's advisory cache can retain old severity even after an online response.
-  // Override inherited config with a fresh, owned cache for every lockfile.
-  const cache = join(cacheParent, label === "." ? "root" : label);
-  mkdirSync(cache, { recursive: true });
-  try {
-    const audit = spawnSync(
-      "npm",
-      [
-        "audit",
-        "--offline=false",
-        `--cache=${cache}`,
-        "--package-lock-only",
-        "--json",
-        "--include=prod",
-        "--include=dev",
-        "--include=optional",
-        "--include=peer",
-      ],
-      {
-        cwd: dir,
-        encoding: "utf8",
-        timeout: 120_000,
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          DEPS_AUDIT_REGISTRY_GUARD: "1",
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(guard)}`,
+  const attempts = retryDelaysMs.length + 1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    // No install scripts, node_modules or application/database credentials needed.
+    // npm's advisory cache can retain old severity even after an online response.
+    // Override inherited config with a fresh, owned cache for every attempt so a
+    // poisoned or partial cache can never leak into a retry.
+    const cache = join(cacheParent, label === "." ? "root" : label, `attempt-${attempt}`);
+    mkdirSync(cache, { recursive: true });
+    try {
+      const audit = spawn(
+        "npm",
+        [
+          "audit",
+          "--offline=false",
+          `--cache=${cache}`,
+          "--package-lock-only",
+          "--json",
+          "--include=prod",
+          "--include=dev",
+          "--include=optional",
+          "--include=peer",
+        ],
+        {
+          cwd: dir,
+          encoding: "utf8",
+          timeout: timeoutMs,
+          maxBuffer: 16 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            DEPS_AUDIT_REGISTRY_GUARD: "1",
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(guard)}`,
+          },
         },
-      },
-    );
-    if (audit.error || ![0, 1].includes(audit.status)) {
-      throw new Error(`npm audit did not complete successfully for "${label}"`);
+      );
+      if (isTransientExecutionFailure(audit)) {
+        if (attempt === attempts) break;
+        console.error(
+          `Dependency audit for "${label}": attempt ${attempt} of ${attempts} did not complete; retrying in ${retryDelaysMs[attempt - 1]}ms`,
+        );
+        sleep(retryDelaysMs[attempt - 1]);
+        continue;
+      }
+      // Only deterministic spawn errors (npm missing, not executable) reach
+      // here: timeouts and bad statuses retry above, completed runs parse below.
+      if (audit.error) {
+        throw new Error(`npm audit did not complete successfully for "${label}"`);
+      }
+      // fd 3 contains only validation state, never registry data or credentials.
+      const boundary = JSON.parse(audit.output[3] || "null");
+      if (
+        !isObject(boundary) ||
+        boundary.version !== 1 ||
+        boundary.valid !== true ||
+        !Number.isSafeInteger(boundary.responses) ||
+        boundary.responses < 1 ||
+        boundary.pending !== 0
+      ) {
+        throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
+      }
+      const report = JSON.parse(audit.stdout);
+      return evaluateAudit(report, allowlist, undefined, label);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new Error(`Invalid JSON for "${label}"`);
+      throw error;
     }
-    // fd 3 contains only validation state, never registry data or credentials.
-    const boundary = JSON.parse(audit.output[3] || "null");
-    if (
-      !isObject(boundary) ||
-      boundary.version !== 1 ||
-      boundary.valid !== true ||
-      !Number.isSafeInteger(boundary.responses) ||
-      boundary.responses < 1 ||
-      boundary.pending !== 0
-    ) {
-      throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
-    }
-    const report = JSON.parse(audit.stdout);
-    return evaluateAudit(report, allowlist, undefined, label);
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new Error(`Invalid JSON for "${label}"`);
-    throw error;
   }
+  throw new Error(`npm audit did not complete successfully for "${label}"`);
 }
 
 export function runAudit() {
