@@ -63,6 +63,20 @@ export const Layout: FC<
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {theme && theme !== "content" ? (
+          // First network hint: the Chakra Petch 700 LCP text must be discovered
+          // with the first document chunk, not after the ~19 KB inlined style
+          // block below. Late discovery left the simulated font completion at
+          // the paint boundary and flipped `/` mobile LCP between FCP and
+          // FCP + ~450 ms across staging runs.
+          <link
+            rel="preload"
+            href="/fonts/chakra-petch-latin-700-normal.woff2"
+            as="font"
+            type="font/woff2"
+            crossorigin="anonymous"
+          />
+        ) : null}
         <meta name="theme-color" content="#141117" />
         <link rel="manifest" href="/site.webmanifest" />
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -117,26 +131,18 @@ export const Layout: FC<
           // preload hints for the same files measured zero. The homepage
           // reuses the exact same bundle: its hero paints at first paint
           // (LCP equals FCP every staging run), so removing the three external
-          // stylesheet requests is the primary FCP improvement. Keep the Chakra Petch
-          // 700 preload for an early font fetch; the Arial-metric 'Display Fallback'
-          // reduces delayed-font layout shift
-          // (the preload alone cannot close the FCP/font gap on cold mobile). The block is
-          // allowlisted by hash in style-src (no unsafe-inline).
+          // stylesheet requests is the primary FCP improvement. The Chakra Petch
+          // 700 preload stays at the top of the head (above this block) for an
+          // early font fetch; the Arial-metric 'Display Fallback' reduces
+          // delayed-font layout shift (the preload alone cannot close the
+          // FCP/font gap on cold mobile). The block is allowlisted by hash in
+          // style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
           <link rel="stylesheet" href="/styles.css" />
         )}
         {theme ? (
           <>
-            {theme !== "content" ? (
-              <link
-                rel="preload"
-                href="/fonts/chakra-petch-latin-700-normal.woff2"
-                as="font"
-                type="font/woff2"
-                crossorigin="anonymous"
-              />
-            ) : null}
             {!inlineCriticalCss && theme !== "content" ? (
               <>
                 <link rel="stylesheet" href="/theme-tokens.css" />
