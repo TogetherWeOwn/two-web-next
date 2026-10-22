@@ -447,7 +447,7 @@ export interface CalendarState {
   view: CalendarView;
   month: string;
   q: string;
-  game: string;
+  game?: string;
   past: boolean;
   page: number;
 }
@@ -469,7 +469,8 @@ export const calendarShowingPast = (s: CalendarState): boolean => s.past || cale
 export function calendarUrl(s: CalendarState): string {
   const params = new URLSearchParams();
   if (s.q.trim() !== "") params.set("q", s.q);
-  if (s.game.trim() !== "") params.set(EVENTS_GAME_PARAM, s.game.trim());
+  const game = (s.game ?? "").trim();
+  if (game !== "") params.set(EVENTS_GAME_PARAM, game);
   if (s.past) params.set("past", "1");
   if (s.view === "calendar") {
     params.set("view", "calendar");

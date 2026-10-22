@@ -454,7 +454,7 @@
     runSearch();
   });
 
-  // The month-jump form is a native GET form (view + past ride as hidden
+  // The month-jump form is a native GET form (view + game + past ride as hidden
   // fields), so a jump works without this file. With it, submit reuses the
   // fragment flow: the chosen month commits exactly like a month step, focus
   // landing in the new form — or back on the origin submitter on failure.
@@ -466,7 +466,7 @@
   function jumpUrl(formEl) {
     var url = new URL("/events", window.location.origin);
     url.searchParams.set("view", "calendar");
-    ["month", "past"].forEach(function (name) {
+    ["month", "game", "past"].forEach(function (name) {
       var field = formEl.querySelector('[name="' + name + '"]');
       if (field && field.value) url.searchParams.set(name, field.value);
     });

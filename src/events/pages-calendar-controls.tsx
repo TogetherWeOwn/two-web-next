@@ -137,17 +137,19 @@ export const CalendarSearchForm: FC<{
       aria-describedby="events-search-scope"
       data-testid={EVENTS_SEARCH_TESTID}
     />
-    <label for="events-game-filter">{EVENTS_GAME_FILTER_LABEL}</label>
-    <select id="events-game-filter" name="game" data-testid={EVENTS_GAME_FILTER_TESTID}>
-      <option value="" selected={gameFilter === null}>
-        {EVENTS_GAME_ALL_COPY}
-      </option>
-      {games.map((game) => (
-        <option value={game} selected={game === gameFilter}>
-          {game}
+    <span class="schedule-game-filter">
+      <label for="events-game-filter">{EVENTS_GAME_FILTER_LABEL}</label>
+      <select id="events-game-filter" name="game" data-testid={EVENTS_GAME_FILTER_TESTID}>
+        <option value="" selected={gameFilter === null}>
+          {EVENTS_GAME_ALL_COPY}
         </option>
-      ))}
-    </select>
+        {games.map((game) => (
+          <option value={game} selected={game === gameFilter}>
+            {game}
+          </option>
+        ))}
+      </select>
+    </span>
     <button class="btn" type="submit">
       Search
     </button>
