@@ -153,7 +153,7 @@ describe("session-adjacent reads on the shared budget", () => {
     expect(await f.sessions.get(member.tokenHash)).not.toBeNull();
   });
 
-  it("keeps admitted /auth/recover behavior: landing copy plus the two pending cookies", async () => {
+  it("keeps admitted /auth/recover behavior: landing copy plus the intended cookie, no pre-armed notice", async () => {
     const f = fixture();
     const res = await f.request("/auth/recover?next=%2Fprofile%3Fedit%3D1");
     expect(res.status).toBe(200);
@@ -162,12 +162,14 @@ describe("session-adjacent reads on the shared budget", () => {
     const html = await res.text();
     expect(html).toContain("Your earlier changes were not saved");
     expect(html).toContain('href="/auth/discord?next=%2Fprofile%3Fedit%3D1"');
+    // No pre-arm: a bare visit mints only the intended-destination cookie.
+    // The pending| notice is armed solely by a genuine expired-write bounce.
     const set = res.headers.getSetCookie();
-    expect(set).toHaveLength(2);
+    expect(set).toHaveLength(1);
     const joined = set.join("\n");
     expect(joined).toContain("__Host-two_login_intended=");
-    expect(joined).toContain("__Host-two_expired_write=");
-    expect(joined).toContain("pending");
+    expect(joined).not.toContain("__Host-two_expired_write=");
+    expect(joined).not.toContain("pending");
     for (const cookie of set) {
       expect(cookie).toContain("Secure");
       expect(cookie).toContain("HttpOnly");
@@ -275,24 +277,44 @@ describe("session-adjacent reads on the shared budget", () => {
   });
 
   it("spends one shared hit per admitted session-adjacent read", async () => {
-    for (const path of ["/auth/status", "/auth/recover?next=%2Fprofile", "/events.json"]) {
+    const cases = [
+      { path: "/auth/status", auth: 0 },
+      { path: "/auth/recover?next=%2Fprofile", auth: 1 },
+      { path: "/events.json", auth: 0 },
+    ] as const;
+    for (const { path, auth: authHits } of cases) {
       const f = fixture();
       const res = await f.request(path);
       expect(res.status, path).not.toBe(429);
-      expect(f.hits, path).toHaveLength(1);
-      expect(f.hits[0]!.bucket, path).toBe(`events-read:${IP}`);
+      const shared = f.hits.filter((hit) => hit.bucket.startsWith("events-read:"));
+      expect(shared, path).toHaveLength(1);
+      expect(shared[0]!.bucket, path).toBe(`events-read:${IP}`);
+      const auth = f.hits.filter((hit) => hit.bucket.startsWith("login-recover:"));
+      expect(auth, path).toHaveLength(authHits);
+      if (authHits > 0) expect(auth[0]!.bucket, path).toBe(`login-recover:${IP}`);
     }
   });
 
   it("shares one budget across the new reads and the sibling pages", async () => {
     const f = fixture();
+    // The landing also spends its 10/min auth bucket, so only the even
+    // iterations visit it (10 admitted landings stay inside that bucket);
+    // odd iterations spend the shared budget on a second status read.
+    // Total: 60 admitted shared hits, 10 auth hits, zero refusals.
     for (let n = 0; n < 20; n++) {
       expect((await f.request("/auth/status")).status).toBe(200);
-      expect((await f.request("/auth/recover?next=%2Fprofile")).status).toBe(200);
       expect((await f.request("/events.json")).status).toBe(401);
+      if (n % 2 === 0) {
+        expect((await f.request("/auth/recover?next=%2Fprofile")).status).toBe(200);
+      } else {
+        expect((await f.request("/auth/status")).status).toBe(200);
+      }
     }
-    expect(f.hits).toHaveLength(60);
-    expect(new Set(f.hits.map((hit) => hit.bucket))).toEqual(new Set([`events-read:${IP}`]));
+    const shared = f.hits.filter((hit) => hit.bucket.startsWith("events-read:"));
+    expect(shared).toHaveLength(60);
+    expect(new Set(shared.map((hit) => hit.bucket))).toEqual(new Set([`events-read:${IP}`]));
+    const auth = f.hits.filter((hit) => hit.bucket.startsWith("login-recover:"));
+    expect(auth).toHaveLength(10);
     const sibling = await f.request("/events?q=chess", { headers: { accept: "application/json" } });
     expect(sibling.status).toBe(429);
     const body = (await sibling.json()) as { request_id?: unknown };
