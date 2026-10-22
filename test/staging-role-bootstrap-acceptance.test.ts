@@ -68,10 +68,6 @@ const {
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW_PATH = resolve(repoRoot, ".github/workflows/staging-role-bootstrap.yml");
-// Built dynamically so the missing implementation is a RED test failure,
-// not a compile-time module error: every behavior test below fails with a
-// clear RED message until the Builder lands the script.
-const BOOTSTRAP_SPECIFIER = ["..", "ci", "staging-role-bootstrap.mjs"].join("/");
 
 interface RoleRow {
   rolname: string;
@@ -110,12 +106,9 @@ interface BootstrapModule {
 async function bootstrapModule(): Promise<BootstrapModule> {
   let loaded: unknown;
   try {
-    loaded = await import(BOOTSTRAP_SPECIFIER);
+    loaded = await import("../ci/staging-role-bootstrap.mjs");
   } catch (error) {
-    throw new Error(
-      "RED: ci/staging-role-bootstrap.mjs does not exist yet — the Builder implements the fixed-purpose staging role bootstrap there.",
-      { cause: error },
-    );
+    throw new Error("Failed to load ci/staging-role-bootstrap.mjs.", { cause: error });
   }
   return loaded as BootstrapModule;
 }
