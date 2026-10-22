@@ -251,6 +251,10 @@ export function registerCalendarRoutes(
     const pastGen = pastSource ? anonCacheGeneration() : 0;
     const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
     c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
+    // Browsing renders are public and shared, like the Kit twin: name the
+    // Cookie variance so shared caches key anonymous and signed-in shells
+    // apart. Searching renders stay private no-store with no Vary.
+    if (!input.searching) c.header("vary", "Cookie");
     const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
