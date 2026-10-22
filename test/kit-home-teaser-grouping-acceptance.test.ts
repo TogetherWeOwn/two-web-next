@@ -9,9 +9,11 @@
 //
 // The Kit page groups with the same shared helper the Hono screen uses
 // (`src/events/teaser-groups.ts`, `groupTeaserEvents(rows, now)`): same
-// event-timezone day buckets, same order, same headings and testids. Most
-// tests below are RED until the builder lands; the empty/unavailable
-// controls stay green throughout.
+// event-timezone day buckets, same order, same headings and testids, pinned
+// here through matching boundary renders on both renderers. Direct helper
+// units live in the companion helper-acceptance file. Most tests below are
+// RED until the builder lands; the empty/unavailable controls stay green
+// throughout.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -213,40 +215,6 @@ function groupTeaserRow(html: string, key: TeaserGroupKey, eventKey: string): st
   return hit.split("</li>")[0]!;
 }
 
-interface TeaserInputRow {
-  startsAt: Date;
-  timezone: string;
-  title: string;
-}
-
-interface TeaserGroup {
-  key: TeaserGroupKey;
-  label: string;
-  events: TeaserInputRow[];
-}
-
-type GroupTeaserEvents = (rows: TeaserInputRow[], now: Date) => TeaserGroup[];
-
-async function loadGrouper(): Promise<GroupTeaserEvents> {
-  const specifier: string = "../src/events/teaser-groups";
-  let mod: unknown = null;
-  try {
-    mod = (await import(specifier)) as unknown;
-  } catch {
-    mod = null;
-  }
-  expect(
-    mod,
-    "shared helper src/events/teaser-groups.ts is missing: the builder has not landed it yet",
-  ).toBeTruthy();
-  const fn = (mod as { groupTeaserEvents?: unknown }).groupTeaserEvents;
-  expect(
-    typeof fn,
-    "src/events/teaser-groups.ts must export a groupTeaserEvents(rows, now) function",
-  ).toBe("function");
-  return fn as GroupTeaserEvents;
-}
-
 describe("Kit teaser grouping acceptance: grouped render", () => {
   it("groups three upcoming rows into Tonight / This week / Later in start order", () => {
     freezeNow();
@@ -339,6 +307,24 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
     expect(html).not.toContain(`data-testid="${GROUP_TESTIDS.later}"`);
   });
 
+  it("buckets the same instant per event zone: UTC tomorrow, Auckland tonight", () => {
+    freezeNow(new Date("2030-06-01T23:30:00Z"));
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          canonicalEvent("utc-1", "UTC tomorrow game", "2030-06-02T00:30:00Z", {
+            timezone: "UTC",
+          }),
+          canonicalEvent("auckland-1", "Auckland tonight game", "2030-06-02T00:30:00Z", {
+            timezone: "Pacific/Auckland",
+          }),
+        ],
+      }),
+    );
+    expect(groupSlice(html, "this-week")).toContain("UTC tomorrow game");
+    expect(groupSlice(html, "tonight")).toContain("Auckland tonight game");
+  });
+
   it("reads an invalid zone as UTC for both bucket and label", () => {
     freezeNow();
     const html = renderPage(
@@ -390,31 +376,6 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
     expect(later).toContain('data-testid="home-event-discord"');
     expect(later).toContain("RSVP in Discord");
     expect(later).not.toContain("going");
-  });
-
-  it("assigns rows to the same buckets as the shared helper, never its own copy", async () => {
-    const group = await loadGrouper();
-    const at = new Date("2030-06-01T23:30:00Z");
-    freezeNow(at);
-    const rows: KitCanonicalRow[] = [
-      canonicalEvent("utc-1", "UTC tomorrow game", "2030-06-02T00:30:00Z", {
-        timezone: "UTC",
-      }),
-      canonicalEvent("auckland-1", "Auckland tonight game", "2030-06-02T00:30:00Z", {
-        timezone: "Pacific/Auckland",
-      }),
-      canonicalEvent("later-1", "Later game night", "2030-06-12T10:00:00Z", {
-        timezone: "UTC",
-      }),
-    ];
-    const expected = group(rows, at);
-    const html = renderPage(baseData({ upcomingEvents: rows }));
-    for (const bucket of expected) {
-      for (const row of bucket.events) {
-        expect(groupSlice(html, bucket.key)).toContain(row.title);
-      }
-    }
-    expect(expected.flatMap((bucket) => bucket.events)).toHaveLength(3);
   });
 
   it("renders grouped with no client script: group blocks carry no island", () => {

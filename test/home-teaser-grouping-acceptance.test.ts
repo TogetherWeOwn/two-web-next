@@ -20,8 +20,11 @@
 // - Empty/unavailable states, the 3-row cap, going counts, the Full marker
 //   and Discord rows render exactly as today; grouping adds no reads.
 //
-// Most tests below are RED until the builder lands (missing helper and group
-// blocks); the "unchanged behavior" controls stay green throughout.
+// Direct helper units live in the companion helper-acceptance file (loaded
+// through the repo's esbuild bundle harness, since the static gates forbid
+// importing a not-yet-existing module). Most tests below are RED until the
+// builder lands (missing group blocks); the "unchanged behavior" controls
+// stay green throughout.
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -368,6 +371,21 @@ describe("teaser grouping acceptance: Hono grouped render", () => {
     expect(html).not.toContain("Invalid/Zone");
   });
 
+  it("clamps an in-progress row that started yesterday to tonight, never drops it", async () => {
+    freezeNow();
+    const f = fixture([
+      windowed(1, "2030-07-03T20:00:00Z", {
+        timezone: "UTC",
+        endsAt: instant("2030-07-04T20:00:00Z"),
+      }),
+      windowed(2, "2030-07-13T10:00:00Z", { timezone: "UTC" }),
+    ]);
+    const html = await (await f.request()).text();
+    expect(groupSlice(html, "tonight")).toContain("Game night 1");
+    expect(groupSlice(html, "later")).toContain("Game night 2");
+    expect(teaserCardCount(html)).toBe(2);
+  });
+
   it("omits empty groups when every row lands tonight", async () => {
     freezeNow();
     const f = fixture([windowed(1, "2030-07-04T19:00:00Z"), windowed(2, "2030-07-04T20:00:00Z")]);
@@ -378,6 +396,8 @@ describe("teaser grouping acceptance: Hono grouped render", () => {
     expect(html).toContain('data-testid="home-events-list"');
     expect(html).toContain("See all events");
     expect(teaserCardCount(html)).toBe(2);
+    const tonight = groupSlice(html, "tonight");
+    expect(tonight.indexOf("Game night 1")).toBeLessThan(tonight.indexOf("Game night 2"));
   });
 
   it("renders a lone later row under its own heading with list and link intact", async () => {
@@ -406,6 +426,8 @@ describe("teaser grouping acceptance: Hono grouped render", () => {
     expect(groupCardCount(html, "tonight")).toBe(2);
     expect(groupCardCount(html, "this-week")).toBe(1);
     expect(teaserCardCount(html)).toBe(3);
+    const tonight = groupSlice(html, "tonight");
+    expect(tonight.indexOf("Game night 1")).toBeLessThan(tonight.indexOf("Game night 2"));
   });
 
   it("groups Discord snapshot rows with canonical rows and keeps the RSVP copy", async () => {
@@ -525,239 +547,6 @@ describe("teaser grouping acceptance: unchanged behavior controls", () => {
   });
 });
 
-const TEASER_GROUPS_SPECIFIER: string = "../src/events/teaser-groups";
-
-interface TeaserInputRow {
-  startsAt: Date;
-  timezone: string;
-  title: string;
-}
-
-interface TeaserGroup {
-  key: TeaserGroupKey;
-  label: string;
-  events: TeaserInputRow[];
-}
-
-type GroupTeaserEvents = (rows: TeaserInputRow[], now: Date) => TeaserGroup[];
-
-async function loadGrouper(): Promise<GroupTeaserEvents> {
-  let mod: unknown = null;
-  try {
-    mod = (await import(TEASER_GROUPS_SPECIFIER)) as unknown;
-  } catch {
-    mod = null;
-  }
-  expect(
-    mod,
-    "shared helper src/events/teaser-groups.ts is missing: the builder has not landed it yet",
-  ).toBeTruthy();
-  const fn = (mod as { groupTeaserEvents?: unknown }).groupTeaserEvents;
-  expect(
-    typeof fn,
-    "src/events/teaser-groups.ts must export a groupTeaserEvents(rows, now) function",
-  ).toBe("function");
-  return fn as GroupTeaserEvents;
-}
-
-function inputRow(startsAt: string, timezone: string, title: string): TeaserInputRow {
-  return { startsAt: instant(startsAt), timezone, title };
-}
-
-function bucketOf(groups: TeaserGroup[], title: string): TeaserGroupKey {
-  const hit = groups.find((group) => group.events.some((row) => row.title === title));
-  if (!hit) throw new Error(`no bucket for ${title}`);
-  return hit.key;
-}
-
-function bucketOfStart(groups: TeaserGroup[], startsAt: Date): TeaserGroupKey {
-  const hit = groups.find((group) =>
-    group.events.some((row) => row.startsAt.getTime() === startsAt.getTime()),
-  );
-  if (!hit) throw new Error(`no bucket for ${startsAt.toISOString()}`);
-  return hit.key;
-}
-
-/** Sealed rows prove the helper buckets from startsAt/timezone alone. */
-function sealedRow(startsAt: Date, timezone: string, title: string): TeaserInputRow {
-  const target: TeaserInputRow = { startsAt, timezone, title };
-  return new Proxy(target, {
-    get(t, p, r) {
-      if (p === "startsAt" || p === "timezone" || typeof p === "symbol") {
-        return Reflect.get(t, p, r);
-      }
-      throw new Error(
-        `groupTeaserEvents must bucket from startsAt/timezone only (read ${String(p)}); pass rows through by reference`,
-      );
-    },
-  });
-}
-
-function zoneOffsetMinutes(at: Date, zone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: zone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(at);
-  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? "";
-  const wall = Date.UTC(
-    Number(get("year")),
-    Number(get("month")) - 1,
-    Number(get("day")),
-    Number(get("hour")) % 24,
-    Number(get("minute")),
-    Number(get("second")),
-  );
-  return Math.round((wall - at.getTime()) / 60000);
-}
-
-describe("teaser grouping acceptance: shared helper units", () => {
-  it("buckets tonight, this-week and later with stable keys, labels and order", async () => {
-    const group = await loadGrouper();
-    const groups = group(
-      [
-        inputRow("2030-07-04T19:00:00Z", "Europe/London", "tonight"),
-        inputRow("2030-07-05T10:00:00Z", "Europe/London", "week"),
-        inputRow("2030-07-13T10:00:00Z", "Europe/London", "later"),
-      ],
-      NOW,
-    );
-    expect(groups.map((g) => g.key)).toEqual(["tonight", "this-week", "later"]);
-    expect(groups.map((g) => g.label)).toEqual(["Tonight", "This week", "Later"]);
-    expect(bucketOf(groups, "tonight")).toBe("tonight");
-    expect(bucketOf(groups, "week")).toBe("this-week");
-    expect(bucketOf(groups, "later")).toBe("later");
-    expect(groups.flatMap((g) => g.events)).toHaveLength(3);
-  });
-
-  it("returns no groups for no rows and a lone group when one bucket fills", async () => {
-    const group = await loadGrouper();
-    expect(group([], NOW)).toEqual([]);
-    const lone = group([inputRow("2030-07-13T10:00:00Z", "UTC", "later")], NOW);
-    expect(lone.map((g) => g.key)).toEqual(["later"]);
-    expect(lone[0]?.events.map((row) => row.title)).toEqual(["later"]);
-  });
-
-  it("puts an exact-midnight start on the next day, never tonight", async () => {
-    const group = await loadGrouper();
-    const now = instant("2030-07-04T23:30:00Z");
-    const groups = group(
-      [
-        inputRow("2030-07-04T23:59:00Z", "UTC", "late"),
-        inputRow("2030-07-05T00:00:00Z", "UTC", "midnight"),
-      ],
-      now,
-    );
-    expect(bucketOf(groups, "late")).toBe("tonight");
-    expect(bucketOf(groups, "midnight")).toBe("this-week");
-  });
-
-  it("buckets the same instant per event zone: UTC tomorrow, Auckland tonight", async () => {
-    const group = await loadGrouper();
-    const groups = group(
-      [
-        inputRow("2030-06-02T00:30:00Z", "UTC", "utc"),
-        inputRow("2030-06-02T00:30:00Z", "Pacific/Auckland", "auckland"),
-      ],
-      instant("2030-06-01T23:30:00Z"),
-    );
-    expect(bucketOf(groups, "utc")).toBe("this-week");
-    expect(bucketOf(groups, "auckland")).toBe("tonight");
-  });
-
-  it("keeps day 7 in This week and moves day 8 to Later", async () => {
-    const group = await loadGrouper();
-    const groups = group(
-      [
-        inputRow("2030-07-11T18:00:00Z", "UTC", "day-7"),
-        inputRow("2030-07-12T18:00:00Z", "UTC", "day-8"),
-      ],
-      NOW,
-    );
-    expect(bucketOf(groups, "day-7")).toBe("this-week");
-    expect(bucketOf(groups, "day-8")).toBe("later");
-  });
-
-  it("follows the wall calendar across DST transitions, not hour counts", async () => {
-    const group = await loadGrouper();
-    // Spring forward (US Eastern 2030-03-10): 23 hours apart, adjacent days.
-    const springNow = instant("2030-03-09T17:00:00Z");
-    const springRow = instant("2030-03-10T16:00:00Z");
-    expect(zoneOffsetMinutes(springNow, "America/New_York")).toBe(-300);
-    expect(zoneOffsetMinutes(springRow, "America/New_York")).toBe(-240);
-    expect(springRow.getTime() - springNow.getTime()).toBe(23 * 3600_000);
-    const spring = group(
-      [inputRow("2030-03-10T16:00:00Z", "America/New_York", "spring")],
-      springNow,
-    );
-    expect(bucketOf(spring, "spring")).toBe("this-week");
-    // Fall back (US Eastern 2030-11-03): 24 hours apart, the same wall day.
-    const fallNow = instant("2030-11-03T04:30:00Z");
-    const fallRow = instant("2030-11-04T04:30:00Z");
-    expect(zoneOffsetMinutes(fallNow, "America/New_York")).toBe(-240);
-    expect(zoneOffsetMinutes(fallRow, "America/New_York")).toBe(-300);
-    expect(fallRow.getTime() - fallNow.getTime()).toBe(24 * 3600_000);
-    const fall = group([inputRow("2030-11-04T04:30:00Z", "America/New_York", "fall")], fallNow);
-    expect(bucketOf(fall, "fall")).toBe("tonight");
-  });
-
-  it("reads invalid zones as UTC", async () => {
-    const group = await loadGrouper();
-    const groups = group(
-      [
-        inputRow("2030-07-04T19:00:00Z", "Invalid/Zone", "tonight"),
-        inputRow("2030-07-05T10:00:00Z", "Invalid/Zone", "week"),
-      ],
-      NOW,
-    );
-    expect(bucketOf(groups, "tonight")).toBe("tonight");
-    expect(bucketOf(groups, "week")).toBe("this-week");
-  });
-
-  it("clamps a past-start row to tonight instead of dropping it", async () => {
-    const group = await loadGrouper();
-    const groups = group([inputRow("2030-07-03T20:00:00Z", "UTC", "in-progress")], NOW);
-    expect(groups.map((g) => g.key)).toEqual(["tonight"]);
-    expect(bucketOf(groups, "in-progress")).toBe("tonight");
-  });
-
-  it("buckets from startsAt and timezone alone, never another row field", async () => {
-    const group = await loadGrouper();
-    const late = instant("2030-07-04T19:00:00Z");
-    const week = instant("2030-07-05T10:00:00Z");
-    const later = instant("2030-07-13T10:00:00Z");
-    const groups = group(
-      [
-        sealedRow(late, "Europe/London", "tonight"),
-        sealedRow(week, "Europe/London", "week"),
-        sealedRow(later, "Europe/London", "later"),
-      ],
-      NOW,
-    );
-    expect(bucketOfStart(groups, late)).toBe("tonight");
-    expect(bucketOfStart(groups, week)).toBe("this-week");
-    expect(bucketOfStart(groups, later)).toBe("later");
-  });
-
-  it("preserves input order inside a bucket instead of re-sorting", async () => {
-    const group = await loadGrouper();
-    const groups = group(
-      [
-        inputRow("2030-07-04T20:00:00Z", "UTC", "second"),
-        inputRow("2030-07-04T19:00:00Z", "UTC", "first"),
-      ],
-      NOW,
-    );
-    expect(groups.map((g) => g.key)).toEqual(["tonight"]);
-    expect(groups[0]?.events.map((row) => row.title)).toEqual(["second", "first"]);
-  });
-});
-
 describe("teaser grouping acceptance: shared module pins", () => {
   it("keeps the grouping helper in one shared module", () => {
     let helper: string | null = null;
@@ -785,6 +574,24 @@ describe("teaser grouping acceptance: shared module pins", () => {
     ).toMatch(
       /import\s*\{[^}]*groupTeaserEvents[^}]*\}\s*from\s*["'][^"']*teaser-groups[^"']*["']/,
     );
+  });
+
+  it("buckets from startsAt and timezone alone, never another row field", () => {
+    let helper: string | null = null;
+    try {
+      helper = rootFile("src/events/teaser-groups.ts");
+    } catch {
+      helper = null;
+    }
+    expect(helper, "the builder has not added src/events/teaser-groups.ts yet").toBeTruthy();
+    const src = helper as string;
+    const forbidden = src.match(
+      /\.\s*(title|location|eventKey|goingCount|goingOccupancy|capacity|source|discordId)\b/,
+    );
+    expect(
+      forbidden,
+      `helper must bucket from startsAt/timezone only (reads row${forbidden?.[0] ?? ""}); pass rows through by reference`,
+    ).toBeNull();
   });
 
   it("keeps the helper free of reads: no database, fetch or environment", () => {
