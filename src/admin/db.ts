@@ -5,7 +5,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { Db } from "../db/index";
 import { memberReadDb } from "../db/member-reads";
-import { databaseOptions, databaseUrl } from "../db/connection";
+import { databaseOptions, databaseUrl, installPerRequestStatementBound } from "../db/connection";
 import * as adminSchema from "../db/admin-schema";
 import * as baseSchema from "../db/schema";
 import type { Env } from "../env";
@@ -20,6 +20,10 @@ export async function dbFor(c: { env: Env }): Promise<Db | null> {
   const url = databaseUrl(c.env);
   if (!url) return null;
   const { default: postgres } = await import("postgres");
-  const client = postgres(url, databaseOptions);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // query): a stuck read cancels into the existing outage handling instead
+  // of wedging the page. The client is fresh and exclusively owned, so the
+  // bound is installed on it directly; injected DBs pass through untouched.
+  const client = installPerRequestStatementBound(postgres(url, databaseOptions));
   return memberReadDb(drizzle(client, { schema: { ...baseSchema, ...adminSchema } }));
 }

@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { accepts } from "hono/accepts";
+import { adminWayBack } from "./admin-wayback";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import {
@@ -124,6 +125,7 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
     <RateLimitedPage
       inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
       supportReference={supportReference(c)}
+      adminBack={adminWayBack(c.req.path) ?? undefined}
     />,
   );
 }
