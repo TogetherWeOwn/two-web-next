@@ -3,6 +3,7 @@
 // required == field list` is asserted in test/api-public-openapi.test.ts —
 // the spec cannot drift from the code it documents.
 import {
+  API_PUBLIC_BOUNDS,
   COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
@@ -94,18 +95,50 @@ function error(status: number, description: string) {
   };
 }
 
+/**
+ * These served descriptions are the single source for paging coercion rules.
+ * Consistency and behavioral tests pin the alias, ceiling, integer-prefix
+ * page parsing, defaults and clamp-to-last-page behavior (never a 422).
+ */
 const PAGING_PARAMETERS = [
   {
     name: "page",
     in: "query",
-    schema: { type: "integer", minimum: 1, default: 1 },
-    description: "Past-the-end pages clamp to the last page.",
+    schema: { type: "integer", minimum: 1, maximum: API_PUBLIC_BOUNDS.maxPage, default: 1 },
+    description:
+      "1-based page. Accepts a leading integer prefix (2abc and 2.9 read as 2), " +
+      "with optional sign and leading whitespace. Invalid or malformed values " +
+      "without an integer prefix, or values below 1, fall back to the default 1; " +
+      `out-of-range values are coerced: capped at the maximum ${API_PUBLIC_BOUNDS.maxPage} pages, then ` +
+      "clamped to the last page. Never a 422.",
   },
   {
     name: "per_page",
     in: "query",
-    schema: { type: "integer", minimum: 1, maximum: 20, default: 20 },
-    description: "Collection cap: at most 20 rows per response.",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Rows per page. Invalid or malformed values fall back to the default 20; " +
+      "out-of-range values are clamped and coerced to 1..20. Takes precedence " +
+      "over the limit alias when both are present.",
+  },
+  {
+    name: "limit",
+    in: "query",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Alias for per_page with identical bounds and defaults. Invalid or " +
+      "malformed values fall back to the default 20; out-of-range values are " +
+      "clamped and coerced to 1..20. Ignored when per_page is present.",
   },
 ];
 

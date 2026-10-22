@@ -42,7 +42,6 @@ describe.skipIf(!process.env.DATABASE_URL)(
           ...env,
           ADMIN_DB: db,
           SESSION_STORE: sessions,
-          MEMBER_ACCESS_LOG_ENFORCE: "false",
         },
       );
     const denial = async (response: Response, checkRows = true) => {

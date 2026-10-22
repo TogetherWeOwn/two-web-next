@@ -68,7 +68,7 @@ describe("performance CI", () => {
           expect(html).toContain("Lighthouse fixture game night");
           expect(html).toContain(fixtureKey);
           expect(html).toContain("Community voice channel");
-          expect(html).toContain(path === "/" ? "3 going" : "3 of 20 going");
+          expect(html).toContain("3 of 20 going");
           expect(html).toMatch(/<time\b[^>]*datetime="[^"]+"/);
         }
         if (path === "/") {
@@ -162,6 +162,8 @@ describe("performance CI", () => {
         timezone: "Europe/London",
         location: "Community voice channel",
         goingCount: 3,
+        goingOccupancy: 3,
+        capacity: 20,
       },
     ]);
     expect(featured).toEqual([
@@ -295,7 +297,11 @@ describe("performance CI", () => {
       (html: string) =>
         html.replace(/(<ul\b[^>]*data-testid="home-events-list"[^>]*>)[\s\S]*?(<\/ul>)/, "$1$2"),
     ],
-    ["homepage missing aggregate", "/", (html: string) => html.replace("3 going", "0 going")],
+    [
+      "homepage missing aggregate",
+      "/",
+      (html: string) => html.replace("3 of 20 going", "0 of 20 going"),
+    ],
     [
       "homepage missing featured fixture",
       "/",
