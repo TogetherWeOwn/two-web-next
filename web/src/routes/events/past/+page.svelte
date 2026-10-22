@@ -4,11 +4,15 @@ import Shell from "#lib/Shell.svelte";
 import {
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
+  PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_PAGER_NEWER_TESTID,
+  PAST_EVENTS_PAGER_OLDER_TESTID,
+  PAST_EVENTS_PAGER_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   pastEventsOutOfRangeCopy,
@@ -43,7 +47,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     <div class="schedule-heading">
       <p class="strap">The archive</p>
       <h1 id="past-events-heading" tabindex="-1">Past events</h1>
-      <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+      <p>Game nights we’ve shared. Find the next one in the <a href="/events">upcoming schedule</a>.</p>
     </div>
     <p>
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
@@ -83,13 +87,13 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
             <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
           </div>
         {:else}
-          <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}</p>
+          <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}{" "}<a href={pastEventsUrl(1, q)}>Back to page 1</a></p>
         {/if}
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#each rows as e (e.eventKey)}<EventCard {e} />{/each}</ul>
-    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>Page {page} of {totalPages}</span>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
-    <p><a href="/events">Back to upcoming events</a></p>
+    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>Page {page} of {totalPages}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
+    <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>
   {@html copyLinkIsland}

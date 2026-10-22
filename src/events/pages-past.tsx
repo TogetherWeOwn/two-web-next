@@ -4,11 +4,15 @@ import { canonicalUrl } from "../seo";
 import {
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
+  PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_PAGER_NEWER_TESTID,
+  PAST_EVENTS_PAGER_OLDER_TESTID,
+  PAST_EVENTS_PAGER_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   goingCountText,
@@ -70,11 +74,14 @@ export const PastEventsPage: FC<{
       aria-labelledby="past-events-heading"
     >
       <div class="schedule-heading">
-        <p class="strap">The archive</p>
+        <p class="strap">The archive</p>{" "}
         <h1 id="past-events-heading" tabindex={-1}>
           Past events
-        </h1>
-        <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+        </h1>{" "}
+        <p>
+          Game nights we’ve shared. Find the next one in the <a href="/events">upcoming schedule</a>
+          .
+        </p>
       </div>
       {/* Feed links live outside the binder's swapped zones (state/list/pager)
           so fragment turns never swallow them; same helpers as the calendar. */}
@@ -123,7 +130,8 @@ export const PastEventsPage: FC<{
             </div>
           ) : (
             <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>
-              {pastEventsOutOfRangeCopy(page, totalPages)}
+              {pastEventsOutOfRangeCopy(page, totalPages)}{" "}
+              <a href={pastEventsUrl(1, q)}>Back to page 1</a>
             </p>
           )
         ) : null}
@@ -133,9 +141,13 @@ export const PastEventsPage: FC<{
           <Card e={e} />
         ))}
       </ul>
-      <nav aria-label="Past event pages" data-archive-pager>
+      <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
         {page > 1 && totalPages > 0 ? (
-          <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>
+          <a
+            data-testid={PAST_EVENTS_PAGER_NEWER_TESTID}
+            data-archive-page
+            href={pastEventsUrl(Math.min(page - 1, totalPages), q)}
+          >
             Newer
           </a>
         ) : null}{" "}
@@ -145,13 +157,19 @@ export const PastEventsPage: FC<{
           </span>
         ) : null}{" "}
         {hasMore ? (
-          <a data-archive-page href={pastEventsUrl(page + 1, q)}>
+          <a
+            data-testid={PAST_EVENTS_PAGER_OLDER_TESTID}
+            data-archive-page
+            href={pastEventsUrl(page + 1, q)}
+          >
             Older
           </a>
         ) : null}
       </nav>
       <p>
-        <a href="/events">Back to upcoming events</a>
+        <a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">
+          Back to upcoming events
+        </a>
       </p>
       <p role="status" data-archive-feedback></p>
     </section>
