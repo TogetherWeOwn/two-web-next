@@ -58,6 +58,10 @@ export const NON_HTML_READS = [
   "/admin/featured-contents/:id/edit",
   "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
   "/admin/queue/source-evidence/:id", // Evidence-only proof is JSON, never HTML.
+  // Live bot read with no local stub: this fixture has no bot binding, so the
+  // route serves the branded 503 shell here (pinned in the error-variants
+  // table), never the 200 form. The 200 form shares the asserted Shell.
+  "/admin/moderation",
   "/sitemap_index.xml",
   "/robots.txt",
   "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.

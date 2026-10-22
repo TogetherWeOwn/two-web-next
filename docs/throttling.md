@@ -114,7 +114,7 @@ RSVP writes use
 | Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/auth/routes.ts`](../src/auth/routes.ts), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
 | Join | 10 / 60 s | `JOIN_THROTTLE_PER_MINUTE` with `JOIN_THROTTLE_BUCKET = "join"` in [`src/join/service.ts`](../src/join/service.ts) | `join:<clientKey>` shared by `GET /join/discord` and `GET /join/callback` in [`src/join/route-shared.ts`](../src/join/route-shared.ts) (`GET /join` lives in [`src/join/route-page.ts`](../src/join/route-page.ts)) |
 | Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/auth/routes.ts`](../src/auth/routes.ts); `event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts) |
-| Admin write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `admin-write:<clientKey>` shared by all admin writes in [`src/admin/routes.tsx`](../src/admin/routes.tsx): `POST /admin/queue/failed/:id/redispatch`, `POST /admin/events`, `POST /admin/events/:key`, `POST /admin/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}`, `POST /admin/featured`, `POST /admin/featured/:id`, `POST /admin/featured/:id/delete` |
+| Admin write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `admin-write:<clientKey>` shared by all admin writes in [`src/admin/routes.tsx`](../src/admin/routes.tsx): `POST /admin/queue/failed/:id/redispatch`, `POST /admin/events`, `POST /admin/events/:key`, `POST /admin/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}`, `POST /admin/featured`, `POST /admin/featured/:id`, `POST /admin/featured/:id/delete`, `POST /admin/moderation` |
 | Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on `PATCH /members/:user` and form-override `POST /members/:user` in [`src/profiles/routes-writes.tsx`](../src/profiles/routes-writes.tsx) via [`admitWrite`](../src/profiles/routes-admission.ts) |
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
 | Shared public reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` via `publicReadGuard` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>`, the same bucket as public event reads, shared by `GET /api/public/*` (via `admitted` in [`src/public-data/routes.ts`](../src/public-data/routes.ts)) and `POST /mcp` (via `admitted` in [`src/mcp/routes.ts`](../src/mcp/routes.ts)) |
@@ -145,8 +145,8 @@ budget instead: `e2e/wrangler.jsonc` and the generated Kit fixture
 production keeps 60 (see
 [`event-read-admission.md`](event-read-admission.md)).
 
-The `admin-write` budget is per client IP and shared across all ten admin
-write routes (seven `throttle("admin-write", …)` call sites in
+The `admin-write` budget is per client IP and shared across all eleven admin
+write routes (eight `throttle("admin-write", …)` call sites in
 [`src/admin/routes.tsx`](../src/admin/routes.tsx); the four lifecycle actions
 share one registration loop): 30 admitted writes per 60-second window total,
 not per route. A burst on any one route — bulk event edits, featured saves,

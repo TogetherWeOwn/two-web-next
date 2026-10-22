@@ -180,7 +180,7 @@ describe("throttle bucket inventory", () => {
   it("pins middleware buckets to their registration files and counts", () => {
     const found = middlewareBuckets();
     const expected = new Map<string, { file: string; count: number }[]>([
-      ["admin-write", [{ file: "src/admin/routes.tsx", count: 7 }]],
+      ["admin-write", [{ file: "src/admin/routes.tsx", count: 8 }]],
       ["event-write", [{ file: "src/events/routes-writes.ts", count: 3 }]],
       ["logout", [{ file: "src/auth/routes.ts", count: 1 }]],
       ["qa-login", [{ file: "src/auth/routes.ts", count: 1 }]],
