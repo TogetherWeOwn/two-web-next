@@ -101,10 +101,18 @@ export function validateStagingUrl(raw) {
     !url.username ||
     !url.password ||
     !["require", "verify-full"].includes(url.searchParams.get("sslmode")) ||
-    [...url.searchParams.keys()].some((key) => key !== "sslmode")
+    [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key))
   ) {
     refuse("Bootstrap requires a direct endpoint with TLS; value withheld.");
   }
+  const bindings = url.searchParams.getAll("channel_binding");
+  if (bindings.some((value) => !["require", "prefer", "disable"].includes(value))) {
+    refuse("Invalid channel binding option; value withheld.");
+  }
+  // postgres.js forwards unknown URL options as startup settings, not libpq
+  // flags, and does not implement SCRAM channel binding. Strip the
+  // libpq-only flag here; TLS stays enforced via sslmode + rejectUnauthorized.
+  url.searchParams.delete("channel_binding");
   url.port = "5432";
   return url;
 }
@@ -287,10 +295,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!isSelftest && !isRun) {
     console.error("staging-role-bootstrap: usage: node ci/staging-role-bootstrap.mjs [--selftest]");
     process.exitCode = 2;
+  } else if (isSelftest) {
+    try {
+      selftest();
+    } catch (error) {
+      // Selftest diagnostics are hardcoded literals with no secrets; print
+      // them verbatim instead of masking them as database failures.
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
   } else {
     try {
-      if (isSelftest) selftest();
-      else await runBootstrap();
+      await runBootstrap();
     } catch (error) {
       console.error(safeBootstrapError(error));
       process.exitCode = 1;
