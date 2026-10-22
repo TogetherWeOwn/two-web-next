@@ -44,7 +44,11 @@ export function registerCalendarRoutes(
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
-    if (!db) return eventsUnavailable(c);
+    if (!db) {
+      return c.req.header("x-two-island") === "events-calendar"
+        ? eventsUnavailable(c)
+        : databaseUnavailable(c);
+    }
     let session;
     try {
       session = await (c.req.header("x-two-island") === "events-calendar"
@@ -211,7 +215,11 @@ export function registerCalendarRoutes(
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
-    if (!db) return eventsUnavailable(c);
+    if (!db) {
+      return c.req.header("x-two-island") === "past-events"
+        ? eventsUnavailable(c)
+        : databaseUnavailable(c);
+    }
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     // Anonymous shared entry (N6 retire): the archive renders no session, no
     // flash and no RSVP controls. Only search-free cookieless renders share bytes.
@@ -243,6 +251,10 @@ export function registerCalendarRoutes(
     const pastGen = pastSource ? anonCacheGeneration() : 0;
     const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
     c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
+    // Browsing renders are public and shared, like the Kit twin: name the
+    // Cookie variance so shared caches key anonymous and signed-in shells
+    // apart. Searching renders stay private no-store with no Vary.
+    if (!input.searching) c.header("vary", "Cookie");
     const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
