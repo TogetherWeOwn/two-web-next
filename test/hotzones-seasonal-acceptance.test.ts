@@ -32,9 +32,10 @@
 // calibration. Season filtering is proven on joins (real data); the seeded
 // priors keep their own re-weight schedule.
 //
-// Visibility: hot-zone grids are aggregates only (7x24 cells, no per-user
-// rows, no timestamps shown) and public like /events. Member-gating applies
-// to the member leaderboard (sibling file), not here.
+// Visibility: hot-zone grids and voice/games views are aggregates only (7x24
+// cells, no per-user rows or timestamps). Index/joins may list published
+// gatherings with titles and times outside the grids. Pages are public like
+// /events. Member-gating applies to the member leaderboard (sibling file), not here.
 //
 // How this fails before the Builder lands: unknown-signal guards pass (404
 // today), everything else fails — Hono answers 404 where 200/400 is pinned,
@@ -193,11 +194,15 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-zone grids (agent-testdb)", () =
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Monday");
-    expect(html).not.toMatch(/20\d\d-\d\d-\d\dT\d\d:/);
+    const outsideGatherings = html.replace(
+      /<section\b[^>]*data-testid="hotzone-gatherings"[^>]*>[\s\S]*?<\/section>/g,
+      "",
+    );
+    expect(outsideGatherings).not.toMatch(/20\d\d-\d\d-\d\dT\d\d:/);
     expect(html).not.toContain("discord_id");
     expect(html).not.toContain("created_at");
     expect(html).not.toContain("presence");
-    expect(html).not.toContain(PROBE_PREFIX);
+    expect(outsideGatherings).not.toContain(PROBE_PREFIX);
   });
 
   it("filters the joins window by season", async () => {
