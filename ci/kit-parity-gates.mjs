@@ -18,6 +18,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sectionOf } from "./kit-section-contract.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 export const PARITY_ROUTES = [
   {
@@ -203,8 +204,9 @@ export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: 
 
 // Staging-allowlisted preview hosts: the staging Worker and preview Workers
 // only. Apex, production or arbitrary hosts are never a valid parity pair.
+const STAGING_HOST = new URL(STAGING_ORIGIN).hostname;
 export function isAllowlistedHost(hostname) {
-  if (hostname === "next.togetherweown.com") return true;
+  if (hostname === STAGING_HOST) return true;
   return hostname.endsWith(".workers.dev");
 }
 
@@ -247,7 +249,7 @@ export function validatePreviewPair(kitRaw, honoRaw) {
     if (!isAllowlistedHost(url.hostname)) {
       return {
         ok: false,
-        error: `kit-parity-gates: ${label} host ${url.hostname} is not staging-allowlisted (next.togetherweown.com or *.workers.dev)`,
+        error: `kit-parity-gates: ${label} host ${url.hostname} is not staging-allowlisted (${STAGING_HOST} or *.workers.dev)`,
       };
     }
     parsed.push(url.origin);

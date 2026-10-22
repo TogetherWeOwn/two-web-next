@@ -11,6 +11,7 @@ import { safeNext, sanitizeSource } from "./service";
 import {
   JOIN_NEXT_COOKIE,
   JOIN_SOURCE_COOKIE,
+  JOIN_START_FAILED_NOTICE,
   JOIN_STATE_COOKIE,
   JOURNEY_TTL_SECONDS,
   joinRedirectUri,
@@ -29,15 +30,23 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     // next/source values ride back onto /join. The query encoding matches the
     // callback retry href; the path is the journey page, which puts both
     // values back on the one-click link. Hostile or absent values keep the
-    // bare target. Both already passed their sanitizers above.
-    const fallback =
+    // bare notice target. Both already passed their sanitizers above.
+    // The degrade target also carries the fixed start-failed notice (E1): the
+    // journey page renders it as a visible explanation of the failed start,
+    // so the bounce is never silent. The value is fixed server-side and the
+    // landing renders (never redirects), so the chain always terminates.
+    const intent =
       next && source
-        ? `/join?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
+        ? `next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
         : next
-          ? `/join?next=${encodeURIComponent(next)}`
+          ? `next=${encodeURIComponent(next)}`
           : source
-            ? `/join?source=${encodeURIComponent(source)}`
-            : "/join";
+            ? `source=${encodeURIComponent(source)}`
+            : "";
+    const fallback =
+      intent === ""
+        ? `/join?notice=${JOIN_START_FAILED_NOTICE}`
+        : `/join?notice=${JOIN_START_FAILED_NOTICE}&${intent}`;
     const state = crypto.randomUUID();
     const store = await hooks.storeFor(c);
     // A transient journey-store failure degrades to /join, never a 500 —

@@ -78,7 +78,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         subjectId: String(id),
         causerId: actor.id,
         description: "deleted featured content Doomed feature",
-        properties: { title: { before: "Doomed feature", after: null } },
+        properties: {
+          title: { before: "Doomed feature", after: null },
+          isPublished: { before: true, after: null },
+          position: { before: 1, after: null },
+          startsAt: { before: "2026-10-02 11:59:59.000000", after: null },
+          endsAt: { before: "2026-10-02 12:00:01.000000", after: null },
+        },
       });
 
       // A second delete follows the existing not-found contract and audits nothing.

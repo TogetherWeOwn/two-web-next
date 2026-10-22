@@ -190,6 +190,23 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
+a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
+(mirroring `API_PUBLIC_BOUNDS.maxBodyBytes`, enforced while streaming when a
+reader exists); settlement aborts the per-call fetch and releases its queue
+entry and pagehide forwarder. Failures reject with an `Error` carrying a
+stable `.code`, a safe `.message` naming the next step, and `.retryAfter`
+seconds (1–86400) on rate limits only. Codes: `timeout`,
+`invalid_response` (oversize, malformed, or unexpected redirect),
+`unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
+retried automatically), `not_found` (unknown event key, no retry),
+`invalid_request` (bad event key, thrown synchronously). Local check,
+fixtures only:
+
+```sh
+npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
+```
+
 ### Browser regressions
 
 Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
@@ -207,9 +224,11 @@ to execute the same Chromium proof.
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
+| `test/profile-refused-draft-recovery-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts` |
 | `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
@@ -481,8 +500,9 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-`npm run check:worker-moderators` parses the top-level
-`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`npm run check:moderators -- --help` prints usage to stdout and reads nothing;
+`--json` emits the findings verdict. `npm run check:worker-moderators` parses
+the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
 `web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
 `env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
 Owner+Moderator pair (staging guild `1545644954272137297`:

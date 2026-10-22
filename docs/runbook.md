@@ -1300,8 +1300,13 @@ argument). `commit` is the deploy commit parsed from the version tag (the
 bare staging SHA or the first component of the production
 `<sha>-<run-id>-<run-attempt>` tag), shown only as a full lowercase 40-hex SHA
 and `null` otherwise, so an arbitrary manual tag never reaches the public body.
-`node bin/revision-check.mjs <origin> [<sha>]` reads it: with a SHA it fails
-unless that commit is live, without one it only logs what is live.
+`node bin/revision-check.mjs <origin> [<sha>] [--json] [--help]` reads it: with
+a SHA it fails unless that commit is live, without one it only logs what is
+live. `--json` emits a versioned verdict (`version`, `mode`, `commit`,
+`verified`, `code`, `next_action`, plus `expected_commit` in verify mode) to
+stdout with no attempt chatter; in verify mode `commit` is the live commit on
+success and `null` on failure while `expected_commit` is the requested SHA.
+`--help` prints usage to stdout and probes nothing.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
 `DATABASE_URL`, otherwise `DB.connectionString`. If that selected database fails,
@@ -1505,9 +1510,9 @@ These are local doubles, not deployed outage acceptance.
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
 and never retries the other source after a connection failure. Optional
-search-log/widget reads fail open but do not protect primary DB reads. Do not
-touch `MEMBER_ACCESS_LOG_ENFORCE` for a recovery: the flag has no production
-effect and required logging always fails closed. Diagnose from redacted
+search-log/widget reads fail open but do not protect primary DB reads. Required
+member-access logging always fails closed, with no setting to relax it, so
+recovery never involves loosening it. Diagnose from redacted
 platform errors/config metadata; a code rollback may help a code regression,
 but cannot repair a Neon outage. Escalate
 binding/DB recovery to the Director and authorized custodian; never credential-hop.

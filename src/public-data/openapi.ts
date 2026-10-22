@@ -3,6 +3,7 @@
 // required == field list` is asserted in test/api-public-openapi.test.ts —
 // the spec cannot drift from the code it documents.
 import {
+  API_PUBLIC_BOUNDS,
   COMMUNITY_RANK_FIELDS,
   COMMUNITY_SNAPSHOT_FIELDS,
   JOIN_HANDOFF_FIELDS,
@@ -92,18 +93,50 @@ function error(status: number, description: string) {
   };
 }
 
+/**
+ * These served descriptions are the single source for paging coercion rules.
+ * Consistency and behavioral tests pin the alias, ceiling, integer-prefix
+ * page parsing, defaults and clamp-to-last-page behavior (never a 422).
+ */
 const PAGING_PARAMETERS = [
   {
     name: "page",
     in: "query",
-    schema: { type: "integer", minimum: 1, default: 1 },
-    description: "Past-the-end pages clamp to the last page.",
+    schema: { type: "integer", minimum: 1, maximum: API_PUBLIC_BOUNDS.maxPage, default: 1 },
+    description:
+      "1-based page. Accepts a leading integer prefix (2abc and 2.9 read as 2), " +
+      "with optional sign and leading whitespace. Invalid or malformed values " +
+      "without an integer prefix, or values below 1, fall back to the default 1; " +
+      `out-of-range values are coerced: capped at the maximum ${API_PUBLIC_BOUNDS.maxPage} pages, then ` +
+      "clamped to the last page. Never a 422.",
   },
   {
     name: "per_page",
     in: "query",
-    schema: { type: "integer", minimum: 1, maximum: 20, default: 20 },
-    description: "Collection cap: at most 20 rows per response.",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Rows per page. Invalid or malformed values fall back to the default 20; " +
+      "out-of-range values are clamped and coerced to 1..20. Takes precedence " +
+      "over the limit alias when both are present.",
+  },
+  {
+    name: "limit",
+    in: "query",
+    schema: {
+      type: "integer",
+      minimum: 1,
+      maximum: API_PUBLIC_BOUNDS.maxPageSize,
+      default: API_PUBLIC_BOUNDS.defaultPageSize,
+    },
+    description:
+      "Alias for per_page with identical bounds and defaults. Invalid or " +
+      "malformed values fall back to the default 20; out-of-range values are " +
+      "clamped and coerced to 1..20. Ignored when per_page is present.",
   },
 ];
 
@@ -129,7 +162,14 @@ export function getOpenApiDocument(appUrl: string) {
         "attendee identities, no model-training permission. Collections cap at 20 rows and " +
         "32 KiB; errors use { error: { code, message } } with code internal, " +
         "invalid_request, not_found, rate_limited or unavailable. On internal, " +
-        "retry the read; the envelope never carries exception text.",
+        "retry the read; the envelope never carries exception text. Freshness: a cache " +
+        "hit carries only the remaining freshness of the original 60s window — a hit " +
+        "just before expiry answers max-age=1, never a fresh full window — and a " +
+        "fresh miss re-arms the full 60s bound. Committed moderator or agent " +
+        "create, update, publish and cancel operations retire collection and " +
+        "detail entries in the mutating isolate at once (pause/reopen and RSVP " +
+        "writes stay TTL-bounded); same-isolate retirement is not a global " +
+        "edge purge, so every other isolate converges on TTL expiry.",
     },
     servers: [{ url: appUrl }],
     paths: {

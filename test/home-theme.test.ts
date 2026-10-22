@@ -154,6 +154,7 @@ describe("homepage theme", () => {
           timezone: "UTC",
           location: "Voice lobby",
           goingCount: 2,
+          capacity: null,
         },
       ],
     });
@@ -271,5 +272,23 @@ describe("homepage theme", () => {
     // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
     // URLs, still one hand-readable file.
     expect(css.length).toBeLessThan(13000);
+  });
+
+  it("keeps the primary .btn:hover lift on the brand token", () => {
+    // The brightness lift is the entire hover affordance: rest and hover
+    // share background var(--brand) and color var(--paper), so deleting or
+    // inverting the filter leaves the join and RSVP CTAs with no visible
+    // hover change. Pin the exact lift and its direction here; the
+    // acceptance file owns only the brand-derivation shape.
+    const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    const hovers = css.match(/\.base-theme \.btn:hover\s*\{[^}]*\}/g) ?? [];
+    expect(hovers).toHaveLength(1);
+    expect(hovers[0]).toContain("var(--brand)");
+    expect(hovers[0]).toContain("filter: brightness(1.1)");
+    const rests = css.match(/\.base-theme \.btn\s*\{[^}]*\}/g) ?? [];
+    expect(rests.length).toBeGreaterThanOrEqual(1);
+    for (const rest of rests) {
+      expect(rest).not.toContain("brightness");
+    }
   });
 });
