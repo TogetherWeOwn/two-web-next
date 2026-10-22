@@ -86,6 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)("overlay revoke kills grace on postgr
     const oldHash = await freshHash();
     const nextHash = await freshHash();
     const remintHash = await freshHash();
+    const t0 = Date.now();
     await store.mint(member, oldHash);
     expect(await store.rotate(member, oldHash, nextHash)).toBe(true);
     // Grace is alive before the revoke (sequence runs in ms, window is 10s).
@@ -94,6 +95,9 @@ describe.skipIf(!process.env.DATABASE_URL)("overlay revoke kills grace on postgr
     expect(await store.lookupByHash(oldHash)).toBeNull();
     await store.mint(member, remintHash);
     expect(await store.lookupByHash(remintHash)).toMatchObject({ memberId: member });
+    // Prove the final lookup lands inside the 10s grace window, so a stalled
+    // runner fails here instead of passing vacuously on an expired window.
+    expect(Date.now() - t0).toBeLessThan(10_000);
     expect(await store.lookupByHash(oldHash)).toBeNull();
   }
 
@@ -108,10 +112,14 @@ describe.skipIf(!process.env.DATABASE_URL)("overlay revoke kills grace on postgr
     const oldHash = await freshHash();
     const nextHash = await freshHash();
     const remintHash = await freshHash();
+    const t0 = Date.now();
     await store.mint(member, oldHash);
     expect(await store.rotate(member, oldHash, nextHash)).toBe(true);
     expect(await store.revokeMemberTokens(member)).toBe(1);
     await store.mint(member, remintHash);
+    // Same in-window proof as the helper: a stalled runner must fail here,
+    // not pass vacuously on an expired grace window.
+    expect(Date.now() - t0).toBeLessThan(10_000);
     expect(await store.lookupByHash(oldHash)).toBeNull();
     expect(await store.lookupByHash(remintHash)).toMatchObject({ memberId: member });
   });

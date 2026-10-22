@@ -318,6 +318,7 @@ exactly once.
 | `src/not-found-suggestions.ts` | content |
 | `src/oauth-code-state-length.ts` | auth |
 | `src/oauth-journeys.ts` | auth |
+| `src/overlay-tokens.ts` | auth |
 | `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
