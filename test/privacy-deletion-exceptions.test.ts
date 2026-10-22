@@ -5,7 +5,7 @@
 // immediate erasure of either. Also pins the runbook classification
 // (creator IDs are identifying data with row-scoped retention; throttle
 // cleanup is lazy and admitted-only) and the numbered-version hand-off
-// (v5 selected, priors preserved, bundle byte-equal).
+// (v6 selected, priors preserved, bundle byte-equal).
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,9 +75,9 @@ describe("deletion-exception inventory", () => {
   });
 
   it("ships as a new numbered version with priors preserved and the bundle regenerated", () => {
-    expect(POLICY_VERSION).toBe(5);
-    expect(POLICY_FILE).toBe("content/privacy-policy-v5.md");
-    for (const prior of [1, 2, 3, 4])
+    expect(POLICY_VERSION).toBe(6);
+    expect(POLICY_FILE).toBe("content/privacy-policy-v6.md");
+    for (const prior of [1, 2, 3, 4, 5])
       expect(
         existsSync(resolve(root, `content/privacy-policy-v${prior}.md`)),
         `prior policy version v${prior} must stay in history`,

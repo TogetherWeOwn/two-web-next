@@ -57,12 +57,47 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
+      <!-- Static recovery: the EventMissing search form, copied verbatim. No
+        loader, session or database reads — suggestions stay Hono-only. -->
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input
+            id="error-events-search"
+            name="q"
+            type="search"
+            placeholder="Search events…"
+            autocomplete="off"
+            data-testid="error-events-search"
+          />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">
+            Search events
+          </button>
+        </div>
+      </form>
     {:else if code === 400 || code === 410}
       <!-- 400/410 share recovery links; each keeps its status-specific copy. -->
       <p class="recovery-actions">
         <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
+      <!-- Same static search form as the 404 block above. -->
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input
+            id="error-events-search"
+            name="q"
+            type="search"
+            placeholder="Search events…"
+            autocomplete="off"
+            data-testid="error-events-search"
+          />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">
+            Search events
+          </button>
+        </div>
+      </form>
     {:else if code === 403}
       <!-- 403 names the join-to-unlock path; re-signing in cannot mint the member bit. -->
       <p class="recovery-actions">
@@ -93,33 +128,8 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
         <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
           Use the Discord invite instead
         </a>
-        <a href="/" data-testid="error-retry">Try again</a>
+        <a href="/" data-testid="error-retry">Back to the homepage</a>
       </p>
     {/if}
   </section>
-  {#if code === 404}
-    <!-- Generic-404 search: markup twin of Hono's NotFoundPage and
-      EventMissing (same action, input contract and submit button). Its own
-      section, not the hero: the rendered-a11y suite pins the hero's exact
-      text and the page's single heading. Suggestions stay out of scope —
-      the boundary reads no database — so there is no "Happening soon" twin. -->
-    <section class="recovery-events">
-      <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search">Search events</label>
-        <div>
-          <input
-            id="error-events-search"
-            name="q"
-            type="search"
-            placeholder="Search events…"
-            autocomplete="off"
-            data-testid="error-events-search"
-          />
-          <button type="submit" class="btn" data-testid="error-events-search-submit">
-            Search events
-          </button>
-        </div>
-      </form>
-    </section>
-  {/if}
 </Shell>
