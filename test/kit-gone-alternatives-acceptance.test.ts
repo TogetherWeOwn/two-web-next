@@ -332,9 +332,10 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Captured from unchanged main at ce1ade0c489e652e9debf5e476d1a40877daf6f7.
+    // Re-captured with main 71c0ec4e0b0a55d9738c824df5b4cd724157de7f merged;
+    // Hono source is unchanged from that main commit.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "a0fb41f7d8f241a514fe373690a03377e48838eb2d95c22e1ac0744a1b467878",
+      "3eab9ef334293582d9ce31fb082e9c2dd0e97172e2f9e99da7e8af0f14b82792",
     );
   });
 
