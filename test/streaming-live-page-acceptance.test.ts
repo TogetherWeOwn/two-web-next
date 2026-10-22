@@ -71,7 +71,7 @@ describe("public member live page: real application route, fixture reads only", 
   });
 
   it.each([TWITCH, YOUTUBE])(
-    "prefers a live $provider embed to billable HLS",
+    "prefers a live $provider embed and loads no fallback player",
     async (destination) => {
       const f = streamingLiveFixture();
       f.member.destinations = [{ ...destination }];
@@ -107,7 +107,7 @@ describe("public member live page: real application route, fixture reads only", 
   });
 
   it.each(["none", "custom", "offline", "disabled"])(
-    "offers Cloudflare HLS only when there is no eligible embed (%s)",
+    "renders live watch-links with no inline player when no eligible embed exists (%s)",
     async (reason) => {
       const f = streamingLiveFixture();
       f.member.destinations =
@@ -124,12 +124,21 @@ describe("public member live page: real application route, fixture reads only", 
             ];
       const { html } = await page(f);
       state(html, "live");
-      const player = new URL(attr(html, "data-stream-player-src"));
-      expect(player.hostname).toBe("customer-example.cloudflarestream.com");
-      // Stream's built-in iframe (HLS-backed) and a direct HLS player are both valid.
-      expect(player.pathname).toMatch(/\/(?:iframe|manifest\/video\.m3u8)$/);
-      const watch = new URL(link(html, "data-stream-watch"));
-      expect(watch.hostname).toBe("customer-example.cloudflarestream.com");
+      // Rev 3: under D4 Cloudflare exposes no playback URL, so v1 renders
+      // watch-links with no inline TWO player instead of an HLS fallback.
+      expect(html).not.toContain("data-stream-player-src");
+      expect(html).not.toMatch(/<iframe\b[^>]*\bsrc="https?:/);
+      expect(html).not.toMatch(/<video\b[^>]*\bsrc="https?:/);
+      expect(html).not.toContain("/manifest/video.m3u8");
+      if (reason === "none") {
+        expect(html).not.toContain("data-stream-watch");
+        expect(html).not.toContain("data-stream-follow");
+      } else {
+        expect(link(html, "data-stream-watch")).toBe(TWITCH.watchUrl);
+        expect(link(html, "data-stream-follow")).toBe(TWITCH.watchUrl);
+      }
+      const report = new URL(link(html, "data-stream-report"), STREAM_ORIGIN);
+      expect(report.origin).toBe(STREAM_ORIGIN);
     },
   );
 
@@ -276,6 +285,8 @@ describe("public member live page: real application route, fixture reads only", 
         "https://player.twitch.tv",
         "https://www.youtube.com",
         "https://www.youtube-nocookie.com",
+        // *.cloudflarestream.com stays pinned for the Plus-recording
+        // fast-follow even though v1 renders no Cloudflare player (Rev 3).
         "https://*.cloudflarestream.com",
       ]),
     );
@@ -293,8 +304,11 @@ describe("public member live page: real application route, fixture reads only", 
     const f = streamingLiveFixture();
     f.member.destinations = [{ ...TWITCH, embedUrl }];
     const { html } = await page(f);
-    const player = new URL(attr(html, "data-stream-player-src"));
-    expect(player.hostname).toBe("customer-example.cloudflarestream.com");
+    // Rev 3: the fallback for an unapproved frame is no-player watch-links.
+    expect(html).not.toContain("data-stream-player-src");
+    expect(html).not.toMatch(/<iframe\b[^>]*\bsrc="https?:/);
+    expect(html).not.toMatch(/<video\b[^>]*\bsrc="https?:/);
+    expect(link(html, "data-stream-watch")).toBe(TWITCH.watchUrl);
     expect(html).not.toContain(embedUrl);
   });
 

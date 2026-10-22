@@ -2,7 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { test, expect, localOrigin } from "./fixtures";
 
 // Builder-owned local Worker fixtures (never real provider accounts):
-// ...001: active Twitch; ...002: active YouTube; ...003: active, HLS only;
+// ...001: active Twitch; ...002: active YouTube; ...003: active input with no
+// eligible embed (custom-only destination with a watch URL, no inline player);
 // ...004: offline, schedule + last-live. Keep these read-only and deterministic.
 const user = (suffix: string) => `01K0000000000000000000000${suffix}`;
 const livePath = (suffix: string) => `/members/${user(suffix)}/live`;
@@ -51,7 +52,6 @@ test.describe("stream player facade", () => {
   for (const scenario of [
     { suffix: "1", host: "player.twitch.tv" },
     { suffix: "2", host: "www.youtube-nocookie.com" },
-    { suffix: "3", host: "customer-example.cloudflarestream.com" },
   ]) {
     test(`${scenario.host} loads only after keyboard activation, never with audible autoplay`, async ({
       page,
@@ -77,42 +77,41 @@ test.describe("stream player facade", () => {
       await page.keyboard.press("Enter");
       await expect(page.locator("iframe, video")).toHaveCount(1);
       const media = page.locator("iframe, video");
-      const isFrame = await media.evaluate((element) => element.tagName === "IFRAME");
-      if (!isFrame) {
-        expect(scenario.suffix).toBe("3");
-        const native = page.locator("video");
-        const properties = await native.evaluate((element) => {
-          if (!(element instanceof HTMLVideoElement))
-            throw new Error("Expected the native HLS player");
-          return {
-            source: element.currentSrc || element.src || element.querySelector("source")?.src,
-            autoplay: element.autoplay,
-            muted: element.muted,
-            controls: element.controls,
-          };
-        });
-        expect(new URL(properties.source!).hostname).toBe(scenario.host);
-        expect(properties.source).toMatch(/\/manifest\/video\.m3u8(?:\?|$)/);
-        expect(!properties.autoplay || properties.muted).toBe(true);
-        expect(properties.controls).toBe(true);
-      } else {
-        await expect(media).toHaveAttribute("title", /\S/);
-        const player = new URL((await media.getAttribute("src"))!);
-        expect(player.hostname).toBe(scenario.host);
-        if (scenario.suffix === "1") {
-          expect(player.searchParams.getAll("parent")).toEqual([new URL(localOrigin).hostname]);
-        }
-        const autoplay = ["1", "true"].includes(
-          player.searchParams.get("autoplay") ?? (scenario.suffix === "1" ? "true" : "false"),
-        );
-        const muted = ["1", "true"].includes(
-          player.searchParams.get("muted") ?? player.searchParams.get("mute") ?? "",
-        );
-        expect(!autoplay || muted).toBe(true);
-        await expect.poll(() => requests.length).toBe(1);
+      await expect(media).toHaveAttribute("title", /\S/);
+      const player = new URL((await media.getAttribute("src"))!);
+      expect(player.hostname).toBe(scenario.host);
+      if (scenario.suffix === "1") {
+        expect(player.searchParams.getAll("parent")).toEqual([new URL(localOrigin).hostname]);
       }
+      const autoplay = ["1", "true"].includes(
+        player.searchParams.get("autoplay") ?? (scenario.suffix === "1" ? "true" : "false"),
+      );
+      const muted = ["1", "true"].includes(
+        player.searchParams.get("muted") ?? player.searchParams.get("mute") ?? "",
+      );
+      expect(!autoplay || muted).toBe(true);
+      await expect.poll(() => requests.length).toBe(1);
     });
   }
+
+  // Rev 3: under D4 there is no Cloudflare playback, so an active member
+  // without an eligible embed gets watch-links and no inline TWO player.
+  test("active member without an eligible embed gets watch-links and no player", async ({
+    page,
+  }) => {
+    const response = await page.goto(localOrigin + livePath("3"));
+    expect(response?.status()).toBe(200);
+    await expect(page.locator('[data-stream-state="live"]')).toBeVisible();
+    await expect(page.locator("iframe, video")).toHaveCount(0);
+    await expect(page.locator("button[data-stream-play]")).toHaveCount(0);
+    const main = page.getByRole("main");
+    const watch = main.locator("a[data-stream-watch]").first();
+    await expect(watch).toBeVisible();
+    expect(await watch.getAttribute("href")).toMatch(/^https:\/\//);
+    await watch.focus();
+    await expect(watch).toBeFocused();
+    await expect(main.locator("a[data-stream-report]")).toBeVisible();
+  });
 });
 
 for (const scenario of [

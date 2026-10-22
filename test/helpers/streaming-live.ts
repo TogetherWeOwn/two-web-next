@@ -18,7 +18,7 @@ export type LiveMember = {
   avatarUrl: string | null;
   bio: string;
   entitled: boolean;
-  input: { uid: string; enabled: boolean; hlsUrl: string } | null;
+  input: { uid: string; enabled: boolean } | null;
   destinations: LiveDestination[];
   schedule: string | null;
   lastLiveAt: string | null;
@@ -69,11 +69,11 @@ export function streamingLiveFixture() {
     avatarUrl: null,
     bio: "Community games and creative streams",
     entitled: true,
+    // Rev 3: under D4 there is no playback URL, so the input carries
+    // identity and enablement only. No fake URL may imply playability.
     input: {
       uid: (++sequence).toString(16).padStart(32, "0"),
       enabled: true,
-      hlsUrl:
-        "https://customer-example.cloudflarestream.com/11111111111111111111111111111111/manifest/video.m3u8",
     },
     destinations: [{ ...TWITCH }],
     schedule: "Fridays at 18:00 UTC",
