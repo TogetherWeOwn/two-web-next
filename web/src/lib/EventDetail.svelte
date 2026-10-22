@@ -152,6 +152,13 @@ const lineup = $derived(
         <dt>Where</dt>
         <dd>
           <p data-testid="event-venue">{model.location}</p>
+          {#if model.directionsUrl}
+            <p>
+              <a href={model.directionsUrl} data-testid="event-directions" rel="noopener">
+                Get directions
+              </a>
+            </p>
+          {/if}
         </dd>
       </div>
     {/if}
