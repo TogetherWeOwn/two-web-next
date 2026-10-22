@@ -13,9 +13,13 @@ import {
   createOperatorClient,
   isLockTimeoutError,
   isProductionDatabaseUrl as sharedIsProductionDatabaseUrl,
-  TLS_OVERRIDE_REFUSAL,
   validateOperatorEnvironment,
 } from "./operator-db-core.mjs";
+import {
+  OperatorCliError,
+  operatorErrorTable,
+  writeOperatorError,
+} from "./operator-cli-errors.mjs";
 import { assertDiscordId, InvalidMemberIdError } from "../src/member-erasure.ts";
 import { revokeMemberSessions } from "../src/session-revocation.ts";
 
@@ -23,7 +27,8 @@ const USAGE =
   "Usage: node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]. Connection settings come from env only.";
 
 export function parseRevokeArgs(args) {
-  if (!Array.isArray(args)) throw new Error(USAGE);
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
+    throw new OperatorCliError("E_UNKNOWN_FLAG");
   if (args.includes("--help")) return { help: true };
   let discordId = "";
   let hasDiscordId = false;
@@ -33,39 +38,39 @@ export function parseRevokeArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--apply" || arg === "--dry-run") {
-      if (seenMode) throw new Error(USAGE);
+      const requested = arg === "--apply" ? "apply" : "dry-run";
+      if (seenMode)
+        throw new OperatorCliError(mode === requested ? "E_DUPLICATE_FLAG" : "E_MODE_CONFLICT");
       seenMode = true;
-      mode = arg === "--apply" ? "apply" : "dry-run";
+      mode = requested;
       continue;
     }
-    if (arg === "--target") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--") || target !== undefined)
-        throw new Error(USAGE);
+    if (arg === "--target" || arg.startsWith("--target=")) {
+      if (target !== undefined) throw new OperatorCliError("E_DUPLICATE_FLAG");
+      const value = arg === "--target" ? args[++i] : arg.slice("--target=".length);
+      if (value === undefined || value.startsWith("--")) throw new OperatorCliError("E_TARGET");
       target = value;
-      i++;
-      continue;
-    }
-    if (arg.startsWith("--target=")) {
-      if (target !== undefined) throw new Error(USAGE);
-      target = arg.slice("--target=".length);
       continue;
     }
     if (arg.startsWith("--discord-id=")) {
-      if (hasDiscordId) throw new Error(USAGE);
+      if (hasDiscordId) throw new OperatorCliError("E_DUPLICATE_FLAG");
       hasDiscordId = true;
       discordId = arg.slice("--discord-id=".length);
       continue;
     }
-    if (arg.startsWith("--") || arg.includes("://") || arg.startsWith("postgres"))
-      throw new Error(USAGE);
-    if (hasDiscordId) throw new Error(USAGE);
+    if (arg.includes("://") || arg.startsWith("postgres")) throw new OperatorCliError("E_URL_ARG");
+    if (arg.startsWith("-")) throw new OperatorCliError("E_UNKNOWN_FLAG");
+    if (hasDiscordId) throw new OperatorCliError("E_DUPLICATE_FLAG");
     hasDiscordId = true;
     discordId = arg;
   }
   if (target !== undefined && target !== "staging" && target !== "production")
-    throw new Error(USAGE);
-  assertDiscordId(discordId);
+    throw new OperatorCliError("E_TARGET");
+  try {
+    assertDiscordId(discordId);
+  } catch {
+    throw new OperatorCliError("E_DISCORD_ID");
+  }
   return { discordId, mode, target };
 }
 
@@ -86,25 +91,20 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     parsed = parseRevokeArgs(args);
   } catch (error) {
-    console.error(
-      error instanceof InvalidMemberIdError
-        ? "revoke-sessions: refusing: malformed Discord id."
-        : "revoke-sessions: refusing: expected --discord-id=<snowflake>; connection URLs are env-only.",
-    );
-    return 2;
+    return writeOperatorError(error instanceof OperatorCliError ? error.code : "E_UNKNOWN_FLAG");
   }
   if (parsed.help) {
-    console.log(USAGE);
+    console.log(`${USAGE}\n\n${operatorErrorTable()}`);
     return 0;
   }
   let target;
   try {
     // Node reads the live process environment at connect time, not the `env` argument.
-    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new Error(TLS_OVERRIDE_REFUSAL);
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0")
+      throw new OperatorCliError("E_TLS_OVERRIDE");
     target = validateRevokeEnvironment(env, parsed.target);
   } catch (error) {
-    console.error(`revoke-sessions: ${error instanceof Error ? error.message : "refusing."}`);
-    return 2;
+    return writeOperatorError(error instanceof OperatorCliError ? error.code : "E_DATABASE_URL");
   }
   for (const key of Object.keys(process.env)) if (key.startsWith("PG")) delete process.env[key];
   for (const method of ["log", "info", "warn", "error", "debug", "trace"])
@@ -121,20 +121,12 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     // revocation-chase forensics next to it.
     const { passes, stampsPerPass, ...counts } = result;
     process.stdout.write(
-      `${JSON.stringify({ mode: parsed.mode, counts, passes, stampsPerPass })}\n`,
+      `${JSON.stringify({ ok: true, mode: parsed.mode, counts, passes, stampsPerPass })}\n`,
     );
     return 0;
   } catch (error) {
-    if (isLockTimeoutError(error)) {
-      process.stderr.write(
-        "revoke-sessions: operation failed with a lock timeout (55P03); transaction rolled back. Retry once the lock clears; verify with a dry-run first.\n",
-      );
-      return 1;
-    }
-    process.stderr.write(
-      "revoke-sessions: operation failed; transaction rolled back if it started. Re-run the dry-run to inspect active counts.\n",
-    );
-    return 1;
+    if (error instanceof InvalidMemberIdError) return writeOperatorError("E_DISCORD_ID");
+    return writeOperatorError(isLockTimeoutError(error) ? "LOCK_TIMEOUT" : "TX_FAILED");
   } finally {
     await sql?.end({ timeout: 5 }).catch(() => {});
   }
