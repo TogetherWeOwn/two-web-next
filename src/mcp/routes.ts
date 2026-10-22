@@ -17,8 +17,9 @@ import { dbFor } from "../admin/db";
 import { alertRequestError } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import type { Env } from "../env";
+import { MCP_TRANSPORT_ERROR_CODE } from "../errors";
 import { safeRequestId } from "../request-log";
-import { admitted } from "../public-data/routes";
+import { admissionRetryAfter } from "../public-data/routes";
 import { createPublicMcpServer } from "./server";
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -44,9 +45,43 @@ function refuseMcpBatchText(text: string, c: Ctx): Response | null {
     {
       jsonrpc: "2.0",
       id: null,
-      error: { code: -32600, message: "Invalid Request: batched requests are not supported." },
+      error: {
+        code: MCP_TRANSPORT_ERROR_CODE,
+        message: "Invalid Request: batched requests are not supported.",
+        data: { next: "Send one request per POST and retry.", request_id: c.get("requestId") },
+      },
     },
     400,
+  );
+}
+
+/**
+ * Over-budget MCP POSTs answer a JSON-RPC error, not the REST envelope: the
+ * transport speaks one shape whatever the failure. Same shared budget and the
+ * same validated Retry-After as the REST 429; the id is null because the
+ * refusal happens before any id is trusted.
+ */
+async function mcpRefused(c: Ctx): Promise<Response | null> {
+  const retryAfterSeconds = await admissionRetryAfter(c);
+  if (retryAfterSeconds === null) return null;
+  return c.json(
+    {
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: MCP_TRANSPORT_ERROR_CODE,
+        message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
+        data: {
+          next: "Wait for Retry-After, then retry.",
+          request_id: c.get("requestId"),
+        },
+      },
+    },
+    429,
+    {
+      "retry-after": String(retryAfterSeconds),
+      "cache-control": "no-store, private",
+    },
   );
 }
 
@@ -100,9 +135,9 @@ export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
   app.options("/mcp", (c) => serveMcp(c));
   app.post("/mcp", requestBodyLimit("mcp"), async (c) => {
     // The shared public-read budget first, before any body parse or database
-    // read. A 429 keeps the shared Retry-After with the public error
-    // envelope, even for batch-shaped bodies.
-    const refused = await admitted(c);
+    // read. A 429 keeps the shared Retry-After with the JSON-RPC error shape,
+    // even for batch-shaped bodies.
+    const refused = await mcpRefused(c);
     if (refused) return refused;
     // Single body materialization: read once, refuse batches on the cached
     // text, then replay it for the handler with no second network read and

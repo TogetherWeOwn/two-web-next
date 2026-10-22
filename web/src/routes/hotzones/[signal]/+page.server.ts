@@ -24,9 +24,17 @@ export const csr = false;
 export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
   // Hono answers the season grammar before the signal vocabulary
   // (src/hotzones/routes.tsx); keep that order here too. The helper
-  // re-checks both for its own callers.
-  if (!parseSeasonParam(url.searchParams.get("season"))) error(400, "Unknown season");
-  if (!SIGNALS.includes(params.signal as HotzoneSignal)) error(404, "Not found");
+  // re-checks both for its own callers. These pre-checks bypass the helper,
+  // so they stamp the helper's no-store headers themselves: exactly one
+  // setHeaders call fires per path either way.
+  if (!parseSeasonParam(url.searchParams.get("season"))) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(400, "Unknown season");
+  }
+  if (!SIGNALS.includes(params.signal as HotzoneSignal)) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(404, "Not found");
+  }
   try {
     const data = await loadHotzoneSignalData({
       env,

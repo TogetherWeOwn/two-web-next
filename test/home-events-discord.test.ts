@@ -93,6 +93,8 @@ function homeRow(row: typeof events.$inferSelect): HomeEvent {
     timezone: row.timezone,
     location: row.location,
     goingCount: 0,
+    goingOccupancy: 0,
+    capacity: row.capacity,
   };
 }
 

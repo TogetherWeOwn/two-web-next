@@ -51,6 +51,13 @@ function branded(message: string, status: number): Error & { status: number } {
   return Object.assign(new Error(message), { status });
 }
 
+const NO_STORE = "private, no-store";
+
+/** Fresh no-store headers per path: every error outcome carries explicit no-store like its Hono twin. */
+function noStoreHeaders(): Record<string, string> {
+  return { "cache-control": NO_STORE };
+}
+
 /** Season grammar failure: the Kit binding maps this to error(400). */
 export function hotzonesBadSeason(): Error & { status: number } {
   return branded("Unknown season", 400);
@@ -66,22 +73,32 @@ export function hotzonesUnavailable(): Error & { status: number } {
   return branded("Hot zones temporarily unavailable", 503);
 }
 
-function seasonOrThrow(seasonParam: string | null): { window: SeasonWindow; label: string } {
+function seasonOrThrow(
+  seasonParam: string | null,
+  setHeaders: (headers: Record<string, string>) => void,
+): { window: SeasonWindow; label: string } {
   const window = parseSeasonParam(seasonParam);
-  if (!window) throw hotzonesBadSeason();
+  if (!window) {
+    setHeaders(noStoreHeaders());
+    throw hotzonesBadSeason();
+  }
   return { window, label: window.kind === "all" ? "all" : window.label };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
 // emit the leak-free error.alert diagnostic before mapping to the branded
 // 503, mirroring the Hono member-read boundary (src/member-reads.ts). Branded
-// throws (400/404/503 from nested helpers) pass through untouched so the
-// binding maps them once and exactly one setHeaders call fires per path.
+// throws (400/404/503 from nested helpers) pass through with the same no-store
+// headers so the binding maps them once and exactly one setHeaders call fires
+// per path.
 function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string): never {
   const status = (err as { status?: unknown })?.status;
-  if (typeof status === "number") throw err;
+  if (typeof status === "number") {
+    args.setHeaders(noStoreHeaders());
+    throw err;
+  }
   alertRequestError(err, { method: "GET", route });
-  args.setHeaders({ "cache-control": "private, no-store" });
+  args.setHeaders(noStoreHeaders());
   throw hotzonesUnavailable();
 }
 
@@ -129,7 +146,7 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   available: boolean;
   peaks: { joins: HotzonePeak | null; voice: HotzonePeak | null; games: HotzonePeak | null };
 }> {
-  const { window, label } = seasonOrThrow(args.seasonParam);
+  const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const { db } = await dbOrUnavailable(args, "/hotzones");
   const joins = await joinsOrUnavailable(args, db, window, "/hotzones");
   await record(args, db, {
@@ -138,7 +155,7 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
     season: label,
     resultCount: joins.total,
   });
-  args.setHeaders({ "cache-control": "public, max-age=300" });
+  args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
   // Leaderboards pattern: `available` is false only when the joins read has
   // no database (never a silent-zero grid). Peaks reuse the already-loaded
   // cells: no new reads. The joins peak is null when unavailable or empty.
@@ -175,9 +192,12 @@ export async function loadHotzoneSignalData(
   available: boolean;
   peak: HotzonePeak | null;
 }> {
-  const { window, label } = seasonOrThrow(args.seasonParam);
+  const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const signal = args.signalParam;
-  if (!isHotzoneSignal(signal)) throw hotzoneSignalNotFound();
+  if (!isHotzoneSignal(signal)) {
+    args.setHeaders(noStoreHeaders());
+    throw hotzoneSignalNotFound();
+  }
   const { db } = await dbOrUnavailable(args, "/hotzones/:signal");
   if (signal === "joins") {
     const joins = await joinsOrUnavailable(args, db, window, "/hotzones/:signal");
@@ -187,7 +207,7 @@ export async function loadHotzoneSignalData(
       season: label,
       resultCount: joins.total,
     });
-    args.setHeaders({ "cache-control": "public, max-age=300" });
+    args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
     const available = db !== null;
     return {
       signal,
@@ -209,7 +229,7 @@ export async function loadHotzoneSignalData(
     season: label,
     resultCount: prior.total,
   });
-  args.setHeaders({ "cache-control": "public, max-age=300" });
+  args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
   return {
     signal,
     season: label,
