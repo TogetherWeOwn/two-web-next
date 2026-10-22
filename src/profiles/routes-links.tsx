@@ -192,22 +192,38 @@ export function registerLinksEditorRoutes(
   const writeGate = linksWriteGate(deps);
   const admit = admitLinksWrite(deps);
 
-  app.get("/profile/links", readGate, async (c) => {
-    const viewer = c.get("viewer");
-    const store = await storeFor(c);
-    const linksStore = await linksFor(c);
-    if (!store || !linksStore) return databaseUnavailable(c);
-    const member = await store.find(viewer.id);
-    if (!member) return notFound(c);
-    const links = (await linksStore.find(viewer.id)) ?? [];
-    return c.html(
-      <LinksEditorPage
-        member={member}
-        appUrl={c.env.APP_URL}
-        isModerator={viewer.moderator}
-        draft={toDraft(links)}
-      />,
-    );
+  // Single registration: Hono lists one route entry per handler in the
+  // chain, and the exposure inventory pins GET multiplicity. The gate still
+  // runs first — explicitly, instead of as a chained handler.
+  app.get("/profile/links", async (c) => {
+    let editor: Response | Promise<Response> | undefined;
+    const gateResult = await readGate(c, async () => {
+      const viewer = c.get("viewer");
+      const store = await storeFor(c);
+      const linksStore = await linksFor(c);
+      if (!store || !linksStore) {
+        editor = await databaseUnavailable(c);
+        return;
+      }
+      const member = await store.find(viewer.id);
+      if (!member) {
+        editor = notFound(c);
+        return;
+      }
+      const links = (await linksStore.find(viewer.id)) ?? [];
+      editor = c.html(
+        <LinksEditorPage
+          member={member}
+          appUrl={c.env.APP_URL}
+          isModerator={viewer.moderator}
+          draft={toDraft(links)}
+        />,
+      );
+    });
+    // The gate either answers (bounce, refusal, outage) or runs the editor.
+    if (editor) return editor;
+    if (gateResult) return gateResult;
+    throw new Error("member gate neither answered nor ran the links editor");
   });
 
   const save = async (c: Ctx, shape: "form" | "json") => {

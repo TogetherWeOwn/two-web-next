@@ -408,6 +408,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       values (${id}, ${`bio for ${id}`}, '["Synthetic Game"]', 'Europe/London')`;
     await fixture.client`insert into rsvps (event_id, user_id, status)
       values (${eventId}, ${id}, 'going')`;
+    await fixture.client`insert into member_links (user_id, links)
+      values (${id}, '[{"label":"Twitch","url":"https://twitch.tv/erased"}]')`;
     await fixture.client`insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at)
       values (${`hash-${id}-1`}, ${id}, ${username}, true, false, ${expiresAt}),
              (${`hash-${id}-2`}, ${id}, ${username}, true, false, ${expiresAt})`;
@@ -416,10 +418,11 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
   };
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [l], [s], [g], [j]] = await Promise.all([
       fixture.client`select count(*)::int as n from users where id = ${id}`,
       fixture.client`select count(*)::int as n from profiles where user_id = ${id}`,
       fixture.client`select count(*)::int as n from rsvps where user_id = ${id}`,
+      fixture.client`select count(*)::int as n from member_links where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       fixture.client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
@@ -428,6 +431,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: (u as { n: number }).n,
       profiles: (p as { n: number }).n,
       rsvps: (r as { n: number }).n,
+      member_links: (l as { n: number }).n,
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
@@ -444,6 +448,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from rsvps`;
+    await fixture.client`delete from member_links`;
     await fixture.client`delete from profiles`;
     await fixture.client`delete from join_attempts`;
     await fixture.client`delete from events`;
@@ -467,6 +472,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 1,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -481,7 +487,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(await countsFor(MEMBER_B)).toEqual(before);
   });
 
-  it("apply removes exactly member A across all six tables and leaves member B intact", async () => {
+  it("apply removes exactly member A across all seven tables and leaves member B intact", async () => {
     const removed = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
       MEMBER_A,
@@ -491,6 +497,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 1,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -501,6 +508,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 0,
       profiles: 0,
       rsvps: 0,
+      member_links: 0,
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
@@ -509,6 +517,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 1,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -532,6 +541,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 0,
       profiles: 0,
       rsvps: 0,
+      member_links: 0,
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
@@ -542,6 +552,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 1,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,

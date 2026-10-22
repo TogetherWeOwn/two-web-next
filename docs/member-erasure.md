@@ -163,9 +163,10 @@ Scope below.
 
 ## Throttle buckets (ephemeral, self-deleting)
 
-`web_throttle_hits.bucket` embeds a Discord id in two write budgets:
-`rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
-`profile-write:<discord id>` (`src/profiles/routes-admission.ts`). These rows are not
+`web_throttle_hits.bucket` embeds a Discord id in three write budgets:
+`rsvp-write:<discord id>` (`src/events/rsvp.ts`),
+`profile-write:<discord id>` (`src/profiles/routes-admission.ts`) and
+`member-links-write:<discord id>` (`src/profiles/routes-links.tsx`). These rows are not
 deleted by `eraseMember`. Five minutes is an age cutoff, not a physical
 deletion deadline: an expired row survives until a later cleanup deletes it,
 so a quiet site can hold expired rows past the five-minute mark — there is no
@@ -174,7 +175,7 @@ rsvp path prunes expired rows before judging the budget (`pruneThrottle` in
 `src/events/rsvp.ts`), so a request refused on budget or a closed event has
 already run the shared prune (an unknown-event id exits before the prune);
 the join admission path (`checkJoinThrottle`
-in `src/join/service.ts`, shared by the profile path) judges and records
+in `src/join/service.ts`, shared by the profile and member-links paths) judges and records
 first, then prunes expired rows after every verdict, admitted or refused
 (a throttle-admitted profile write still prunes before the owner check can
 refuse it). Both prunes are bounded by

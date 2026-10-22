@@ -201,19 +201,21 @@ describe("throttle bucket inventory", () => {
   });
 
   it("fails loudly on non-literal throttle registrations", () => {
-    // src/profiles/routes-admission.ts holds the only two: the local admitWrite
+    // src/profiles/routes-admission.ts holds two: the local admitWrite
     // helper call throttle(c, `profile-write:${viewer.id}`) and the
-    // deps.throttle(bucket) seam delegation. Neither is the src/throttle.ts
-    // middleware; the profile-write bucket itself is pinned by the dedicated
+    // deps.throttle(bucket) seam delegation; src/profiles/routes-links.tsx
+    // holds the same pair for the member-links-write bucket. None is the
+    // src/throttle.ts middleware; both buckets are pinned by the dedicated
     // assertion below. Any new entry here is a bucket escaping the literal
     // inventory: hand-pin it and cover it, or make it literal.
     expect(Object.fromEntries(nonLiteralThrottleSites())).toEqual({
       "src/profiles/routes-admission.ts": 2,
+      "src/profiles/routes-links.tsx": 2,
     });
     expect(Object.fromEntries(nonLiteralGuardSites())).toEqual({});
   });
 
-  it("pins join, profile-write and rsvp-write buckets to their call sites", () => {
+  it("pins join, profile-write, member-links-write and rsvp-write buckets to their call sites", () => {
     const service = stripComments(readFileSync(resolve(root, "src/join/service.ts"), "utf8"));
     expect(service).toContain('JOIN_THROTTLE_BUCKET = "join"');
     const routeShared = stripComments(
@@ -224,6 +226,10 @@ describe("throttle bucket inventory", () => {
       readFileSync(resolve(root, "src/profiles/routes-admission.ts"), "utf8"),
     );
     expect(admission).toContain("profile-write:${viewer.id}");
+    const linksAdmission = stripComments(
+      readFileSync(resolve(root, "src/profiles/routes-links.tsx"), "utf8"),
+    );
+    expect(linksAdmission).toContain("member-links-write:${viewer.id}");
     const rsvp = stripComments(readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8"));
     expect(rsvp.match(/rsvp-write:/g)?.length).toBe(3);
   });

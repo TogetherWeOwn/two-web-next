@@ -22,6 +22,8 @@ const EXEMPT: Record<string, string> = {
     "HTML adapter invokes the same PUT/DELETE handlers and transactional 12/min RSVP bucket (W10)",
   "PATCH /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /members/:user": "in-handler 30/min profile-write bucket (W7)",
+  "PATCH /profile/links": "in-handler 30/min member-links-write bucket (S1 link-in-bio)",
+  "POST /profile/links": "in-handler 30/min member-links-write bucket (S1 link-in-bio)",
   "POST /admin/queue/source-evidence/:id":
     "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "PUT /admin/queue/source-evidence/:id":

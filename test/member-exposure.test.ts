@@ -37,7 +37,7 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
-const PROFILE_READS = ["/profile", "/members/:user", "/leaderboards/members"];
+const PROFILE_READS = ["/profile", "/profile/links", "/members/:user", "/leaderboards/members"];
 const ADMIN_REDIRECTS = [
   "/events/create",
   "/events/:key/edit",
@@ -82,6 +82,7 @@ const OTHER_READS = [
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/members", // Retired bare path: frozen 404, answered before the member gate.
   "/members/", // Trailing-slash form is retired before the same gate.
+  "/members/:user/links", // Link-in-bio page: public by design, exposes username/bio/ordered links to guests with no session and no access-log row.
   "/events",
   "/events/past",
   "/hotzones", // Aggregate heatmaps: counts only, no member rows.
