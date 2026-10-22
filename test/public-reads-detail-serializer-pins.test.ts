@@ -79,8 +79,13 @@ const MD_DETAIL_KEY = "01J0000000000000000000PXB1";
 const key = (n: number) => String(n).padStart(26, "0");
 
 const REST_INTERNAL = {
-  error: { code: "internal", message: "Event data could not be read." },
-} as const;
+  error: {
+    code: "internal",
+    message: "Event data could not be read.",
+    request_id: expect.any(String),
+    next: "Retry the read shortly.",
+  },
+};
 const MD_INTERNAL_BODY = "Events temporarily unavailable. Try again shortly.";
 
 describe.skipIf(!process.env.DATABASE_URL)("public reads detail serializer pins", () => {

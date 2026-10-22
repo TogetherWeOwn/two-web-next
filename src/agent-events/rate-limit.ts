@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { ingressDenial } from "./envelope";
 import { ulid } from "./payload";
 import { pruneAgentEventHits } from "./prune-hits";
 import type { Answer, Grant, IngressConfig, Op } from "./types";
@@ -8,12 +9,12 @@ export function throttleEnvelope(retryAfterSeconds: number, requestId: string): 
   const retry = Math.max(1, retryAfterSeconds);
   return {
     status: 429,
-    body: {
-      reason: "rate_limited",
-      message: `Too many requests. Try again in ${retry} seconds.`,
-      request_id: requestId,
-      retry_after: retry,
-    },
+    body: ingressDenial(
+      "rate_limited",
+      `Too many requests. Try again in ${retry} seconds.`,
+      requestId,
+      { retry_after: retry },
+    ),
     headers: { "Retry-After": String(retry) },
   };
 }
@@ -22,11 +23,11 @@ export function throttleEnvelope(retryAfterSeconds: number, requestId: string): 
 export function busyEnvelope(requestId: string): Answer {
   return {
     status: 503,
-    body: {
-      reason: "operation_busy",
-      message: "The rate limiter is busy admitting requests. Retry with the same idempotency key.",
-      request_id: requestId,
-    },
+    body: ingressDenial(
+      "operation_busy",
+      "The rate limiter is busy admitting requests. Retry with the same idempotency key.",
+      requestId,
+    ),
   };
 }
 

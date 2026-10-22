@@ -569,7 +569,7 @@ describe("agent ingress envelope shape (control)", () => {
     expect(res.status).toBe(403);
     const text = await res.text();
     const body = JSON.parse(text) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
     expect(body.reason).toBe("forbidden_action");
     expect(body.request_id).toMatch(ULID);
     expectNoLeak(text, [CRED, CALLER]);
@@ -584,7 +584,14 @@ describe("agent ingress envelope shape (control)", () => {
     expect(res.status).toBe(422);
     const text = await res.text();
     const body = JSON.parse(text) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["errors", "message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "code",
+      "errors",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
     expect(body.reason).toBe("validation_failed");
     expect(body.request_id).toMatch(ULID);
     expectNoLeak(text, [CRED, CALLER]);
