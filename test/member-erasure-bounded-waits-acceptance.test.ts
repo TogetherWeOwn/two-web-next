@@ -317,6 +317,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     expect(dry.timedOut).toBe(false);
     expect(dry.status).toBe(0);
     expect(JSON.parse(dry.stdout)).toEqual({
+      ok: true,
       mode: "dry-run",
       counts: {
         users: 1,
@@ -342,6 +343,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
     expect(applied.status).toBe(0);
     expect(JSON.parse(applied.stdout)).toEqual({
+      ok: true,
       mode: "apply",
       counts: seeded,
       passes: 1,
@@ -361,6 +363,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     const again = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
     expect(again.status).toBe(0);
     expect(JSON.parse(again.stdout)).toEqual({
+      ok: true,
       mode: "apply",
       counts: empty,
       passes: 1,
@@ -438,6 +441,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       join_attempts: 1,
     };
     expect(JSON.parse(result.stdout)).toEqual({
+      ok: true,
       mode: "apply",
       counts: seeded,
       passes: 1,
