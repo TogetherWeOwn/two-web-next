@@ -72,7 +72,8 @@ same envelope when the observed handler fails with a classified outage or the
 audit write fails; every other refusal (contract violation, unclassified error)
 stays its plain 503. Neither path serves the buffered member contents.
 The 503 envelope is branded HTML for browsers and sanitized JSON for JSON
-callers, private/no-store and varied on Accept. Negotiated routes compare the
+callers, private/no-store and varied on Accept. Every Hono outage 503 — the `db_unavailable` envelope and its buffered twin, `eventsUnavailable`, the maintenance page and the inline event legs — emits `Retry-After: 60` (`OUTAGE_RETRY_AFTER_SECONDS` in `src/error-responses.tsx`), so machine clients wait 60 seconds before retrying.
+Negotiated routes compare the
 quality of HTML and JSON using the most-specific matching media range; an
 explicit `q=0` cannot be overridden by a wildcard. Equal-quality choices use
 specificity, then header order, with HTML as the default/fallback. JSON-only
