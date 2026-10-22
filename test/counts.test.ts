@@ -85,7 +85,7 @@ describe("readCounts contract", () => {
     });
     expect(state.urls).toEqual([env.BOT_DB!.connectionString, env.BOT_DB!.connectionString]);
     expect(state.queries[0]).toContain("human_member_count, online_count, counts_updated_at");
-    expect(state.queries[1]).toContain("ORDER BY rank_order");
+    expect(state.queries[1]).toContain("ORDER BY c.rank_order");
     expect(state.options[0]).toMatchObject({
       prepare: false,
       fetch_types: false,

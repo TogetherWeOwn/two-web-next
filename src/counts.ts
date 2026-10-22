@@ -132,9 +132,19 @@ function mapRank(row: Row): Rank {
   return rank;
 }
 
-function isMissingRelation(error: unknown): boolean {
+// The ladder side of the join is optional: a bot schema without rank_ladder
+// (42P01), without a grant on it (42501), without its role column (42703),
+// or with its own rank_order column (42702) still renders role-less ranks
+// from the counts alone. A code here only costs a counts-only retry: when the
+// counts side itself is broken the retry fails too and takes the usual
+// single-warn fallback path, exactly as before.
+const LADDER_UNAVAILABLE_CODES = new Set(["42P01", "42501", "42703", "42702"]);
+
+function isLadderUnavailable(error: unknown): boolean {
   return (
-    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "42P01"
+    typeof error === "object" &&
+    error !== null &&
+    LADDER_UNAVAILABLE_CODES.has((error as { code?: unknown }).code as string)
   );
 }
 
@@ -143,15 +153,14 @@ const readRanksView = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
     const rows = await sql<Row[]>`
       SELECT c.rank_key, c.rank_label, c.member_count, l.role_id
       FROM web_v1.rank_counts c LEFT JOIN web_v1.rank_ladder l ON l.rank_key = c.rank_key
-      ORDER BY rank_order
+      ORDER BY c.rank_order
     `;
     return rows.map(mapRank);
   } catch (error) {
-    // The ladder table is optional: a bot schema without rank_ladder fails
-    // the join with 42P01, and the ranks still render role-less from the
-    // counts alone. Any other error — or a ranks-only failure too — takes the
-    // usual single-warn fallback path.
-    if (!isMissingRelation(error)) throw error;
+    // The ladder table is optional: a bot schema that cannot serve the join
+    // still renders role-less ranks from the counts alone. Any other error —
+    // or a ranks-only failure too — takes the usual single-warn fallback path.
+    if (!isLadderUnavailable(error)) throw error;
     const rows = await sql<Row[]>`
       SELECT rank_key, rank_label, member_count
       FROM web_v1.rank_counts ORDER BY rank_order

@@ -2,7 +2,7 @@
 // Keep these read models synthetic; never create or read shared bot tables.
 import type { PgDialect, PgSession } from "drizzle-orm/pg-core";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import type { Counts } from "../src/counts";
+import type { Counts, Rank } from "../src/counts";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 
@@ -30,6 +30,15 @@ export async function readCounts(
       { key: "legend", label: "Legend", memberCount: 0 },
     ],
   };
+}
+
+// The ladder alone, for leaves that need ranks but no live numerals: the same
+// readCounts fixture, minus the live leg, so populated and unavailable states
+// stay in lockstep with the combined read.
+export async function readRanks(
+  env: Env & { A11Y_READ_STATE?: AuditFixtureState },
+): Promise<Rank[]> {
+  return (await readCounts(env)).ranks;
 }
 
 const members: Record<string, Record<string, unknown>> = {

@@ -290,3 +290,71 @@ describe("web_v1 fixture containment", () => {
     await expect(createWebV1Fixture(raw)).rejects.toThrow("refusing before connecting");
   });
 });
+
+// The web_v1 fixture lends a single transactional connection, so any failed
+// join there aborts the retry too and the reads degrade to the label-only
+// fallback (the acceptance suite pins that end state). Production request
+// reads use fresh auto-commit connections, where the counts-only retry
+// succeeds. This block mirrors production with a committed schema in a second
+// run-owned database: the ladder table exists but has no role column, so the
+// join fails with 42703 and the retry must return live role-less ranks.
+describe.skipIf(!/\/two_web_next_tog\d+\/?$/.test(process.env.DATABASE_URL ?? ""))(
+  "rank ladder counts-only retry (committed schema)",
+  () => {
+    it("retries counts-only when the ladder table lacks the role column", async () => {
+      const pg = (await import("postgres")).default;
+      const baseName = process.env.DATABASE_URL!.match(/two_web_next_tog\d+/)![0];
+      const dbName = `${baseName}9`;
+      const maintenance = testDatabaseUrl(
+        process.env.DATABASE_URL!.replace(/\/two_web_next_tog\d+\/?$/, "/postgres"),
+      );
+      const admin = pg(maintenance.href, {});
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
+        await admin.unsafe(`CREATE DATABASE "${dbName}"`);
+        const target = testDatabaseUrl(
+          process.env.DATABASE_URL!.replace(/\/two_web_next_tog\d+\/?$/, `/${dbName}`),
+        );
+        const ddl = pg(target.href, {});
+        try {
+          await ddl.unsafe("CREATE SCHEMA web_v1");
+          await ddl`
+            CREATE TABLE web_v1.rank_counts (
+              rank_key text NOT NULL,
+              rank_label text NOT NULL,
+              member_count bigint,
+              rank_order integer NOT NULL
+            )
+          `;
+          await ddl`
+            INSERT INTO web_v1.rank_counts VALUES
+            ('legend', 'Legend', 0, 5), ('soldier', 'Soldier', 20, 3),
+            ('prospect', 'Prospect', 24, 1), ('veteran', 'Veteran', NULL, 4), ('member', 'Member', 40, 2)
+          `;
+          // Ladder present but role-less: the join fails with 42703.
+          await ddl`CREATE TABLE web_v1.rank_ladder (rank_key text NOT NULL)`;
+        } finally {
+          await ddl.end();
+        }
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const { readRanks } = await import("../src/counts");
+          const ranks = await readRanks({ ...baseEnv, BOT_DATABASE_URL: target.href } as Env);
+          expect(ranks).toEqual([
+            { key: "prospect", label: "Prospect", memberCount: 24 },
+            { key: "member", label: "Member", memberCount: 40 },
+            { key: "soldier", label: "Soldier", memberCount: 20 },
+            { key: "veteran", label: "Veteran", memberCount: null },
+            { key: "legend", label: "Legend", memberCount: 0 },
+          ]);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
+      } finally {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
+        await admin.end();
+      }
+    });
+  },
+);
