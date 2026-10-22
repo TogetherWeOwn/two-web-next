@@ -154,8 +154,7 @@ const lineup = $derived(
           <p data-testid="event-venue">{model.location}</p>
         </dd>
       </div>
-    {/if}
-    {#if model.series && model.series.hosts.length > 0}
+    {/if}{#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
         <dd>
@@ -318,8 +317,7 @@ const lineup = $derived(
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">
-    {#if model.series && (model.series.previous || model.series.next)}
+  <div class="event-discovery">{#if model.series && (model.series.previous || model.series.next)}
       <nav aria-label="Series events" data-testid="event-series-nav">
         {#if model.series.previous}
           <a
@@ -336,8 +334,7 @@ const lineup = $derived(
           </a>
         {/if}
       </nav>
-    {/if}
-    {#if model.neighbors.previous || model.neighbors.next}
+    {/if}{#if model.neighbors.previous || model.neighbors.next}
       <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
         {#if model.neighbors.previous}
           <a
