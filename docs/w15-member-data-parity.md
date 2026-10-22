@@ -28,7 +28,7 @@ Test aliases:
 `test/event-attendees.test.ts` covers the mounted event page's four roles,
 original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
 escaping, missing users, empty names, self-exclusion and real failed access-log
-INSERTs (503 even when the legacy enforcement flag is disabled). One access-log row
+INSERTs (always 503; no setting relaxes it). One access-log row
 names all rendered subjects except the viewer; guests never query the identity
 projection. All normal event HTML is `private, no-store` because the guest join
 pitch also depends on the session; `Vary: Cookie` preserves explicit viewer

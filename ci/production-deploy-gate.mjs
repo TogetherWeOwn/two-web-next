@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { APEX_ORIGIN } from "./operator-constants.mjs";
 import { deployTitle, e2eTitle } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
@@ -71,7 +72,7 @@ export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
 // the production apex /up revision marker (the same source the production
 // promoter uses). Returns the 40-hex commit, or null when the marker is
 // absent or unreadable (unknown, never equal).
-export const PRODUCTION_ORIGIN = "https://togetherweown.com";
+export const PRODUCTION_ORIGIN = APEX_ORIGIN;
 
 export async function readLiveProductionCommit({
   origin = PRODUCTION_ORIGIN,
