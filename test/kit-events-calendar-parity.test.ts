@@ -68,6 +68,8 @@ const baseData = () => ({
   now: new Date("2026-10-13T12:00:00Z"),
   totalPages: 1,
   emptyState: null,
+  games: [],
+  gameFilter: null,
   robots: undefined,
   discordFailed: false,
   member: false,
