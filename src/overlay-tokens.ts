@@ -130,6 +130,22 @@ export function createMemoryOverlayTokenStore(clock: () => number = Date.now): O
     }
     return false;
   };
+  // Revoke kills grace permanently: a predecessor rotated at t0 must not
+  // resolve again just because the member minted a fresh token later. Any
+  // revocation of the member's chain at or after the rotation voids the
+  // 10s window, so a killed URL stays dead past a re-mint.
+  const chainRevokedSinceRotation = (memberId: string, rotatedAtMs: number) => {
+    for (const row of rows.values()) {
+      if (
+        row.memberId === memberId &&
+        row.status === "revoked" &&
+        row.revokedAtMs !== null &&
+        row.revokedAtMs >= rotatedAtMs
+      )
+        return true;
+    }
+    return false;
+  };
 
   return {
     async mint(memberId, tokenHash) {
@@ -200,7 +216,8 @@ export function createMemoryOverlayTokenStore(clock: () => number = Date.now): O
         row.status === "rotated" &&
         row.rotatedAtMs !== null &&
         clock() - row.rotatedAtMs < graceMs &&
-        hasLiveSuccessor(row.memberId)
+        hasLiveSuccessor(row.memberId) &&
+        !chainRevokedSinceRotation(row.memberId, row.rotatedAtMs)
       ) {
         row.useCount += 1;
         row.lastUsedAtMs = clock();
@@ -309,8 +326,10 @@ export function createPostgresOverlayTokenStore(sql: Sql): OverlayTokenStore {
       return rows.length > 0;
     },
     async revoke(tokenHash) {
-      // Revoking the predecessor kills its grace row directly; revoking the
-      // successor kills it indirectly, because grace requires a live row.
+      // Revoking the predecessor kills its grace row directly. Revoking any
+      // later row of the chain kills it permanently too: the lookup refuses
+      // rotated rows with a revocation at or after rotated_at, so a later
+      // re-mint cannot revive a killed URL.
       await sql`update overlay_tokens set status = 'revoked', revoked_at = clock_timestamp()
         where token_hash = ${tokenHash} and status <> 'revoked'`;
     },
@@ -329,7 +348,8 @@ export function createPostgresOverlayTokenStore(sql: Sql): OverlayTokenStore {
         returning id, member_id`;
       if (live[0]) return { memberId: live[0].member_id, tokenId: live[0].id };
       // Predecessor grace: strictly inside 10s from rotated_at, only while a
-      // live successor exists. Reads never extend the deadline.
+      // live successor exists, and never after the chain was revoked at or
+      // after the rotation. Reads never extend the deadline.
       const grace = await sql<{ id: string; member_id: string }[]>`update overlay_tokens as o
         set use_count = o.use_count + 1, last_used_at = clock_timestamp()
         where o.token_hash = ${tokenHash} and o.status = 'rotated'
@@ -337,6 +357,11 @@ export function createPostgresOverlayTokenStore(sql: Sql): OverlayTokenStore {
           and exists (
             select 1 from overlay_tokens as s
             where s.member_id = o.member_id and s.status = 'live'
+          )
+          and not exists (
+            select 1 from overlay_tokens as r
+            where r.member_id = o.member_id and r.status = 'revoked'
+              and r.revoked_at >= o.rotated_at
           )
         returning o.id as id, o.member_id as member_id`;
       if (grace[0]) return { memberId: grace[0].member_id, tokenId: grace[0].id };
