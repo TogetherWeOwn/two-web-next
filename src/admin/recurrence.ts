@@ -89,6 +89,17 @@ function asUtcMs(wall: PreciseWall): number {
   );
 }
 
+/** Whole calendar days between two wall dates, ignoring time-of-day. */
+function wallDateSpanDays(start: PreciseWall, end: PreciseWall): number {
+  const s = WALL_PARTS.exec(start.minute)!;
+  const e = WALL_PARTS.exec(end.minute)!;
+  const span =
+    (Date.UTC(Number(e[1]), Number(e[2]) - 1, Number(e[3])) -
+      Date.UTC(Number(s[1]), Number(s[2]) - 1, Number(s[3]))) /
+    86_400_000;
+  return Math.max(0, span);
+}
+
 /**
  * Every occurrence the rule names, parent first, keyed by 1-based index.
  * Both bounds apply and the tighter wins: `count` caps the total including
@@ -113,6 +124,10 @@ export function occurrences(
   // occurrence keeps this duration from its resolved start instead of storing
   // a zero-length meeting the event parser would reject.
   const durationMs = endsAt.getTime() - startsAt.getTime();
+  // Multi-day seeds keep their wall shape: the monthly end anchors to the
+  // resolved start date plus the seed's day span, so a Jan 25-31 event still
+  // runs 6 days in February instead of clamping its end to Feb 28.
+  const seedDaySpan = wallDateSpanDays(localStart, localEnd);
   const out = new Map<number, Occurrence>();
   const monthly = frequency === "monthly";
   for (let index = 1; index <= limit; index++) {
@@ -124,7 +139,24 @@ export function occurrences(
       : addDaysToWall(localStart, 7 * step);
     if (endDate !== null && startWall.minute.slice(0, 10) > endDate) break;
     const starts = index === 1 ? startsAt : resolveWall(startWall, timezone);
-    const endWall = monthly ? addMonthsToWall(localEnd, step) : addDaysToWall(localEnd, 7 * step);
+    // Monthly end walls anchor to the resolved start wall date with the seed
+    // end time, never to the seed end day: clamping the end day independently
+    // would silently shorten multi-day events in short months. Same-day seeds
+    // keep the direct month step, which names the identical wall.
+    let endWall: PreciseWall;
+    if (!monthly) {
+      endWall = addDaysToWall(localEnd, 7 * step);
+    } else if (seedDaySpan === 0) {
+      endWall = addMonthsToWall(localEnd, step);
+    } else {
+      endWall = addDaysToWall(
+        {
+          minute: `${startWall.minute.slice(0, 10)} ${localEnd.minute.slice(11)}`,
+          subMinuteMs: localEnd.subMinuteMs,
+        },
+        seedDaySpan,
+      );
+    }
     let ends = index === 1 ? endsAt : resolveWall(endWall, timezone);
     if (index > 1 && durationMs > 0 && ends.getTime() <= starts.getTime()) {
       ends = new Date(starts.getTime() + durationMs);

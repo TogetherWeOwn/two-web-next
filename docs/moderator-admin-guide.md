@@ -389,7 +389,9 @@ Sources: [critical browser journeys](critical-journeys.md#critical-browser-journ
 
 Choose **Weekly** or **Monthly** only for an approved series and review its count/end date
 before **Create draft**. Weekly keeps the same weekday; monthly keeps the same
-wall day-of-month and meets on the last day of shorter months. Occurrences retain local wall time across clock changes;
+wall day-of-month and meets on the last day of shorter months. A multi-day
+monthly event keeps its length, so a February occurrence can end in March.
+Occurrences retain local wall time across clock changes;
 subsequent occurrences in a spring-forward gap move forward by that gap, and
 repeated-hour times use the first occurrence. Fresh ambiguous first-event times
 still follow the event form's validation rules.
