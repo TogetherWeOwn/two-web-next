@@ -163,8 +163,24 @@ export interface PublicDataErrorDto {
   error: {
     code: PublicDataErrorCode;
     message: string;
+    /** Matches the x-request-id response header, for correlation. */
+    request_id: string;
+    /** One safe next action for the caller. */
+    next: string;
   };
 }
+
+/**
+ * The one safe next action per public-data error code. Static strings, so
+ * agents can match on them; see docs/machine-errors.md, the single source.
+ */
+export const PUBLIC_DATA_ERROR_NEXT: Record<PublicDataErrorCode, string> = {
+  internal: "Retry the read shortly.",
+  invalid_request: "Fix the request and retry.",
+  not_found: "Check the event key and retry.",
+  rate_limited: "Wait for Retry-After, then retry.",
+  unavailable: "Retry the read shortly.",
+};
 
 /** Exclusions are part of the public contract, not fields callers can opt into. */
 export const PUBLIC_DATA_EXCLUSIONS = [
