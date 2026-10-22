@@ -1,10 +1,10 @@
 // route-inventory: POST /mcp
 // route-inventory: OPTIONS /mcp
 // Acceptance pins: the shared public-read budget is checked BEFORE batch
-// parsing on POST /mcp. An over-budget caller therefore gets the same JSON
-// 429 envelope as any other over-budget request, even when the body is a
-// JSON-RPC batch that would otherwise be refused with -32600. Under budget,
-// the batch refusal is unchanged, and OPTIONS preflight is never throttled.
+// parsing on POST /mcp. An over-budget caller therefore gets the JSON-RPC
+// 429 error, even when the body is a JSON-RPC batch that would otherwise be
+// refused with -32600. Under budget, the batch refusal is unchanged, and
+// OPTIONS preflight is never throttled.
 // Real app + agent-testdb/CI Postgres only.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
@@ -39,11 +39,18 @@ const BATCH = [
   },
 ];
 
-// The 429 envelope the public API already answers with (see the shared-budget
-// pin in test/api-public-events.test.ts); MCP shares that budget and shape.
-// The throttle double reports a 60-second wait for hits seeded at `now`.
+// The 429 the MCP transport answers with: the shared public-read budget (see
+// the shared-budget pin in test/api-public-events.test.ts) in the JSON-RPC
+// error shape, never the REST envelope. The throttle double reports a
+// 60-second wait for hits seeded at `now`.
 const RATE_LIMITED = {
-  error: { code: "rate_limited", message: "Too many requests. Try again in 60 seconds." },
+  jsonrpc: "2.0",
+  id: null,
+  error: {
+    code: -32600,
+    message: "Too many requests. Try again in 60 seconds.",
+    data: { next: "Wait for Retry-After, then retry.", request_id: expect.any(String) },
+  },
 };
 
 type RpcResponse = {
