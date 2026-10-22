@@ -278,17 +278,20 @@ function selftest() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  try {
-    if (args.includes("--selftest")) {
-      if (args.some((arg) => arg !== "--selftest"))
-        throw new Error("This preflight takes no inputs.");
-      selftest();
-    } else {
-      if (args.length > 0) throw new Error("This preflight takes no inputs.");
-      await runPreflight();
+  const isSelftest = args.length === 1 && args[0] === "--selftest";
+  const isRun = args.length === 0;
+  if (!isSelftest && !isRun) {
+    console.error(
+      "staging-catalog-preflight: usage: node ci/staging-catalog-preflight.mjs [--selftest]",
+    );
+    process.exitCode = 2;
+  } else {
+    try {
+      if (isSelftest) selftest();
+      else await runPreflight();
+    } catch (error) {
+      console.error(safePreflightError(error));
+      process.exitCode = 1;
     }
-  } catch (error) {
-    console.error(safePreflightError(error));
-    process.exitCode = 1;
   }
 }

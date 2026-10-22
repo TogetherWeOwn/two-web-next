@@ -106,7 +106,10 @@ describe("warm-cache freshness boundary", () => {
       memberCount: null,
       ranks: [{ key: "prospect", label: "Prospect", memberCount: 24 }],
     });
-    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", { key: "counts.live" });
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Counts read unavailable", {
+      key: "counts.live",
+      exception: "Error",
+    });
     // Recover live and break ranks while both caches are still warm.
     state.liveError = null;
     state.live[0]!.human_member_count = "55";
@@ -125,6 +128,9 @@ describe("warm-cache freshness boundary", () => {
     expect(state.liveQueries).toBe(2);
     expect(state.ranksQueries).toBe(2);
     expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenLastCalledWith("Counts read unavailable", { key: "counts.ranks" });
+    expect(warn).toHaveBeenLastCalledWith("Counts read unavailable", {
+      key: "counts.ranks",
+      exception: "Error",
+    });
   });
 });

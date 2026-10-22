@@ -469,13 +469,13 @@ describe("member-access-log (memory doubles)", () => {
     },
   );
 
-  it("MEMBER_ACCESS_LOG_ENFORCE=false cannot bypass the keyed read boundary", async () => {
+  it("fails closed when the access log is down", async () => {
     const { app, sessions } = harness({ logDown: true });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await app.request(
       `/members/${ALICE.userId}`,
       { headers: { cookie: await cookieFor(sessions, BOB) } },
-      { ...env, MEMBER_ACCESS_LOG_ENFORCE: "false" },
+      env,
     );
     expect(res.status).toBe(503);
     expect(await res.text()).not.toContain("alice");
