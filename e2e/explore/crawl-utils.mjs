@@ -1,7 +1,8 @@
 // Pure helpers for the staging explorer (e2e/explore/explore.spec.ts).
 import { createHash } from "node:crypto";
+import { STAGING_ORIGIN } from "../../ci/operator-constants.mjs";
 
-export const EXPLORE_ORIGIN = "https://next.togetherweown.com";
+export const EXPLORE_ORIGIN = STAGING_ORIGIN;
 
 // Paths the explorer never follows: they start sign-in or Discord flows, or are
 // non-HTML feeds the explorer cannot judge visually.

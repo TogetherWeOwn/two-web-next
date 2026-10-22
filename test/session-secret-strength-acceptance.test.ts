@@ -197,15 +197,8 @@ describe("SESSION_SECRET strength gate: valid and rotation-shaped secrets stay r
     const { res, text, body, logs } = await upWith(secret);
     try {
       expect(res.status).toBe(200);
-      // A ready Worker adds nothing to the body besides informational
-      // signals: no `config` key, same shape plus `member_access_log_enforcement`.
-      expect(Object.keys(body).sort()).toEqual([
-        "db",
-        "member_access_log_enforcement",
-        "pending_migrations",
-        "queue",
-        "status",
-      ]);
+      // A ready Worker adds nothing to the body: no `config` key.
+      expect(Object.keys(body).sort()).toEqual(["db", "pending_migrations", "queue", "status"]);
       expect(body).toMatchObject({ status: "healthy", db: "ok", pending_migrations: 0 });
       expect(text).not.toContain(secret);
       expect(logs.text()).not.toContain(secret);
