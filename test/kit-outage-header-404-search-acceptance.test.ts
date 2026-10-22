@@ -15,7 +15,7 @@
 //   same href/label/testid contract as Hono's cta branch; no OAuth start
 //   (/join/discord or /auth/discord) anywhere on those pages.
 // - 400/404/410 headers keep the sign-in CTA exactly as today (parity pin).
-// - Kit 404 gains the event search form, markup-matching the Hono
+// - Kit 400/404/410 gain the event search form, markup-matching the Hono
 //   NotFoundPage and EventMissing twins; other statuses gain no form.
 // - The boundary still reads no session/DB/network; noindex intact;
 //   data-testid="signin" stays on the header CTA for every status.
@@ -195,11 +195,13 @@ describe("acceptance: outage headers point at Discord, never the OAuth start", (
 });
 
 describe("acceptance: Kit 404 restores the event search form", () => {
-  function searchForm(): string {
-    const { body } = renderShell(404);
+  function searchForm(code: KitErrorStatus = 404): string {
+    const { body } = renderShell(code);
     const forms = searchForms(body);
-    expect(forms, "404 renders exactly one form").toHaveLength(1);
-    expect(mainHtml(body, "404"), "the 404 form lives in the main landmark").toContain(forms[0]);
+    expect(forms, `${code} renders exactly one form`).toHaveLength(1);
+    expect(mainHtml(body, `${code}`), `the ${code} form lives in the main landmark`).toContain(
+      forms[0],
+    );
     return forms[0]!;
   }
 
@@ -231,6 +233,13 @@ describe("acceptance: Kit 404 restores the event search form", () => {
       );
     expect(button, "404 form keeps the twin submit button").not.toBeNull();
     expect(button![1]!.replace(/\s+/g, " ").trim()).toBe("Search events");
+  });
+
+  it.each([400, 410] as const)("%d renders the same search form as 404", (code) => {
+    // The three forms are verbatim copies; 404's action/method/role/class/
+    // label/input/submit contract is pinned above, so byte equality extends
+    // that contract to 400/410.
+    expect(searchForm(code)).toBe(searchForm(404));
   });
 
   it("markup-matches the Hono NotFoundPage and EventMissing twins", () => {
@@ -268,8 +277,8 @@ describe("acceptance: Kit 404 restores the event search form", () => {
     expect(body).toContain('data-testid="error-all-events"');
   });
 
-  it.each([400, 403, 410, 429, 500, 503] as const)(
-    "%d renders no search form: the form is 404-only",
+  it.each([403, 429, 500, 503] as const)(
+    "%d renders no search form: the form is 400/404/410-only",
     (code) => {
       const { body } = renderShell(code);
       expect(searchForms(body), `${code} renders no form`).toHaveLength(0);
