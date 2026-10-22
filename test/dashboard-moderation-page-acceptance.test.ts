@@ -1,7 +1,7 @@
 // route-inventory: GET /admin/moderation, POST /admin/moderation
 // Acceptance: dashboard moderation page (Slice 2b).
 //
-// Parent spec: TOG-35922 "Web dashboard parity" §2.1 (moderation slice),
+// Parent spec: "Web dashboard parity" §2.1 (moderation slice),
 // §3 (data model), §3.5 (conflicts), §4 (security), §6 (test plan), §7 item 6,
 // owner decisions B4 (write auth) + B7 (honest gaps). Owner-approved 2026-10-21.
 //
@@ -239,7 +239,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       stubState.botDown = false;
       globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
         const url = String(input);
-        if (url.startsWith(BOT_URL)) {
+        if (url === BOT_URL || url.startsWith(`${BOT_URL}/`)) {
           const body = String(init?.body ?? "");
           botCalls.push({ url, body });
           if (stubState.botDown) return new Response("bot down", { status: 500 });
