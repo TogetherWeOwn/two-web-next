@@ -668,12 +668,12 @@ describe("invalid inputs fail before network, queue or credentials", () => {
     expect(apply.out).toMatch(/BOT_SHARED_SECRET/);
   });
 
-  it("--dry-run stays refused, never a preview alias", () => {
+  it("--dry-run with --apply refuses conflicting modes", () => {
     for (const [script, valid] of [
       [SMOKE, SMOKE_VALID],
       [DRILL, DRILL_VALID],
     ] as const) {
-      const r = runCli(script, [...valid, "--dry-run"]);
+      const r = runCli(script, [...valid, "--dry-run", "--apply"]);
       expect(r.code).toBe(2);
       expect(r.out).toMatch(/usage/i);
     }
