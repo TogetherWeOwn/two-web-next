@@ -203,7 +203,7 @@ describe("operator 503 logging acceptance", () => {
     const res = await previewRequest(
       store,
       { headers: { cookie: await operatorCookie(store) } },
-      { ...queueEnv, MEMBER_ACCESS_LOG_ENFORCE: "true" },
+      queueEnv,
     );
     expect(res.status).toBe(503);
     const text = await res.text();
