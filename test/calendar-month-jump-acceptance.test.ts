@@ -18,6 +18,7 @@
 //   calendar-month-empty       month-local guidance block (names the month)
 // No live sources, no real DB: pg-proxy fakes + fixed clocks only.
 import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
@@ -466,7 +467,7 @@ describe("recognized game month-jump regression", () => {
     // admission or replacement; those behaviors remain covered in island suites.
     const fetch = vi.fn(async () => new Response(null, { status: 503 }));
     runInNewContext(
-      readFileSync(new URL("../public/islands/events-calendar.js", import.meta.url), "utf8"),
+      readFileSync(new NodeURL("../public/islands/events-calendar.js", import.meta.url), "utf8"),
       {
         URL,
         AbortController,
