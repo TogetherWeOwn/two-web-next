@@ -74,7 +74,24 @@ async function fixture(callback) {
   const admin = postgres(url.href, options);
   let client;
   let created = false;
+  // Migrations carry runtime GRANTs to two_web_app
+  // (ci/migration-runtime-rights.mjs), so every apply target provisions the
+  // role first: CI workflows create it on the service cluster, staging/prod
+  // carry it provisioned. The fixture mirrors that prerequisite for
+  // standalone runs: adopt a pre-existing role, else create and own it.
+  // Never drop a role this run did not create.
+  let ownedRuntimeRole = false;
   try {
+    const [runtimeRole] = await admin`select 1 from pg_roles where rolname = 'two_web_app'`;
+    if (!runtimeRole) {
+      try {
+        await admin.unsafe("CREATE ROLE two_web_app NOLOGIN");
+        ownedRuntimeRole = true;
+      } catch (error) {
+        // Lost a concurrent create on a shared cluster; adopt the winner.
+        if (error?.code !== "42710") throw error;
+      }
+    }
     await admin.unsafe(`create database "${name}"`);
     created = true;
     url.pathname = `/${name}`;
@@ -98,6 +115,17 @@ async function fixture(callback) {
     try {
       if (client) await client.end();
       if (created) await admin.unsafe(`drop database "${name}" with (force)`);
+      // After the database drop: the grants this apply recorded are gone
+      // with it. A 2BP01 here means a concurrent suite on a shared cluster
+      // adopted the role and recorded grants in its own database; leave it
+      // like any adopted leftover instead of failing teardown.
+      if (ownedRuntimeRole) {
+        try {
+          await admin.unsafe("DROP ROLE two_web_app");
+        } catch (error) {
+          if (error?.code !== "2BP01") throw error;
+        }
+      }
     } finally {
       await admin.end();
     }
@@ -496,12 +524,9 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    // The fixture provisions two_web_app (adopted or owned); this test only
+    // uses it and never drops it, so it runs on provisioned clusters instead
+    // of skipping. The fixture drops the role only when it created it.
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -529,7 +554,6 @@ test("runtime-role connection is refused while the reviewed sequence default pas
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
     }
   });
 });
