@@ -8,6 +8,7 @@ import { discardFailedJob, listFailedJobs } from "../src/jobs/redrive";
 import {
   configReadiness,
   databaseReadiness,
+  migrationLedgerMax,
   missingSecrets,
   pendingWebMigrations,
   QUEUE_CRITICAL_AT,
@@ -44,6 +45,7 @@ const depthRow = (over: Record<string, unknown> = {}) => ({
 });
 const withStore = (sql: unknown) => ({ ...env, QUEUE_DEPTH_STORE: sql }) as Env;
 const applied = WEB_MIGRATIONS.map((entry) => ({ created_at: String(entry.when) }));
+const ledgerMax = Math.max(...WEB_MIGRATIONS.map((entry) => entry.when));
 const never = () => new Promise<Record<string, unknown>[]>(() => {});
 
 const healthyQueue = {
@@ -94,6 +96,17 @@ describe("web migration journal comparison", () => {
     "fails closed on malformed ledger timestamps (%s)",
     (created_at) => {
       expect(() => pendingWebMigrations([{ created_at }])).toThrow();
+    },
+  );
+  it("reports the ledger max across all rows, or null when the ledger is empty", () => {
+    expect(migrationLedgerMax(applied)).toBe(ledgerMax);
+    expect(migrationLedgerMax([...applied, { created_at: "9999999999999" }])).toBe(9999999999999);
+    expect(migrationLedgerMax([])).toBeNull();
+  });
+  it.each([null, "", "bad", -1, 1.5, Infinity, "9007199254740993"])(
+    "fails the ledger max together with the pending count on malformed timestamps (%s)",
+    (created_at) => {
+      expect(() => migrationLedgerMax([{ created_at }])).toThrow();
     },
   );
 });
@@ -241,6 +254,7 @@ describe("GET /up", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -274,6 +288,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: unknownQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -286,6 +301,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "error",
       pending_migrations: null,
+      migration_ledger_max: null,
       queue: { ...unknownQueue, detail: "queue ledger is not configured." },
       member_access_log_enforcement: "enforcing",
     });
@@ -304,6 +320,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "ok",
       pending_migrations: 1,
+      migration_ledger_max: 9999999999999,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -319,6 +336,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "ok",
       pending_migrations: null,
+      migration_ledger_max: null,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -341,6 +359,7 @@ describe("GET /up", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger_max: null,
         queue: unknownQueue,
         member_access_log_enforcement: "enforcing",
       });
@@ -392,6 +411,7 @@ describe("/up required Worker secrets", () => {
     expect(Object.keys(body).sort()).toEqual([
       "db",
       "member_access_log_enforcement",
+      "migration_ledger_max",
       "pending_migrations",
       "queue",
       "status",
@@ -400,6 +420,7 @@ describe("/up required Worker secrets", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -426,6 +447,7 @@ describe("/up required Worker secrets", () => {
           status: "degraded",
           db: "ok",
           pending_migrations: 0,
+          migration_ledger_max: ledgerMax,
           config: "missing",
           queue: healthyQueue,
           member_access_log_enforcement: "enforcing",
@@ -457,6 +479,7 @@ describe("/up required Worker secrets", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger_max: null,
         queue: healthyQueue,
         member_access_log_enforcement: "enforcing",
       });
@@ -475,6 +498,7 @@ describe("/up required Worker secrets", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger_max: null,
         config: "missing",
         queue: { ...unknownQueue, detail: "queue ledger is not configured." },
         member_access_log_enforcement: "enforcing",
@@ -523,6 +547,7 @@ describe("/up revision marker", () => {
     expect(Object.keys((await res.json()) as object).sort()).toEqual([
       "db",
       "member_access_log_enforcement",
+      "migration_ledger_max",
       "pending_migrations",
       "queue",
       "status",
@@ -537,6 +562,7 @@ describe("/up revision marker", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
       revision: { version_id: versionId, commit: sha },
@@ -727,6 +753,7 @@ describe("/up bounded reads", () => {
           status: "degraded",
           db: stage === "ping" ? "error" : "ok",
           pending_migrations: null,
+          migration_ledger_max: null,
           queue: unknownQueue,
           member_access_log_enforcement: "enforcing",
         });
@@ -749,7 +776,11 @@ describe("/up bounded reads", () => {
         }),
       );
       await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
-      expect(await p).toEqual({ db: "error", pending_migrations: null });
+      expect(await p).toEqual({
+        db: "error",
+        pending_migrations: null,
+        migration_ledger_max: null,
+      });
       reject(new Error("late failure"));
       await vi.advanceTimersByTimeAsync(0);
     } finally {

@@ -16,8 +16,11 @@
 // database, network or deployment is touched.
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
+import { WEB_MIGRATIONS } from "../src/up";
 import app from "./app";
 import { healthSql } from "./helpers/up";
+
+const ledgerMax = Math.max(...WEB_MIGRATIONS.map((entry) => entry.when));
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -73,6 +76,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -85,6 +89,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "enforcing",
     });
@@ -102,6 +107,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger_max: ledgerMax,
       queue: healthyQueue,
       member_access_log_enforcement: "log_only",
     });
@@ -133,7 +139,14 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
     const { member_access_log_enforcement: _l, ...restLogOnly } = logOnly;
     expect(restLogOnly).toEqual(restEnforcing);
     expect(Object.keys(logOnly).sort()).toEqual(
-      ["db", "pending_migrations", "queue", "status", "member_access_log_enforcement"].sort(),
+      [
+        "db",
+        "pending_migrations",
+        "migration_ledger_max",
+        "queue",
+        "status",
+        "member_access_log_enforcement",
+      ].sort(),
     );
   });
 
@@ -171,6 +184,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
       status: "degraded",
       db: "error",
       pending_migrations: null,
+      migration_ledger_max: null,
       queue: healthyQueue,
       member_access_log_enforcement: "log_only",
     });
@@ -202,6 +216,7 @@ describe("/up member-access-log enforcement reporting (acceptance)", () => {
         status: "degraded",
         db: "ok",
         pending_migrations: 0,
+        migration_ledger_max: ledgerMax,
         config: "missing",
         queue: healthyQueue,
         member_access_log_enforcement: "log_only",

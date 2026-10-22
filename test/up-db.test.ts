@@ -120,9 +120,14 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       expect(await databaseReadiness(client)).toEqual({
         db: "ok",
         pending_migrations: WEB_MIGRATIONS.length,
+        migration_ledger_max: null,
       });
       await admin.unsafe(`DROP TABLE "${schema}".__drizzle_migrations`);
-      expect(await databaseReadiness(client)).toEqual({ db: "ok", pending_migrations: null });
+      expect(await databaseReadiness(client)).toEqual({
+        db: "ok",
+        pending_migrations: null,
+        migration_ledger_max: null,
+      });
     } finally {
       await reader.end({ timeout: 0 });
       try {
@@ -156,6 +161,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       expect(await databaseReadiness(scopedHealthSql(reader, name, "ping"))).toEqual({
         db: "error",
         pending_migrations: null,
+        migration_ledger_max: null,
       });
       expect(Date.now() - started).toBeLessThan(3500);
       const [activity] = await admin<{ active: number }[]>`
@@ -199,7 +205,11 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
         await new Promise((resolve) => setTimeout(resolve, 2600));
       });
       const started = Date.now();
-      expect(await databaseReadiness(client)).toEqual({ db: "error", pending_migrations: null });
+      expect(await databaseReadiness(client)).toEqual({
+        db: "error",
+        pending_migrations: null,
+        migration_ledger_max: null,
+      });
       expect(Date.now() - started).toBeLessThan(3500);
       // Prompt single sample, no settle wait: in the correct path the
       // post-setup refusal throws before any ping is issued and the
@@ -330,6 +340,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       expect(await databaseReadiness(scopedHealthSql(reader, schema))).toEqual({
         db: "ok",
         pending_migrations: null,
+        migration_ledger_max: null,
       });
       expect(Date.now() - started).toBeLessThan(3500);
       await reader.end({ timeout: 0 });
