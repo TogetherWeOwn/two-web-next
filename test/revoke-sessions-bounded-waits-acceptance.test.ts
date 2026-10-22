@@ -267,6 +267,7 @@ describe.skipIf(!ambientUrl)(
       expect(dry.timedOut).toBe(false);
       expect(dry.status).toBe(0);
       expect(JSON.parse(dry.stdout)).toEqual({
+        ok: true,
         mode: "dry-run",
         counts: { web_sessions: 1 },
         passes: 0,
@@ -277,6 +278,7 @@ describe.skipIf(!ambientUrl)(
       const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(applied.status).toBe(0);
       expect(JSON.parse(applied.stdout)).toEqual({
+        ok: true,
         mode: "apply",
         counts: { web_sessions: 1 },
         passes: 1,
@@ -288,6 +290,7 @@ describe.skipIf(!ambientUrl)(
       const again = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(again.status).toBe(0);
       expect(JSON.parse(again.stdout)).toEqual({
+        ok: true,
         mode: "apply",
         counts: { web_sessions: 0 },
         passes: 1,
@@ -360,6 +363,7 @@ describe.skipIf(!ambientUrl)(
       expect(result.timedOut).toBe(false);
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
+        ok: true,
         mode: "apply",
         counts: { web_sessions: 1 },
         passes: 1,
