@@ -1786,6 +1786,9 @@ test("ledger state requires a current database and the applied set", () => {
   assert.deepEqual(readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [] }), []);
   for (const body of [
     { db: "error", pending_migrations: null, migration_ledger: null },
+    // Isolated db arm: pending and ledger are valid, only db is bad. Deleting
+    // the body?.db !== "ok" disjunct in readLedgerState must turn this red.
+    { db: "error", pending_migrations: 0, migration_ledger: [1000, 1001] },
     { db: "ok", pending_migrations: 1, migration_ledger: [1000, 1001] },
     { db: "ok", pending_migrations: 0, migration_ledger: null },
     { db: "ok", pending_migrations: 0, migration_ledger: [1000, "1001"] },
