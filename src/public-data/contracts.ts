@@ -87,6 +87,16 @@ export const COMMUNITY_SNAPSHOT_FIELDS = ["member_count", "online_count", "ranks
 
 export const COMMUNITY_RANK_FIELDS = ["key", "label", "member_count"] as const;
 
+/**
+ * Collection envelope keys, in serializer order. The OpenAPI collection
+ * schema and the MCP list_events output schema both require exactly these,
+ * so the envelope cannot drift between surfaces.
+ */
+export const PUBLIC_API_COLLECTION_FIELDS = ["data", "page", "limit", "meta"] as const;
+
+/** Paging cursor keys, in serializer order. Required by both the OpenAPI meta schema and the MCP output schema. */
+export const PUBLIC_API_META_FIELDS = ["current_page", "per_page", "total", "last_page"] as const;
+
 export const JOIN_HANDOFF_FIELDS = ["intro", "invite_url"] as const;
 
 export type PublicEventId = string & { readonly __brand: "PublicEventId" };
@@ -153,8 +163,24 @@ export interface PublicDataErrorDto {
   error: {
     code: PublicDataErrorCode;
     message: string;
+    /** Matches the x-request-id response header, for correlation. */
+    request_id: string;
+    /** One safe next action for the caller. */
+    next: string;
   };
 }
+
+/**
+ * The one safe next action per public-data error code. Static strings, so
+ * agents can match on them; see docs/machine-errors.md, the single source.
+ */
+export const PUBLIC_DATA_ERROR_NEXT: Record<PublicDataErrorCode, string> = {
+  internal: "Retry the read shortly.",
+  invalid_request: "Fix the request and retry.",
+  not_found: "Check the event key and retry.",
+  rate_limited: "Wait for Retry-After, then retry.",
+  unavailable: "Retry the read shortly.",
+};
 
 /** Exclusions are part of the public contract, not fields callers can opt into. */
 export const PUBLIC_DATA_EXCLUSIONS = [

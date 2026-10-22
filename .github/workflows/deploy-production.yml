@@ -12,7 +12,7 @@ on:
         type: string
         default: ""
       migrations_applied:
-        description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation for known-pending migrations or an unknown live commit after 3 /up reads; automatic runs ignore it and halt on either condition"
+        description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
         required: false
         type: boolean
         default: false
@@ -80,13 +80,19 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
       - name: Refuse pending production migrations before any deploy
-        # Until the least-privilege migrator lands, a target whose journal has
-        # entries production lacks stops here with a clear error instead of
-        # deploying. An unknown live commit after 3 /up reads also stops here.
-        # Manual dispatch can continue past either stop only on the audited
-        # migrations_applied=true confirmation after db-migrate.yml (target
-        # production); automatic runs ignore that input and halt on either.
-        # Afterwards this step becomes a db-migrate.yml
+        # A target whose journal has entries production lacks reads the live
+        # production ledger via /up: when the ledger holds every target web
+        # entry (set inclusion), promotion clears automatically; otherwise it
+        # stops here with a clear error (ledger lacks entries, ledger read
+        # failed, unusable target timestamp, non-ok database, or a live Worker
+        # that predates the ledger signal). An unknown live commit after 3 /up
+        # reads also stops here. Manual dispatch can continue past any stop
+        # only on the audited migrations_applied=true confirmation after
+        # db-migrate.yml (target production); automatic runs ignore that input
+        # and halt on those stops unless the ledger proves the target applied.
+        # The first promotion after the ledger signal ships needs one manual
+        # dispatch because the live Worker predates it. Once the
+        # least-privilege migrator lands, this step becomes a db-migrate.yml
         # (workflow_call, target production) call first. This check runs from
         # the tip checkout on purpose, like --already-live above: after the
         # re-checkout below, an older target's script could lack this flag and

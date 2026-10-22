@@ -45,9 +45,11 @@ async function expectClamped(retryAfter: number, expected: number): Promise<void
   expect(res.headers.get("content-type")).toContain("application/json");
   expect(res.headers.get("retry-after")).toBe(String(expected));
   expect(await res.json()).toEqual({
+    code: "rate_limited",
     reason: "rate_limited",
     message: `Too many requests. Try again in ${expected} seconds.`,
     retry_after: expected,
+    next: "Wait for Retry-After, then retry.",
   });
 }
 
