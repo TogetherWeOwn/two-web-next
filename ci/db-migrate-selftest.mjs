@@ -61,6 +61,18 @@ function testAdminUrl() {
   return url;
 }
 
+async function dropOwnedRuntimeRole(admin) {
+  try {
+    await admin.unsafe("DROP ROLE two_web_app");
+  } catch (error) {
+    // A 2BP01 here means a concurrent suite on a shared cluster adopted the
+    // role and recorded grants in its own database; leave it like any adopted
+    // leftover instead of failing teardown.
+    if (error?.code === "2BP01") return;
+    throw error;
+  }
+}
+
 async function fixture(callback) {
   const url = testAdminUrl();
   const name = `web_migrate_test_${randomUUID().replaceAll("-", "")}`;
@@ -116,16 +128,9 @@ async function fixture(callback) {
       if (client) await client.end();
       if (created) await admin.unsafe(`drop database "${name}" with (force)`);
       // After the database drop: the grants this apply recorded are gone
-      // with it. A 2BP01 here means a concurrent suite on a shared cluster
-      // adopted the role and recorded grants in its own database; leave it
-      // like any adopted leftover instead of failing teardown.
-      if (ownedRuntimeRole) {
-        try {
-          await admin.unsafe("DROP ROLE two_web_app");
-        } catch (error) {
-          if (error?.code !== "2BP01") throw error;
-        }
-      }
+      // with it. (The helper swallows 2BP01 for a concurrently adopted role;
+      // it lives outside this finally so no throw sits inside it.)
+      if (ownedRuntimeRole) await dropOwnedRuntimeRole(admin);
     } finally {
       await admin.end();
     }
