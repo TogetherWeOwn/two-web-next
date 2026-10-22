@@ -3,6 +3,7 @@
 // pins end to end, nailed down at the seam for edge shapes the integration
 // suite does not cover (single rung, article choice, count words).
 import { describe, expect, it } from "vitest";
+import { faqPageData } from "../src/faq-content";
 import {
   aboutLadderFact,
   entryAnswer,
@@ -19,6 +20,24 @@ const LIVE: LadderRank[] = [
   { key: "thorn", label: "Thorn", memberCount: null },
   { key: "crown", label: "Crown", memberCount: 3 },
 ];
+
+describe("faqPageData", () => {
+  it("retains the RSVP recovery link when deriving live ladder answers", () => {
+    const { faqs } = faqPageData("https://example.test", [LIVE[0]!, LIVE[4]!]);
+    const events = faqs.find((group) => group.sectionId === "faq-events");
+    const recovery = events?.items.find(([question]) =>
+      question.includes("What if my RSVP is syncing"),
+    );
+    expect(recovery?.[2]).toEqual({
+      label: "RSVP recovery guide",
+      href: "https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/rsvp-recovery.md",
+    });
+    const ranks = faqs.find((group) => group.sectionId === "faq-ranks");
+    expect(
+      ranks?.items.find(([question]) => question === "What are the rank rungs?")?.[1],
+    ).toContain("Ember → Crown");
+  });
+});
 
 describe("ladderHeading", () => {
   it("joins the live labels in rank order", () => {

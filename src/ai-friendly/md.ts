@@ -129,7 +129,10 @@ export function mdFaq(appUrl: string, ranks?: LadderRank[]): string {
   ];
   for (const group of faqs) {
     out.push(`## ${mdText(group.section)}`, "");
-    for (const [q, a] of group.items) out.push(`### ${mdText(q)}`, "", mdText(a), "");
+    for (const [q, a, link] of group.items) {
+      const answer = mdText(a) + (link ? ` [${mdInlineText(link.label)}](${link.href})` : "");
+      out.push(`### ${mdText(q)}`, "", answer, "");
+    }
   }
   out.push(leafFooter(appUrl), "");
   return out.join("\n");
