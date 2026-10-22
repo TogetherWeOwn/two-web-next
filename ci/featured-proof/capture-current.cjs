@@ -10,7 +10,7 @@ async function captureScreenshot(page, screenshotPath, recoveries) {
     await page.screenshot(options);
   } catch (error) {
     if (!(error instanceof Error) || error.message.split('\n')[0] !== 'page.screenshot: Protocol error (Page.captureScreenshot): Unable to capture screenshot') throw error;
-    recoveries.push({ screenshot: path.basename(screenshotPath), error: error.message, retry: 1 });
+    recoveries.push({ filename: path.basename(screenshotPath), error: error.message, retryCount: 1 });
     await page.screenshot(options);
   }
 }
