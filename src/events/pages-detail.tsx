@@ -7,6 +7,7 @@ import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl, isWireInstant } from "./feeds";
 import { attendeePageHref } from "./attendee-paths";
+import { isEditedEvent, updatedStampLabel } from "./date-format";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
@@ -149,6 +150,17 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        {isEditedEvent(e.createdAt, e.updatedAt) ? (
+          <div>
+            <dt>Updated</dt>
+            <dd data-testid="event-updated">
+              {"Updated "}
+              <time datetime={e.updatedAt.toISOString()}>
+                {updatedStampLabel(e.updatedAt, e.timezone)}
+              </time>
+            </dd>
+          </div>
+        ) : null}
         {e.location ? (
           <div>
             <dt>Where</dt>
