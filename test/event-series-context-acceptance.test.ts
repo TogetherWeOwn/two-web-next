@@ -6,7 +6,7 @@
 // Locked contract (builder must satisfy without editing this file):
 // - Series hosts line in <dl class="event-meta">, after Hosted-by when present:
 //   <div><dt>Series hosts</dt><dd><p data-testid="event-series-hosts">Jo, Riley, Sam</p></dd></div>.
-//   Each distinct non-blank organizer across the published series run, current
+//   Each distinct non-blank organizer across the published/past series run, current
 //   host first, the rest in ascending series-index order (parent index 1, first
 //   child 2, ...). Duplicates collapsed. Null/blank organizers omitted; when no
 //   published sibling (including current) has a non-blank organizer, the hosts
@@ -16,9 +16,8 @@
 //   <nav aria-label="Series events" data-testid="event-series-nav"> with
 //   <a href="/e/<prevKey>" rel="prev" data-testid="event-series-previous">← Previous in series: {title}</a>
 //   and <a href="/e/<nextKey>" rel="next" data-testid="event-series-next">Next in series: {title} →</a>.
-//   Previous/next are the adjacent published siblings by recurrenceIndex (past
-//   rows are not excluded by status here: the fixture run is future-dated, and
-//   the contract pins published-only like the neighbors read). Draft and
+//   Previous/next are the adjacent published/past siblings by recurrenceIndex.
+//   Future dates do not make a past-status row invisible. Draft and
 //   cancelled siblings are excluded from hosts and navigation entirely. First
 //   published sibling omits previous, last omits next; a standalone event (no
 //   published siblings) renders no series markup at all (byte-identical to today).
@@ -39,14 +38,9 @@
 // RED expectations on the base head: every test marked RED fails (missing
 // series block/read); tests marked CONTROL pass before and after (regression
 // pins). The suite as a whole is red until the builder lands.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
-import { build } from "esbuild";
+import { renderSeriesDetail as renderDetail } from "./helpers/event-series-context-render";
 import { describe, expect, it } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
@@ -121,16 +115,23 @@ const SERIES_ROWS: EventRow[] = [
     recurrenceCount: 6,
     recurrenceIndex: 1,
   }),
-  row(11, { organizer_name: "Jo", parentEventId: 10, recurrenceIndex: 2 }),
-  row(12, { organizer_name: "Riley", parentEventId: 10, recurrenceIndex: 3 }),
-  row(13, { organizer_name: "Sam", parentEventId: 10, recurrenceIndex: 4 }),
-  row(14, { organizer_name: "Drafty", status: "draft", parentEventId: 10, recurrenceIndex: 5 }),
+  row(11, { organizer_name: "Jo", parentEventId: 10, recurrenceIndex: 3 }),
+  row(12, { organizer_name: "Riley", parentEventId: 10, recurrenceIndex: 5 }),
+  row(13, { organizer_name: "Sam", parentEventId: 10, recurrenceIndex: 6 }),
+  // Hidden siblings interleave visible ones: losing the WHERE status predicate
+  // must change adjacency, not only a host-list assertion.
+  row(14, { organizer_name: "Drafty", status: "draft", parentEventId: 10, recurrenceIndex: 2 }),
   row(15, {
     organizer_name: "Canny",
     status: "cancelled",
     parentEventId: 10,
-    recurrenceIndex: 6,
+    recurrenceIndex: 4,
   }),
+];
+
+const UNRELATED_SERIES = [
+  row(40, { organizer_name: "Foreign root", recurrenceFrequency: "weekly", recurrenceIndex: 1 }),
+  row(41, { organizer_name: "Foreign child", parentEventId: 40, recurrenceIndex: 2 }),
 ];
 
 const STANDALONE_ROW = row(20, { organizer_name: "Solo" });
@@ -148,20 +149,70 @@ interface SeriesFixtureOpts {
   organizers?: Record<number, string | null>;
   /** Global neighbors (default none, so only series nav renders). */
   globalNeighbors?: { previous: EventRow | null; next: EventRow | null };
+  /** Only the series SQL fails; ordinary detail and global rails still work. */
+  rejectSeries?: boolean;
+  /** A recurring root with no visible sibling still performs the series read. */
+  singleton?: boolean;
+}
+
+// pg-proxy maps positional SELECT expressions, not full schema rows. Split at
+// top-level commas so CASE/coalesce projections stay aligned after narrowing.
+function selectedExpressions(sql: string): string[] {
+  const selected = sql.slice(
+    sql.toLowerCase().indexOf("select ") + 7,
+    sql.indexOf(' from "events"'),
+  );
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i < selected.length; i++) {
+    if (selected[i] === "(") depth++;
+    if (selected[i] === ")") depth--;
+    if (selected[i] === "," && depth === 0) {
+      parts.push(selected.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  return [...parts, selected.slice(start).trim()];
 }
 
 function seriesFixture(opts: SeriesFixtureOpts) {
   const { currentId, organizers = {}, globalNeighbors = { previous: null, next: null } } = opts;
   const byId = new Map<number, EventRow>();
-  for (const base of [...SERIES_ROWS, STANDALONE_ROW, GLOBAL_PREVIOUS, GLOBAL_NEXT]) {
+  for (const base of [
+    ...SERIES_ROWS,
+    ...UNRELATED_SERIES,
+    STANDALONE_ROW,
+    GLOBAL_PREVIOUS,
+    GLOBAL_NEXT,
+  ]) {
     const over = base.id in organizers ? { organizer_name: organizers[base.id] ?? null } : {};
     byId.set(base.id, { ...base, ...over });
   }
+  if (opts.singleton) {
+    for (const id of [11, 12, 13]) byId.delete(id);
+  }
   const current = byId.get(currentId)!;
   const queries: { sql: string; params: unknown[] }[] = [];
-  const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
-  const toRow = (r: EventRow) =>
-    columns.map((k) => (r[k] instanceof Date ? (r[k] as Date).toISOString() : r[k]));
+  const columnByName = new Map(
+    Object.entries(getTableColumns(events)).map(([property, column]) => [
+      column.name,
+      property as keyof EventRow,
+    ]),
+  );
+  const toRow = (r: EventRow, sql: string) =>
+    selectedExpressions(sql).map((expression) => {
+      // All hermetic public text is small. Exact SQL CASE byte limits are tested
+      // against PostgreSQL in the live suite, not reimplemented in this fake.
+      if (/octet_length/i.test(expression) && !/\bthen\s+"/i.test(expression)) return true;
+      const projected =
+        /\bthen\s+(?:"events"\.)?"([^"]+)"/i.exec(expression) ??
+        /^(?:"events"\.)?"([^"]+)"/.exec(expression);
+      const property = projected && columnByName.get(projected[1]!);
+      if (!property) throw new Error(`Unsupported event projection: ${expression}`);
+      const value = r[property];
+      return value instanceof Date ? value.toISOString() : value;
+    });
 
   // A series read filters on the parent pointer; the plain event lookup only
   // selects the column (SELECT list), so the predicate requires the WHERE
@@ -172,17 +223,36 @@ function seriesFixture(opts: SeriesFixtureOpts) {
   const db = drizzle(async (sql: string, params: unknown[]) => {
     queries.push({ sql, params });
     if (sql.includes('from "rsvps"') || sql.includes("from rsvps")) return { rows: [] };
-    if (sql.includes('"event_key" =')) return { rows: [toRow(current)] };
-    // Future series read: full event rows for the run. Mimic correct SQL
-    // filtering: when the query constrains status, honor published-only (the
-    // contract); when it does not, return the whole run so a missing filter
-    // (SQL or code) surfaces in the render.
+    if (sql.includes('"event_key" =')) return { rows: [toRow(current, sql)] };
     if (isSeriesRead(sql)) {
-      const publishedOnly = sql.includes('"status"') || sql.includes("status");
-      const siblings = SERIES_ROWS.map((s) => byId.get(s.id)!).filter(
-        (s) => !publishedOnly || s.status === "published",
-      );
-      return { rows: siblings.map(toRow) };
+      if (opts.rejectSeries) throw new Error("series database read rejected");
+      // Only WHERE predicates may filter fixtures. SELECT mentioning status or
+      // parent_event_id is not a predicate. Resolve the actual placeholder
+      // values, so a missing visibility guard or event.id-as-root is observable.
+      const where = sql.split(/\bwhere\b/i)[1]!.split(/\border by\b|\blimit\b/i)[0]!;
+      const predicates = [
+        ...where.matchAll(/"(status|id|parent_event_id)"\s*(=\s*\$\d+|in\s*\([^)]*\))/gi),
+      ].map((match) => ({
+        column: match[1]!,
+        values: [...match[2]!.matchAll(/\$(\d+)/g)].map((bound) => params[Number(bound[1]) - 1]),
+      }));
+      const visibility = predicates.filter((p) => p.column === "status");
+      const roots = predicates.filter((p) => p.column !== "status");
+      const siblings = [...byId.values()]
+        .filter(
+          (s) =>
+            (visibility.length === 0 || visibility.some((p) => p.values.includes(s.status))) &&
+            (roots.length === 0 ||
+              roots.some((p) => p.values.includes(p.column === "id" ? s.id : s.parentEventId))),
+        )
+        .sort(
+          (a, b) =>
+            (a.recurrenceIndex ?? Number.MAX_SAFE_INTEGER) -
+            (b.recurrenceIndex ?? Number.MAX_SAFE_INTEGER),
+        );
+      const limit = /\blimit\s+\$(\d+)/i.exec(sql);
+      const bounded = limit ? siblings.slice(0, Number(params[Number(limit[1]) - 1])) : siblings;
+      return { rows: bounded.map((s) => toRow(s, sql)) };
     }
     // Neighbor reads carry starts_at comparisons; related carries ends_at.
     if (sql.includes('"starts_at" <') || sql.includes('"starts_at" >')) {
@@ -335,6 +405,38 @@ describe("series context on Hono event detail (hermetic)", () => {
     expect(f.eventKeyQueries()).toHaveLength(1);
   });
 
+  it("a rejected series query degrades only that Hono slice, never the detail response", async () => {
+    const f = seriesFixture({
+      currentId: 11,
+      rejectSeries: true,
+      globalNeighbors: { previous: GLOBAL_PREVIOUS, next: GLOBAL_NEXT },
+    });
+    const response = await f.request();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    const html = await response.text();
+    expect(html).toContain("Game night 11");
+    expect(html).toContain('data-testid="event-organizer">Jo');
+    expect(html).toContain(`href="/e/${key(30)}"`);
+    expect(html).toContain(`href="/e/${key(31)}"`);
+    expect(html).toContain('data-island="rsvp-button"');
+    expect(html).not.toContain("event-series-hosts");
+    expect(html).not.toContain("event-series-nav");
+    expect(f.seriesQueries()).toHaveLength(1);
+  });
+
+  it("a recurring singleton reads hidden siblings but emits no Hono series markup", async () => {
+    const f = seriesFixture({ currentId: 10, singleton: true });
+    const response = await f.request();
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('data-testid="event-organizer">Riley');
+    expect(html).not.toContain("event-series-hosts");
+    expect(html).not.toContain("event-series-nav");
+    expect(f.seriesQueries()).toHaveLength(1);
+  });
+
   it("CONTROL: keeps private/no-store, Vary and guest audit silence on series pages", async () => {
     const f = seriesFixture({ currentId: 11 });
     const response = await f.request();
@@ -352,7 +454,10 @@ const GUEST: KitRequestSession = { status: "guest", session: null };
 const kitEnv = { APP_URL } as unknown as Env;
 
 async function resolveSeries(currentId: number, organizers: Record<number, string | null> = {}) {
-  const f = seriesFixture({ currentId, organizers });
+  return resolveFixture(seriesFixture({ currentId, organizers }));
+}
+
+async function resolveFixture(f: ReturnType<typeof seriesFixture>) {
   const store: KitEventDetailStore = {
     ...kitEventDetailStore(kitEnv),
     dbForFn: async () => f.db,
@@ -413,6 +518,41 @@ describe("series context in the Kit detail model (hermetic)", () => {
     },
   );
 
+  it("a rejected series query through the production Kit store preserves unrelated model slices", async () => {
+    const f = seriesFixture({
+      currentId: 11,
+      rejectSeries: true,
+      globalNeighbors: { previous: GLOBAL_PREVIOUS, next: GLOBAL_NEXT },
+    });
+    const { model } = await resolveFixture(f);
+    expect(model.series ?? null).toBeNull();
+    expect(model.title).toBe("Game night 11");
+    expect(model.eventKey).toBe(key(11));
+    expect(model.neighbors).toMatchObject({ previous: { key: key(30) }, next: { key: key(31) } });
+    expect(model.related).toEqual([]);
+    expect(model.attendees).toEqual([]);
+    expect(model.answer).toBeNull();
+    expect(model.showJoinPitch).toBe(true);
+    expect(model.rsvpOpen).toBe(true);
+    expect(model.icsUrl).toBe(`/events/${key(11)}.ics`);
+    const html = await renderDetail(model);
+    expect(html).toContain("Game night 11");
+    expect(html).not.toContain("event-series-hosts");
+    expect(html).not.toContain("event-series-nav");
+    expect(f.seriesQueries()).toHaveLength(1);
+  });
+
+  it("a recurring singleton reads hidden siblings but omits Kit model and HTML context", async () => {
+    const f = seriesFixture({ currentId: 10, singleton: true });
+    const { model } = await resolveFixture(f);
+    expect(model.series ?? null).toBeNull();
+    const html = await renderDetail(model);
+    expect(html).toContain("Game night 10");
+    expect(html).not.toContain("event-series-hosts");
+    expect(html).not.toContain("event-series-nav");
+    expect(f.seriesQueries()).toHaveLength(1);
+  });
+
   it("CONTROL: leaves model.series null for standalone events", async () => {
     const { model } = await resolveSeries(20);
     expect((model as Record<string, unknown>).series ?? null).toBeNull();
@@ -422,71 +562,6 @@ describe("series context in the Kit detail model (hermetic)", () => {
 // Kit presentation parity: the real Svelte SSR bundle, same recipe as
 // test/kit-event-detail.test.ts. The model gains `series` (see above); the
 // view renders the same block, copy and testids as Hono.
-const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
-const { compile } = webRequire("svelte/compiler") as {
-  compile: (
-    source: string,
-    options: { generate: string; dev: boolean; filename: string },
-  ) => { js: { code: string } };
-};
-
-let cachedRender: ((model: Record<string, unknown>) => string) | null = null;
-async function renderDetail(model: Record<string, unknown>): Promise<string> {
-  if (!cachedRender) {
-    const worktree = fileURLToPath(new URL("../", import.meta.url));
-    const scratch = mkdtempSync(join(tmpdir(), "kit-series-context-"));
-    try {
-      const entry = join(scratch, "entry.mjs");
-      writeFileSync(
-        entry,
-        `
-import { render } from "svelte/server";
-import Detail from ${JSON.stringify(join(worktree, "web/src/lib/EventDetail.svelte"))};
-export function renderDetail(model) {
-  const { head, body } = render(Detail, { props: { model } });
-  return "<head>" + head + "</head><body>" + body + "</body>";
-}
-`,
-      );
-      const outfile = join(scratch, "bundle.mjs");
-      await build({
-        entryPoints: [entry],
-        bundle: true,
-        platform: "node",
-        format: "esm",
-        outfile,
-        logLevel: "warning",
-        absWorkingDir: worktree,
-        nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
-        alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
-        plugins: [
-          {
-            name: "kit-series-context-ssr",
-            setup(plugin) {
-              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-                const source = readFileSync(args.path, "utf8");
-                const { js } = compile(source, {
-                  generate: "server",
-                  dev: false,
-                  filename: args.path,
-                });
-                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-              });
-            },
-          },
-        ],
-      });
-      const bundle = (await import(pathToFileURL(outfile).href)) as {
-        renderDetail: (model: Record<string, unknown>) => string;
-      };
-      cachedRender = bundle.renderDetail;
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  }
-  return cachedRender!(model);
-}
-
 async function baseKitModel(): Promise<Record<string, unknown>> {
   const { model } = await resolveSeries(11);
   return { ...model };
