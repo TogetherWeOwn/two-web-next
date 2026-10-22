@@ -706,7 +706,7 @@ describe("hotzone valid and outage stability", () => {
     expect(kitErrorCopy(503)).toEqual({
       code: "503",
       title: "We will be right back",
-      lead: "The site is down for a minute of maintenance. The Discord server never closes.",
+      lead: "The site is temporarily unavailable. You can use the Discord invite or return to the homepage.",
     });
     const shell = readSource("web/src/lib/ErrorShell.svelte");
     const outageBranch = shell.slice(shell.lastIndexOf("{:else}"));
