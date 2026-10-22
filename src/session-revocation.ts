@@ -1,5 +1,6 @@
 // Operator revocation of one member's active web sessions.
 import { assertDiscordId } from "./member-erasure";
+import { SESSION_ABSOLUTE_MAX_AGE_SECONDS } from "./sessions";
 
 export type SessionRevocationCounts = { web_sessions: number };
 
@@ -31,7 +32,8 @@ export async function countActiveMemberSessions(
 ): Promise<SessionRevocationCounts> {
   assertDiscordId(discordId);
   const [row] = await sql<{ n: number }[]>`select count(*)::int as n from web_sessions
-    where user_id = ${discordId} and revoked_at is null and expires_at > clock_timestamp()`;
+    where user_id = ${discordId} and revoked_at is null and expires_at > clock_timestamp()
+      and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
   return { web_sessions: row?.n ?? 0 };
 }
 
@@ -65,6 +67,7 @@ export async function revokeMemberSessions(
       const rows = await tx`update web_sessions
         set revoked_at = clock_timestamp()
         where user_id = ${discordId} and revoked_at is null and expires_at > clock_timestamp()
+        and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
         returning 1`;
       revoked += rows.length;
       stampsPerPass.push(rows.length);
