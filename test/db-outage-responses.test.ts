@@ -5,6 +5,7 @@ import { internalErrorHandler } from "../src/errors";
 import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
+import type { MemberStatsSource } from "../src/profiles/stats";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { requestLog } from "../src/request-log";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
@@ -188,7 +189,7 @@ describe("narrow database outage classification", () => {
 });
 
 describe("profile failures after a successful session and data read", () => {
-  async function fixture() {
+  async function fixture(stats?: MemberStatsSource) {
     const sessions = createMemorySessionStore();
     const cookie = await cookieFor(sessions, MEMBER);
     // Main #145: self-reads name no other member and write no audit row, so
@@ -215,6 +216,7 @@ describe("profile failures after a successful session and data read", () => {
       sessionStore: sessions,
       store,
       throttle: async () => ({ limited: false }),
+      ...(stats ? { stats } : {}),
       accessLog: async () => {
         throw refused();
       },
@@ -360,9 +362,47 @@ describe("profile failures after a successful session and data read", () => {
       expect(store.save).toHaveBeenCalledOnce();
       expect(res.status).toBe(503);
       expect(res.headers.get("content-type")).toContain(accept);
-      expect(await res.text()).not.toContain("private profile fixture");
+      const body = await res.text();
+      // Driver details never leak. The owner's own baseline and submitted
+      // draft do render: a classified outage keeps the editor, not the shell.
+      expect(body).not.toMatch(/ECONNREFUSED|private connection details/);
+      if (accept === "text/html") {
+        expect(body).toContain('data-testid="profile-form"');
+        expect(body).toContain("private profile fixture");
+        expect(body).toContain("new fixture");
+        expect(body).toMatch(/try again/i);
+      } else {
+        expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+        expect(body).not.toContain("new fixture");
+      }
     },
   );
+
+  it("warns that retrying stats discards the retained draft on a classified save outage", async () => {
+    const { cookie, store, profile } = await fixture(async () => {
+      throw refused();
+    });
+    vi.spyOn(store, "save").mockRejectedValue(refused());
+    const res = await profile.request(
+      `/members/${MEMBER.userId}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie,
+          accept: "text/html",
+          origin: env.APP_URL,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ bio: "new fixture", games: [] }),
+      },
+      env,
+    );
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).toContain("new fixture");
+    expect(body).toContain("Retry loading member stats");
+    expect(body).toContain("Reloading discards your unsaved changes.");
+  });
 });
 
 describe("public session failure boundaries", () => {

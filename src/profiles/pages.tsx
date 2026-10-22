@@ -215,7 +215,7 @@ export const ProfilePage: FC<{
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: ProfileFormValues;
-  /** 422 re-render: the stats recovery link warns that reloading discards the draft. */
+  /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
   statsDraftWarning?: boolean;
 }> = ({
   member,
