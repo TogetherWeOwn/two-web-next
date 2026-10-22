@@ -409,7 +409,8 @@ describe("acceptance: Kit duplicate form submits to duplicate, never cancel", ()
     scratch = mkdtempSync(
       join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "kit-duplicate-form-"),
     );
-    const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler") as {
+    const webRequire = createRequire(join(root, "web/package.json"));
+    const { compile } = webRequire("svelte/compiler") as {
       compile(source: string, options: Record<string, unknown>): { js: { code: string } };
     };
     const entry = join(scratch, "entry.mjs");
