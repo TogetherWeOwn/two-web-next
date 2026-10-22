@@ -29,7 +29,7 @@ export function profileStores(deps: ProfileDeps) {
         (async (memberId, signal) => {
           // Injected fixtures/clients are borrowed, never shut down by this request.
           const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
-          if (injected) return readMemberStats(injected, memberId, signal);
+          if (injected) return readMemberStats(injected, memberId, signal, c.get("requestId"));
           // Bot-owned `web_v1` views live in the bot database, never the
           // web DB (same source rule as homepage counts): explicit
           // BOT_DATABASE_URL wins, else the BOT_DB Hyperdrive binding.
@@ -41,9 +41,10 @@ export function profileStores(deps: ProfileDeps) {
             ...databaseOptions,
             connection: { statement_timeout: MEMBER_STATS_BUDGET_MS },
           });
-          return readOwnedMemberStats(drizzle(client), memberId, signal);
+          return readOwnedMemberStats(drizzle(client), memberId, signal, c.get("requestId"));
         }),
       id,
+      c.get("requestId"),
     );
   const sinkFor = async (c: { env: Env }): Promise<AccessSink | null> => {
     if (deps.accessLog) return deps.accessLog;

@@ -2,6 +2,8 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import {
+  CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
+  CALENDAR_MONTH_EMPTY_TESTID,
   EVENTS_CAL_FEEDBACK,
   EVENTS_CALENDAR_FETCH_FAILED,
   EVENTS_CALENDAR_ISLAND,
@@ -10,15 +12,18 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
   calendarGridRange,
+  calendarMonthEmptyCopy,
   calendarSearching,
   calendarShowingPast,
   calendarUrl,
   canonicalIntervalDays,
   monthGrid,
   wallDateIso,
+  wallMonth,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -51,6 +56,7 @@ export const EventsCalendarPage: FC<{
   state: CalendarState;
   upcoming: CalRow[];
   past: PublicEvent[];
+  pastMayBeTruncated?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
@@ -74,6 +80,7 @@ export const EventsCalendarPage: FC<{
   state,
   upcoming,
   past,
+  pastMayBeTruncated: pastMayBeTruncatedProp = past.length >= EVENTS_PAST_DRAWER_LIMIT,
   zone,
   now,
   totalPages,
@@ -129,6 +136,25 @@ export const EventsCalendarPage: FC<{
     }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
+  // Month-local emptiness follows occupied in-month cells, including canonical
+  // continuations, but never spillover cells. Count past start-days even with
+  // the drawer closed: the claim names the month, not just the visible rows.
+  // A truncated past drawer (at the cap) leaves months at or before the wall month
+  // incomplete — older in-month past rows may exist unread — so the claim is
+  // suppressed there; future months cannot hold past rows. A failed source
+  // suppresses the claim — October may only look empty — while the
+  // error/never/gap states keep their own precedence.
+  const monthHasInMonthRows =
+    weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
+    past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
+  const pastMayBeTruncated = pastMayBeTruncatedProp;
+  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
+  const monthEmpty =
+    emptyState === null &&
+    state.view === "calendar" &&
+    !discordFailed &&
+    !monthHasInMonthRows &&
+    !(pastMayBeTruncated && monthCouldHoldPast);
   return (
     <ScheduleShell
       title="Events"
@@ -240,7 +266,18 @@ export const EventsCalendarPage: FC<{
               absence alone opens the grid, exactly like the old unpaged merge
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
-            <MonthGrid state={state} weeks={weeks} zone={zone} />
+            <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+          ) : null}
+
+          {monthEmpty ? (
+            <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
+              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>
+                <a href={calendarUrl({ ...state, view: "list" })}>
+                  {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}
+                </a>
+              </p>
+            </div>
           ) : null}
         </div>
       </section>
