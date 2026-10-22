@@ -30,6 +30,18 @@ import {
 import type { MemberView } from "./store";
 import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
 import type { UpcomingGameNight } from "./upcoming";
+import {
+  PROFILE_BIO_COUNT_ID,
+  PROFILE_BIO_HINT_COPY,
+  PROFILE_BIO_HINT_ID,
+  PROFILE_GAMES_TEXT_COUNT_ID,
+  PROFILE_GAMES_TEXT_HINT_COPY,
+  PROFILE_GAMES_TEXT_HINT_ID,
+  bioCountText,
+  codePoints,
+  gamesCountText,
+  parseGamesText,
+} from "./composition";
 
 // Stable field/error ids for profile validation association.
 // The server `games` key maps to the `games_text` control; any other key is
@@ -285,6 +297,11 @@ export const ProfilePage: FC<{
     timezone: member.timezone ?? "",
     leaderboard_opt_out: member.leaderboardOptOut ?? false,
   };
+  // Persistent composition feedback, seeded from the rendered values (the
+  // rejected draft on a 422, the stored record otherwise). The island binder
+  // refreshes these same nodes; no-JS readers get the seeded state.
+  const bioCount = bioCountText(codePoints(form.bio));
+  const gamesCount = gamesCountText(parseGamesText(form.games_text));
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -492,6 +509,13 @@ export const ProfilePage: FC<{
                 </p>
               ) : null}
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
+              {/* class-before-id keeps `id="…">` adjacent to the count copy. */}
+              <p class="profile-hint" id={PROFILE_BIO_HINT_ID}>
+                {PROFILE_BIO_HINT_COPY}
+              </p>
+              <p class="profile-count" id={PROFILE_BIO_COUNT_ID}>
+                {bioCount}
+              </p>
               <label class="profile-field">
                 Bio{" "}
                 <textarea
@@ -499,7 +523,11 @@ export const ProfilePage: FC<{
                   name="bio"
                   rows={4}
                   aria-invalid={errors?.bio ? "true" : undefined}
-                  aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+                  aria-describedby={
+                    errors?.bio
+                      ? `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID} ${PROFILE_ERROR_IDS.bio}`
+                      : `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID}`
+                  }
                 >
                   {form.bio}
                 </textarea>
@@ -509,6 +537,12 @@ export const ProfilePage: FC<{
                   {errors.bio}
                 </p>
               ) : null}
+              <p class="profile-hint" id={PROFILE_GAMES_TEXT_HINT_ID}>
+                {PROFILE_GAMES_TEXT_HINT_COPY}
+              </p>
+              <p class="profile-count" id={PROFILE_GAMES_TEXT_COUNT_ID}>
+                {gamesCount}
+              </p>
               <label class="profile-field">
                 Games (one per line){" "}
                 <textarea
@@ -518,8 +552,8 @@ export const ProfilePage: FC<{
                   aria-invalid={errors && (errors.games ?? errors.games_text) ? "true" : undefined}
                   aria-describedby={
                     errors && (errors.games ?? errors.games_text)
-                      ? PROFILE_ERROR_IDS.games_text
-                      : undefined
+                      ? `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID} ${PROFILE_ERROR_IDS.games_text}`
+                      : `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID}`
                   }
                 >
                   {form.games_text}

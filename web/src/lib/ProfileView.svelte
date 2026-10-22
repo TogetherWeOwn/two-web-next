@@ -36,6 +36,18 @@ import {
   statsLabel,
   type ProfileFormValues,
 } from "../../../src/profiles/pages";
+import {
+  PROFILE_BIO_COUNT_ID,
+  PROFILE_BIO_HINT_COPY,
+  PROFILE_BIO_HINT_ID,
+  PROFILE_GAMES_TEXT_COUNT_ID,
+  PROFILE_GAMES_TEXT_HINT_COPY,
+  PROFILE_GAMES_TEXT_HINT_ID,
+  bioCountText,
+  codePoints,
+  gamesCountText,
+  parseGamesText,
+} from "../../../src/profiles/composition";
 import type { MemberStats } from "../../../src/profiles/stats";
 import type { UpcomingGameNight } from "../../../src/profiles/upcoming";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
@@ -109,6 +121,10 @@ const saved: ProfileFormValues = $derived({
   leaderboard_opt_out: member.leaderboardOptOut ?? false,
 });
 const gamesError = $derived(errors?.games ?? errors?.games_text);
+// Persistent composition feedback, seeded from the rendered values like the
+// Hono ProfilePage twin. The island binder refreshes these same nodes.
+const bioCount = $derived(bioCountText(codePoints(form.bio)));
+const gamesCount = $derived(gamesCountText(parseGamesText(form.games_text)));
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
 const editorIsland = '<script src="/islands/member-profile.js" defer></' + "script>";
@@ -402,6 +418,8 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               {errors.leaderboard_opt_out}
             </p>
           {/if}
+          <p class="profile-hint" id={PROFILE_BIO_HINT_ID}>{PROFILE_BIO_HINT_COPY}</p>
+          <p class="profile-count" id={PROFILE_BIO_COUNT_ID}>{bioCount}</p>
           <label class="profile-field">
             Bio{" "}
             <textarea
@@ -410,12 +428,16 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               rows="4"
               value={form.bio}
               aria-invalid={errors?.bio ? "true" : undefined}
-              aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+              aria-describedby={errors?.bio
+                ? `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID} ${PROFILE_ERROR_IDS.bio}`
+                : `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID}`}
             ></textarea>
           </label>
           {#if errors?.bio}
             <p id={PROFILE_ERROR_IDS.bio} class="error">{errors.bio}</p>
           {/if}
+          <p class="profile-hint" id={PROFILE_GAMES_TEXT_HINT_ID}>{PROFILE_GAMES_TEXT_HINT_COPY}</p>
+          <p class="profile-count" id={PROFILE_GAMES_TEXT_COUNT_ID}>{gamesCount}</p>
           <label class="profile-field">
             Games (one per line){" "}
             <textarea
@@ -424,7 +446,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               rows="4"
               value={form.games_text}
               aria-invalid={gamesError ? "true" : undefined}
-              aria-describedby={gamesError ? PROFILE_ERROR_IDS.games_text : undefined}
+              aria-describedby={gamesError
+                ? `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID} ${PROFILE_ERROR_IDS.games_text}`
+                : `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID}`}
             ></textarea>
           </label>
           {#if gamesError}
