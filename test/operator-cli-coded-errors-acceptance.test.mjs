@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { main as erase, parseEraseArgs } from "../bin/erase-member.mjs";
 import { main as revoke, parseRevokeArgs } from "../bin/revoke-sessions.mjs";
+import { SESSION_ABSOLUTE_MAX_AGE_SECONDS } from "../src/sessions";
 
 const driver = vi.hoisted(() => ({ factory: vi.fn() }));
 vi.mock("postgres", () => ({ default: driver.factory }));
@@ -347,7 +348,9 @@ for (const cli of [
           [cli.passesKey]: expectedMode === "apply" ? [4] : [],
         });
         expect(fixture.queries.length).toBeGreaterThan(0);
-        for (const query of fixture.queries) expect(query.values).toEqual([ID]);
+        const expectedValues =
+          cli.name === "revoke-sessions" ? [ID, SESSION_ABSOLUTE_MAX_AGE_SECONDS] : [ID];
+        for (const query of fixture.queries) expect(query.values).toEqual(expectedValues);
         expect(fixture.sql.begin).toHaveBeenCalledTimes(expectedMode === "apply" ? 1 : 0);
         if (expectedMode === "dry-run") {
           expect(fixture.writes).toEqual([]);
