@@ -416,9 +416,8 @@ roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
-no access row. Audit-write failures always refuse protected contents, including
-when the legacy `MEMBER_ACCESS_LOG_ENFORCE` setting is false. Stop and escalate any
-reported audit failure; do not try disabling enforcement or another access path.
+no access row. Audit-write failures always refuse protected contents; no setting
+changes that. Stop and escalate any reported audit failure; do not look for another access path.
 
 ### RSVP is not attendance
 
@@ -575,8 +574,8 @@ including the list's unrendered pagination lookahead and excluding the viewer; t
 do not require a current users row or membership flag. Missing owner projections
 and malformed non-null IDs still refuse the whole response rather than silently
 dropping subjects. Empty, null-ID-only and self-only reads create no access row.
-Audit-write failures for actual member subjects always refuse protected contents,
-even with the legacy enforcement setting disabled.
+Audit-write failures for actual member subjects always refuse protected contents; no setting
+changes that.
 Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the

@@ -74,12 +74,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
   () => {
     let fixture: MemberDataFixture;
     let sessions = createMemorySessionStore();
-    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}, enforce?: string) =>
+    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}) =>
       app.request(path, init, {
         ...env,
         ADMIN_DB: fixture.db,
         SESSION_STORE: sessions,
-        MEMBER_ACCESS_LOG_ENFORCE: enforce,
       });
     const headers = async (actor = MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
     const logs = () => fixture.db.select().from(memberDataAccessLogs);

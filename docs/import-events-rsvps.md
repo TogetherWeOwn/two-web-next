@@ -37,6 +37,7 @@ pinned to 5432; an explicit nonzero URL port is honored.
 node bin/import/events-rsvps.mjs             # default: read-only dry run
 node bin/import/events-rsvps.mjs --dry-run   # explicit read-only dry run
 node bin/import/events-rsvps.mjs --apply     # explicit transactional writes
+node bin/import/events-rsvps.mjs --help      # print usage; reads no env, opens no connections
 ```
 
 Run the dry run, inspect its per-table counts, resolve rejected rows, and only
@@ -133,8 +134,13 @@ into ordinary events.
 The JSON report contains counts only, not connection strings, event content,
 member identifiers, or raw database errors. Orphan RSVPs are counted by reason
 and skipped, never silently dropped. Missing creators are reported and mapped
-to null, matching the nullable creator FK. Exit 2 means the report contains
-orphans/missing creators (valid rows are still committed with `--apply`); exit 1
+to null, matching the nullable creator FK. Exit 2 has two meanings; tell them
+apart by the output. **Report exit 2**: the run completed, stdout carries the JSON
+report, and the report contains orphans/missing creators (valid rows are still
+committed with `--apply`). **Usage exit 2**: the tool was invoked wrong (a typo
+such as `--aply`, an unknown flag, or a URL on argv), nothing ran, stdout is empty
+and stderr carries the one usage line. A wrapper must check for the JSON report on
+stdout before concluding that an apply committed. Exit 1
 means validation/connection/database failure. Transactional failures roll back;
 a lost commit acknowledgement has an unconfirmed outcome, so inspect the
 destination before retrying. Exit 0
