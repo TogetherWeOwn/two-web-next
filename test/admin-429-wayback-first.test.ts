@@ -207,7 +207,7 @@ describe("admin-path 429 shows the admin way back (Hono)", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("30");
     const body = (await response.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id", "retry_after"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id", "retry_after"]);
     expect(body).toMatchObject({
       reason: "rate_limited",
       message: "Too many requests. Try again in 30 seconds.",
@@ -227,9 +227,11 @@ describe("admin-path 429 shows the admin way back (Hono)", () => {
     );
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 30 seconds.",
       retry_after: 30,
+      next: "Wait for Retry-After, then retry.",
     });
   });
 });
