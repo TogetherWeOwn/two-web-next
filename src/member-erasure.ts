@@ -1,7 +1,8 @@
 // Member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): one Discord id, one transaction,
-// six member tables: users, profiles, rsvps, web_sessions, the session
-// predecessor-grace table, and join_attempts. Authorship columns (events.created_by,
+// eight member tables: users, profiles, rsvps, web_sessions, the session
+// predecessor-grace table, join_attempts, overlay_configs, and overlay_tokens.
+// Authorship columns (events.created_by,
 // featured_contents.created_by) and the append-only audit tables are
 // deliberately out of scope — see docs/member-erasure.md.
 export const DISCORD_ID_RE = /^[1-9]\d{0,19}$/;
@@ -33,6 +34,8 @@ export type ErasureCounts = {
   web_sessions: number;
   web_session_grace: number;
   join_attempts: number;
+  overlay_configs: number;
+  overlay_tokens: number;
 };
 
 /**
@@ -55,6 +58,8 @@ export const ERASURE_TABLES = [
   "web_sessions",
   "web_session_grace",
   "join_attempts",
+  "overlay_configs",
+  "overlay_tokens",
 ] as const;
 
 export type ErasureTable = (typeof ERASURE_TABLES)[number];
@@ -76,6 +81,8 @@ const zeroCounts = (): ErasureCounts => ({
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  overlay_configs: 0,
+  overlay_tokens: 0,
 });
 
 /** Per-table row counts for one member. Reads only; never row contents. */
@@ -100,6 +107,14 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
   const [j] = await sql<
     { n: number }[]
   >`select count(*)::int as n from join_attempts where discord_id = ${discordId}`;
+  const [configs] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from overlay_configs where member_id = ${discordId}`;
+  const [tokens] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from overlay_tokens where member_id = ${discordId}`;
+  counts.overlay_configs = configs?.n ?? 0;
+  counts.overlay_tokens = tokens?.n ?? 0;
   counts.users = u?.n ?? 0;
   counts.profiles = p?.n ?? 0;
   counts.rsvps = r?.n ?? 0;
@@ -111,7 +126,7 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
 
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all six member tables in one transaction and returns rows removed
+ * deletes all eight member tables in one transaction and returns rows removed
  * plus the session-chase pass forensics. The id is validated before any
  * query runs.
  */
@@ -154,6 +169,21 @@ export async function eraseMember(
       >`select count(*)::int as n from web_sessions where user_id = ${discordId}`;
       if ((remaining?.n ?? 0) === 0) break;
     }
+    // Overlay rotation also inserts a successor after updating its source.
+    // Delete all history and chase that same snapshot frontier before commit.
+    let tokens = 0;
+    for (;;) {
+      const deleted =
+        await tx`delete from overlay_tokens where member_id = ${discordId} returning 1`;
+      tokens += deleted.length;
+      const [remaining] = await tx<{ n: number }[]>`select count(*)::int as n
+        from overlay_tokens where member_id = ${discordId}`;
+      if (remaining!.n === 0) break;
+    }
+    const configs =
+      await tx`delete from overlay_configs where member_id = ${discordId} returning 1`;
+    counts.overlay_tokens = tokens;
+    counts.overlay_configs = configs.length;
     const grace = await tx`delete from web_session_grace where user_id = ${discordId} returning 1`;
     const attempts =
       await tx`delete from join_attempts where discord_id = ${discordId} returning 1`;

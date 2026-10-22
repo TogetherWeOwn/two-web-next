@@ -8,8 +8,8 @@
 // predecessor keeps resolving for exactly 10s (measured from `rotated_at`,
 // strict `<`, DB wall clock) and only while a live successor exists, so the
 // in-OBS browser source survives the cutover and revoke kills grace both
-// directions. Lifecycle ops never delete rows; `pruneHistory` is the only
-// deletion path (see the retention rule below).
+// directions. Lifecycle ops never delete rows; `pruneHistory` and operator
+// member erasure delete them (see the retention rule below).
 //
 // Telemetry retention rule: `last_used_at`/`use_count` live on the token row
 // and die with it. Non-live rows older than OVERLAY_TELEMETRY_RETENTION_DAYS
@@ -66,8 +66,8 @@ export type OverlayTokenStore = {
    * resolve and bump their own telemetry; everything else is null. The
    * result carries ids only, never the hash or the plaintext. */
   lookupByHash: (tokenHash: string) => Promise<OverlayTokenLookup | null>;
-  /** Full per-member history (live plus rotated/revoked), oldest first. Only
-   * pruning deletes rows; lifecycle ops only flip status. */
+  /** Full per-member history (live plus rotated/revoked), oldest first.
+   * Pruning and member erasure delete rows; lifecycle ops only flip status. */
   listMemberTokens: (memberId: string) => Promise<OverlayTokenRow[]>;
   /** Delete non-live rows older than the retention window (aged by
    * `created_at`), sparing rotated rows whose grace is still open and all
@@ -279,6 +279,11 @@ function toDbRow(row: OverlayTokenDbRow): OverlayTokenRow {
 }
 
 export function createPostgresOverlayTokenStore(sql: Sql): OverlayTokenStore {
+  // The shared session Sql type omits transactions; the supplied postgres.js
+  // pool also provides begin(), needed to hold revocation locks until commit.
+  const transactionalSql = sql as Sql & {
+    begin: <T>(fn: (tx: Sql) => Promise<T>) => Promise<T>;
+  };
   return {
     async mint(memberId, tokenHash) {
       try {
@@ -334,11 +339,22 @@ export function createPostgresOverlayTokenStore(sql: Sql): OverlayTokenStore {
         where token_hash = ${tokenHash} and status <> 'revoked'`;
     },
     async revokeMemberTokens(memberId) {
-      const rows = await sql<{ revoked: number }[]>`update overlay_tokens
-        set status = 'revoked', revoked_at = clock_timestamp()
-        where member_id = ${memberId} and status = 'live'
-        returning 1 as revoked`;
-      return rows.length;
+      return transactionalSql.begin(async (tx) => {
+        let revoked = 0;
+        // A rotation holding a predecessor lock can commit its successor
+        // after this UPDATE's snapshot. Chase with fresh snapshots, holding
+        // revoked rows locked until commit so later rotations cannot escape.
+        for (;;) {
+          const rows = await tx`update overlay_tokens
+            set status = 'revoked', revoked_at = clock_timestamp()
+            where member_id = ${memberId} and status = 'live'
+            returning 1`;
+          revoked += rows.length;
+          const [remaining] = await tx<{ n: number }[]>`select count(*)::int as n
+            from overlay_tokens where member_id = ${memberId} and status = 'live'`;
+          if (remaining!.n === 0) return revoked;
+        }
+      });
     },
     async lookupByHash(tokenHash) {
       const live = await sql<

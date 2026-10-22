@@ -77,6 +77,13 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `overlay_configs` | `member_id` (member-written elements and theme) |
+| `overlay_tokens` | `member_id` (all statuses, bearer hashes and use telemetry) |
+
+Overlay erasure physically deletes live tokens and all history regardless of age
+or grace, so neither the current URL nor its predecessor resolves afterwards.
+Dry-run, apply and repeat results include `overlay_configs` and `overlay_tokens`
+counts. The isolated Postgres proof is `test/overlay-postgres-guards.test.ts`.
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a
@@ -100,7 +107,13 @@ member's chase is visible forensically without changing the uncapped
 chase itself. A rotation that starts after erasure has removed its
 source fails on the missing row without minting a successor.
 
-Boundary: this converges over rotations of sessions that existed when
+Overlay token removal uses its own fresh-snapshot DELETE/recount loop for the
+same frontier: a rotation already holding a predecessor lock cannot leave an
+unseen live successor behind. `overlay_tokens` accumulates every token row the
+erasure physically deletes across passes. The `passes` and `deletesPerPass`
+forensics remain session-only for backwards compatibility.
+
+Boundary: this converges over rotations of sessions and overlay tokens that existed when
 erasure ran. It is not a tombstone and not a sign-in ban: a genuinely
 new session created after erasure authenticates normally, and a sign-in
 racing the final pass can land after it. Retained-table policy is

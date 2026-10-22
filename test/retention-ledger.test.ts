@@ -1533,6 +1533,8 @@ describe("retention ledger L8b core member tables", () => {
       "web_sessions",
       "web_session_grace",
       "join_attempts",
+      "overlay_configs",
+      "overlay_tokens",
     ]);
     const erasure = read("src/member-erasure.ts");
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");

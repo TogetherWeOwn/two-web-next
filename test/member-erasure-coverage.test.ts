@@ -31,6 +31,7 @@ type LocatedColumn = { table: string; column: string; source: string };
  * deliberately not member keys. */
 const MEMBER_KEYED_COLUMNS = new Set([
   "user_id",
+  "member_id",
   "discord_id",
   "viewer_discord_id",
   "viewer_user_id",

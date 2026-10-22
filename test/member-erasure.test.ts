@@ -1,6 +1,6 @@
 // Member erasure (TOG-12548). Proves the operator command backs the
 // published deletion promise: dry-run writes nothing, apply removes exactly
-// one member's rows across all six tables, re-apply is a no-op, and a
+// one member's rows across all eight tables, re-apply is a no-op, and a
 // malformed id is refused before any connection is opened.
 //
 // Live round-trips use a guarded disposable schema on agent-testdb or the
@@ -413,16 +413,20 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
              (${`hash-${id}-2`}, ${id}, ${username}, true, false, ${expiresAt})`;
     await fixture.client`insert into join_attempts (outcome, source, request_id, discord_id)
       values ('added', 'site', ${`request-${id}`}, ${id})`;
+    await fixture.client`insert into overlay_configs (member_id) values (${id})`;
+    await fixture.client`insert into overlay_tokens (member_id, token_hash) values (${id}, ${`overlay-${id}`})`;
   };
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [s], [g], [j], [c], [t]] = await Promise.all([
       fixture.client`select count(*)::int as n from users where id = ${id}`,
       fixture.client`select count(*)::int as n from profiles where user_id = ${id}`,
       fixture.client`select count(*)::int as n from rsvps where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       fixture.client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
+      fixture.client`select count(*)::int as n from overlay_configs where member_id = ${id}`,
+      fixture.client`select count(*)::int as n from overlay_tokens where member_id = ${id}`,
     ]);
     return {
       users: (u as { n: number }).n,
@@ -431,6 +435,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      overlay_configs: (c as { n: number }).n,
+      overlay_tokens: (t as { n: number }).n,
     };
   };
 
@@ -441,6 +447,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
   });
 
   beforeEach(async () => {
+    await fixture.client`delete from overlay_configs`;
+    await fixture.client`delete from overlay_tokens`;
     await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from rsvps`;
@@ -470,6 +478,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 1,
+      overlay_tokens: 1,
     });
     const preview = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
@@ -481,7 +491,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(await countsFor(MEMBER_B)).toEqual(before);
   });
 
-  it("apply removes exactly member A across all six tables and leaves member B intact", async () => {
+  it("apply removes exactly member A across all eight tables and leaves member B intact", async () => {
     const removed = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
       MEMBER_A,
@@ -494,6 +504,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 1,
+      overlay_tokens: 1,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -504,6 +516,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual({
       users: 1,
@@ -512,6 +526,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 1,
+      overlay_tokens: 1,
     });
     // The event itself survives: erasure removes answers, never content.
     expect(
@@ -535,6 +551,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 1,
       deletesPerPass: [0],
     });
@@ -545,6 +563,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 1,
+      overlay_tokens: 1,
     });
   });
 });
