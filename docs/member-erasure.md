@@ -77,6 +77,9 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `event_reminder_mutes` | `user_id` (per-event reminder mutes) |
+| `notifications` | `user_id` (site-notification inbox rows) |
+| `event_reminder_deliveries` | `user_id` (reminder send log) |
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a

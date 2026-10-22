@@ -2,6 +2,7 @@ import { alertScheduledFailing, exceptionClass } from "../alerts";
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
   BOARD_VIEW_LOG_RETENTION_DAYS,
+  EVENT_REMINDER_DELIVERY_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   IDEMPOTENCY_KEY_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
@@ -151,6 +152,7 @@ export type PruneCounts = {
   idempotencyKeys: number;
   searchLog: number;
   boardViews: number;
+  reminderDeliveries: number;
   sessions: number;
   jobUniqueLocks: number;
 };
@@ -324,6 +326,16 @@ export async function pruneModelTables(
   } catch (error) {
     failures.push({ table: "boardViews", error });
   }
+  let reminderDeliveries = { total: 0, capped: false };
+  try {
+    reminderDeliveries = await drainPruneTable(
+      (c) => stores.reminderDeliveries.pruneOlderThan(c),
+      cutoff(now, EVENT_REMINDER_DELIVERY_RETENTION_DAYS),
+      stores.reminderDeliveries.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "reminderDeliveries", error });
+  }
   let sessions = { total: 0, capped: false };
   try {
     const isolate = stores.sessions.isolate;
@@ -344,6 +356,7 @@ export async function pruneModelTables(
     idempotencyKeys: idempotencyKeys.total,
     searchLog: searchLog.total,
     boardViews: boardViews.total,
+    reminderDeliveries: reminderDeliveries.total,
     sessions: sessions.total,
     jobUniqueLocks: jobUniqueLocks.total,
   };
@@ -355,6 +368,7 @@ export async function pruneModelTables(
       ["idempotencyKeys", idempotencyKeys.capped],
       ["searchLog", searchLog.capped],
       ["boardViews", boardViews.capped],
+      ["reminderDeliveries", reminderDeliveries.capped],
       ["sessions", sessions.capped],
       ["jobUniqueLocks", jobUniqueLocks.capped],
     ] as const

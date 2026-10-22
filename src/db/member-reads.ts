@@ -21,6 +21,9 @@ const owners: Record<string, string> = {
   profiles: "user_id",
   rsvps: "user_id",
   join_attempts: "discord_id",
+  event_reminder_mutes: "user_id",
+  notifications: "user_id",
+  event_reminder_deliveries: "user_id",
 };
 // CTEs can mutate even when the final SELECT never references them. Only the
 // supported SELECT shapes are reads; do not infer safety from a WITH prefix.

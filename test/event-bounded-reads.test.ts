@@ -68,6 +68,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       // Drizzle applies each migration in one transaction; some (LOCK TABLE) require it.
       await client.begin(async (tx) => {
         for (const statement of migration.sql) {
+          // Live ACLs stay out of fixtures (see test/helpers/member-data-db.ts).
+          if (/^\s*GRANT\b/i.test(statement)) continue;
           if (statement.trim())
             await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
         }

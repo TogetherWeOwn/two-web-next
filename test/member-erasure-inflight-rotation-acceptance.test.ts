@@ -12,7 +12,7 @@
 // (2) several pre-existing in-flight rotations converge in the same erase
 //     with truthful accumulated web_sessions counts (rows the erase itself
 //     physically deleted), without touching another member;
-// (3) the six-table transaction stays atomic: ordinary deletion, a repeat
+// (3) the nine-table transaction stays atomic: ordinary deletion, a repeat
 //     apply returning zero, a read-only dry-run, and a whole-transaction
 //     rollback on a database failure;
 // (4) erasure is not a tombstone: a genuinely new sign-in afterwards works.
@@ -56,6 +56,9 @@ const ZERO: ErasureCounts = {
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  event_reminder_mutes: 0,
+  notifications: 0,
+  event_reminder_deliveries: 0,
 };
 
 describe.skipIf(!url)("member erasure against already-in-flight rotations", () => {
@@ -224,6 +227,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 2,
         web_session_grace: 1,
         join_attempts: 1,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(raced.passes).toBe(raced.deletesPerPass.length);
       expect(raced.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -237,7 +243,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       // The minted successor cannot be rotated back to life afterwards.
       expect(await store.rotate("race-successor", session("race-revival"))).toBe(false);
       expect(await store.get("race-revival")).toBeNull();
-      // Repeat apply is a no-op across all six tables.
+      // Repeat apply is a no-op across all nine tables.
       await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual({
         ...ZERO,
         passes: 1,
@@ -251,6 +257,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(await store.get("race-bystander")).not.toBeNull();
     } finally {
@@ -334,6 +343,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 4,
         web_session_grace: 3,
         join_attempts: 1,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(multi.passes).toBe(multi.deletesPerPass.length);
       expect(multi.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -352,6 +364,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 1,
         join_attempts: 1,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(await store.get("multi-bystander-source")).toMatchObject({ userId: BYSTANDER });
       expect(await store.get("multi-bystander-successor")).toMatchObject({ userId: BYSTANDER });
@@ -389,6 +404,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        event_reminder_mutes: 0,
+        notifications: 0,
+        event_reminder_deliveries: 0,
       });
       expect(won.passes).toBe(won.deletesPerPass.length);
       expect(won.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -415,6 +433,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -430,6 +451,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -444,6 +468,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -462,7 +489,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
     expect(await store.get("dry-new-signin")).toMatchObject({ userId: VICTIM });
   });
 
-  it("rolls back all six tables when a late deletion fails (control)", async () => {
+  it("rolls back all nine tables when a late deletion fails (control)", async () => {
     await seedMember(VICTIM, "synthetic-erase-rollback-a");
     await seedMember(BYSTANDER, "synthetic-erase-rollback-b");
     await store.create(session("rollback-source"));
@@ -476,11 +503,14 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 1,
       join_attempts: 1,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
 
-    // Fail the last of the six deletions from inside the database: every
-    // earlier deletion in the transaction must be rolled back with it, and
-    // no successful counts may be returned.
+    // Fail a late deletion from inside the database: every earlier deletion
+    // in the transaction must be rolled back with it, and no successful
+    // counts may be returned.
     await fixture.client.unsafe(
       `create function erasure_rollback_guard() returns trigger language plpgsql as 'begin raise exception ''synthetic erasure failure''; end'`,
     );
@@ -514,6 +544,9 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
   }, 15_000);
 });

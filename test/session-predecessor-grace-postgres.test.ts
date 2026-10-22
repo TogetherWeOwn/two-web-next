@@ -191,6 +191,9 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       web_sessions: 1,
       web_session_grace: 1,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
     expect(await eraseMember(sql, USER, { dryRun: true })).toEqual({
       ...before,
@@ -210,6 +213,9 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
     expect(await store.get("erase-source")).toBeNull();
     expect(await store.get("erase-successor")).toBeNull();
@@ -225,6 +231,9 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
       passes: 1,
       deletesPerPass: [0],
     });

@@ -137,7 +137,7 @@ describe("erase-member bounded waits: client budget and docs", () => {
     const section = doc.slice(start, doc.indexOf("\n## ", start + 1));
     expect(section).toMatch(/statement_timeout/);
     expect(section).toMatch(/lock_timeout/);
-    // A timed-out run erased nothing: the operator must be told all six
+    // A timed-out run erased nothing: the operator must be told all nine
     // tables stay unchanged and to verify with a dry-run.
     expect(section).toMatch(/unchanged|erases? nothing|rolls? back/i);
     expect(section).toMatch(/dry-run/);
@@ -166,13 +166,16 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
   const password = () => new URL(ambientUrl!).password;
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [s], [g], [j], [m], [n], [d]] = await Promise.all([
       client`select count(*)::int as n from users where id = ${id}`,
       client`select count(*)::int as n from profiles where user_id = ${id}`,
       client`select count(*)::int as n from rsvps where user_id = ${id}`,
       client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
+      client`select count(*)::int as n from event_reminder_mutes where user_id = ${id}`,
+      client`select count(*)::int as n from notifications where user_id = ${id}`,
+      client`select count(*)::int as n from event_reminder_deliveries where user_id = ${id}`,
     ]);
     return {
       users: (u as { n: number }).n,
@@ -181,6 +184,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      event_reminder_mutes: (m as { n: number }).n,
+      notifications: (n as { n: number }).n,
+      event_reminder_deliveries: (d as { n: number }).n,
     };
   };
 
@@ -198,6 +204,12 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
                (${`hash-${id}-2`}, ${id}, ${username}, true, false, ${expiresAt})`;
     await client`insert into join_attempts (outcome, source, request_id, discord_id)
         values ('added', 'site', ${`request-${id}`}, ${id})`;
+    await client`insert into event_reminder_mutes (event_id, user_id)
+        values (${eventId}, ${id})`;
+    await client`insert into notifications (user_id, kind, event_id, title, body, url)
+        values (${id}, 'event_reminder', ${eventId}, 'T', 'B', 'https://example.test/e/1')`;
+    await client`insert into event_reminder_deliveries (event_id, user_id, lead, channel, status)
+        values (${eventId}, ${id}, '24h', 'site', 'sent')`;
   };
 
   beforeAll(async () => {
@@ -223,6 +235,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     await client.begin(async (tx) => {
       for (const migration of migrations)
         for (const statement of migration.sql) {
+          // Live ACLs stay out of fixtures (see test/helpers/member-data-db.ts).
+          if (/^\s*GRANT\b/i.test(statement)) continue;
           if (statement.trim()) await tx.unsafe(statement);
         }
     });
@@ -232,6 +246,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
   beforeEach(async () => {
     await client`delete from web_sessions`;
     await client`delete from rsvps`;
+    await client`delete from event_reminder_mutes`;
+    await client`delete from notifications`;
+    await client`delete from event_reminder_deliveries`;
     await client`delete from profiles`;
     await client`delete from join_attempts`;
     await client`delete from events`;
@@ -325,6 +342,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
         web_sessions: 2,
         web_session_grace: 0,
         join_attempts: 1,
+        event_reminder_mutes: 1,
+        notifications: 1,
+        event_reminder_deliveries: 1,
       },
       passes: 0,
       deletesPerPass: [],
@@ -336,6 +356,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
 
@@ -354,6 +377,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     };
     expect(await countsFor(MEMBER_A)).toEqual(empty);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -390,6 +416,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -411,6 +440,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -436,6 +468,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_reminder_mutes: 1,
+      notifications: 1,
+      event_reminder_deliveries: 1,
     };
     expect(JSON.parse(result.stdout)).toEqual({
       mode: "apply",
@@ -450,6 +485,9 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_reminder_mutes: 0,
+      notifications: 0,
+      event_reminder_deliveries: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
   }, 60_000);

@@ -472,6 +472,7 @@ describe.skipIf(!DB)("scheduled retention execution budgets (test Postgres, acce
       idempotencyKeys: 1,
       searchLog: 0,
       boardViews: 1,
+      reminderDeliveries: 0,
       sessions: 1,
       jobUniqueLocks: 1,
     });

@@ -150,6 +150,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             idempotencyKeys: 0,
             searchLog: 0,
             boardViews: 0,
+            reminderDeliveries: 0,
             sessions: 1,
             jobUniqueLocks: 0,
           });

@@ -475,7 +475,7 @@ describe("retention ledger doc rows", () => {
       "No prune store exists",
       "`PruneStores`",
       "`pruneModelTables`",
-      "six age-pruned tables plus the session and lock sweeps",
+      "seven age-pruned tables plus the session and lock sweeps",
       "no retention-days constant names sync attempts",
       "only in test fixtures as cleanup",
       "../drizzle/1020_event-sync-revisions.sql",
@@ -712,6 +712,7 @@ describe("retention ledger agent-event rows (L8a)", () => {
       idempotencyKeys: memTable(),
       searchLog: memTable(),
       boardViews: memTable(),
+      reminderDeliveries: memTable(),
     };
     const stores = {
       ...tables,
@@ -898,6 +899,7 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
       idempotencyKeys: memTable(),
       searchLog: memTable(),
       boardViews: memTable(),
+      reminderDeliveries: memTable(),
     };
     const stores = {
       ...tables,
@@ -989,7 +991,7 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(read("src/jobs/constants.ts")).not.toMatch(
       /sync.?attempt.*retention|retention.*sync.?attempt/i,
     );
-    // The prune wiring never mentions the attempts table: six age-pruned
+    // The prune wiring never mentions the attempts table: seven age-pruned
     // stores plus the session and lock sweeps, and sync attempts is not among them.
     expect(read("src/jobs/cron.ts")).not.toContain("event_sync_attempts");
     expect(read("src/jobs/postgres.ts")).not.toContain("event_sync_attempts");
@@ -1499,7 +1501,7 @@ describe("retention ledger L8b core member tables", () => {
         );
       }
     }
-    // Exact-name pin: no *_RETENTION_DAYS may appear beyond the known six.
+    // Exact-name pin: no *_RETENTION_DAYS may appear beyond the known seven.
     // A synonym (DISCORD_SNAPSHOT_RETENTION_DAYS, OAUTH_JOURNEY_RETENTION_DAYS)
     // keeps the stem probe green when the alias list drifts; this fails it.
     const retentionNames = [...constants.matchAll(/export const ([A-Z0-9_]*RETENTION_DAYS)\b/g)]
@@ -1508,6 +1510,7 @@ describe("retention ledger L8b core member tables", () => {
     expect(retentionNames).toEqual([
       "AGENT_EVENT_AUDIT_RETENTION_DAYS",
       "BOARD_VIEW_LOG_RETENTION_DAYS",
+      "EVENT_REMINDER_DELIVERY_RETENTION_DAYS",
       "EVENT_SEARCH_LOG_RETENTION_DAYS",
       "IDEMPOTENCY_KEY_RETENTION_DAYS",
       "JOIN_ATTEMPT_RETENTION_DAYS",
@@ -1533,6 +1536,9 @@ describe("retention ledger L8b core member tables", () => {
       "web_sessions",
       "web_session_grace",
       "join_attempts",
+      "event_reminder_mutes",
+      "notifications",
+      "event_reminder_deliveries",
     ]);
     const erasure = read("src/member-erasure.ts");
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");

@@ -32,6 +32,9 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.web_throttle_hits": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_sessions": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_oauth_journeys": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  "public.event_reminder_mutes": ["DELETE", "INSERT", "SELECT"],
+  "public.notifications": ["INSERT", "SELECT", "UPDATE(read_at)"],
+  "public.event_reminder_deliveries": ["DELETE", "INSERT", "SELECT"],
 });
 
 export const SEQUENCE_RIGHTS = Object.freeze(
@@ -50,6 +53,8 @@ export const SEQUENCE_RIGHTS = Object.freeze(
       "queue_failed_jobs_id_seq",
       "join_attempts_id_seq",
       "web_throttle_hits_id_seq",
+      "notifications_id_seq",
+      "event_reminder_deliveries_id_seq",
     ].map((name) => [`public.${name}`, ["SELECT", "USAGE"]]),
   ),
 );

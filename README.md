@@ -105,6 +105,11 @@ env -u BOT_DATABASE_URL npm run check # lint + format + types + config drift/sel
 For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
+New-table migrations carry per-migration `GRANT`s to the `two_web_app` role
+(see the runtime-rights guard in `ci/migration-runtime-rights.mjs`), so
+`npm run db:migrate` ensures that NOLOGIN role exists first
+(`ci/db-ensure-runtime-role.mjs`); test fixtures skip `GRANT` statements and
+need no role.
 
 Always supply the test URL for full-suite runs. Live suites skip when
 `DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB

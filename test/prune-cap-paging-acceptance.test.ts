@@ -48,6 +48,7 @@ const TABLE_NAMES = [
   "idempotencyKeys",
   "searchLog",
   "boardViews",
+  "reminderDeliveries",
 ] as const;
 
 type AgeTableName = (typeof TABLE_NAMES)[number];
@@ -66,6 +67,7 @@ function emptyTables(): Record<AgeTableName, ReturnType<typeof zeroTable>> {
     idempotencyKeys: zeroTable(),
     searchLog: zeroTable(),
     boardViews: zeroTable(),
+    reminderDeliveries: zeroTable(),
   };
 }
 
@@ -183,7 +185,7 @@ describe("prune batch-cap paging (acceptance)", () => {
     expectPageLine(pages[0]!);
   });
 
-  it("all six tables capped still emit exactly one page line, counts unchanged", async () => {
+  it("all seven tables capped still emit exactly one page line, counts unchanged", async () => {
     const calls = { n: 0 };
     const endless = endlessTable(calls);
     const tables = Object.fromEntries(TABLE_NAMES.map((name) => [name, endless]));

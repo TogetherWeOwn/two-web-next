@@ -53,6 +53,8 @@ async function createMigrationFixture(raw: string) {
   };
   const apply = async (sql: postgres.TransactionSql, statements: string[]) => {
     for (const statement of statements) {
+      // Live ACLs stay out of fixtures (see test/helpers/member-data-db.ts).
+      if (/^\s*GRANT\b/i.test(statement)) continue;
       if (statement.trim()) {
         // Canonical legacy FKs explicitly qualify public; redirect only those
         // references to the schema we just created, as the safety helper does.

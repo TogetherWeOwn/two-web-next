@@ -200,6 +200,7 @@ function stubStores(): PruneStores {
     idempotencyKeys: empty,
     searchLog: empty,
     boardViews: empty,
+    reminderDeliveries: empty,
     sessions: createMemorySessionStore(() => NOW.getTime()),
     jobUniqueLocks: {
       async sweepExpired(_now: Date): Promise<number> {
