@@ -43,6 +43,23 @@ export function isQueueMessage(value: unknown): value is QueueMessage {
         typeof value.action.userId === "string" &&
         typeof value.action.roleKey === "string"
       );
+    case "settings-set":
+      // Exactly the dashboard's carrier: the verb is pinned so no other verb
+      // reaches the bot under this kind, and the key is a UUID because the
+      // transport sends it as the Idempotency-Key header.
+      return (
+        typeof value.idempotencyKey === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          value.idempotencyKey,
+        ) &&
+        typeof value.guildId === "string" &&
+        typeof value.actor === "string" &&
+        isRecord(value.action) &&
+        value.action.verb === "settings.set" &&
+        typeof value.action.key === "string" &&
+        typeof value.action.value === "string" &&
+        typeof value.action.expected_version === "number"
+      );
     default:
       return false;
   }

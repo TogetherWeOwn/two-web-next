@@ -4,11 +4,19 @@ import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
+import { handleSettingsSet } from "./settings-set";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
-import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
+import type {
+  BotClient,
+  EventStore,
+  QueueLedger,
+  QueueMessage,
+  SettingsWriter,
+  UniqueLock,
+} from "./types";
 
 const LEDGER_TIMEOUT_MS = 2000;
 // The unique-lock cleanup shares the ledger's posture: it must never hold the
@@ -42,6 +50,14 @@ const JOBS = {
     tries: CALL_INTERNAL_ACTION.tries,
   },
   "role-assign": {
+    queue: "two-internal-action",
+    job: "CallInternalAction",
+    tries: CALL_INTERNAL_ACTION.tries,
+  },
+  // Dashboard settings writes ride the same internal-action queue, budget,
+  // and alert identity as the other bot verbs; delivery is a settings-only
+  // handler, never the role/announcement one.
+  "settings-set": {
     queue: "two-internal-action",
     job: "CallInternalAction",
     tries: CALL_INTERNAL_ACTION.tries,
@@ -80,6 +96,10 @@ export async function consume(
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
+    // Optional so carriers from before the settings slice keep their shape;
+    // production always passes it. A settings-set carrier without a writer
+    // fails terminally below, never silently and never to the wrong handler.
+    settings?: SettingsWriter;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -245,6 +265,13 @@ export async function consume(
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else if (body.kind === "settings-set") {
+        // A settings carrier without a writer is a misconfigured worker, not
+        // a retriable wait: fail it terminally so it pages instead of
+        // redelivering forever or falling through to the wrong handler.
+        outcome = deps.settings
+          ? await handleSettingsSet(body, m.attempts, deps.settings)
+          : { failed: "settings writer unconfigured" };
       } else {
         outcome =
           body.kind === "sync-event"

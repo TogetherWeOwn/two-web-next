@@ -984,6 +984,21 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(offenders, `no src file may prune activity_log: ${offenders.join(", ")}`).toEqual([]);
   });
 
+  it("moderation dashboard writes audit to activity_log under the indefinite bound", () => {
+    // Ledger convention: the doc row and this pin travel together, so a later
+    // prune change cannot silently orphan the moderation audit trail.
+    const row = read("docs/retention-ledger.md")
+      .split("\n")
+      .find((line) => line.startsWith("| `activity_log` |"));
+    expect(row, "activity_log ledger row").toBeDefined();
+    expect(row).toMatch(/moderation/i);
+    expect(row).toMatch(/indefinite/i);
+    expect(row).toContain("moderation_setting");
+    // The code side: the dashboard's one-row-per-write audit call.
+    expect(read("src/admin/moderation.ts")).toContain('subjectType: "moderation_setting"');
+    expect(read("src/admin/moderation.ts")).toContain("expected version");
+  });
+
   it("sync attempts have no age prune: no constant, no store, no src delete", () => {
     // No retention-days constant names sync attempts; every named window is 90 days elsewhere.
     expect(read("src/jobs/constants.ts")).not.toMatch(

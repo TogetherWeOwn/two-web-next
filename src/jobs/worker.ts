@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { alertScheduledFailing, type ScheduledFailingJob } from "../alerts";
 import { createBotClient } from "../bot/client";
+import { createSettingsWriter, settingsBotConfig } from "../bot/settings";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
@@ -22,6 +23,7 @@ import type {
   EventStore,
   QueueLedger,
   QueueMessage,
+  SettingsWriter,
   TxClient,
   UniqueLock,
 } from "./types";
@@ -44,6 +46,18 @@ export function botClientFor(
     keyId: env.BOT_KEY_ID,
     fetchFn,
   });
+}
+
+/**
+ * Live settings transport for the queue consumer. Like botClientFor, a
+ * missing BOT_* value surfaces per call as the consumer's terminal outcome,
+ * never as an acked success.
+ */
+export function settingsWriterFor(
+  env: Pick<JobsEnv, "BOT_ENDPOINT_URL" | "BOT_KEY_ID" | "BOT_SHARED_SECRET">,
+  fetchFn?: typeof fetch,
+): SettingsWriter {
+  return createSettingsWriter(settingsBotConfig(env), fetchFn);
 }
 
 function sqlFor(
@@ -149,6 +163,7 @@ export async function handleQueue(
     };
     await consume(batch, {
       bot: botClientFor(env),
+      settings: settingsWriterFor(env),
       events: pgEventStore(sql),
       lock: pgUniqueLock(cleanupSql),
       ledger,

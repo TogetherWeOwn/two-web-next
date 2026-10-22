@@ -36,6 +36,12 @@ export const AdminDashboard: FC<{
           </h2>
           <p>Who changed what, when. Read-only; views that name a member are access-logged.</p>
         </li>
+        <li class="card">
+          <h2>
+            <a href="/admin/moderation">Moderation settings</a>
+          </h2>
+          <p>Live automod limits over the bot settings path. Writes re-check the Discord role.</p>
+        </li>
       </ul>
       {funnel ? (
         <section data-testid="join-funnel">

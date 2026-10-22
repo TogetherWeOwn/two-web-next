@@ -205,6 +205,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
+| `GET /admin/moderation` | moderator | admin-moderation: live automod settings form; session bit only, 503 when the bot is unreachable |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
 | `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
@@ -259,6 +260,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/featured` | moderator | admin: featured create |
 | `POST /admin/featured/:id` | moderator | admin: featured update |
 | `POST /admin/featured/:id/delete` | moderator | admin: featured delete |
+| `POST /admin/moderation` | moderator | admin-moderation: versioned hot-key write; live Discord role re-check, 409 on stale version, one audit row per accepted write |
 | `POST /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route / queue-redispatch-postgres: one-row guarded re-dispatch of replay advice only; refusals and stale rows are never deleted, reset or re-budgeted |
 | `POST /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
