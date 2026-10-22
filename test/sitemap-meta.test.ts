@@ -273,7 +273,8 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
   it("tags the homepage for sharing", async () => {
     const html = await (await harness([]).request("/")).text();
     tags(html, `${APP_URL}/`, HOME_TITLE, HOME_DESCRIPTION);
-    expect(html).not.toContain("og:image");
+    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 
   it("tags the join page with its own canonical and the funnel intro", async () => {
