@@ -152,7 +152,7 @@ describe("llms.txt guidance matches its actual content", () => {
     const body = llmsTxt(APP_URL);
     const mdUrls = [...body.matchAll(/https:\/\/[^\s)]+\.md/g)]
       .map((m) => m[0])
-      .filter((u) => u.startsWith(APP_URL))
+      .filter((u) => new URL(u).origin === new URL(APP_URL).origin)
       .filter((u) => !u.includes("/e/") && !u.endsWith("/events.md"));
     expect(mdUrls.length).toBeGreaterThanOrEqual(5);
     for (const url of mdUrls) {
