@@ -5,7 +5,10 @@ import { pathToFileURL } from "node:url";
 const MAX_PROCESSES = 32;
 const MAX_READ_BYTES = 8192;
 const INTERVAL_MS = 60000;
-const MAX_SAMPLES = 28;
+// Tracks the node22-compat timeout-minutes ceiling (45): one sample per
+// minute from t=0 keeps live evidence flowing until just before the
+// deadline, as before (28 samples under the old 30m ceiling).
+const MAX_SAMPLES = 43;
 
 // Read only stat and main-thread child IDs, never cmdline/environ, process
 // names, stack/heap reports or test output. Even diagnostic errors stay fixed.
