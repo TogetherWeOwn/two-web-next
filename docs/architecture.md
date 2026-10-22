@@ -309,6 +309,7 @@ exactly once.
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
+| `src/ladder-copy.ts` | content |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/mcp/` | content |

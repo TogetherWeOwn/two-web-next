@@ -66,6 +66,10 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       ('legend', 'Legend', 0, 5), ('soldier', 'Soldier', 20, 3),
       ('prospect', 'Prospect', 24, 1), ('veteran', 'Veteran', NULL, 4), ('member', 'Member', 40, 2)
     `;
+    // The ranks read left-joins the ladder for role ids; production bot
+    // schemas carry the table, so the fixture mirrors it (empty: role pins
+    // live in the web_v1 acceptance suite, not here).
+    await sql`CREATE TABLE web_v1.rank_ladder (rank_key text NOT NULL, role_id text)`;
     state.fixture = fixture;
     // Keep event/featured reads local and separate from the bot-view socket.
     // A counts failure must not take either of these homepage sections down.

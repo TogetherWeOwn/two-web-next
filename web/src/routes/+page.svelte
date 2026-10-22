@@ -4,6 +4,7 @@ import Shell from "#lib/Shell.svelte";
 import { featuredImageSrc } from "../../../src/featured-image";
 import type { HomeNotice } from "../../../src/home-copy";
 import { cardTimeLabel, isValidZone } from "../../../src/islands/contracts";
+import { ladderHeading, stackSentence } from "../../../src/ladder-copy";
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
@@ -33,6 +34,11 @@ const canonical = $derived(canonicalUrl(appUrl, "/"));
 // is one of the six — the cast only recovers what $derived destructuring widens.
 const noticeText = $derived(notice ? HOME_NOTICES[notice as HomeNotice] : null);
 const ranks = $derived(counts.ranks.length ? counts.ranks : FALLBACK_RANKS);
+// The heading and stack sentence derive from whichever ladder rendered —
+// live ranks when the bot views answer, the static fallback otherwise — so
+// the null-state bytes never change.
+const ladderTitle = $derived(ladderHeading(ranks));
+const ladderStack = $derived(stackSentence(ranks));
 const siteGraph = $derived(siteJsonLd(appUrl));
 </script>
 
@@ -141,7 +147,7 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     <section class="community-intro" aria-labelledby="community-heading">
       <h2 id="community-heading">No application. No interview.</h2>
       <p>
-        Show up a few times. Play. Become a Member. The ladder records trust and time, not
+        Show up a few times. Play. Become a member. The ladder records trust and time, not
         grind.
       </p>
       <p>Small enough that people notice when you come back.</p>
@@ -160,11 +166,11 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     </section>
   </div>
   <section aria-label="Community ladder" class="community-ladder">
-    <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-    <p>Ranks stack — a Veteran still holds everything below.</p>
+    <h2>{ladderTitle}</h2>
+    <p>{ladderStack}</p>
     <dl class="facts rank-stack" data-testid="rank-stack">
       {#each ranks as rank (rank.key)}
-        <div class="card" data-rank={rank.key}>
+        <div class="card" data-rank={rank.key} data-role-id={rank.roleId}>
           <dt>{rank.label}</dt>
           <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
         </div>

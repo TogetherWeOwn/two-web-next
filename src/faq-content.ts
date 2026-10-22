@@ -4,6 +4,7 @@
 // database — importing this module must never connect to anything.
 
 import { SUBSCRIPTION_GUIDANCE } from "./events/subscription-copy";
+import { entryAnswer, rungsAnswer, type LadderRank } from "./ladder-copy";
 
 export const FAQS: Array<{
   section: string;
@@ -128,6 +129,29 @@ export const FAQS: Array<{
 // The Kit page renders this shape server-side: the questions, answer
 // semantics and section anchors stay byte-identical across renderers because
 // every renderer reads this module, never a pasted copy.
-export function faqPageData(appUrl: string): { appUrl: string; faqs: typeof FAQS } {
-  return { appUrl, faqs: FAQS };
+const RUNGS_QUESTION = "What are the rank rungs?";
+const ENTRY_QUESTION = "Is there an application, interview, or skill requirement?";
+
+// The optional ranks slice (ordered [{ key, label, memberCount }] from
+// web_v1.rank_counts; extra fields ignored) derives the two ladder answers
+// from live data. Without ranks — the views are down — the static bytes below
+// render as the null-state fallback.
+export function faqPageData(
+  appUrl: string,
+  ranks?: LadderRank[],
+): { appUrl: string; faqs: typeof FAQS } {
+  if (!ranks?.length) return { appUrl, faqs: FAQS };
+  return {
+    appUrl,
+    faqs: FAQS.map((group) => ({
+      ...group,
+      items: group.items.map(([question, answer]): [string, string] =>
+        question === RUNGS_QUESTION
+          ? [question, rungsAnswer(ranks)]
+          : question === ENTRY_QUESTION
+            ? [question, entryAnswer(ranks)]
+            : [question, answer],
+      ),
+    })),
+  };
 }
