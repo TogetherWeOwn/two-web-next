@@ -80,7 +80,13 @@ import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
-import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
+import {
+  isKnownTimezone,
+  parseEventForm,
+  parseFeaturedForm,
+  utcToWall,
+  ValidationError,
+} from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
   ActivityLogPage,
@@ -786,14 +792,23 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 }
 
 function eventValues(row: EventRow): Record<string, unknown> {
+  // A validation refusal can retain a corrupt stored zone or instant. Keep the
+  // bad zone visible for correction, but never format it or invent wall times.
+  const knownTimezone = isKnownTimezone(row.timezone);
   return {
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
     accessibility_notes: row.accessibilityNotes ?? "",
     // Wall text in the row's zone — what the moderator typed is what they see.
-    starts_at: utcToWall(row.startsAt, row.timezone),
-    ends_at: utcToWall(row.endsAt, row.timezone),
+    starts_at:
+      knownTimezone && Number.isFinite(row.startsAt.getTime())
+        ? utcToWall(row.startsAt, row.timezone)
+        : "",
+    ends_at:
+      knownTimezone && Number.isFinite(row.endsAt.getTime())
+        ? utcToWall(row.endsAt, row.timezone)
+        : "",
     timezone: row.timezone,
     location: row.location ?? "",
     organizer_name: row.organizer_name ?? "",

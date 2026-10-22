@@ -51,6 +51,7 @@ import { newEventKey } from "../src/admin/validation";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { agentEventGrants } from "../src/db/schema";
 import type { Env, Session } from "../src/env";
 import { registerEventRoutes } from "../src/events/routes";
 import type { SessionReader } from "../src/events/routes-shared";
@@ -152,6 +153,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     beforeEach(async () => {
       await fixture.reset();
+      await fixture.db.delete(agentEventGrants);
       await fixture.client`delete from queue_jobs`;
       vi.clearAllMocks();
       currentSession = null;
@@ -302,6 +304,65 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(edit.status).toBe(200);
       expect(await edit.text()).toContain(copy!.title);
     });
+
+    // Mutants: carrying source.agentGrantId/proofMarker into the insert hits
+    // the migrated UNIQUE constraints; carrying agentVersion fails the read.
+    // Non-default persisted source values make every reset assertion nonvacuous.
+    it.each(["HTML", "JSON"] as const)(
+      "%s duplicate clears a real grant-bound source's ownership, proof and version without changing it",
+      async (surface) => {
+        const [grant] = await db
+          .insert(agentEventGrants)
+          .values({
+            agentId: "duplicate-fixture-agent",
+            companyId: "duplicate-fixture-company",
+            guildId: baseEnv.DISCORD_GUILD_ID,
+            verifierHash: "d".repeat(64),
+          })
+          .returning();
+        const source = await seed({
+          agentGrantId: grant!.id,
+          proofMarker: "duplicate-fixture-proof",
+          agentVersion: 7,
+          createdBy: "100000000000000999",
+        });
+        const before = await getEvent(db, source.eventKey);
+        expect(before).toMatchObject({
+          agentGrantId: grant!.id,
+          proofMarker: "duplicate-fixture-proof",
+          agentVersion: 7,
+        });
+        currentSession = moderatorSession;
+        const res =
+          surface === "HTML"
+            ? await duplicateHtml(source.eventKey, modCookie)
+            : await jsonApp.request(
+                `/events/${source.eventKey}/duplicate`,
+                { method: "POST", headers: JSON_HEADERS },
+                jsonEnv(),
+              );
+        expect(res.status).toBe(surface === "HTML" ? 303 : 201);
+        const newKey =
+          surface === "HTML"
+            ? duplicateKey(res)
+            : ((await res.json()) as { data: { event_key: string } }).data.event_key;
+        expect(newKey).not.toBe(source.eventKey);
+        const copy = await getEvent(db, newKey);
+        expect(copy).toMatchObject({
+          status: "draft",
+          createdBy: MOD_ID,
+          agentGrantId: null,
+          proofMarker: null,
+          agentVersion: 1,
+        });
+        expect(await getEvent(db, source.eventKey)).toEqual(before);
+        expect(await db.select().from(agentEventGrants)).toEqual([grant]);
+        expect(await db.select().from(events)).toHaveLength(2);
+        expect(await db.select().from(activityLog)).toHaveLength(1);
+        expect(dispatchWriteBack).not.toHaveBeenCalled();
+        expect(await fixture.client`select job_id from queue_jobs`).toEqual([]);
+      },
+    );
 
     it("duplicating a draft keeps the copy a draft and allows a blank location", async () => {
       const source = await seed({ status: "draft", location: null });

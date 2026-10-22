@@ -87,12 +87,20 @@ export async function duplicateEvent(
     // so a duplicate never blocks behind an in-flight edit.
     const [source] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
     if (!source) throw new NotFoundError("event");
-    const input = mergePatchInput(source, { title: duplicateTitle(source.title) });
+    // PostgreSQL accepts infinite timestamps, but wall-time/ISO formatting does
+    // not. Refuse them as field errors before deriving any display values.
+    const fields: Record<string, string> = {};
+    if (!Number.isFinite(source.startsAt.getTime())) fields.starts_at = "Enter a valid start time.";
+    if (!Number.isFinite(source.endsAt.getTime())) fields.ends_at = "Enter a valid end time.";
+    if (Object.keys(fields).length > 0) throw new ValidationError(fields);
+    // Validate the original title too: prefixing/truncation must not hide a
+    // blank title or a prohibited character beyond the copy's cutoff.
+    const input = mergePatchInput(source, {});
     const [row] = await tx
       .insert(events)
       .values({
         eventKey: newEventKey(),
-        title: input.title,
+        title: duplicateTitle(input.title),
         game: input.game,
         description: input.description,
         accessibilityNotes: input.accessibilityNotes,
