@@ -131,6 +131,12 @@ function withExhaustedThrottle(f: Fixture) {
   (f.env as unknown as EnvWithThrottle).THROTTLE_STORE = async () => sql;
 }
 
+/** Auth-budget hits only: the shared read guard (`events-read:*`) also
+ * accounts each landing, so spend pins filter to `login-recover:*`. */
+function authHits(hits: { bucket: string; at: number }[]) {
+  return hits.filter((h) => h.bucket.startsWith("login-recover:"));
+}
+
 /** The retry href the landing page offers, carrying the destination itself. */
 function retryHref(html: string): string {
   const href = html.match(/href="(\/auth\/discord\?next=[^"]+)"/)?.[1];
@@ -267,20 +273,20 @@ describe("recovery landing never pre-arms the pending notice", () => {
     const fake = withFakeThrottle(f);
     const first = await f.request(`/auth/recover?next=${DEST_ENC}`);
     expect(first.status).toBe(200);
-    expect(fake.hits).toHaveLength(1);
-    expect(fake.hits[0]!.bucket).toMatch(/:anon$/);
+    expect(authHits(fake.hits)).toHaveLength(1);
+    expect(authHits(fake.hits)[0]!.bucket).toMatch(/:anon$/);
 
     // Nine more landings exhaust the 10/min budget; the eleventh refuses.
     for (let i = 0; i < 9; i++) {
       const res = await f.request(`/auth/recover?next=${DEST_ENC}`);
       expect(res.status).toBe(200);
     }
-    expect(fake.hits).toHaveLength(10);
+    expect(authHits(fake.hits)).toHaveLength(10);
     const refused = await f.request(`/auth/recover?next=${DEST_ENC}`);
     expect(refused.status).toBe(429);
     expect(refused.headers.get("Retry-After")).toBeDefined();
     // A refusal charges no hit and arms nothing.
-    expect(fake.hits).toHaveLength(10);
+    expect(authHits(fake.hits)).toHaveLength(10);
     expect(liveSetCookies(refused, EXPIRED_WRITE_COOKIE)).toEqual([]);
   });
 
@@ -307,8 +313,9 @@ describe("recovery landing never pre-arms the pending notice", () => {
     expect(html).not.toContain(big.slice(0, 32));
     expect(liveSetCookies(res, EXPIRED_WRITE_COOKIE)).toEqual([]);
     expect(pairOf(mergeCookies("", res), EXPIRED_WRITE_COOKIE)).toBeUndefined();
-    // Refused before the throttle: zero budget spent, even on this hit.
-    expect(fake.hits).toHaveLength(0);
+    // Oversized ?next= skips the auth budget (OAuth-callback parity); the
+    // shared read budget still accounts the request.
+    expect(authHits(fake.hits)).toHaveLength(0);
   });
 
   it("control: a JSON expired-write bounce keeps the 401 shape and arms nothing", async () => {
