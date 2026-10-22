@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,6 +25,11 @@ test("accepts an exact reviewed table grant set and its serial sequence grants",
       GRANT SELECT ON SEQUENCE public.events_id_seq TO two_web_app;`),
     [],
   );
+});
+
+test("the shipped 1033 member_links migration carries its exact reviewed grant set", () => {
+  const sql = readFileSync(new URL("../drizzle/1033_member-links.sql", import.meta.url), "utf8");
+  assert.deepEqual(validateMigrationSql("drizzle/1033_member-links.sql", sql), []);
 });
 
 test("accepts only the candidate column-level update on agent_event_grants", () => {

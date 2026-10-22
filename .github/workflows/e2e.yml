@@ -114,6 +114,8 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      - name: Provision runtime role stub
+        run: node ci/provision-runtime-role-stub.mjs
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures

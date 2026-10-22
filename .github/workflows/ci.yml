@@ -395,6 +395,11 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      - name: Provision runtime role stub
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/provision-runtime-role-stub.mjs
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -800,6 +805,11 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Provision runtime role stub
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/provision-runtime-role-stub.mjs
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate

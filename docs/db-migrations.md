@@ -208,6 +208,33 @@ runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
+### Runtime role bootstrap
+
+In-migration `GRANT`s need the `two_web_app` role to exist before they apply,
+and migrations can never create it (role DDL is forbidden in changed
+migrations). Each environment provisions the role out of band, with identical
+attributes:
+
+```sql
+CREATE ROLE "two_web_app" NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+```
+
+- Staging and production (PlanetScale branches): the authorized database
+  operator runs the statement once per branch. Staging before the first
+  GRANT-bearing migration merges (staging auto-migrates on push to main);
+  production before that release's production migration. No password or secret
+  is attached: the role stays `NOLOGIN` until a separately reviewed runtime
+  cutover. A recreated branch needs the statement re-run alongside the
+  endpoint-pin update; the migrate runner's preflight refuses GRANT-bearing
+  pending work with this remedy when the role is missing.
+- CI `drizzle-kit migrate` steps: `node ci/provision-runtime-role-stub.mjs`
+  runs first (it refuses non-disposable endpoints).
+- Local `npm run db:migrate` on a fresh database: run the same script first
+  with the test `DATABASE_URL`.
+- Test fixtures that apply canonical migrations, including the migrate-runner
+  selftest, call `ensureRuntimeRoleStub()`; roles are cluster-global, so
+  parallel fixtures share one stub.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,

@@ -11,7 +11,7 @@ import { pgEventStore } from "../src/jobs/events";
 import type { QueueMessage } from "../src/jobs/types";
 import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { ensureRuntimeRoleStub, testDatabaseUrl } from "./helpers/member-data-db";
 
 export const REDISPATCH_DB_PREFIX = "two_web_next_tog";
 
@@ -147,6 +147,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     });
     try {
       createdDb = await provisionRedispatchDb(admin, process.env.DATABASE_URL!, DB_NAME);
+      // Outside provisionRedispatchDb: its statement sequence is pinned by
+      // fake-admin tests. Roles are cluster-global.
+      await ensureRuntimeRoleStub(admin);
     } finally {
       await admin.end({ timeout: 1 });
     }

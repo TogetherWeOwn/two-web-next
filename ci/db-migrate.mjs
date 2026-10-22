@@ -42,6 +42,30 @@ const refuse = (message) => {
   throw new MigrationError(message);
 };
 
+// Pending GRANTs to the runtime role need the operator-provisioned two_web_app
+// role (docs/db-migrations.md "Runtime role bootstrap"). Refuse with the exact
+// remedy instead of failing mid-apply behind the masked driver error. The
+// pattern is a tripwire, not a parser: the guard owns GRANT syntax, and an
+// over-match only requires a role the next real GRANT needs anyway.
+// The trailing boundary applies to the bare spelling only: a closing quote is
+// self-delimiting and never forms a word boundary with what follows it.
+const RUNTIME_GRANT_TRIPWIRE = /\bgrant\b[\s\S]*?\bto\s+("two_web_app"|two_web_app\b)/i;
+
+export function pendingGrantsRuntimeRole(pending) {
+  return pending.some((entry) =>
+    entry.sql.some((statement) => RUNTIME_GRANT_TRIPWIRE.test(statement)),
+  );
+}
+
+export async function assertRuntimeRolePresent(connection, pending) {
+  if (!pendingGrantsRuntimeRole(pending)) return;
+  const [role] = await connection`select 1 as ok from pg_roles where rolname = 'two_web_app'`;
+  if (!role)
+    refuse(
+      'Missing two_web_app role: the authorized database operator must run CREATE ROLE "two_web_app" NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION on this target before pending GRANT-bearing migrations can apply.',
+    );
+}
+
 export function migrationConfig(env, { testDatabase = false } = {}) {
   // Single admission source: the contract owner is assertMigrationAdmission
   // (ci/migration-admission.mjs). Re-throw as MigrationError so CLI masking
@@ -275,6 +299,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
       throw error;
     }
     const pending = await pendingMigrations(connection, migrations);
+    await assertRuntimeRolePresent(connection, pending);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
     await summary(
       `Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`,

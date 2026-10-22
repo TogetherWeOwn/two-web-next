@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, type Sql } from "../src/sessions";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
 import { createEraseClient } from "../bin/erase-member.mjs";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { ensureRuntimeRoleStub, testDatabaseUrl } from "./helpers/member-data-db";
 
 // Acceptance contract: the operator erase-member CLI must bound its own SQL
 // waits with finite server-enforced statement and lock budgets, like
@@ -211,6 +211,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     if (existing?.n) throw new Error(`refusing to reuse existing database "${DB_NAME}"`);
     await admin.unsafe(`CREATE DATABASE "${DB_NAME}"`);
     created = true;
+    await ensureRuntimeRoleStub(admin); // Roles are cluster-global.
     client = postgres(derivedUrl(ambientUrl!, DB_NAME), {
       max: 6,
       connect_timeout: 5,

@@ -95,6 +95,7 @@ export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
 unset LEGACY_DATABASE_URL
 export PGPASSWORD=
 export W1_AGENT_TESTDB=0
+node ci/provision-runtime-role-stub.mjs  # NOLOGIN two_web_app stub; once per fresh database
 npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
 npm run format        # formatting only; no lint fixes or import reordering
@@ -123,6 +124,7 @@ export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
 unset LEGACY_DATABASE_URL
 export PGPASSWORD=
 export W1_AGENT_TESTDB=0
+node ci/provision-runtime-role-stub.mjs
 npm run db:migrate
 npm run test:coverage
 node ci/coverage-summary.mjs

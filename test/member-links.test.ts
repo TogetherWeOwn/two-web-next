@@ -153,6 +153,13 @@ describe.skipIf(!process.env.DATABASE_URL)("links database store", () => {
     await store.save("100000000000000211", []);
     expect(await store.find("100000000000000211")).toEqual([]);
   });
+
+  it("grants two_web_app exactly the reviewed CRUD set on member_links", async () => {
+    const [row] = await fixture.client<{ crud: boolean; truncate: boolean }[]>`
+      select has_table_privilege('two_web_app', 'member_links', 'SELECT, INSERT, UPDATE, DELETE') as crud,
+             has_table_privilege('two_web_app', 'member_links', 'TRUNCATE') as truncate`;
+    expect(row).toEqual({ crud: true, truncate: false });
+  });
 });
 
 const BUILDER_SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
