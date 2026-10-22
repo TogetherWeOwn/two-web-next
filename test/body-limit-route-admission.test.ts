@@ -460,8 +460,11 @@ describe("agent ingress admission", () => {
       const response = await app.request(request, undefined, ingressEnv, ctx);
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({
+        code: "internal_error",
         reason: "internal_error",
         message: "The agent event ingress failed.",
+        request_id: expect.any(String),
+        next: "Retry shortly; report if it persists.",
       });
       expect(fixture.ends).toBe(1);
       expect(ctx.waitUntil).toHaveBeenCalledOnce();
