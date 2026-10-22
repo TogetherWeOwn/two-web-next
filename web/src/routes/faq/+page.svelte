@@ -35,7 +35,7 @@ const { appUrl, faqs, leafCss } = $derived(data);
   <ContentLeaf navCurrent="faq" headingId="faq-heading" heading="Frequently asked questions">
     <p class="strap">New here? Start here</p>
     <p class="lead">Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.</p>
-    <div data-testid="faq-list">{#each faqs as group (group.sectionId)}<section aria-labelledby={group.sectionId}><h2 id={group.sectionId}>{group.section}</h2><div>{#each group.items as [question, answer] (question)}<div class="card"><h3>{question}</h3><p>{answer}</p></div>{/each}</div></section>{/each}</div>
+    <div data-testid="faq-list">{#each faqs as group (group.sectionId)}<section aria-labelledby={group.sectionId}><h2 id={group.sectionId}>{group.section}</h2><div>{#each group.items as [question, answer, link] (question)}<div class="card"><h3>{question}</h3><p>{answer}{#if link}{" "}<a href={link.href}>{link.label}</a>{/if}</p></div>{/each}</div></section>{/each}</div>
     <p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a>{" "}<a href="/">Back to the homepage</a></p>
   </ContentLeaf>
 </Shell>
