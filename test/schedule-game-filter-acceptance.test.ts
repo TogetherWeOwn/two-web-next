@@ -647,8 +647,10 @@ describe("Hono calendar: game filtering", () => {
     expect(selected).toHaveLength(1);
     expect(norm(selected[0]!.label)).toBe("chess");
     // Month steps and the list toggle keep the filter.
-    const prev = /<a\b[^>]*aria-label="Previous month"[^>]*href="([^"]+)"/.exec(html)?.[1];
-    const next = /<a\b[^>]*aria-label="Next month"[^>]*href="([^"]+)"/.exec(html)?.[1];
+    const prevTag = /<a\b[^>]*aria-label="Previous month"[^>]*>/.exec(html)?.[0];
+    const prev = prevTag && /href="([^"]+)"/.exec(prevTag)?.[1];
+    const nextTag = /<a\b[^>]*aria-label="Next month"[^>]*>/.exec(html)?.[0];
+    const next = nextTag && /href="([^"]+)"/.exec(nextTag)?.[1];
     expect(gameParamOf(prev?.replaceAll("&amp;", "&") ?? null)).toBe("Chess");
     expect(gameParamOf(next?.replaceAll("&amp;", "&") ?? null)).toBe("Chess");
     expect(gameParamOf(hrefFor(html, EVENTS_VIEW_LIST_TESTID))).toBe("Chess");
