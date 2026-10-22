@@ -9,6 +9,7 @@ import { CalCard } from "../src/events/pages-calendar-card";
 import { MonthGrid } from "../src/events/pages-calendar-grid";
 import {
   GRID_CANCELLED_COPY,
+  SPOTS_LEFT_TESTID,
   calendarDayLongLabel,
   cardDayLabel,
   existingResponsesText,
@@ -48,6 +49,24 @@ describe("cancelled schedule copy", () => {
       expect(renderedText(html)).toContain("73 existing responses");
       expect(html).not.toContain('data-testid="signin"');
     }
+  });
+
+  it("suppresses the Full marker on a cancelled card at capacity", async () => {
+    // Pins the !cancelled guard on the occupancy verdict: capacity is
+    // meaningless after cancellation, so only the existing-responses line
+    // shows. isPast is false so the guard-dropping mutant would print the
+    // marker — the red-green proof for this pin.
+    const html = await jsx(CalCard, {
+      e: cancellationEvent({ goingCount: 100, goingOccupancy: 100 }),
+      zone: ZONE,
+      isPast: false,
+      member: false,
+      inviteUrl: "https://discord.gg/example",
+      loginReturnTo: "/events",
+    }).toString();
+    expect(renderedText(html)).toContain("100 existing responses");
+    expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
+    expect(html).not.toContain("Full");
   });
 
   it("shares one badge word between the card and the grid entry", async () => {
