@@ -93,9 +93,15 @@ describe("cancelled schedule copy", () => {
     // Compare rendered text as well as the helper, including escaped title bytes.
     expect(renderedText(link![1]!).startsWith(renderedText(link![2]!))).toBe(true);
     expect(html).not.toContain("<script>");
-    // The published shape is untouched by the new flag default.
+    // The published shape is untouched by the new flag default: long titles
+    // keep the truncated visible form first, then the full title.
+    const time = wallTimeHm(e.startsAt, ZONE);
+    const day = cardDayLabel(e.startsAt, ZONE);
+    const truncated = gridTitle(e.title);
     expect(gridAccessibleName(e.title, e.startsAt, ZONE)).toBe(
-      `${wallTimeHm(e.startsAt, ZONE)} ${e.title}, ${cardDayLabel(e.startsAt, ZONE)}`,
+      truncated === e.title
+        ? `${time} ${e.title}, ${day}`
+        : `${time} ${truncated} ${e.title}, ${day}`,
     );
   });
 
@@ -133,8 +139,12 @@ describe("cancelled schedule copy", () => {
     expect(link![2]).toContain(`<span class="schedule-badge">${GRID_CANCELLED_COPY}</span>`);
     expect(renderedText(link![1]!).startsWith(renderedText(link![2]!))).toBe(true);
     // The published continuation shape is untouched by the new flag default.
+    const truncated = gridTitle(e.title);
+    const day = calendarDayLongLabel(dayIso);
     expect(gridContinuationAccessibleName(e.title, dayIso)).toBe(
-      `Continues ${e.title}, ${calendarDayLongLabel(dayIso)}`,
+      truncated === e.title
+        ? `Continues ${e.title}, ${day}`
+        : `Continues ${truncated} ${e.title}, ${day}`,
     );
   });
 
