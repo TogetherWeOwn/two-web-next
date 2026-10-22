@@ -155,6 +155,14 @@ const lineup = $derived(
         </dd>
       </div>
     {/if}
+    {#if model.series && model.series.hosts.length > 0}
+      <div>
+        <dt>Series hosts</dt>
+        <dd>
+          <p data-testid="event-series-hosts">{model.series.hosts.join(", ")}</p>
+        </dd>
+      </div>
+    {/if}
     <div>
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
@@ -311,6 +319,24 @@ const lineup = $derived(
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">
+    {#if model.series && (model.series.previous || model.series.next)}
+      <nav aria-label="Series events" data-testid="event-series-nav">
+        {#if model.series.previous}
+          <a
+            href="/e/{model.series.previous.key}"
+            rel="prev"
+            data-testid="event-series-previous"
+          >
+            ← Previous in series: {model.series.previous.title}
+          </a>
+        {/if}{" "}
+        {#if model.series.next}
+          <a href="/e/{model.series.next.key}" rel="next" data-testid="event-series-next">
+            Next in series: {model.series.next.title} →
+          </a>
+        {/if}
+      </nav>
+    {/if}
     {#if model.neighbors.previous || model.neighbors.next}
       <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
         {#if model.neighbors.previous}

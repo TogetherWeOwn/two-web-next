@@ -16,6 +16,7 @@ import {
   ATTENDEE_PAGE_SIZE,
   attendeePageHref,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
@@ -24,6 +25,7 @@ import {
   parseAttendeePageParam,
   type EventLink,
   type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
 } from "./reads";
 import { waitlistPosition } from "./waitlist";
@@ -202,9 +204,14 @@ export function registerDetailRoutes(
             (related) => related,
             (): EventLink[] => [],
           );
-          const [neighbors, related, attendees, position, answer] = await Promise.all([
+          const seriesSettled = getEventSeriesContext(db, e).then(
+            (series) => series,
+            (): EventSeriesContext | null => null,
+          );
+          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
             neighborsSettled,
             relatedSettled,
+            seriesSettled,
             session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
@@ -236,6 +243,7 @@ export function registerDetailRoutes(
               e={e}
               neighbors={neighbors}
               related={related}
+              series={series}
               attendees={attendees}
               attendeesPaging={attendeesPaging}
               appUrl={c.env.APP_URL}

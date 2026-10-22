@@ -739,6 +739,115 @@ export async function listRelatedEvents(
   return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
+/** Series context for one detail render: the hosts behind the run plus the
+ * adjacent published nights by series index. Null for standalone events, so
+ * both renderers keep today's markup byte-identical there. */
+export interface EventSeriesContext {
+  /** Distinct non-blank organizers across the published run, current host
+   * first, the rest in ascending series-index order. Empty when nobody in
+   * the run names a host; the view then omits the line but keeps prev/next. */
+  hosts: string[];
+  previous: EventLink | null;
+  next: EventLink | null;
+}
+
+/** The series-membership slice of the loaded row the context read keys on. */
+export type SeriesEventRef = Pick<
+  PublicEvent,
+  "id" | "parentEventId" | "recurrenceFrequency" | "recurrenceIndex" | "organizer_name"
+>;
+
+/**
+ * One published-only read for the whole series run: the parent plus its
+ * children by the indexed parent pointer, ordered by series index. Draft and
+ * cancelled siblings never leave the database; past rows stay included (the
+ * run is history members can still read, unlike the upcoming-only neighbor
+ * and related rails). Fails open at the callers like the other decorative
+ * reads: organizer names are already public on the detail page, so the read
+ * is anonymous-safe and audit-silent.
+ */
+export async function getEventSeriesContext(
+  db: Db,
+  event: SeriesEventRef,
+): Promise<EventSeriesContext | null> {
+  // Standalone fast path: no series pointer, rule, or index means no run to
+  // read, so the detail skips the query entirely (zero reads, not one empty).
+  if (
+    event.parentEventId == null &&
+    event.recurrenceFrequency == null &&
+    event.recurrenceIndex == null
+  ) {
+    return null;
+  }
+  const rootId = event.parentEventId ?? event.id;
+  // Full rows, not a link projection: the run is small (one indexed read)
+  // and both renderers need organizers plus link fields together.
+  const rows = await nonSensitiveRead("events", () =>
+    db
+      .select()
+      .from(events)
+      .where(
+        and(
+          eq(events.status, "published"),
+          finiteEventStart,
+          or(eq(events.id, rootId), eq(events.parentEventId, rootId)),
+        ),
+      )
+      .orderBy(asc(events.recurrenceIndex)),
+  );
+  // SQL orders by index with nulls last; re-sort defensively so a null index
+  // never interleaves siblings on any backend (stable: ties keep SQL order).
+  const run = [...rows].sort(
+    (a, b) =>
+      (a.recurrenceIndex ?? Number.MAX_SAFE_INTEGER) -
+      (b.recurrenceIndex ?? Number.MAX_SAFE_INTEGER),
+  );
+  const toLink = (row: (typeof run)[number]): EventLink => ({
+    id: row.id,
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+  });
+  // A run of one is a standalone render: the current row with no published
+  // siblings keeps today's markup with no series block at all.
+  if (run.filter((row) => row.id !== event.id).length === 0) return null;
+  const at = run.findIndex((row) => row.id === event.id);
+  let previous: EventLink | null = null;
+  let next: EventLink | null = null;
+  if (at >= 0) {
+    previous = at > 0 ? toLink(run[at - 1]!) : null;
+    next = at + 1 < run.length ? toLink(run[at + 1]!) : null;
+  } else {
+    // The current row is not published (a moderator reading a draft child):
+    // bracket its index among the published run instead of a list position.
+    const idx = event.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;
+    for (const row of run) {
+      const rowIdx = row.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;
+      if (rowIdx < idx) previous = toLink(row);
+      else if (rowIdx > idx && !next) next = toLink(row);
+    }
+  }
+  // Current host first (already visible in this page's Hosted-by line), then
+  // distinct others in index order; null/blank organizers omitted.
+  const seen = new Set<string>();
+  const hosts: string[] = [];
+  const current = (event.organizer_name ?? "").trim();
+  if (current) {
+    seen.add(current);
+    hosts.push(current);
+  }
+  for (const row of run) {
+    if (row.id === event.id) continue;
+    const name = (row.organizer_name ?? "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    hosts.push(name);
+  }
+  return { hosts, previous, next };
+}
+
 /** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row
  * only — keyed on the session user, never another member's. Null when the
  * viewer has not answered. Waitlist copy uses the null-position fallback:
