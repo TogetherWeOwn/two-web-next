@@ -390,7 +390,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const read = await readModerationSettings(c.env);
     if (!read.ok) {
       console.warn("moderation settings read failed; answering 503");
-      c.header("cache-control", "no-store, private");
+      c.header("cache-control", "private, no-store");
       return errorPage(
         c,
         503,
@@ -401,7 +401,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const model = moderationPageModel(read.settings);
     if (!model) {
       console.warn("moderation settings read omitted the pinned hot key; answering 503");
-      c.header("cache-control", "no-store, private");
+      c.header("cache-control", "private, no-store");
       return errorPage(
         c,
         503,

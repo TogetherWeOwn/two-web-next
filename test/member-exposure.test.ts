@@ -56,6 +56,7 @@ const ADMIN_READS = [
   "/featured/:id",
   "/join-attempts",
   "/join-attempts/:id",
+  "/moderation",
   ...ADMIN_REDIRECTS,
 ];
 const OPERATIONAL_READS = ["/queue/failed/:id/preview", "/queue/source-evidence/:id"];
@@ -265,6 +266,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await request(path, {
             headers: role === "guest" ? {} : await headers(actor),
           });
+          // The moderation page reads live bot settings; this harness has no
+          // bot binding, so a moderator gets the fail-closed 503 here (the
+          // 200 form is covered by the acceptance suite with a stubbed bot).
           const expected =
             role === "guest"
               ? 302
@@ -276,7 +280,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
                   ? 404
                   : ADMIN_REDIRECTS.includes(pattern)
                     ? 301
-                    : 200;
+                    : pattern === "/moderation"
+                      ? 503
+                      : 200;
           expect(res.status, path).toBe(expected);
           const body = await res.text();
           if (role !== "moderator") {

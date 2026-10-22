@@ -312,6 +312,11 @@ const MATRIX: Case[] = [
     actor: "moderator" as const,
     format: "html" as const,
   })),
+  // The moderation page reads no database rows: with no bot binding the live
+  // read fails closed to the admin-shell 503 (accurate copy per cause, not
+  // the home-shell maintenance page), so no format brand applies. Its shell
+  // is pinned in the page-shell error-variants table instead.
+  { method: "GET", route: "/admin/moderation", status: 503, actor: "moderator" },
   ...[
     "/admin/events",
     "/admin/events/:key",
@@ -331,6 +336,18 @@ const MATRIX: Case[] = [
     body: route.includes("featured") ? "title=Fixture&position=0" : adminForm,
     contentType: "application/x-www-form-urlencoded",
   })),
+  // This harness binds no dispatch queue, so the versioned write refuses at
+  // the static binding check with the admin-shell 503 (a real database
+  // outage instead throws from the audit insert into the shared handler).
+  // Same admin shell as the GET row above, so no format brand applies.
+  {
+    method: "POST",
+    route: "/admin/moderation",
+    status: 503,
+    actor: "moderator",
+    body: "TWO_AUTOMOD_MENTION_LIMIT=8&expected_version=7",
+    contentType: "application/x-www-form-urlencoded",
+  },
 ];
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
