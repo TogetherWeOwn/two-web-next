@@ -11,7 +11,8 @@ import type { PageProps } from "./$types";
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
 // The server load builds /join/discord from the sanitized query inputs.
-const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult } = $derived(data);
+const { inviteUrl, widgetUrl, widgetSnapshot, widgetStale, oneClickHref, appUrl, joinResult } =
+  $derived(data);
 const { HOME_JOIN_RESULT_COPY, JOIN_INTRO } = $derived(data.joinCopy);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
@@ -60,7 +61,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       {#if widgetSnapshot}
         <section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">
           <h2 id="discord-presence-heading">
-            In {widgetSnapshot.name} {widgetSnapshot.stale ? "as of the last update" : "now"}
+            In {widgetSnapshot.name} {widgetStale ? "as of the last update" : "now"}
           </h2>
           <p data-testid="join-widget-online">
             <strong>{widgetSnapshot.presenceCount}</strong>{" "}
@@ -78,13 +79,12 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
             </ul>
           {:else}
             <p>
-              No voice channels open {widgetSnapshot.stale ? "as of the last update." : "right now."}
+              No voice channels open {widgetStale ? "as of the last update." : "right now."}
             </p>
           {/if}
-          <!-- Public page: aggregate presence only (count + channels). Member
-            names stay off this logged-out, indexed page per privacy policy v2;
-            the snapshot may still carry them server-side for a future
-            member-gated use, but they never render here. -->
+          <!-- Public page: aggregate presence only (count + channels). The load
+            projects the snapshot before returning, so member names never reach
+            __data.json on this logged-out, indexed page (privacy policy v2). -->
         </section>
         {#if widgetUrl}
           <div class="strap">

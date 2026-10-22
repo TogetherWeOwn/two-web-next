@@ -1,14 +1,17 @@
 // Kit /join stale-presence render contract: the real +page.svelte, compiled
 // with the web workspace's svelte/compiler and bundled by esbuild (the same
 // harness as test/kit-home-render.test.ts), SSR-rendered with fresh, stale,
-// and flag-absent widget snapshots. String presence in source cannot catch a
-// wrong branch: inverting both stale conditions (or deleting one) keeps every
-// source-grep suite green while serving "now" copy for stale data, the exact
-// bug the fresh-only fix removes. These renders fail those mutants on both the
-// heading and the empty-channels line. The Test Author acceptance
-// (test/join-widget-fresh-only-acceptance.test.ts, never edited here) keeps the
-// Hono end-to-end and cross-renderer parity pins; this suite is the executed
-// Kit side. No network, no database: fixtures only.
+// and flag-absent staleness. Snapshots ride the production projection
+// (toPublicWidgetSnapshot: aggregates only, the Kit __data.json privacy
+// boundary); the read-time freshness flag travels as the separate widgetStale
+// load field, exactly as the load returns them. String presence in source
+// cannot catch a wrong branch: inverting both stale conditions (or deleting
+// one) keeps every source-grep suite green while serving "now" copy for stale
+// data, the exact bug the fresh-only fix removes. These renders fail those
+// mutants on both the heading and the empty-channels line. The Test Author
+// acceptance (test/join-widget-fresh-only-acceptance.test.ts, never edited
+// here) keeps the Hono end-to-end and cross-renderer parity pins; this suite
+// is the executed Kit side. No network, no database: fixtures only.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -16,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { DiscordWidgetSnapshot } from "../src/discord-widget";
+import { toPublicWidgetSnapshot, type DiscordWidgetSnapshot } from "../src/discord-widget";
 import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,6 +62,7 @@ function pageData(overrides: Record<string, unknown> = {}): Record<string, unkno
     joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO },
     widgetUrl: WIDGET_URL,
     widgetSnapshot: null,
+    widgetStale: false,
     oneClickHref: "/join/discord",
     appUrl: APP_URL,
     joinResult: null,
@@ -120,7 +124,9 @@ afterAll(() => {
 
 describe("Kit /join stale-presence render", () => {
   it("a stale snapshot qualifies the heading and never renders now copy", () => {
-    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: true }) }));
+    const body = renderPage(
+      pageData({ widgetSnapshot: toPublicWidgetSnapshot(snapshot()), widgetStale: true }),
+    );
     expect(body).toContain('data-testid="join-widget-presence"');
     expect(body).toContain("In Together We Own as of the last update");
     expect(body).not.toContain("In Together We Own now");
@@ -128,27 +134,40 @@ describe("Kit /join stale-presence render", () => {
   });
 
   it("a fresh snapshot keeps the live heading and never qualifies", () => {
-    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: false }) }));
+    const body = renderPage(
+      pageData({ widgetSnapshot: toPublicWidgetSnapshot(snapshot()), widgetStale: false }),
+    );
     expect(body).toContain('data-testid="join-widget-presence"');
     expect(body).toContain("In Together We Own now");
     expect(body).not.toContain("as of the last update");
   });
 
-  it("a snapshot without the flag renders the live copy (parser output predates the read)", () => {
-    const { stale: _dropped, ...unstamped } = snapshot({ stale: false });
-    const body = renderPage(pageData({ widgetSnapshot: unstamped }));
+  it("a missing stale flag renders the live copy (absent means fresh)", () => {
+    const body = renderPage(
+      pageData({ widgetSnapshot: toPublicWidgetSnapshot(snapshot()), widgetStale: undefined }),
+    );
     expect(body).toContain("In Together We Own now");
     expect(body).not.toContain("as of the last update");
   });
 
   it("a stale empty-channels snapshot qualifies the line and never renders right now", () => {
-    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: true, channels: [] }) }));
+    const body = renderPage(
+      pageData({
+        widgetSnapshot: toPublicWidgetSnapshot(snapshot({ channels: [] })),
+        widgetStale: true,
+      }),
+    );
     expect(body).toContain("No voice channels open as of the last update.");
     expect(body).not.toContain("right now");
   });
 
   it("a fresh empty-channels snapshot keeps the live line and never qualifies", () => {
-    const body = renderPage(pageData({ widgetSnapshot: snapshot({ stale: false, channels: [] }) }));
+    const body = renderPage(
+      pageData({
+        widgetSnapshot: toPublicWidgetSnapshot(snapshot({ channels: [] })),
+        widgetStale: false,
+      }),
+    );
     expect(body).toContain("No voice channels open right now.");
     expect(body).not.toContain("as of the last update");
   });

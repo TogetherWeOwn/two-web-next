@@ -123,6 +123,32 @@ export function parseDiscordWidgetJson(
   };
 }
 
+/**
+ * The anonymous-safe slice of a widget snapshot: aggregates only (name,
+ * presence count, invite, channels). Kit serializes load data into
+ * `__data.json` for anonymous clients even with `csr=false`, so the join
+ * load returns this projection, never the full snapshot: member usernames
+ * and statuses, the guild id and the fetch stamp never leave the server on
+ * this logged-out, indexed page (privacy policy v2).
+ */
+export type PublicWidgetSnapshot = Pick<
+  DiscordWidgetSnapshot,
+  "name" | "presenceCount" | "inviteUrl" | "channels"
+>;
+
+/** Project a presence snapshot to its anonymous-safe slice, or null. */
+export function toPublicWidgetSnapshot(
+  snapshot: DiscordWidgetSnapshot | null | undefined,
+): PublicWidgetSnapshot | null {
+  if (!snapshot) return null;
+  return {
+    name: snapshot.name,
+    presenceCount: snapshot.presenceCount,
+    inviteUrl: snapshot.inviteUrl,
+    channels: snapshot.channels,
+  };
+}
+
 export type DiscordWidgetHealth = {
   /**
    * The widget URL to offer, or null for the static fallback. Synchronous:

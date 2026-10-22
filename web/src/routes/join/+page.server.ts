@@ -1,5 +1,5 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { discordWidgetHealth } from "../../../../src/discord-widget";
+import { discordWidgetHealth, toPublicWidgetSnapshot } from "../../../../src/discord-widget";
 import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../../../../src/home-copy";
 import { inviteDestination } from "../../../../src/invite";
 import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
@@ -56,11 +56,18 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // the hardcoded fallback, never a dead, relative or hostile href. The
   // banner and intro copy ride as load data (the Kit home homeCopy channel),
   // so the page renders the shared bytes without importing the Hono screen.
+  // Projected before returning: Kit serializes load data into __data.json
+  // for anonymous clients even with csr=false, so member usernames and
+  // statuses never ride the snapshot (privacy policy v2). The projection
+  // keeps exactly the four aggregate fields, so the read-time freshness flag
+  // travels as its own boolean: a stale-but-preserved snapshot renders
+  // qualified "as of" copy instead of "now" (absent means fresh).
   return {
     inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
     joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO },
     widgetUrl,
-    widgetSnapshot,
+    widgetSnapshot: toPublicWidgetSnapshot(widgetSnapshot),
+    widgetStale: widgetSnapshot?.stale ?? false,
     oneClickHref:
       next && source
         ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
