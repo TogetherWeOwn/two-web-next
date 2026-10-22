@@ -14,10 +14,12 @@ import {
   PLANETSCALE_PRODUCTION_HOST,
   PLANETSCALE_STAGING_BRANCH_ID,
   PLANETSCALE_STAGING_HOST,
+  assertRuntimeRolePresent,
   captureDriverRaceCrashes,
   isDriverConnectionRaceCrash,
   migrationClient,
   migrationConfig,
+  pendingGrantsRuntimeRole,
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
@@ -77,6 +79,17 @@ async function fixture(callback) {
   try {
     await admin.unsafe(`create database "${name}"`);
     created = true;
+    // Canonical 1033+ GRANTs target two_web_app. Live targets get the role
+    // from the operator; selftest databases get the same NOLOGIN stub the CI
+    // migrate steps provision (ci/provision-runtime-role-stub.mjs). Roles are
+    // cluster-global, so a leftover stub from an earlier run is reused.
+    try {
+      await admin.unsafe(
+        'CREATE ROLE "two_web_app" NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION',
+      );
+    } catch (error) {
+      if (error?.code !== "42710") throw error;
+    }
     url.pathname = `/${name}`;
     client = postgres(url.href, options);
     const output = [];
@@ -450,6 +463,33 @@ test("canonical Drizzle migrator applies a pending migration after the runner", 
   }
 });
 
+test("runtime-role preflight refuses GRANT-bearing pending work without the role", async () => {
+  // Pure check with a fake connection: dropping the cluster-global stub to
+  // rehearse the refusal would race parallel suites on the shared test host.
+  const granting = [{ sql: ["GRANT SELECT ON TABLE member_links TO two_web_app"] }];
+  assert.equal(pendingGrantsRuntimeRole(granting), true);
+  assert.equal(
+    pendingGrantsRuntimeRole([{ sql: ['grant delete on table "member_links" to "two_web_app"'] }]),
+    true,
+  );
+  assert.equal(pendingGrantsRuntimeRole([{ sql: ["CREATE TABLE t (id integer)"] }]), false);
+  assert.equal(pendingGrantsRuntimeRole([]), false);
+  // The real first GRANT-bearing migration trips the wire.
+  const sql1033 = readFileSync(join(source, "1033_member-links.sql"), "utf8");
+  assert.equal(pendingGrantsRuntimeRole([{ sql: [sql1033] }]), true);
+  await assert.rejects(
+    assertRuntimeRolePresent(async () => [], granting),
+    /Missing two_web_app role: the authorized database operator must run CREATE ROLE/,
+  );
+  await assertRuntimeRolePresent(async () => [{ ok: 1 }], granting);
+  let queried = false;
+  await assertRuntimeRolePresent(async () => {
+    queried = true;
+    return [];
+  }, [{ sql: ["CREATE TABLE t (id integer)"] }]);
+  assert.equal(queried, false);
+});
+
 test("unreviewed default ACL refuses plan and apply with the offending reason", async () => {
   for (const grant of [
     "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC",
@@ -496,12 +536,9 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    // The fixture provisions the shared two_web_app stub: reference it, never
+    // drop it. The default privileges below are per-database, so they die
+    // with the owned fixture database.
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -529,7 +566,6 @@ test("runtime-role connection is refused while the reviewed sequence default pas
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
     }
   });
 });

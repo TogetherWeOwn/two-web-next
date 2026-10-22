@@ -240,11 +240,14 @@ test("live: all seven queries execute on disposable Postgres and report the seed
   const admin = postgres(LIVE_URL, { max: 1 });
   const dbName = `catalog_preflight_${process.pid}`;
   try {
-    // Roles are cluster-wide, so a pre-existing fixture name means a leaked
-    // run or a real local role: fail closed instead of dropping what we did
-    // not create. A loud refusal beats a silent pass on a dirty cluster.
+    // Roles are cluster-wide, so a pre-existing preflight_* name means a
+    // leaked run or a real local role: fail closed instead of dropping what
+    // we did not create. A loud refusal beats a silent pass on a dirty
+    // cluster. two_web_app is exempt: since 1033 it is the shared
+    // runtime-role stub (created by the migrate steps and every DB fixture),
+    // so this run reuses a pre-existing one and never drops it.
     const existing = await admin.unsafe(
-      "SELECT rolname FROM pg_roles WHERE rolname IN ('two_web_app', 'preflight_owner', 'preflight_reader')",
+      "SELECT rolname FROM pg_roles WHERE rolname IN ('preflight_owner', 'preflight_reader')",
     );
     if (existing.length > 0) {
       throw new Error(
@@ -259,7 +262,12 @@ test("live: all seven queries execute on disposable Postgres and report the seed
   liveBase.pathname = `/${dbName}`;
   const client = postgres(liveBase.href, { max: 1 });
   try {
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    try {
+      await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    } catch (error) {
+      // Shared stub from the migrate steps or another fixture: reuse it.
+      if (error?.code !== "42710") throw error;
+    }
     await client.unsafe("CREATE ROLE preflight_owner NOLOGIN");
     await client.unsafe("CREATE ROLE preflight_reader NOLOGIN");
     await client.unsafe("GRANT CREATE ON SCHEMA public TO preflight_owner");
@@ -338,11 +346,20 @@ test("live: all seven queries execute on disposable Postgres and report the seed
       4,
     );
 
-    // A missing two_web_app role reports NULL instead of aborting the run.
-    await client.unsafe("DROP OWNED BY two_web_app");
-    await client.unsafe("DROP ROLE two_web_app");
+    // A missing app role reports NULL instead of aborting the run. The shared
+    // stub cannot be dropped to rehearse this (it holds real grants across
+    // databases), so the rehearsal runs the same query shape against a
+    // guaranteed-absent name; the offline test above pins the literal
+    // 'two_web_app' in the shipped query.
+    const [absent] = await client.unsafe(
+      "SELECT 1 AS one FROM pg_roles WHERE rolname = 'preflight_missing_role'",
+    );
+    assert.equal(absent, undefined);
     const missing = await client.unsafe(
-      QUERIES.find((query) => query.id === "create_booleans").sql,
+      QUERIES.find((query) => query.id === "create_booleans").sql.replaceAll(
+        "two_web_app",
+        "preflight_missing_role",
+      ),
     );
     assert.equal(missing.length, 1);
     assert.equal(missing[0].app_has_create, null);
@@ -352,9 +369,11 @@ test("live: all seven queries execute on disposable Postgres and report the seed
     const cleanup = postgres(LIVE_URL, { max: 1 });
     try {
       await cleanup.unsafe(`DROP DATABASE "${dbName}" WITH (FORCE)`);
-      // Safe: the existence gate above proved these names were absent, so
-      // every role dropped here was created by this run.
-      for (const role of ["two_web_app", "preflight_owner", "preflight_reader"]) {
+      // Safe: the existence gate proved the preflight_* names were absent, so
+      // they were created by this run. two_web_app is never dropped: since
+      // 1033 it is the shared cluster stub, and dropping it would race
+      // parallel suites whose migrations GRANT to it.
+      for (const role of ["preflight_owner", "preflight_reader"]) {
         try {
           await cleanup.unsafe(`DROP ROLE "${role}"`);
         } catch {
