@@ -25,12 +25,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
   () => {
     let fixture: MemberDataFixture;
     let sessions = createMemorySessionStore();
-    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}, enforce?: string) =>
+    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}) =>
       app.request(path, init, {
         ...env,
         ADMIN_DB: fixture.db,
         SESSION_STORE: sessions,
-        MEMBER_ACCESS_LOG_ENFORCE: enforce,
       });
     const headers = async (actor = MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
     const logs = () => fixture.db.select().from(memberDataAccessLogs);
@@ -335,31 +334,28 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it.each([undefined, "false"])(
-      "failed log INSERT enforces=%s without spilling subjects",
-      async (enforce) => {
-        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    it("failed log INSERT refuses the read without spilling subjects", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      await fixture.db.execute(
+        sql`ALTER TABLE member_data_access_logs ADD CONSTRAINT reject_test_access CHECK (false)`,
+      );
+      try {
+        const res = await request(undefined, { headers: await headers(MEMBER) });
+        expect(res.status).toBe(503);
+        const html = await res.text();
+        expect(html).not.toContain(SUBJECT.username);
+        expect(res.headers.get("cache-control")).toBe("private, no-store");
+        expect(await logs()).toHaveLength(0);
+        const logged = JSON.stringify(error.mock.calls);
+        expect(logged).toContain("DrizzleQueryError");
+        expect(logged).not.toContain("insert into");
+        expect(logged).not.toContain(SUBJECT.userId);
+        expect(logged).not.toContain(SUBJECT.username);
+      } finally {
         await fixture.db.execute(
-          sql`ALTER TABLE member_data_access_logs ADD CONSTRAINT reject_test_access CHECK (false)`,
+          sql`ALTER TABLE member_data_access_logs DROP CONSTRAINT reject_test_access`,
         );
-        try {
-          const res = await request(undefined, { headers: await headers(MEMBER) }, enforce);
-          expect(res.status).toBe(503);
-          const html = await res.text();
-          expect(html).not.toContain(SUBJECT.username);
-          expect(res.headers.get("cache-control")).toBe("private, no-store");
-          expect(await logs()).toHaveLength(0);
-          const logged = JSON.stringify(error.mock.calls);
-          expect(logged).toContain("DrizzleQueryError");
-          expect(logged).not.toContain("insert into");
-          expect(logged).not.toContain(SUBJECT.userId);
-          expect(logged).not.toContain(SUBJECT.username);
-        } finally {
-          await fixture.db.execute(
-            sql`ALTER TABLE member_data_access_logs DROP CONSTRAINT reject_test_access`,
-          );
-        }
-      },
-    );
+      }
+    });
   },
 );

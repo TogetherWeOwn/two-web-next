@@ -31,9 +31,7 @@ export type Env = AgentEventsEnv & {
   SESSION_SECRET: string;
   // Optional explicit Postgres URL (agent-testdb locally); web DB consumers
   // use DB.connectionString when absent. `QA_AUTH_TOKEN` enables the staging-only
-  // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
-  // is legacy: a log write failure refuses the read whatever it says, and the
-  // parsed value feeds only the informational /up enforcement label.
+  // QA seam; unset elsewhere, the route 404s.
   DATABASE_URL?: string;
   // Bot database for the homepage counts' and profile stats' `web_v1` views
   // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`
@@ -60,7 +58,6 @@ export type Env = AgentEventsEnv & {
   SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
-  MEMBER_ACCESS_LOG_ENFORCE?: string;
   // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
   // written to the log. Unset or unparseable falls back to 1.0 (log
   // everything); out-of-range values clamp. Lower it if report volume ever
