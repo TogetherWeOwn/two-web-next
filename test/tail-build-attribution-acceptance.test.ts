@@ -53,7 +53,6 @@ const upBody = (revision: unknown) =>
     db: "ok",
     pending_migrations: 0,
     queue: { status: "healthy", pending: 0 },
-    member_access_log_enforcement: "enforcing",
     revision,
   });
 const markedBody = (commit: unknown = shaA, version: unknown = versionId) =>
