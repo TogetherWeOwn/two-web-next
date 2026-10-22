@@ -430,7 +430,8 @@ describe("savable games: Kit member-board load (seam)", () => {
     expect(dbForFn).not.toHaveBeenCalled();
     expect(refusedRanking).not.toHaveBeenCalled();
     expect(queueBoardViewFn).not.toHaveBeenCalled();
-    expect(setHeaders).not.toHaveBeenCalled();
+    expect(setHeaders).toHaveBeenCalledTimes(1);
+    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
   it("admits D&D but refuses control-bearing twins with 400 before any read", async () => {
@@ -466,7 +467,10 @@ describe("savable games: Kit member-board load (seam)", () => {
       expect(dbForFn, JSON.stringify(raw)).not.toHaveBeenCalled();
       expect(refusedRanking, JSON.stringify(raw)).not.toHaveBeenCalled();
       expect(queueBoardViewFn, JSON.stringify(raw)).not.toHaveBeenCalled();
-      expect(setHeaders, JSON.stringify(raw)).not.toHaveBeenCalled();
+      expect(setHeaders, JSON.stringify(raw)).toHaveBeenCalledTimes(1);
+      expect(setHeaders, JSON.stringify(raw)).toHaveBeenCalledWith({
+        "cache-control": "private, no-store",
+      });
     }
   });
 });

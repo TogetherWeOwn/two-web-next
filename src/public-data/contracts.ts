@@ -87,6 +87,16 @@ export const COMMUNITY_SNAPSHOT_FIELDS = ["member_count", "online_count", "ranks
 
 export const COMMUNITY_RANK_FIELDS = ["key", "label", "member_count"] as const;
 
+/**
+ * Collection envelope keys, in serializer order. The OpenAPI collection
+ * schema and the MCP list_events output schema both require exactly these,
+ * so the envelope cannot drift between surfaces.
+ */
+export const PUBLIC_API_COLLECTION_FIELDS = ["data", "page", "limit", "meta"] as const;
+
+/** Paging cursor keys, in serializer order. Required by both the OpenAPI meta schema and the MCP output schema. */
+export const PUBLIC_API_META_FIELDS = ["current_page", "per_page", "total", "last_page"] as const;
+
 export const JOIN_HANDOFF_FIELDS = ["intro", "invite_url"] as const;
 
 export type PublicEventId = string & { readonly __brand: "PublicEventId" };
