@@ -5,7 +5,13 @@ import type { HomeUpcomingRow } from "../events/reads";
 import type { VisibleFeatured } from "../featured";
 import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
-import { cardTimeLabel, isValidZone } from "../islands/contracts";
+import {
+  SPOTS_LEFT_TESTID,
+  cardTimeLabel,
+  goingCountText,
+  isValidZone,
+  spotsLeftText,
+} from "../islands/contracts";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { siteJsonLd } from "../seo-json-ld";
@@ -215,7 +221,27 @@ export const Home: FC<{
                         </p>
                         <h3>{event.title}</h3>
                         {event.location ? <p>{event.location}</p> : null}
-                        <p>{event.goingCount} going</p>
+                        <p>
+                          {goingCountText(event.goingCount, event.capacity)}
+                          {/* Full marker, same node and copy as cards and the
+                              detail lineup. The verdict reads seat occupancy,
+                              never the attributable count alone, so the teaser
+                              never offers a seat the write path cannot grant;
+                              older fixtures without occupancy fall back to the
+                              named count (the GoingCountState precedent). */}
+                          {event.capacity !== null &&
+                          (event.goingOccupancy ?? event.goingCount) >= event.capacity ? (
+                            <>
+                              {" · "}
+                              <span data-testid={SPOTS_LEFT_TESTID}>
+                                {spotsLeftText(
+                                  event.goingOccupancy ?? event.goingCount,
+                                  event.capacity,
+                                )}
+                              </span>
+                            </>
+                          ) : null}
+                        </p>
                       </a>
                     </li>
                   ),
