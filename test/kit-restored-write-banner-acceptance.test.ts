@@ -58,6 +58,7 @@ import {
 import { EXPIRED_WRITE_COOKIE, expiredWriteBanner } from "../src/write-recovery";
 import {
   fixtureDiscord,
+  MEMBER,
   mergeCookies,
   recoveryFixture,
   SECRET as FIXTURE_SECRET,
@@ -626,7 +627,24 @@ describe("sign-in-again flow lands the banner on a Kit route", () => {
   it("the real callback's restored| cookie renders once on GET /about, then is gone", async () => {
     vi.stubGlobal("fetch", fixtureDiscord);
     const f = recoveryFixture();
-    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fabout"));
+    const dead = await f.login(new Date(0));
+    const bounce = await f.request(`/members/${MEMBER}`, {
+      method: "POST",
+      headers: {
+        cookie: dead.cookie,
+        origin: f.env.APP_URL,
+        referer: `${f.env.APP_URL}/about`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: "_method=PATCH&bio=Unsaved+secret+draft",
+    });
+    expect(bounce.status).toBe(303);
+    let jar = mergeCookies("", bounce);
+    const landing = await f.request(bounce.headers.get("location")!, {
+      headers: { cookie: jar },
+    });
+    expect(landing.status).toBe(200);
+    jar = mergeCookies(jar, landing);
     const start = await f.request("/auth/discord?next=%2Fabout", {
       headers: { cookie: jar },
     });
