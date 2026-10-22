@@ -91,6 +91,7 @@ describe("public 429 Retry-After validation (raw upstream header)", () => {
       error: {
         code: "rate_limited",
         message: `Too many requests. Try again in ${seconds} seconds.`,
+        next: "Wait for Retry-After, then retry.",
       },
     });
     // The raw upstream text is never reflected when it was not admitted.
@@ -108,6 +109,7 @@ describe("public 429 Retry-After validation (raw upstream header)", () => {
       error: {
         code: "rate_limited",
         message: "Too many requests. Try again in 60 seconds.",
+        next: "Wait for Retry-After, then retry.",
       },
     });
   });

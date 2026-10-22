@@ -203,13 +203,23 @@ export function membersBoardUnavailable(): Error & { status: number } {
 // A code bug (no branded status) must never look like a downstream outage:
 // emit the leak-free error.alert diagnostic before mapping to the branded
 // 503, mirroring the Hono member-read boundary (src/member-reads.ts). Branded
-// throws pass through untouched so the binding maps them once.
+// throws pass through with the same no-store headers so the binding maps them
+// once and exactly one setHeaders call fires per path.
 function reportBoardFailure(err: unknown, args: MembersBoardArgs): never {
   const status = (err as { status?: unknown })?.status;
-  if (typeof status === "number") throw err;
+  if (typeof status === "number") {
+    args.setHeaders({ "cache-control": "private, no-store" });
+    throw err;
+  }
   alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw membersBoardUnavailable();
+}
+
+/** Stamp explicit no-store before a gate/grammar throw, like the Hono twin. The guest 302 never calls this: the binding owns the bounce headers. */
+function refuseWithNoStore(args: MembersBoardArgs, err: Error & { status: number }): never {
+  args.setHeaders({ "cache-control": "private, no-store" });
+  throw err;
 }
 
 /**
@@ -231,18 +241,19 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   appUrl: string;
 }> {
   // Same gate order as the Hono handler: session gate before any grammar,
-  // grammar before any read.
-  if (args.session.status === "unknown") throw membersSessionUnknown();
+  // grammar before any read. Every refusal carries explicit no-store except
+  // the guest bounce, whose headers the binding owns.
+  if (args.session.status === "unknown") refuseWithNoStore(args, membersSessionUnknown());
   if (args.session.status !== "authenticated" || !args.session.userId) {
     throw membersGuestBounce(await guestIntendedCookie(args.url, args.env.SESSION_SECRET));
   }
-  if (!args.session.member) throw membersForbidden();
+  if (!args.session.member) refuseWithNoStore(args, membersForbidden());
   const season = parseSeasonParam(args.seasonParam);
-  if (!season) throw branded("Unknown season", 400);
+  if (!season) refuseWithNoStore(args, branded("Unknown season", 400));
   const scope = parseScopeParam(args.scopeParam);
-  if (!scope.ok) throw branded(scope.message, 400);
+  if (!scope.ok) refuseWithNoStore(args, branded(scope.message, 400));
   const activity = parseActivityParam(args.activityParam);
-  if (!activity.ok) throw branded(activity.message, 400);
+  if (!activity.ok) refuseWithNoStore(args, branded(activity.message, 400));
   let db: Db | null;
   let ranked: RankedMember[];
   try {
