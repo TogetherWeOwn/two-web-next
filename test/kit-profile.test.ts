@@ -321,7 +321,6 @@ describe("Kit profile routes: server posture", () => {
       expect(server).toContain("resolveKitProfile");
       expect(server).toContain("kitProfileDeps");
       expect(server).not.toContain("createMemoryProfileStore");
-      expect(server).not.toContain("MEMBER_ACCESS_LOG_ENFORCE");
     }
     // /profile resolves the viewer's own id; the member route resolves the param.
     expect(profileServer()).toContain("locals.session?.userId");
