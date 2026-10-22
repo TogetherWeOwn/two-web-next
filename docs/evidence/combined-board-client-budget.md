@@ -6,6 +6,11 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
+**Current proposal after base-conflict reconciliation:** raw client JS
+247296 → 248320 B (+1024 B). The initial 247808 B proposal below is historical
+and does not fit the refreshed integration. See the final section for the
+new repeated measurements and unchanged guards.
+
 ## Inputs and method
 
 - Main: `5f4f1c65931ba4164a4e611c861f6d1428a8b591`, including profile
@@ -89,7 +94,7 @@ the server data contract would broaden this prerequisite into a feature
 rewrite. No safe sufficient reduction is established, so this PR leaves
 the feature bytes intact and makes the cost decision explicit.
 
-## Proposed limit and unchanged guards
+## Initial proposal and unchanged guards (superseded below)
 
 Only `client.js.maxRawBytes` moves: **247296 → 247808 (+512 B, about 0.21%)**.
 It is the first fitting 512-byte boundary, not an arbitrary proportional
@@ -116,3 +121,68 @@ this measurement does not stand in for them. This prerequisite changes no
 page, so it has no new page screenshot or staging claim. Rollback restores
 the prior raw limit; it intentionally makes the frozen combined candidate
 fail again. Do not change the feature ref from this prerequisite.
+
+## Base-conflict reconciliation: current proposal
+
+The PR conflict wake requires consuming main `65285dba9` (2026-10-22).
+Only `ci/kit-perf-budget.json` conflicted: main appended RSVP decision
+history, without changing any numeric ceiling. The resolution retains all
+of main's history, the original proposal above, and this reconciliation.
+No incoming source or test file was edited during resolution.
+
+The budget-only merged tree passes under main's original ceiling. However,
+that alone would miss whether the prerequisite still fits the feature.
+A disposable archive of `65285dba9` was overlaid with the exact five-path
+source/acceptance diff from `5f4f1c659` to frozen candidate `723957121b65`:
+
+- `src/leaderboards/captions.ts`
+- `src/leaderboards/members.ts`
+- `src/leaderboards/pages.tsx`
+- `web/src/routes/leaderboards/members/+page.svelte`
+- `test/member-board-captions-empty-recovery-acceptance.test.ts`
+
+The overlay applies cleanly. The feature's budget-history edit, screenshots
+and baselines are not build inputs and were not overlaid. No feature source
+ref was modified or pushed. Use `git archive 65285dba9`, then apply
+`git diff 5f4f1c659 723957121b65 -- <the five paths above>` to reproduce.
+Install the same root/web lockfiles externally, link their dependencies,
+then run `npm --prefix web run build` and `node ci/check-kit-perf.mjs` in
+each tree. This uses no database, credential or remote service.
+
+Two locked builds per tree, Node `v24.22.1`, the same lockfile hashes as
+above; all 52 client path/hash pairs match between each tree's rebuilds:
+
+| Group | Updated main 1 | Updated main 2 | Refreshed combined 1 | Refreshed combined 2 |
+| --- | --- | --- | --- | --- |
+| Client JS raw/gzip | 247148/99351 | 247148/99351 | 247913/99601 | 247913/99601 |
+| Client JS files | 52 | 52 | 52 | 52 |
+| Server JS raw/gzip | 1109456/326133 | 1109456/326132 | 1110974/326633 | 1110974/326630 |
+| Server JS files | 122 | 122 | 123 | 123 |
+| Worker raw/gzip | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 |
+| Client CSS raw/gzip | 2660/891 | 2660/891 | 2660/891 | 2660/891 |
+
+The same 50 client paths/hashes are unchanged across the two trees; only
+the board structural node and app hash relink change. The board node still
+measures 3600/1722 → 4365/1972 B, exactly **+765/+250 B**; the app entry is
+5318/1476 B on both sides. Both clients have zero literal `drizzle-orm`
+references. The TSV appends first-build rows named `refreshed-main` and
+`refreshed-combined`; the original rows remain untouched.
+
+The updated main is 148 B below its raw ceiling. The refreshed feature is
+**617 B over main's 247296 B ceiling and 105 B over the initial 247808 B
+proposal**. Therefore the current raw proposal is **248320 B**, the first
+fitting 512 B boundary: +1024 B versus main (about 0.41%), with **407 B raw
+and 239 B gzip margins**. This supersedes the initial +512 B proposal; it
+is not another allowance on top of 248320 B. Every other numeric ceiling
+remains identical to `65285dba9`; server gzip still fits by at least 1047 B.
+No feature rewrite or gate exemption is introduced.
+
+On the same second-build combined output, swapping only the raw ceiling
+247296 → 247808 → 248320 exits **1 → 1 → 0**, repeated twice without a
+rebuild. The unchanged feature acceptance suite passes **20/20** on the
+refreshed integration. Checker selftests **6/6**, checker tests **13/13**,
+parity-gate unit tests **67/67**, lint, typecheck, asset drift and floor
+guard pass on the resolved prerequisite. No acceptance test was edited.
+This is local measurement, not exact-head CI, feature approval, a completed
+full `npm run check`, a browser run, startup measurement or staging proof.
+Rollback restores main's 247296 B raw ceiling.
