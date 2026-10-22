@@ -33,6 +33,12 @@ export default defineConfig({
             // separately. This does not change client chunking.
             codeSplitting: {
               groups: [
+                // Compress both header representations together; their shared
+                // artwork otherwise occupies separate gzip streams.
+                {
+                  name: "site-header",
+                  test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/SiteHeader\.svelte)$/,
+                },
                 { name: "admin", test: /\/src\/admin\// },
                 {
                   name: "events",
