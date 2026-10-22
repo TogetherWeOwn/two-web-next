@@ -476,7 +476,8 @@ jobs:
       # config) because every test/** file runs inside the blocking coverage
       # step above.
       - name: Tier-0 check (validators + authz + EXPLAIN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        # Do not invoke installed tools after an audit/install failure skipped npm ci.
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -563,10 +564,11 @@ jobs:
           CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
-      # report fails the step (fail closed). Docs-only and draft PRs skip via
-      # the scope guard in `if:`, never a file-presence check.
+      # report after successful coverage fails the step (fail closed). Earlier
+      # failures keep their own verdict without a secondary missing-input error.
+      # Docs-only and draft PRs skip via scope, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
       # literals. The planted-finding selftest and strict scan both fail closed.
