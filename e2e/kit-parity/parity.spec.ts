@@ -459,14 +459,17 @@ for (const target of targets) {
       expect(body).not.toContain("<iframe");
       // Per-visitor journey state: never shared-cacheable.
       expect(response.headers()["cache-control"]).toBe("no-store, private");
-      // The Hono controller still owns the one-use journey writes, served
-      // undecorated through honoFetch on both targets until enablement.
+      // The Hono controller still owns the one-use journey write, served
+      // undecorated through honoFetch on both targets until enablement. A
+      // bare landing visit never arms the pending notice: only a genuine
+      // expired-write bounce does, so an attacker link cannot pre-arm a
+      // false restored banner.
       const setCookies = (await response.headersArray())
         .filter((h) => h.name.toLowerCase() === "set-cookie")
         .map((h) => h.value)
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
-      expect(setCookies).toContain("__Host-two_expired_write=");
+      expect(setCookies).not.toContain("__Host-two_expired_write=");
     });
 
     test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
@@ -714,7 +717,9 @@ for (const target of targets) {
         "/leaderboards/members?season=bogus",
         "/leaderboards/members?scope=friends",
         "/leaderboards/members?scope=bogus",
-        "/leaderboards/members?activity=chess!",
+        // Punctuation is a valid savable game name, so the activity
+        // refusal pin uses an overlong value (101 chars > 100 max).
+        `/leaderboards/members?activity=${"a".repeat(101)}`,
       ]) {
         const response = await api(target).get(path, { headers: { cookie } });
         expect(response.status(), `${target.name} ${path}`).toBe(400);
@@ -1806,7 +1811,19 @@ test.describe("kit: member-board visuals", () => {
       const context = await browser.newContext({
         baseURL: kit.origin,
         ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
-        extraHTTPHeaders: { cookie },
+        // Keep the session in the jar so a later status probe shares one
+        // Cookie header with it. Raw extra headers collide with jar cookies
+        // on the second navigation. Preserve the issued cookie's attributes.
+        storageState: {
+          cookies: (await api(hono).storageState()).cookies
+            .filter((session) => session.name === "__Host-two_session")
+            .map((session) => ({
+              ...session,
+              domain: new URL(kit.origin).hostname,
+              value: cookie.slice(cookie.indexOf("=") + 1),
+            })),
+          origins: [],
+        },
       });
       const pageErrors: string[] = [];
       try {
@@ -1823,6 +1840,20 @@ test.describe("kit: member-board visuals", () => {
           await page.setViewportSize(viewport.size);
           const response = await page.goto(path);
           expect(response?.status(), `kit ${path} @ ${viewport.name}`).toBe(200);
+          const cookieHeaders = (await response!.request().headersArray()).filter(
+            (header) => header.name.toLowerCase() === "cookie",
+          );
+          expect(cookieHeaders.length, "one browser Cookie header").toBe(1);
+          const cookieNames = cookieHeaders[0]!.value
+            .split(/;\s*/)
+            .map((pair) => pair.slice(0, pair.indexOf("=")));
+          expect(cookieNames.filter((name) => name === "__Host-two_session")).toHaveLength(1);
+          if (viewport.name === "mobile") {
+            expect(
+              cookieNames.filter((name) => name === "__Host-two_session_status"),
+              "second navigation replays the status probe alongside the session",
+            ).toHaveLength(1);
+          }
           await expect(page.getByRole("heading", { name: "Member leaderboard" })).toBeVisible();
           await expect(page.getByRole("navigation", { name: "Board scope" })).toBeVisible();
           await page.waitForLoadState("networkidle");

@@ -27,7 +27,7 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
-import type { MemberStats } from "./stats";
+import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
 
 // Stable field/error ids for profile validation association.
 // The server `games` key maps to the `games_text` control; any other key is
@@ -70,63 +70,124 @@ export const statsDate = (date: Date) =>
     timeZone: "UTC",
   });
 
-const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
-  <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
-    <h2 id="member-stats-heading">Member stats</h2>
-    <dl class="profile-stats-grid">
-      {stats.rankKey ? (
-        <div>
-          <dt>Rank</dt>
-          <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
-        </div>
-      ) : null}
-      {stats.joinedAt ? (
-        <div>
-          <dt>Joined</dt>
-          <dd data-testid={PROFILE_JOINED_TESTID}>
-            <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
-          </dd>
-        </div>
-      ) : null}
-      {stats.tenureDays !== null ? (
-        <div>
-          <dt>Tenure</dt>
-          <dd>
-            {stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}
-          </dd>
-        </div>
-      ) : null}
-      <div>
-        <dt>Membership</dt>
-        <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
-      </div>
-      <div>
-        <dt>Milestones</dt>
-        <dd>
-          {stats.milestonesTruncated ? `${stats.milestones.length}+` : stats.milestones.length}
-        </dd>
-      </div>
-    </dl>
-    <h3>Milestones</h3>
-    {stats.milestones.length > 0 ? (
-      <ol class="profile-milestones">
-        {stats.milestones.map((milestone) => (
-          <li>
-            <div>
-              <strong>{statsLabel(milestone.type)}</strong>
-              {milestone.detail ? <p>{milestone.detail}</p> : null}
-            </div>
-            <time datetime={milestone.occurredAt.toISOString()}>
-              {statsDate(milestone.occurredAt)}
-            </time>
-          </li>
-        ))}
-      </ol>
-    ) : (
-      <p>No milestones yet.</p>
-    )}
-  </section>
+// Recovery is an explicit safe GET to the same profile, never a background
+// retry or an automatic reload: over an unsaved editor the link warns that
+// reloading discards the draft.
+const StatsRecovery: FC<{ profilePath: string; label: string; draftWarning?: boolean }> = ({
+  profilePath,
+  label,
+  draftWarning,
+}) => (
+  <p class="profile-hint">
+    <a href={profilePath}>{label}</a>
+    {draftWarning ? " Reloading discards your unsaved changes." : null}
+  </p>
 );
+
+const MemberStatsBlock: FC<{
+  stats: MemberStats;
+  profilePath: string;
+  draftWarning?: boolean;
+}> = ({ stats, profilePath, draftWarning }) => {
+  if (stats.membershipUnavailable) {
+    return (
+      <section
+        class="profile-panel"
+        aria-labelledby="member-stats-heading"
+        data-testid="profile-stats"
+      >
+        <h2 id="member-stats-heading">Member stats</h2>
+        <p class="profile-hint">Member stats unavailable right now.</p>
+        <StatsRecovery
+          profilePath={profilePath}
+          label="Retry loading member stats"
+          draftWarning={draftWarning}
+        />
+      </section>
+    );
+  }
+  return (
+    <section
+      class="profile-panel"
+      aria-labelledby="member-stats-heading"
+      data-testid="profile-stats"
+    >
+      <h2 id="member-stats-heading">Member stats</h2>
+      <dl class="profile-stats-grid">
+        {stats.rankKey ? (
+          <div>
+            <dt>Rank</dt>
+            <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
+          </div>
+        ) : null}
+        {stats.joinedAt ? (
+          <div>
+            <dt>Joined</dt>
+            <dd data-testid={PROFILE_JOINED_TESTID}>
+              <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
+            </dd>
+          </div>
+        ) : null}
+        {stats.tenureDays !== null ? (
+          <div>
+            <dt>Tenure</dt>
+            <dd>
+              {stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}
+            </dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Membership</dt>
+          <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
+        </div>
+        <div>
+          <dt>Milestones</dt>
+          <dd>
+            {stats.milestonesUnavailable
+              ? "Unavailable"
+              : stats.milestonesTruncated
+                ? `${stats.milestones.length}+`
+                : stats.milestones.length}
+          </dd>
+        </div>
+      </dl>
+      <h3>Milestones</h3>
+      {stats.milestonesUnavailable ? (
+        <>
+          <p class="profile-hint">Milestones unavailable right now.</p>
+          <StatsRecovery
+            profilePath={profilePath}
+            label="Retry loading milestones"
+            draftWarning={draftWarning}
+          />
+        </>
+      ) : (
+        <>
+          {stats.milestonesTruncated ? (
+            <p class="profile-hint">Showing the newest {MEMBER_MILESTONES_CAP} milestones.</p>
+          ) : null}
+          {stats.milestones.length > 0 ? (
+            <ol class="profile-milestones">
+              {stats.milestones.map((milestone) => (
+                <li>
+                  <div>
+                    <strong>{statsLabel(milestone.type)}</strong>
+                    {milestone.detail ? <p>{milestone.detail}</p> : null}
+                  </div>
+                  <time datetime={milestone.occurredAt.toISOString()}>
+                    {statsDate(milestone.occurredAt)}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p>No milestones yet.</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+};
 
 // Share tags (TOG-6793): the canonical is always the shareable member URL,
 // so /profile and /members/{user} never present as duplicates. The
@@ -154,7 +215,19 @@ export const ProfilePage: FC<{
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: ProfileFormValues;
-}> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
+  /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
+  statsDraftWarning?: boolean;
+}> = ({
+  member,
+  isOwner,
+  isModerator,
+  appUrl,
+  joinResult,
+  stats,
+  errors,
+  values,
+  statsDraftWarning,
+}) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const isNewMember = profileIsNewMember(member);
@@ -308,7 +381,13 @@ export const ProfilePage: FC<{
             </div>
           </section>
         ) : null}
-        {stats ? <MemberStatsBlock stats={stats} /> : null}
+        {stats ? (
+          <MemberStatsBlock
+            stats={stats}
+            profilePath={`/members/${member.id}`}
+            draftWarning={statsDraftWarning}
+          />
+        ) : null}
         {isOwner ? (
           <section
             class="profile-panel profile-editor"

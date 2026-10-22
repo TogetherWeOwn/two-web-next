@@ -23,9 +23,13 @@ import {
   isProviderOutage,
 } from "../discord";
 import type { Env } from "../env";
-import { maintenanceHandler, prefersHtmlError, varyAccept } from "../errors";
-import { inviteDestination } from "../invite";
 import { STATE_TTL_SECONDS } from "../index";
+import {
+  databaseUnavailable,
+  outageRepresentation,
+  prefersHtmlError,
+  varyAccept,
+} from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
@@ -87,7 +91,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
   // Legacy login links: retain only the existing guarded-next value, never OAuth input.
   app.get("/auth/discord/redirect", (c) => {
     const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store");
+    c.header("cache-control", "no-store, private");
     return c.redirect(
       next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
       302,
@@ -338,15 +342,20 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           }
         } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone.
+          // this browser's cookie as if the server row were gone. The failure
+          // logs bounded facts only — the class, never the message, which can
+          // quote connection details. Explicit JSON callers get the correlated
+          // envelope; absent/wildcard callers keep the legacy text bytes and
+          // browsers the branded page (explicit-HTML opt-in).
           console.error("logout revocation failed", {
             exception: exceptionClass(err),
             request_id: safeRequestId(c.get("requestId")),
           });
           c.header("cache-control", "no-store, private");
           varyAccept(c);
-          if (prefersHtmlError(c)) {
-            return maintenanceHandler(inviteDestination(c.env.DISCORD_INVITE_URL))(c);
+          if (prefersHtmlError(c)) return databaseUnavailable(c);
+          if (outageRepresentation(c) === "application/json") {
+            return databaseUnavailable(c, true);
           }
           return c.text("Sign-out temporarily unavailable", 503);
         }

@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -45,7 +45,6 @@ import { registerMcpRoutes } from "./mcp/routes";
 import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
-import { enforceOn } from "./access-log";
 import {
   configReadiness,
   revisionReadiness,
@@ -213,7 +212,11 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
@@ -229,6 +232,8 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
   if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
   if (!url) return { sql: null };
+  // Bare options: this client feeds upsertRosterUser only, whose
+  // transaction already installs a tighter 500 ms SET LOCAL bound.
   const client = postgres(url, databaseOptions);
   return {
     sql: client as unknown as Sql,
@@ -254,8 +259,9 @@ function rosterSqlFor(c: Context<{ Bindings: Env }>): {
 const freshLoginChains = new Map<string, Promise<void>>();
 
 /** Bound on waiting for the previous same-user issuance (see
- * withFreshLoginUserLock): a holder that never settles its tail — a hung
- * store query (no statement timeout is configured) or a disconnect-cancelled
+ * withFreshLoginUserLock): a holder that never settles its tail — a store
+ * query stalled on transport (the per-request statement timeout cancels
+ * server-side execution, not a dead socket) or a disconnect-cancelled
  * callback — would otherwise hang that user's future logins on the isolate
  * indefinitely. Normal insert+sweep work is millisecond-scale and the
  * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only
@@ -638,6 +644,7 @@ registerJoinRoutes(
           source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
+          notice={props.notice}
         />,
       );
     },
@@ -708,21 +715,10 @@ app.get("/up", async (c) => {
     c.header("cache-control", "no-store");
     // Two slots on the one client: the queue read cannot starve the DB read.
     const sql = connect(url, 2);
-    // Member-access-log enforcement signal: informational only, never moves
-    // the status code. Parsing mirrors enforceOn exactly — no raw value or
-    // variable name is echoed into the body. Security note: this two-state
-    // label is intentionally public on the unauthenticated /up body. The
-    // control name is already public in the operator runbooks, and dashboards
-    // poll /up without credentials, so an authenticated-only signal would not
-    // reach its consumers. `log_only` is a legacy label with no serving
-    // effect — the keyed read boundary always fails closed — so the field
-    // aids operators without giving an unauthenticated caller a bypass. Consistent with the existing public config/db/queue
-    // signals, which likewise describe operational posture, not secrets.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
       configReadiness(c.env),
-      enforceOn(c.env) ? "enforcing" : "log_only",
     );
     // Informational only: the revision never moves the status code.
     return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));

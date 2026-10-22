@@ -128,8 +128,8 @@ export function registerAiFriendlyRoutes(app: App): void {
     mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
   );
   app.get("/privacy.md", (c) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE));
-  // Same sanitized floor as the /discord front door: raw, empty or hostile
-  // config degrades to the hardcoded fallback, never a dead or hostile href.
+  // Sanitized like /join: a bad DISCORD_INVITE_URL renders the hardcoded
+  // fallback, never a dead, relative or hostile href.
   app.get("/join.md", (c) =>
     mdOk(c, mdJoin(c.env.APP_URL, inviteDestination(c.env.DISCORD_INVITE_URL)), STATIC_MD_CACHE),
   );

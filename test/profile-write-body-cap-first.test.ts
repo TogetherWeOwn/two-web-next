@@ -151,7 +151,7 @@ describe("body-size cap precedes throttle, session and store on profile writes",
       const { request, pull } = upload(method, contentType, cookie, true);
       const response = await profile.request(request, undefined, env);
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(throttle).not.toHaveBeenCalled();
       expect(get).not.toHaveBeenCalled();
       expect(store.find).not.toHaveBeenCalled();
@@ -170,7 +170,7 @@ describe("body-size cap precedes throttle, session and store on profile writes",
       const { request, pull } = upload(method, contentType, cookie, false);
       const response = await profile.request(request, undefined, env);
       expect(response.status).toBe(413);
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
       expect(throttle).not.toHaveBeenCalled();
       expect(get).not.toHaveBeenCalled();
       expect(store.find).not.toHaveBeenCalled();
@@ -192,7 +192,7 @@ describe("body-size cap precedes throttle, session and store on profile writes",
         const { request } = upload(method, contentType, cookie, advertised);
         const response = await profile.request(request, undefined, env);
         expect(response.status, `advertised=${advertised}`).toBe(413);
-        expect(await response.json(), `advertised=${advertised}`).toEqual(ERROR);
+        expect(await response.json(), `advertised=${advertised}`).toMatchObject(ERROR);
         expect(throttle, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(get, `advertised=${advertised}`).not.toHaveBeenCalled();
         expect(store.find, `advertised=${advertised}`).not.toHaveBeenCalled();
@@ -256,7 +256,12 @@ describe("controls: at/under-cap profile writes keep the current behavior", () =
         contentType,
       );
       expect(response.status).toBe(403);
-      expect(await response.text()).toBe("Forbidden");
+      // JSON Accept selects the machine envelope (browsers get the branded
+      // own-profile page); the bare "Forbidden" text is gone on this leg.
+      expect(await response.json()).toEqual({
+        error: "forbidden",
+        message: "You can only edit your own profile.",
+      });
       expect(throttle).toHaveBeenCalledOnce();
       expect(get).toHaveBeenCalledOnce();
       expect(store.save).not.toHaveBeenCalled();

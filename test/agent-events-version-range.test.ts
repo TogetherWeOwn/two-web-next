@@ -182,7 +182,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         await expectDenial(refused, 422, "validation_failed", eventKey);
         // The submitted value is never echoed back: the body carries only the
         // reason, the standing message and the request id.
-        expect(Object.keys(refused.body).sort()).toEqual(["message", "reason", "request_id"]);
+        expect(Object.keys(refused.body).sort()).toEqual([
+          "code",
+          "message",
+          "next",
+          "reason",
+          "request_id",
+        ]);
         // No event mutation, no idempotency write and no write-back: the refusal
         // stores nothing, so only the seed create holds a key.
         expect(await sql`SELECT * FROM events`).toEqual(before);

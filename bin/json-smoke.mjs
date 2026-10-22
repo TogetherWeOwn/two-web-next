@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { STAGING_ORIGIN as CANONICAL_STAGING_ORIGIN } from "../ci/operator-constants.mjs";
+import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 // Staging-only post-deploy probe for the session-gated event JSON contract:
 // collection paging envelope,
@@ -20,7 +22,7 @@ import { pathToFileURL } from "node:url";
 // output names attributes and states only, never a token or cookie value.
 //
 
-export const STAGING_ORIGIN = "https://next.togetherweown.com";
+export const STAGING_ORIGIN = CANONICAL_STAGING_ORIGIN;
 const QA_IDENTITY = "qa-member";
 const QA_HEADER = "X-TWO-QA-Auth";
 const SESSION_COOKIE = "__Host-two_session";
@@ -306,8 +308,7 @@ export async function jsonSmoke(
       "base-url must be an HTTP(S) origin without credentials, path, query or fragment",
     );
   }
-  const loopback =
-    base.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(base.hostname);
+  const loopback = base.protocol === "http:" && isLoopbackHostname(base.hostname);
   if (base.origin !== STAGING_ORIGIN && !loopback) {
     throw new Error(
       `staging-only: refusing ${base.origin} (production and unknown hosts are never probed)`,

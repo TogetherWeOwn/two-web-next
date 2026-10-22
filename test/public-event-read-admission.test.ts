@@ -110,9 +110,11 @@ describe("public event read admission", () => {
         expect(await response.text()).toBe("Too many requests");
       } else {
         expect(await response.json()).toEqual({
+          code: "rate_limited",
           reason: "rate_limited",
           message: "Too many requests. Try again in 60 seconds.",
           retry_after: 60,
+          next: "Wait for Retry-After, then retry.",
         });
       }
     }
@@ -227,7 +229,15 @@ describe("public event read admission", () => {
     };
     const response = await f.request("/events?q=chess");
     expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Events temporarily unavailable");
+    // The guard fails open, so the limiter outage is invisible: with no
+    // database this answers the negotiated databaseUnavailable envelope
+    // (branded HTML by default), never the legacy bare-text bytes, and the
+    // driver diagnostic stays out of the response.
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("We will be right back");
+    expect(body).toContain('id="error-heading"');
+    expect(body).not.toContain("private driver diagnostic");
     expect(f.hits).toHaveLength(0);
   });
 

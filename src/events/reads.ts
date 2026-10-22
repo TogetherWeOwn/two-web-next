@@ -31,7 +31,7 @@ import {
   PAST_EVENTS_PAGE_SIZE,
   type DiscordTransient,
 } from "../islands/contracts";
-import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
+import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
@@ -48,8 +48,16 @@ export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes">
 
 export type HomeEvent = Pick<
   PublicEvent,
-  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount"
->;
+  "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount" | "capacity"
+> & {
+  /** Seat occupancy for the teaser full verdict, like `waitlist.goingCount`.
+   * `listHomeUpcoming` always projects it (no extra query: `withGoing`
+   * already batches both aggregates), so the live teaser never offers a seat
+   * the write path cannot grant. Optional only for older hand-built
+   * fixtures: renderers fall back to the named `goingCount` when absent
+   * (the `GoingCountState.occupancy` precedent). Aggregate only. */
+  goingOccupancy?: number;
+};
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
@@ -135,7 +143,7 @@ export function normalizeUpcomingPage(page: number): number {
     : 1;
 }
 
-/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
+/** Upcoming = visible, never explicitly past, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
 export async function listUpcoming(
   db: Db,
   now = new Date(),
@@ -143,7 +151,12 @@ export async function listUpcoming(
   page = 1,
 ): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number; total: number }> {
   page = normalizeUpcomingPage(page);
-  const visible = and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now));
+  const visible = and(
+    calendarVisible(opts),
+    finiteEventWindow,
+    notPastEventStatus,
+    gte(events.endsAt, now),
+  );
   const [total] = await db.select({ n: count() }).from(events).where(visible);
   const n = Number(total?.n ?? 0);
   const totalPages = Math.ceil(n / EVENTS_UPCOMING_PAGE_SIZE);
@@ -187,6 +200,7 @@ export async function rankUpcoming(
         eq(events.eventKey, key),
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
         gte(events.endsAt, now),
       ),
     );
@@ -203,6 +217,7 @@ export async function rankUpcoming(
       and(
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
         gte(events.endsAt, now),
         or(
           lt(events.startsAt, anchorStartsAt),
@@ -216,7 +231,8 @@ export async function rankUpcoming(
 /** Month-grid scope: the visible upcoming rows plotted on the grid for `month`
  * ("YYYY-MM", caller-validated). The grid renders whole Monday-first weeks,
  * so the covered range reaches into the adjacent months and the read keeps
- * exactly the rows landing on a covered wall day in their own zone. SQL reads
+ * exactly the rows whose finite scheduled interval overlaps a covered wall
+ * day in their own zone — including starts before the leading week. SQL reads
  * the covered UTC days widened for the widest zone offset; the grid cap is a
  * pathological guard only: a real month never holds that many events. */
 export async function listUpcomingForMonth(
@@ -231,8 +247,6 @@ export async function listUpcomingForMonth(
   if (!range) return [];
   const from = new Date(wallDayStart(range.first) - 86400000);
   const to = new Date(wallDayStart(range.last) + 2 * 86400000);
-  const firstDay = wallDayStart(range.first);
-  const lastDay = wallDayStart(range.last);
   const rows = await db
     .select()
     .from(events)
@@ -240,9 +254,11 @@ export async function listUpcomingForMonth(
       and(
         calendarVisible(opts),
         finiteEventWindow,
+        notPastEventStatus,
+        ne(events.status, "cancelled"),
         gte(events.endsAt, now),
-        gte(events.startsAt, from),
         lt(events.startsAt, to),
+        gt(events.endsAt, from),
       ),
     )
     .orderBy(asc(events.startsAt), asc(events.id))
@@ -251,8 +267,9 @@ export async function listUpcomingForMonth(
     db,
     rows.filter((r) => {
       if (!isRenderableEventWindow(r)) return false;
-      const day = wallDayStart(wallDateIso(r.startsAt, r.timezone));
-      return day >= firstDay && day <= lastDay;
+      return (
+        canonicalIntervalDays(r.startsAt, r.endsAt, r.timezone, range.first, range.last).length > 0
+      );
     }),
   );
 }
@@ -263,6 +280,14 @@ const finiteEventStart = sql`isfinite(${events.startsAt})`;
 // Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
 // `toISOString()`/formatting throws, so upcoming reads refuse either one.
 const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
+
+// A row explicitly marked past is never upcoming, even with a future end:
+// without this the overlap read would grow a past archive. Cancelled rows
+// stay listed (legacy visibility); the month grid excludes them separately.
+// Inlined like the draft literal in `calendarVisible`, never a bound param:
+// pg-proxy fixtures route reads by bound params, and a bound "past" would
+// misroute every upcoming read into the past bucket.
+const notPastEventStatus = sql`${events.status} != 'past'`;
 
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
@@ -291,13 +316,24 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     // The teaser renders `startsAt` unguarded, so unrenderable windows are
     // refused here too (this read never had #232's `isfinite()` guard).
     return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(
-      ({ eventKey, title, startsAt, timezone, location, goingCount }) => ({
+      ({
         eventKey,
         title,
         startsAt,
         timezone,
         location,
         goingCount,
+        goingOccupancy,
+        capacity,
+      }) => ({
+        eventKey,
+        title,
+        startsAt,
+        timezone,
+        location,
+        goingCount,
+        goingOccupancy,
+        capacity,
       }),
     );
   });
@@ -503,17 +539,24 @@ export async function listCalendarPast(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+): Promise<PublicEvent[] & { mayBeTruncated?: boolean }> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), lt(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, lt(events.endsAt, now)))
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(EVENTS_PAST_DRAWER_LIMIT);
   // Ended rows are normally renderable by construction (ends_at < now), but
   // imports can violate the end-after-start invariant with an unrenderable
-  // starts_at, and the drawer/`EmptyGap` render it unguarded.
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+  // starts_at, and the drawer/`EmptyGap` render it unguarded. The SQL finite
+  // guard keeps infinity rows from occupying limit slots (like the sibling
+  // upcoming reads); the JS filter stays as defence for JS-overflow timestamps
+  // that `isfinite()` cannot see. Truncation is judged on the pre-filter
+  // fetched count (like `listUpcoming`/`listPast` `hasMore`): a post-filter
+  // length would misread a drawer that dropped an overflow row as complete.
+  const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
+  const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
+  return Object.assign(visible, { mayBeTruncated: truncated });
 }
 
 /** Invalid HTML archive pages/offsets retain the page-one fallback. */

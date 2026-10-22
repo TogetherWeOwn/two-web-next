@@ -28,7 +28,7 @@ Test aliases:
 `test/event-attendees.test.ts` covers the mounted event page's four roles,
 original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
 escaping, missing users, empty names, self-exclusion and real failed access-log
-INSERTs (503 even when the legacy enforcement flag is disabled). One access-log row
+INSERTs (always 503; no setting relaxes it). One access-log row
 names all rendered subjects except the viewer; guests never query the identity
 projection. All normal event HTML is `private, no-store` because the guest join
 pitch also depends on the session; `Vary: Cookie` preserves explicit viewer
@@ -162,7 +162,7 @@ The citations above prove append-only enforcement for roles that cannot alter th
 tables (row 391), subject to the documented owner/superuser exception and pending
 runtime-role provisioning, and the executable retention adapter (rows 406/428).
 Optional MemberStats reads now return keyed owner columns;
-unavailable bot-owned views still hide the stats block within the existing budget.
+unavailable bot-owned views now render an explicit unavailable state (keeping membership on milestones-only failure) within the budget.
 
 ## Scoped runtime control and evidence split
 

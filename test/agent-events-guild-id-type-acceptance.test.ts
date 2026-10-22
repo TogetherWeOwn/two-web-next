@@ -131,7 +131,7 @@ async function setup(grant: FakeGrant | null = liveGrant(), config: IngressConfi
 function expectWrongGuild(a: Answer, ctx: Ctx) {
   expect(a.status).not.toBeGreaterThanOrEqual(500);
   expect(a.status).toBe(403);
-  expect(Object.keys(a.body).sort()).toEqual(["message", "reason", "request_id"]);
+  expect(Object.keys(a.body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
   expect(a.body).toMatchObject({
     reason: "wrong_guild",
     message: expect.any(String),

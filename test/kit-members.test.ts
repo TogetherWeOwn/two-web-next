@@ -181,7 +181,8 @@ describe("Kit member-board load parity", () => {
       ),
     ).rejects.toMatchObject({ status: 403 });
     expect(loadRankingFn).not.toHaveBeenCalled();
-    expect(setHeaders).not.toHaveBeenCalled();
+    expect(setHeaders).toHaveBeenCalledTimes(1);
+    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
   it("answers a branded 503 when the session state is unknown, never a guest bounce", async () => {
@@ -197,7 +198,8 @@ describe("Kit member-board load parity", () => {
       ),
     ).rejects.toMatchObject({ status: 503 });
     expect(loadRankingFn).not.toHaveBeenCalled();
-    expect(setHeaders).not.toHaveBeenCalled();
+    expect(setHeaders).toHaveBeenCalledTimes(1);
+    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
   it("answers branded 400s for bad season, scope and activity before any read", async () => {
@@ -205,7 +207,7 @@ describe("Kit member-board load parity", () => {
       { seasonParam: "bogus" },
       { scopeParam: "friends" },
       { scopeParam: "bogus" },
-      { activityParam: "chess!" },
+      { activityParam: "chess\u0000" },
     ]) {
       const dbForFn = vi.fn(async () => ({}) as never);
       const loadRankingFn = vi.fn(async () => ranked);
@@ -219,7 +221,8 @@ describe("Kit member-board load parity", () => {
       expect(dbForFn).not.toHaveBeenCalled();
       expect(loadRankingFn).not.toHaveBeenCalled();
       expect(queueBoardViewFn).not.toHaveBeenCalled();
-      expect(setHeaders).not.toHaveBeenCalled();
+      expect(setHeaders).toHaveBeenCalledTimes(1);
+      expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
     }
   });
 

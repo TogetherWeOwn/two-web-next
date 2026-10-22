@@ -33,8 +33,11 @@ Moderator status is copied into the session at sign-in, so removing a Discord
 role does not update existing sessions. First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
-normal browsing can rotate and extend that window. Kit-served admin pages renew
-the sliding session exactly like the Hono panel. For immediate invalidation,
+normal browsing can rotate and extend that idle window, but never beyond
+24 hours from the login that started the session lineage. Rotation preserves
+that start time; reaching the absolute cap requires a fresh sign-in and role
+lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
@@ -416,9 +419,8 @@ roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
-no access row. Audit-write failures always refuse protected contents, including
-when the legacy `MEMBER_ACCESS_LOG_ENFORCE` setting is false. Stop and escalate any
-reported audit failure; do not try disabling enforcement or another access path.
+no access row. Audit-write failures always refuse protected contents; no setting
+changes that. Stop and escalate any reported audit failure; do not look for another access path.
 
 ### RSVP is not attendance
 
@@ -563,8 +565,8 @@ including the list's unrendered pagination lookahead and excluding the viewer; t
 do not require a current users row or membership flag. Missing owner projections
 and malformed non-null IDs still refuse the whole response rather than silently
 dropping subjects. Empty, null-ID-only and self-only reads create no access row.
-Audit-write failures for actual member subjects always refuse protected contents,
-even with the legacy enforcement setting disabled.
+Audit-write failures for actual member subjects always refuse protected contents; no setting
+changes that.
 Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
@@ -664,18 +666,19 @@ Only perform content actions you are authorized to take. Do not:
 - Promise a Discord announcement, membership change or fix time without evidence.
 
 For a member incident, collect the **page path**, exact visible sentence,
-approximate time with timezone, whether `/discord` worked, and whether others
-are affected. Strip callback queries and personal information before handing
-that summary to site maintainers/engineering. Share any necessary member-specific
-context only through the approved private support process.
+Support reference shown on the error page, approximate time with timezone,
+whether `/discord` worked, and whether others are affected. Strip callback
+queries and personal information before handing that summary to site
+maintainers/engineering. Share any necessary member-specific context only
+through the approved private support process.
 
 | Report | Moderator response |
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
-| **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Do not repeatedly click or bypass the limit. |
+| **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Copy the Support reference from the page into the incident report. Do not repeatedly click or bypass the limit. |
 | **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Order is guard, then cap, then throttle: sign-in and moderator role still come first (a guest redirect or 403 takes precedence), but the cap runs before the write throttle, so an oversized body answers 413 even when the budget is spent, and 429 applies only to bodies at or under the cap. |
-| **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording and time. Do not guess the cause. |
-| **We will be right back** (503) | Use the invite offered by the page or `/discord`; escalate if it persists. Do not restart anything. |
+| **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording, Support reference and time. Do not guess the cause. |
+| **We will be right back** (503) | Use the invite offered by the page or `/discord`; copy the Support reference into the incident report and escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
 | 403 on a moderator/admin surface | Expect it for a signed-in non-moderator, a stale role cache, or a form-action path opened directly by a signed-in non-moderator. Verify the role in-server, then re-check after a fresh sign-in and role sync ([sign-in check](#get-into-the-panel)); non-moderators get 403 and failed lookups fail closed ([probe expectations](#auth-wall-probe-staging-only)). If a current moderator hits it, escalate the path and time. |
 | Dashboard card or section missing on `/admin` (Join funnel, Top searches with no results) | Do not read absence as zero: a failing or slow optional read omits its section inside the 1.5 s budget while the dashboard stays available. Stop and escalate the path and time with timezone. A signed-session 503 or missing database configuration is different: the panel itself is unavailable, so report it the same way. |

@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { accepts } from "hono/accepts";
+import { adminWayBack } from "./admin-wayback";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import {
@@ -9,6 +10,7 @@ import {
   InternalErrorPage,
   MaintenancePage,
   NotFoundPage,
+  OwnProfileOnlyPage,
   PayloadTooLargePage,
   RateLimitedPage,
 } from "./error-pages";
@@ -21,6 +23,7 @@ import {
   memberReadActive,
 } from "./member-reads";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
+import { acceptsJson } from "./media-type";
 import { requestRoute, safeRequestId } from "./request-log";
 
 function supportReference(c: Context): string | undefined {
@@ -88,8 +91,9 @@ export function varyAccept(c: Context) {
 }
 
 // One 429 shape for every throttle (ports ThrottleEnvelope::render): JSON
-// callers get the {reason, message, retry_after} envelope, browsers get the
-// branded page — both with the Retry-After header. Default 60 s, min 1 s.
+// callers get the {code, reason, message, retry_after, next} envelope,
+// browsers get the branded page — both with the Retry-After header. Default
+// 60 s, min 1 s.
 // Wired by the RSVP writes (src/events/routes.tsx, W9). Uses the same
 // quality/specificity/q=0 selector as outageRepresentation so that explicit
 // JSON q=0, mixed-case, wildcard, and machine-only contracts behave
@@ -109,9 +113,11 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
     const requestId = supportReference(c);
     return c.json({
+      code: "rate_limited",
       reason: "rate_limited",
       message: `Too many requests. Try again in ${n} seconds.`,
       retry_after: n,
+      next: "Wait for Retry-After, then retry.",
       ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
@@ -119,6 +125,7 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
     <RateLimitedPage
       inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
       supportReference={supportReference(c)}
+      adminBack={adminWayBack(c.req.path) ?? undefined}
     />,
   );
 }
@@ -192,7 +199,7 @@ function negotiatedErrorSelection(c: Context): NegotiatedErrorSelection {
   }) as unknown as NegotiatedErrorSelection;
 }
 
-function outageRepresentation(c: Context): string {
+export function outageRepresentation(c: Context): string {
   return negotiatedErrorSelection(c).type;
 }
 
@@ -214,20 +221,25 @@ const BAD_REQUEST_MESSAGE = "Check your request and try again.";
 const PAYLOAD_TOO_LARGE_MESSAGE = "Reduce the size of your request and try again.";
 
 // JSON-RPC "Invalid Request": the one static transport code for early /mcp
-// upload refusals (over-cap 413, broken-stream 400), matching the documented
-// batch refusal in mcp/routes.ts. Uploads fail before any id is known, so the
-// id is always null.
-const MCP_TRANSPORT_ERROR_CODE = -32600;
+// refusals (over-cap 413, broken-stream 400, over-budget 429), matching the
+// documented batch refusal in mcp/routes.ts. Transport failures happen before
+// any id is known, so the id is always null; data carries the machine
+// vocabulary's next action plus the request id for correlation.
+export const MCP_TRANSPORT_ERROR_CODE = -32600;
 
 function isMcpTransport(c: Context): boolean {
   return c.req.method.toUpperCase() === "POST" && c.req.path === "/mcp";
 }
 
-function mcpTransportError(c: Context, message: string): Response {
+function mcpTransportError(c: Context, message: string, next: string): Response {
   return c.json({
     jsonrpc: "2.0",
     id: null,
-    error: { code: MCP_TRANSPORT_ERROR_CODE, message },
+    error: {
+      code: MCP_TRANSPORT_ERROR_CODE,
+      message,
+      data: { next, request_id: c.get("requestId") },
+    },
   });
 }
 
@@ -238,7 +250,8 @@ export function badRequest(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(400);
-  if (isMcpTransport(c)) return mcpTransportError(c, BAD_REQUEST_MESSAGE);
+  if (isMcpTransport(c))
+    return mcpTransportError(c, BAD_REQUEST_MESSAGE, "Fix the request and retry.");
   if (isFeedErrorPath(c.req.path)) {
     return memberReadActive()
       ? bufferedMemberText(c, "Bad request", 400)
@@ -263,18 +276,44 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
   varyAccept(c);
   c.status(503);
   if (jsonOnly || jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
-    const requestId = supportReference(c);
-    return c.json({
-      error: "db_unavailable",
-      message: "The service is temporarily unavailable. Try again shortly.",
-      ...(requestId === undefined ? {} : { request_id: requestId }),
-    });
+    return c.json(outageJsonBody(c));
   }
   return c.html(
     <MaintenancePage
       inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
       supportReference={supportReference(c)}
     />,
+  );
+}
+
+function outageJsonBody(c: Context) {
+  const requestId = supportReference(c);
+  return {
+    error: "db_unavailable",
+    message: "The service is temporarily unavailable. Try again shortly.",
+    ...(requestId === undefined ? {} : { request_id: requestId }),
+  };
+}
+
+// Buffered twin of databaseUnavailable for responses built INSIDE a
+// memberReadBoundary (profile reads, event detail): the same negotiated
+// outage envelope, released through the capture instead of beside it. A
+// direct databaseUnavailable call here would fail the capture.response
+// identity check and refuse the page it just built.
+export function databaseUnavailableBuffered(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(503);
+  if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
+    return bufferedMemberJson(c, outageJsonBody(c), 503);
+  }
+  return bufferedMemberHtml(
+    c,
+    <MaintenancePage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />,
+    503,
   );
 }
 
@@ -308,19 +347,28 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(413);
-  if (isMcpTransport(c)) return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE);
+  if (isMcpTransport(c))
+    return mcpTransportError(c, PAYLOAD_TOO_LARGE_MESSAGE, "Reduce the request size and retry.");
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     return c.json({
       reason: "payload_too_large",
       message: PAYLOAD_TOO_LARGE_MESSAGE,
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
   const back = payloadTooLargeReturn(c.req.path);
-  return c.html(<PayloadTooLargePage returnHref={back.href} returnLabel={back.label} />);
+  return c.html(
+    <PayloadTooLargePage
+      returnHref={back.href}
+      returnLabel={back.label}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Feed contracts stay non-HTML: a calendar/RSS/Markdown caller never receives
@@ -346,14 +394,38 @@ export function forbidden(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       error: "forbidden",
       message: "You do not have access to this.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 403) : c.json(body);
   }
-  const page = <ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />;
+  const page = (
+    <ForbiddenPage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />
+  );
   return memberReadActive() ? bufferedMemberHtml(c, page, 403) : c.html(page);
+}
+
+// 403 for a signed-in member writing another member's profile (profile write
+// admission; UserPolicy::updateProfile is owner-only). Only the member's own
+// profile can be edited, so the recovery links back to the viewer's profile —
+// never the join-to-unlock path and never the refused target. JSON callers get
+// the machine envelope (the write-path 422 pattern: any exact JSON range
+// selects JSON); browsers get the branded page. Always private no-store +
+// Vary: Accept. No session, store or target reads.
+export function nonOwnerProfileWrite(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(403);
+  if (acceptsJson(c.req.header("accept"))) {
+    return c.json({ error: "forbidden", message: "You can only edit your own profile." });
+  }
+  return c.html(<OwnProfileOnlyPage />);
 }
 
 // Branded 410 for explicitly retired documents. Unknown and
@@ -373,13 +445,15 @@ export function gone(c: Context): Response | Promise<Response> {
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
+    const requestId = supportReference(c);
     const body = {
       reason: "gone",
       message: "This page is gone.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     };
     return memberReadActive() ? bufferedMemberJson(c, body, 410) : c.json(body);
   }
-  const page = <GonePage />;
+  const page = <GonePage supportReference={supportReference(c)} />;
   return memberReadActive() ? bufferedMemberHtml(c, page, 410) : c.html(page);
 }
 

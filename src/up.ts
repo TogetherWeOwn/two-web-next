@@ -24,7 +24,7 @@
 // export list below is exactly the previous export list of this file, so all
 // importers keep working untouched.
 export { upBody, upHttpStatus } from "./up-body";
-export type { MemberAccessLogEnforcement, UpBody } from "./up-body";
+export type { UpBody } from "./up-body";
 export { REQUIRED_SECRETS, configReadiness, missingSecrets } from "./up-config";
 export type { ConfigReadiness } from "./up-config";
 export {
@@ -34,7 +34,12 @@ export {
   withHealthReadTimeout,
 } from "./up-database";
 export type { DatabaseReadiness } from "./up-database";
-export { WEB_MIGRATIONS, pendingWebMigrations } from "./up-migrations";
+export {
+  WEB_MIGRATIONS,
+  appliedMigrationTimestamps,
+  migrationLedger,
+  pendingWebMigrations,
+} from "./up-migrations";
 export {
   QUEUE_CRITICAL_AT,
   QUEUE_WARN_AT,

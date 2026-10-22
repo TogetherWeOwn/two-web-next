@@ -1,7 +1,12 @@
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
-import { databaseUnavailable, forbidden, NotFoundPage } from "../errors";
+import {
+  databaseUnavailable,
+  databaseUnavailableBuffered,
+  forbidden,
+  NotFoundPage,
+} from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
@@ -123,7 +128,7 @@ export function registerDetailRoutes(
           }
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
-          if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+          if (!db) return databaseUnavailableBuffered(c);
           const e = await getPublicEvent(db, key);
           if (!e) return notFound();
           if (e.status === "cancelled") {
@@ -133,12 +138,22 @@ export function registerDetailRoutes(
             // varies on the cookie (TOG-10356 finding 5). The cancelled page is
             // viewer-independent: it renders before any session read, so a
             // store outage or a rotated cookie can never turn the static
-            // cancellation into a 500 (TOG-10356 review).
+            // cancellation into a 500 (TOG-10356 review). The alternatives
+            // lookup degrades to an empty list when it fails (mirroring the
+            // Kit gone model), so a related-read outage keeps the 410 with its
+            // calendar download instead of becoming a 500.
             c.header("cache-control", "private, no-store");
+            let related: EventLink[] = [];
+            try {
+              related = await listRelatedEvents(db, e);
+            } catch {
+              related = [];
+            }
             return bufferedMemberHtml(
               c,
               <EventGonePage
                 e={e}
+                related={related}
                 jsonLd={jsonLd(e, c.env.APP_URL)}
                 siteJsonLd={siteIdentities(c.env.APP_URL)}
               />,
