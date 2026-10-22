@@ -11,7 +11,7 @@
 //     fall back to 60 — the raw upstream text is never echoed into the
 //     user-visible message or the header.
 //   - The MCP 429 path (POST /mcp) carries the same validated value with
-//     no separate parser copy.
+//     no separate parser copy, in the JSON-RPC error shape.
 //   - Positive control: an unexhausted budget still serves the normal 200
 //     with no Retry-After header.
 //
@@ -84,6 +84,22 @@ async function expectValidated429(res: Response, seconds: number) {
     error: {
       code: "rate_limited",
       message: `Too many requests. Try again in ${seconds} seconds.`,
+      next: "Wait for Retry-After, then retry.",
+    },
+  });
+}
+
+async function expectValidatedMcp429(res: Response, seconds: number) {
+  expect(res.status).toBe(429);
+  expect(res.headers.get("retry-after")).toBe(String(seconds));
+  expect(res.headers.get("cache-control")).toBe("no-store, private");
+  expect(await res.json()).toEqual({
+    jsonrpc: "2.0",
+    id: null,
+    error: {
+      code: -32600,
+      message: `Too many requests. Try again in ${seconds} seconds.`,
+      data: { next: "Wait for Retry-After, then retry." },
     },
   });
 }
@@ -133,12 +149,12 @@ describe("public 429 Retry-After validation (real routes + memory throttle)", ()
 
   it("MCP 429 carries the same validated value (huge wait capped, no separate parser)", async () => {
     const f = fixture(true, 999_999);
-    await expectValidated429(await f.mcp(), 86_400);
+    await expectValidatedMcp429(await f.mcp(), 86_400);
   });
 
   it("MCP 429 passes a valid upstream wait through unchanged", async () => {
     const f = fixture(true, 17);
-    await expectValidated429(await f.mcp(), 17);
+    await expectValidatedMcp429(await f.mcp(), 17);
   });
 
   it("positive control: an unexhausted budget serves the normal 200 join handoff with no Retry-After", async () => {
