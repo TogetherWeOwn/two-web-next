@@ -126,10 +126,7 @@ export function parseLinksFormText(value: unknown): LinksResult {
       errors[`links[${index}]`] = `Line ${index + 1} needs "Label | https://...".`;
       return;
     }
-    const result = linkItemError(
-      { label: line.slice(0, pipe), url: line.slice(pipe + 1) },
-      index,
-    );
+    const result = linkItemError({ label: line.slice(0, pipe), url: line.slice(pipe + 1) }, index);
     Object.assign(errors, result.errors);
     if (result.link) links.push(result.link);
   });
