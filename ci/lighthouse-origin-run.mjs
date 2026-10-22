@@ -35,6 +35,7 @@ import {
   loadCollectedLhrs,
   loadAssertions,
 } from "./lighthouse-quality-run.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 const require = createRequire(import.meta.url);
 const lib = require("./lighthouse-origin-lib.cjs");
@@ -439,7 +440,7 @@ export async function main(
 }
 
 function selftest() {
-  const ORIGIN = "https://next.togetherweown.com";
+  const ORIGIN = STAGING_ORIGIN;
   const EVENT = "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV";
   const ROUTES = ["/", "/events", EVENT, "/join", "/about", "/faq", "/rules", "/privacy"];
   const NO_EVENT_ROUTES = ["/", "/events", "/join", "/about", "/faq", "/rules", "/privacy"];

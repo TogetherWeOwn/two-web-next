@@ -13,8 +13,10 @@
 // Cancel resets to the last accepted values and ignores pending completions,
 // but a newer save waits until the cancelled
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
-// expired notice with login link, input kept; anything else → save-failed
-// alert, input kept. Refusal alerts focus only when the member has not moved
+// expired notice with login link, input kept; 429 → throttled notice naming the
+// bounded Retry-After wait, input kept, never resent; 503 with the
+// profile_save_uncertain code → uncertain notice, input kept; anything else →
+// save-failed alert, input kept. Refusal alerts focus only when the member has not moved
 // on since the save started, like the saved confirmation. Copy and testids
 // mirror src/islands/contracts.ts.
 // While a write is unsettled the form is aria-busy and a polite progress line
@@ -455,6 +457,7 @@
       if (
         t === "profile-error" ||
         t === "profile-save-failed" ||
+        t === "profile-save-throttled" ||
         t === "profile-session-expired" ||
         t === "profile-saved" ||
         t === "profile-uncertain"
@@ -464,8 +467,38 @@
   }
 
   var SAVE_FAILED_COPY = "Could not save your profile. Your changes are still here — try again.";
+  // Mirrors PROFILE_COPY.saveUncertain: a settled save the store cancelled
+  // mid-write may still have committed, so this never claims it failed.
+  var SAVE_UNCERTAIN_COPY =
+    "Your save may still have gone through. Check your profile before trying again.";
+  var THROTTLED_PREFIX = "Too many requests. Your changes are still here — try again in ";
   var GENERIC_INVALID_COPY = "Could not save your profile. Check the form and try again.";
   var ERROR_BOUND = 500;
+  // Largest wait the throttled notice ever names (24h, like the server's
+  // MAX_RETRY_DELAY_SECONDS): representable-but-absurd values cap here
+  // instead of echoing raw.
+  var RETRY_AFTER_CAP_SECONDS = 86400;
+
+  // Bounded Retry-After for a throttled save, mirroring the server's
+  // parseRetryAfterSeconds (src/jobs/retry-delay.ts): numeric-only
+  // delta-seconds, fractions round up so the member never retries sooner than
+  // asked, values under a second are unusable, absurd caps, and anything else
+  // (dates, signs, words, overflow) falls back. The header wins; the JSON
+  // retry_after falls back.
+  function parseRetryAfterSeconds(value) {
+    var raw = value === null || value === undefined ? "" : String(value).trim();
+    if (!/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
+    var n = Number(raw);
+    if (!isFinite(n) || n * 1000 > 8000000000000000) return undefined;
+    var seconds = Math.ceil(n);
+    if (seconds < 1) return undefined;
+    return Math.min(seconds, RETRY_AFTER_CAP_SECONDS);
+  }
+
+  function throttledCopy(seconds) {
+    if (seconds === undefined) return THROTTLED_PREFIX + "a moment.";
+    return THROTTLED_PREFIX + seconds + " second" + (seconds === 1 ? "" : "s") + ".";
+  }
 
   function boundError(text) {
     var chars = Array.from(String(text));
@@ -503,6 +536,78 @@
 
   function saveFailed(noFocus) {
     notice("profile-save-failed", "alert", SAVE_FAILED_COPY, false, noFocus);
+  }
+
+  // A throttled save keeps the draft and names the bounded wait; nothing is
+  // resent, and the member retries with the ordinary Save. Decided at settle
+  // time with the generation guard, like the 422 payload, so a body that
+  // arrives after Cancel stays inert.
+  function saveThrottled(res, request) {
+    var headerSeconds;
+    try {
+      headerSeconds =
+        res.headers && typeof res.headers.get === "function"
+          ? parseRetryAfterSeconds(res.headers.get("Retry-After"))
+          : undefined;
+    } catch {
+      headerSeconds = undefined;
+    }
+    var show = function (seconds) {
+      if (request !== generation) return;
+      notice("profile-save-throttled", "alert", throttledCopy(seconds), false, hasMovedOn());
+    };
+    if (headerSeconds !== undefined) {
+      show(headerSeconds);
+      return;
+    }
+    var fromBody = function (j) {
+      if (request !== generation) return;
+      show(
+        j && typeof j === "object" && !Array.isArray(j)
+          ? parseRetryAfterSeconds(j.retry_after)
+          : undefined,
+      );
+    };
+    var noBody = function () {
+      if (request !== generation) return;
+      show(undefined);
+    };
+    try {
+      var payload = res.json();
+      if (payload && typeof payload.then === "function") {
+        return payload.then(fromBody, noBody);
+      }
+      fromBody(payload);
+    } catch {
+      noBody();
+    }
+  }
+
+  // A settled 503 is either definitely failed (safe to retry) or a cancelled
+  // write that may still have committed: only the profile_save_uncertain code
+  // owns the uncertain notice, everything else keeps the failed-safe alert.
+  function settledUnavailable(res, request) {
+    var settle = function (j) {
+      if (request !== generation) return;
+      if (j && typeof j === "object" && !Array.isArray(j) && j.error === "profile_save_uncertain") {
+        notice("profile-uncertain", "status", SAVE_UNCERTAIN_COPY, false, hasMovedOn());
+      } else {
+        saveFailed(hasMovedOn());
+      }
+    };
+    var unproven = function () {
+      if (request !== generation) return;
+      saveFailed(hasMovedOn());
+    };
+    try {
+      var outcome = res.json();
+      if (outcome && typeof outcome.then === "function") {
+        return outcome.then(settle, unproven);
+      }
+      settle(outcome);
+    } catch {
+      unproven();
+    }
   }
 
   function expire(request) {
@@ -773,6 +878,8 @@
         ) {
           return expiredNotice();
         }
+        if (res.status === 429) return saveThrottled(res, request);
+        if (res.status === 503) return settledUnavailable(res, request);
         saveFailed(hasMovedOn());
       })
       .catch(function (err) {
