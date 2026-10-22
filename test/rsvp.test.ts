@@ -603,9 +603,11 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(retry).toBeGreaterThanOrEqual(1);
     expect(retry).toBeLessThanOrEqual(60);
     expect(await limited.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: `Too many requests. Try again in ${retry} seconds.`,
       retry_after: retry,
+      next: "Wait for Retry-After, then retry.",
       request_id: limited.headers.get("x-request-id"),
     });
     expect((await call("DELETE", ev.key, "u1")).status).toBe(429);

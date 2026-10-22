@@ -593,4 +593,72 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     }
     expect((await pgDiscordSnapshotStore(connect).claim(key)).token).toBeTruthy();
   });
+  it("a stale claim blocked on the admission row lock loses tokenless with the stale view", async () => {
+    await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
+    const holderClient = connect();
+    try {
+      // connect() is lazy, so the pid query is the handshake. Do it before
+      // dispatching the hold: the sleep below runs only after the subquery's
+      // FOR UPDATE has taken the tuple lock.
+      const [backend] = await holderClient`select pg_backend_pid() as pid`;
+      const holderPid: number = backend!.pid;
+      // Hold the stale row past the store's 350ms lock_timeout with a single
+      // autocommit statement (same pattern as the fence test above): the lock
+      // is held for the statement's duration and freed by the server's
+      // implicit commit when pg_sleep returns, with no client-sent COMMIT hop.
+      // postgres.js template queries are lazy: .execute() dispatches now.
+      const released = holderClient`select /* discord_snapshot_claim_holder */ pg_sleep(0.9)
+          from (select lease_expires_at from discord_event_snapshots where key = ${key} for update) s`
+        .execute()
+        .then(
+          () => ({ released: true as const }),
+          (error: unknown) => ({ error }),
+        );
+      // Readiness waits for the holder's pg_sleep: wait_event = 'PgSleep'
+      // proves the row is held. The sleep lasts 900ms, so a 5ms poll cannot
+      // miss it; a stall past the sleep fails here instead of hanging.
+      let holding = false;
+      for (let i = 0; i < 200 && !holding; i++) {
+        const [activity] = await fixture.client`select exists(
+            select 1 from pg_stat_activity
+            where pid = ${holderPid}
+              and state = 'active'
+              and wait_event = 'PgSleep'
+          ) as holding`;
+        holding = activity!.holding;
+        if (!holding) await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(holding).toBe(true);
+      // The claimant's initial SELECT takes no row lock, so it reads the
+      // stale row through the held lock; only the admission UPDATE blocks,
+      // waits past lock_timeout, and must lose gracefully instead of
+      // throwing 55P03. Deleting the 55P03 catch must turn this test red.
+      let opens = 0;
+      const started = Date.now();
+      const claim = await pgDiscordSnapshotStore(() => {
+        opens += 1;
+        return connect();
+      }).claim(key);
+      const elapsed = Date.now() - started;
+      expect(opens).toBe(1);
+      expect(claim.token).toBeNull();
+      expect(claim.payload).toEqual([]);
+      expect(claim.succeededAt).not.toBeNull();
+      expect(claim.nowQueryStartedAt).toEqual(expect.any(Number));
+      // The admission UPDATE waited out the server-side lock_timeout rather
+      // than losing spuriously (same lower-bound margin as the throw pin).
+      expect(elapsed).toBeGreaterThanOrEqual(DISCORD_STORE_SQL_TIMEOUT_MS - 70);
+      const outcome = await released;
+      if ("error" in outcome) throw outcome.error;
+      // No lease strands on the timed-out claimant: a follow-up claim wins.
+      const followUp = await pgDiscordSnapshotStore(connect).claim(key);
+      expect(followUp.token).toBeTruthy();
+      expect(followUp.leaseExpiresAt! - followUp.now).toBeGreaterThan(
+        DISCORD_REFRESH_LEASE_MS - 100,
+      );
+      expect(followUp.leaseExpiresAt! - followUp.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
+    } finally {
+      await holderClient.end({ timeout: 0 });
+    }
+  });
 });

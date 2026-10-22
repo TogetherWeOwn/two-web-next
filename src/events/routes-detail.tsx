@@ -138,12 +138,22 @@ export function registerDetailRoutes(
             // varies on the cookie (TOG-10356 finding 5). The cancelled page is
             // viewer-independent: it renders before any session read, so a
             // store outage or a rotated cookie can never turn the static
-            // cancellation into a 500 (TOG-10356 review).
+            // cancellation into a 500 (TOG-10356 review). The alternatives
+            // lookup degrades to an empty list when it fails (mirroring the
+            // Kit gone model), so a related-read outage keeps the 410 with its
+            // calendar download instead of becoming a 500.
             c.header("cache-control", "private, no-store");
+            let related: EventLink[] = [];
+            try {
+              related = await listRelatedEvents(db, e);
+            } catch {
+              related = [];
+            }
             return bufferedMemberHtml(
               c,
               <EventGonePage
                 e={e}
+                related={related}
                 jsonLd={jsonLd(e, c.env.APP_URL)}
                 siteJsonLd={siteIdentities(c.env.APP_URL)}
               />,
