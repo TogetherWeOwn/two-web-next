@@ -54,6 +54,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       ),
       total: data.total,
       eventCount: data.eventCount,
+      gatherings: data.gatherings,
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,

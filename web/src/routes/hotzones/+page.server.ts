@@ -30,6 +30,7 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
       ),
       joinsTotal: data.joins.total,
       eventCount: data.joins.eventCount,
+      gatherings: data.gatherings,
       voiceHtml: await renderHotzoneGrid(
         data.voice.cells,
         "Season-independent seeded estimate of voice activity",

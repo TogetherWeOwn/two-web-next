@@ -20,7 +20,9 @@ function fixture() {
       throw new Error("fixture insert failure; this message must not be logged");
     }
     if (sql.includes('from "join_attempts"')) return { rows: [] };
-    if (sql.includes('from "events"')) return { rows: [[0]] };
+    // The event count answers 0; the bounded gatherings list answers empty,
+    // so the board renders genuine-empty with no section.
+    if (sql.includes('from "events"')) return { rows: sql.includes("count(*)") ? [[0]] : [] };
     if (sql.startsWith("SET LOCAL") || sql.startsWith("select set_config(")) return { rows: [] };
     throw new Error(`Unexpected fixture SQL: ${sql}`);
   });

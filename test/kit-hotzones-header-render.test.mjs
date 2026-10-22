@@ -78,6 +78,7 @@ function fixture(signal, season) {
     total: 0,
     joinsTotal: 0,
     eventCount: 0,
+    gatherings: [],
     retentionNote: null,
     estimated: signal !== "joins",
     gridHtml,
