@@ -1,4 +1,5 @@
-// route-inventory: GET /admin/moderation, POST /admin/moderation
+// route-inventory: GET /admin/moderation
+// route-inventory: POST /admin/moderation
 // Acceptance: dashboard moderation page (Slice 2b).
 //
 // Parent spec: TOG-35922 "Web dashboard parity" §2.1 (moderation slice),
