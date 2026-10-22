@@ -106,7 +106,7 @@ describe("runbook diagnostic and homepage contract", () => {
       /Classified DB outages.*503.*missing event DB.*plain-text.*503.*other uncaught failures.*500 HTML/i,
     );
     expect(routeRow("/e/:key")).toMatch(
-      /missing event DB.*plain-text.*503.*other failed reads.*plain-text.*503/,
+      /missing event DB.*branded HTML.*503.*negotiated JSON.*503.*db_unavailable.*other failed reads.*plain-text.*503/,
     );
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
