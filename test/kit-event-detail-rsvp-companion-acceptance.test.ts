@@ -197,7 +197,10 @@ describe("acceptance: companion gate order through the shared seams", () => {
     expect(outcome.kind).toBe("missing");
     if (outcome.kind !== "missing") throw new Error("unreachable");
     expect(outcome.status).toBe(404);
-    expect(outcome.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(outcome.headers).toEqual({
+      "cache-control": "private, no-store",
+      "x-robots-tag": "noindex, nofollow",
+    });
     expect(outcome.model.suggestions).toHaveLength(1);
     // Admission refused before the database: only the suggestion read ran.
     expect(calls).toEqual(["suggestions"]);

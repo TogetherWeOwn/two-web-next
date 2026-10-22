@@ -144,9 +144,11 @@ describe("branded error handlers on a scratch app", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("7");
     expect(await res.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 7 seconds.",
       retry_after: 7,
+      next: "Wait for Retry-After, then retry.",
     });
   });
 
