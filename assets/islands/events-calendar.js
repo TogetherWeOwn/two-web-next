@@ -24,6 +24,13 @@
   var live = LIVE_TESTIDS.map(function (t) {
     return root.querySelector('[data-testid="' + t + '"]');
   });
+  // Failed-read recovery host (optional: pages and harnesses without it keep
+  // the pre-recovery behavior). Testids mirror EVENTS_READ_*_TESTID in
+  // src/islands/contracts-calendar.ts.
+  var retry = root.querySelector('[data-testid="events-read-retry"]');
+  var clearRead = root.querySelector('[data-testid="events-read-clear"]');
+  var readStatus = root.querySelector('[data-testid="events-read-status"]');
+  var hasRecovery = !!(retry && clearRead && readStatus);
   if (
     zones.length === 0 ||
     !skeleton ||
@@ -51,6 +58,12 @@
   var activeIsSearch = false;
   var debounceTimer = null;
   var inputRevision = 0;
+  // The last failed GET intent (page address plus any card hash), retried
+  // explicitly and dropped by any newer action. A 429 Retry-After cools the
+  // retry down, at most 60 seconds (mirrors EVENTS_READ_RETRY_AFTER_CAP_MS).
+  var RETRY_AFTER_CAP_MS = 60000;
+  var failedIntent = null;
+  var cooldownTimer = null;
   // The deadline needs both timer globals; harnesses with a partial fake
   // clock (setTimeout only) get the pre-deadline behavior.
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
@@ -64,6 +77,116 @@
 
   function invalidPage() {
     throw new Error("Invalid calendar page");
+  }
+
+  var MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
+  // Mirrors calendarMonthLabel in src/islands/contracts-calendar.ts.
+  function monthLabel(month) {
+    var match = /^(\d{1,4})-(\d{1,2})$/.exec(month || "");
+    if (!match) return null;
+    var year = Number(match[1]);
+    var index = Number(match[2]);
+    if (year < 1 || index < 1 || index > 12) return null;
+    return MONTH_NAMES[index - 1] + " " + year;
+  }
+
+  // One line the kept last-good zones can stand beside: what the address
+  // would have shown, never the generic failure copy. The past drawer and the
+  // upcoming-list page are part of the destination: without them a failed
+  // pager turn or past toggle would read as "Couldn't load X. Showing X."
+  function describeDestination(address) {
+    var params = new URL(address, window.location.origin).searchParams;
+    var q = params.get("q") || "";
+    var view = params.get("view") || "list";
+    var place =
+      view === "calendar"
+        ? monthLabel(params.get("month") || "") || "the calendar"
+        : "the events list";
+    var base =
+      q === ""
+        ? place
+        : view === "calendar"
+          ? "results for “" + q + "” in " + place
+          : "results for “" + q + "”";
+    if (params.get("past") === "1") base += " with past events";
+    // Page 1 is the bare address (calendarUrl omits it), so only later list
+    // pages need naming; the grid is month-scoped and never carries a page.
+    var page = params.get("page");
+    if (view !== "calendar" && page !== null && /^\d+$/.test(page) && Number(page) > 1) {
+      base = "page " + Number(page) + " of " + base;
+    }
+    return base;
+  }
+
+  // Strict delay-seconds only: a missing, dated, signed, zero, exponential
+  // or suffixed value leaves the retry immediate instead of parking it, and
+  // an absurd value caps instead of storming (nothing refetches alone).
+  function parseRetryAfterMs(value) {
+    if (typeof value !== "string") return null;
+    if (!/^\d+(\.\d+)?$/.test(value.trim())) return null;
+    var seconds = Math.ceil(Number(value.trim()));
+    if (!isFinite(seconds) || seconds <= 0) return null;
+    return Math.min(seconds * 1000, RETRY_AFTER_CAP_MS);
+  }
+
+  function hideRecovery() {
+    failedIntent = null;
+    if (cooldownTimer !== null) {
+      clearTimeout(cooldownTimer);
+      cooldownTimer = null;
+    }
+    if (!hasRecovery) return;
+    retry.hidden = true;
+    clearRead.hidden = true;
+    retry.disabled = false;
+    readStatus.textContent = "";
+  }
+
+  function startCooldown(ms) {
+    if (!canTimeout) return;
+    retry.disabled = true;
+    if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+    cooldownTimer = setTimeout(function () {
+      cooldownTimer = null;
+      retry.disabled = false;
+    }, ms);
+  }
+
+  function showRecovery(url, cooldownMs) {
+    if (!hasRecovery) return;
+    // Keep the full intent including any card hash: a failed grid day-jump
+    // retries onto the picked card instead of only its list page. The fetch
+    // still sends path+query only; history and jump focus reuse the hash.
+    failedIntent = pageAddress(url) + (url.hash || "");
+    var copy =
+      "Couldn't load " +
+      describeDestination(pageAddress(url)) +
+      ". Showing " +
+      describeDestination(renderedAddress) +
+      ".";
+    if (cooldownMs) {
+      var seconds = Math.round(cooldownMs / 1000);
+      copy += " Retry available in " + seconds + " second" + (seconds === 1 ? "." : "s.");
+    }
+    readStatus.textContent = copy;
+    retry.hidden = false;
+    clearRead.hidden = false;
+    retry.disabled = false;
+    if (cooldownMs) startCooldown(cooldownMs);
   }
 
   function cancelDebounce() {
@@ -141,6 +264,9 @@
   // opts.search: newer input invalidates this request before its debounce fires.
   async function load(url, push, opts) {
     opts = opts || {};
+    // A newer action drops the failed intent before its own read resolves;
+    // a newer failure below replaces it with its own destination.
+    hideRecovery();
     var inputAtStart = input.value;
     var inputRevisionAtStart = inputRevision;
     var focusAtStart = document.activeElement;
@@ -163,6 +289,9 @@
     // this request no longer owns the zones: release active first so its late
     // abort/completion stays silent, then restore the last good view.
     var deadlineTimer = null;
+    // 429 backoff belongs to this read only: a missing or hostile
+    // Retry-After leaves the explicit retry immediate.
+    var retryAfterMs = null;
     if (canTimeout) {
       deadlineTimer = setTimeout(function () {
         if (active !== controller) return;
@@ -183,6 +312,7 @@
         if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
           window.location.assign(window.location.href);
         } else {
+          showRecovery(url, null);
           restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
         }
       }, READ_DEADLINE_MS);
@@ -193,7 +323,16 @@
         headers: { accept: "text/html", "x-two-island": "events-calendar" },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error("Calendar unavailable");
+      if (!response.ok) {
+        if (
+          response.status === 429 &&
+          response.headers &&
+          typeof response.headers.get === "function"
+        ) {
+          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        }
+        throw new Error("Calendar unavailable");
+      }
       var html = await response.text();
       if (active !== controller) return;
       var page = new DOMParser().parseFromString(html, "text/html");
@@ -320,6 +459,10 @@
       if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
         window.location.assign(window.location.href);
       } else {
+        // Ordinary failure: the last-good zones stay, the missed destination
+        // is named beside them, and the failed GET intent gains an explicit
+        // retry plus a safe return.
+        showRecovery(url, retryAfterMs);
         restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
       }
     } finally {
@@ -407,6 +550,9 @@
   function scheduleSearch() {
     inputRevision += 1;
     cancelDebounce();
+    // Typing supersedes a failed intent at once, not when the next fetch
+    // starts; composition schedules nothing but still drops the recovery.
+    hideRecovery();
     // Typing supersedes a search immediately, not just when the next fetch starts.
     // Explicit navigation may still commit while newer text remains in the box.
     if (active && activeIsSearch) {
@@ -444,6 +590,41 @@
     if (composing || (event && event.isComposing)) return;
     runSearch();
   });
+
+  // Explicit recovery: retry re-issues the last failed GET intent unchanged
+  // (a 429 cooldown holds it briefly); the safe return drops the intent and
+  // restores the committed box without fetching. Plain buttons, so without
+  // this file they stay hidden and inert.
+  if (hasRecovery) {
+    // Hiding the activated recovery button would drop keyboard focus to body
+    // (a hidden element cannot keep it). Park it on the stable heading first;
+    // pointer activation never focuses the button and stays where it was.
+    function parkFocus(control) {
+      if (document.activeElement !== control) return;
+      var target = root.querySelector("#events-heading") || input;
+      if (target) target.focus();
+    }
+    retry.addEventListener("click", function () {
+      if (!failedIntent || retry.disabled) return;
+      parkFocus(retry);
+      var intent = new URL(failedIntent, window.location.origin);
+      load(intent, true, {
+        skeleton: true,
+        syncInput: true,
+        focus: intent.hash || null,
+      });
+    });
+    clearRead.addEventListener("click", function () {
+      if (!failedIntent) return;
+      input.value = new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
+      // The safe return reaches the same steady state as a successful load:
+      // the generic failure line clears instead of prompting a retry of an
+      // intent the member just abandoned.
+      feedback.textContent = overLimit() ? searchTooLong : "";
+      parkFocus(clearRead);
+      hideRecovery();
+    });
+  }
 
   // The month-jump form is a native GET form (view + past ride as hidden
   // fields), so a jump works without this file. With it, submit reuses the

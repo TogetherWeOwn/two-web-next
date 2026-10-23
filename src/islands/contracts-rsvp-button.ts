@@ -132,33 +132,49 @@ export function rsvpBroadcast(eventKey: string, viewerState: GoingViewerState): 
   return { event: GOING_UPDATED_EVENT, eventKey, viewerState };
 }
 
+// Separate values let Kit tree-shake island-only feedback without duplicating copy.
+export const RSVP_CTA_COPY = "I'm in";
+export const RSVP_CONFIRMED_COPY = "You're in";
+export const RSVP_WITHDRAW_COPY = "Can't make it";
+export const RSVP_FULL_COPY = "This one's full.";
+export const RSVP_WAITLIST_JOIN_COPY = "Join the waitlist";
+export const RSVP_WAITLIST_FALLBACK_COPY = "You're on the waitlist";
+export const RSVP_WAITLIST_CLAIM_COPY = "A seat opened up — I'm in";
+export const RSVP_WAITLIST_LEAVE_COPY = "Leave the waitlist";
+export const RSVP_SYNCING_COPY = "Saved. Syncing to Discord.";
+export const RSVP_SYNCED_COPY = "Synced to Discord.";
+export const RSVP_PAUSED_COPY = "RSVPs are paused for this event — check back soon.";
+export const RSVP_GUEST_CTA_COPY = "Log in with Discord";
+export const RSVP_GUEST_FULL_HINT_COPY = "Sign in to join the waitlist";
+export const RSVP_JOIN_TO_RSVP_COPY = "Join the server to RSVP";
+
 /** Member-visible copy, pinned verbatim (CM-frozen rows noted). */
 export const RSVP_COPY = {
-  cta: "I'm in",
+  cta: RSVP_CTA_COPY,
   saving: "Saving…",
-  confirmed: "You're in",
-  withdraw: "Can't make it",
+  confirmed: RSVP_CONFIRMED_COPY,
+  withdraw: RSVP_WITHDRAW_COPY,
   removing: "Removing…",
-  full: "This one's full.",
-  waitlistJoin: "Join the waitlist",
-  waitlistFallback: "You're on the waitlist",
-  waitlistClaim: "A seat opened up — I'm in",
-  waitlistLeave: "Leave the waitlist",
+  full: RSVP_FULL_COPY,
+  waitlistJoin: RSVP_WAITLIST_JOIN_COPY,
+  waitlistFallback: RSVP_WAITLIST_FALLBACK_COPY,
+  waitlistClaim: RSVP_WAITLIST_CLAIM_COPY,
+  waitlistLeave: RSVP_WAITLIST_LEAVE_COPY,
   waitlistSeatTaken: "Someone just took that seat.",
-  syncing: "Saved. Syncing to Discord.",
+  syncing: RSVP_SYNCING_COPY,
   syncFailed: "Saved. Discord sync didn't go through — your spot is still held.",
-  synced: "Synced to Discord.",
+  synced: RSVP_SYNCED_COPY,
   failedTitle: "That RSVP didn't save.",
   failedAction: "Try once more.",
   unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
   refresh: "Refresh the event",
-  paused: "RSVPs are paused for this event — check back soon.",
+  paused: RSVP_PAUSED_COPY,
   sessionExpired: "Your session expired.",
-  guestCta: "Log in with Discord",
+  guestCta: RSVP_GUEST_CTA_COPY,
   /** Guest full-event hint: the sign-in link text that names the waitlist path. */
-  guestFullHint: "Sign in to join the waitlist",
+  guestFullHint: RSVP_GUEST_FULL_HINT_COPY,
   /** Signed-in non-member prompt: links to /join?next=<event>, never login. */
-  joinToRsvp: "Join the server to RSVP",
+  joinToRsvp: RSVP_JOIN_TO_RSVP_COPY,
 } as const;
 
 /** Closed-event copy by reason (legacy closed branch, role=status). */
@@ -183,7 +199,7 @@ export function rsvpFullCapCopy(capacity: number): string {
 /** One-based place in line, in words and digits, never colour alone. */
 export function waitlistPositionCopy(position: number | null): string {
   return position === null
-    ? RSVP_COPY.waitlistFallback
+    ? RSVP_WAITLIST_FALLBACK_COPY
     : `You're on the waitlist — #${position} in line`;
 }
 
