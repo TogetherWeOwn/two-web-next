@@ -44,16 +44,30 @@ vi.mock("postgres", async () => {
   return { ...actual, default: vi.fn(actual.default) };
 });
 
-// The past archive has no Discord read to hold an in-flight render on (unlike
-// /events), so the past race test pauses listPast itself: the wrapper lets the
-// rows resolve, then holds the handler before it renders and settles. The
-// channel lives on globalThis because the mock factory runs before the module
-// body. One-shot (the first gated call consumes it) so a concurrent moderator
-// write can never deadlock on the same seam.
+// Pause each list read after its rows resolve but before the handler renders
+// and settles. Discord now resolves before the schedule's list reads, so its
+// gate cannot prove the old title was captured. These one-shot gates pin the
+// race to the actual snapshot, independent of unrelated source-read ordering.
+// Channels live on globalThis because the mock factory runs before the module
+// body. A concurrent moderator write never consumes either list seam.
 vi.mock("../src/events/reads", async () => {
   const actual = await vi.importActual<typeof import("../src/events/reads")>("../src/events/reads");
   return {
     ...actual,
+    listUpcoming: async (...args: Parameters<typeof actual.listUpcoming>) => {
+      const result = await actual.listUpcoming(...args);
+      const gate = (
+        globalThis as unknown as {
+          __upcomingListGate?: { used: boolean; arrived: () => void; gate: Promise<void> };
+        }
+      ).__upcomingListGate;
+      if (gate && !gate.used) {
+        gate.used = true;
+        gate.arrived();
+        await gate.gate;
+      }
+      return result;
+    },
     listPast: async (...args: Parameters<typeof actual.listPast>) => {
       const result = await actual.listPast(...args);
       const gate = (
@@ -279,10 +293,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     it("an in-flight render never settles stale HTML after a retire", async () => {
       const row = await seed({ title: "Old title" });
-      // Gate the Discord read: the handler reaches it only after both DB
-      // reads, so the in-flight render has already seen "Old title" when the
-      // gate holds it. The moderator PATCH path never reads Discord, so the
-      // gate cannot deadlock it.
+      // Gate the resolved upcoming rows, not Discord: the list snapshot must
+      // contain "Old title" before the write retires it. The moderator PATCH
+      // never calls listUpcoming, so the gate cannot deadlock it.
       let releaseGate!: () => void;
       const gate = new Promise<void>((resolve) => {
         releaseGate = resolve;
@@ -291,11 +304,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const arrivedAtGate = new Promise<void>((resolve) => {
         arrived = resolve;
       });
-      const realUpcoming = discordStub.upcoming;
-      discordStub.upcoming = async () => {
-        arrived();
-        await gate;
-        return [];
+      (globalThis as unknown as { __upcomingListGate?: unknown }).__upcomingListGate = {
+        used: false,
+        arrived,
+        gate,
       };
       try {
         const inflight = guestGet("/events");
@@ -314,7 +326,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(html).not.toContain("Old title");
       } finally {
         releaseGate();
-        discordStub.upcoming = realUpcoming;
+        delete (globalThis as unknown as { __upcomingListGate?: unknown }).__upcomingListGate;
       }
     });
 
