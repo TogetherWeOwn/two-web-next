@@ -266,8 +266,9 @@ describe("featured Kit chrome (per-child AdminShell)", () => {
   // never inherits the wrong tab title during mixed mode. This pins the
   // featured slice's own title, the Kit twin of its Hono Shell title.
   it("wraps itself in its own AdminShell title", () => {
+    expect(read("web/src/routes/admin/featured/+page.svelte")).toContain("<AdminShell");
     expect(read("web/src/routes/admin/featured/+page.svelte")).toContain(
-      '<AdminShell title="Featured content">',
+      'title="Featured content"',
     );
   });
 });

@@ -28,7 +28,8 @@ export type OrientationRenderer = (
 ) => Rendered;
 
 export async function compileOrientation(): Promise<OrientationRenderer> {
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler");
   const entries = {
     ...Object.fromEntries(
       Object.entries(routes).map(([name, route]) => [
