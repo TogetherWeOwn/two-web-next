@@ -7,7 +7,8 @@ export function archiveContext(search: string): ArchiveContext | null {
   // URLSearchParams repairs malformed percent/UTF-8 input. Refuse it instead
   // of returning the viewer to a silently different search.
   try {
-    decodeURIComponent(search);
+    // Consume the result so production tree-shaking retains the throwing check.
+    if (!decodeURIComponent(search)) return null;
   } catch {
     return null;
   }
