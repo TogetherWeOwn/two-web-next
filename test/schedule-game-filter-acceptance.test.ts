@@ -185,7 +185,8 @@ function gameScheduleFixture(args: {
         (p): p is string =>
           typeof p === "string" &&
           !(p.startsWith("%") && p.endsWith("%")) &&
-          !/^\d{4}-\d{2}-\d{2}[T ]/.test(p),
+          !/^\d{4}-\d{2}-\d{2}[T ]/.test(p) &&
+          !rows.some((row) => row.eventKey === p),
       );
       if (typeof gameParam === "string") {
         const want = norm(gameParam);
@@ -230,6 +231,21 @@ function gameScheduleFixture(args: {
     }
     let rows = /"ends_at" </.test(sql) ? past : upcoming;
     rows = applyFilters(rows, sql, params);
+    // Explicit day jumps first load a keyed anchor, then count rows before its
+    // stored start/id. Keep those reads distinct from the ordinary page total.
+    if (/"event_key" = \$/.test(sql)) {
+      rows = rows.filter((row) => params.includes(row.eventKey));
+    }
+    if (/^select count/i.test(sql) && sql.includes('(select "starts_at"')) {
+      const idParam = /"id" = \$(\d+)/.exec(sql);
+      const anchor = upcoming.find((row) => row.id === params[Number(idParam?.[1]) - 1]);
+      if (!anchor) throw new Error("Rank fixture requires a stored anchor id");
+      rows = rows.filter(
+        (row) =>
+          row.startsAt < anchor.startsAt ||
+          (row.startsAt.getTime() === anchor.startsAt.getTime() && row.id < anchor.id),
+      );
+    }
     if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     if (sql.includes("limit")) {
       const hasOffset = sql.includes(" offset ");
@@ -881,3 +897,190 @@ describe("CONTROL: existing search and calendar contracts", () => {
     expect(await res.text()).toContain('data-view="list"');
   });
 });
+
+// Independent regression coverage: each group names a concrete broken branch.
+// Run both real adapters/resolvers; only DB and Discord I/O use local fixtures.
+for (const adapter of ["Hono", "Kit"] as const) {
+  describe(`${adapter}: game-filter coverage regressions`, () => {
+    async function htmlFor(path: string, src: ReturnType<typeof gameScheduleFixture>) {
+      if (adapter === "Hono") {
+        const response = await src.request(path);
+        expect(response.status).toBe(200);
+        return response.text();
+      }
+      const url = new URL(path, APP_URL);
+      const headers: Record<string, string> = {};
+      const data = await loadEventsPage({
+        env: src.env,
+        url,
+        method: "GET",
+        island: false,
+        request: new Request(url),
+        setHeaders: (values) => Object.assign(headers, values),
+        deleteJoinCookie: () => {},
+        dbForFn: async () => src.db,
+        sessionForFn: async () => null,
+        journeyForFn: async () => null,
+        discordForFn: () => src.source,
+      });
+      const response = await renderEventsHtml(data as never, headers);
+      expect(response.status).toBe(200);
+      return response.body;
+    }
+
+    // Break: unconditional dedupeTransients admits game-less Discord rows.
+    it.each(["list", "calendar"])(
+      "excludes a nonempty Discord source only when a recognized game is active (%s)",
+      async (view) => {
+        const chess = eventRow({ title: "Local Chess Fixture", game: "Chess" });
+        const transient = {
+          discordId: "1545644954272137999",
+          status: "scheduled" as const,
+          title: "Discord Native Fixture",
+          description: null,
+          location: null,
+          startsAt: new Date("2099-07-15T21:00:00Z"),
+          endsAt: new Date("2099-07-15T23:00:00Z"),
+        };
+        const fixture = () =>
+          gameScheduleFixture({
+            upcoming: [chess],
+            monthRows: [chess],
+            source: discordSource([transient]),
+          });
+        const path = `/events?view=${view}&month=2099-07`;
+        const control = await htmlFor(path, fixture());
+        expect(control).toContain("Discord Native Fixture");
+        expect(control).toContain("Local Chess Fixture");
+        const filtered = await htmlFor(`${path}&game=Chess`, fixture());
+        expect(filtered).not.toContain("Discord Native Fixture");
+        expect(filtered).toContain("Local Chess Fixture");
+      },
+    );
+
+    // Break: listCalendarPast(..., { ...opts, game: null }) leaks other games.
+    it.each([
+      { query: "past=1", titles: ["Archive Chess Match", "Unrelated Chess Result"] },
+      { query: "q=Archive", titles: ["Archive Chess Match"] },
+      { query: "q=Archive&past=1", titles: ["Archive Chess Match"] },
+    ])("filters nonempty past-drawer cards with $query", async ({ query, titles }) => {
+      const past = [
+        eventRow({ title: "Archive Chess Match", game: "Chess" }),
+        eventRow({ title: "Archive Go Match", game: "Go" }),
+        eventRow({ title: "Unrelated Chess Result", game: "Chess" }),
+      ].map((row) => ({
+        ...row,
+        startsAt: new Date("2000-07-15T19:00:00Z"),
+        endsAt: new Date("2000-07-15T21:00:00Z"),
+      }));
+      // A nonempty upcoming schedule keeps explicit past=1 on the real drawer
+      // path instead of the no-upcoming gap summary (which renders no cards).
+      const future = eventRow({ title: "Upcoming Fixture", game: "Chess" });
+      const fixture = () => gameScheduleFixture({ past, upcoming: [future], monthRows: [future] });
+      const control = await htmlFor("/events?past=1", fixture());
+      for (const row of past) expect(control).toContain(row.title);
+      const path = `/events?game=Chess&${query}${query === "q=Archive" ? "&view=calendar" : ""}`;
+      const filtered = await htmlFor(path, fixture());
+      const drawer = /<ul\b[^>]*data-testid="events-past-list"[^>]*>[\s\S]*?<\/ul>/.exec(
+        filtered,
+      )?.[0];
+      expect(drawer).toBeDefined();
+      // Assert exact drawer card identities, not game names in the select or
+      // the separate upcoming list (which must not count as a past result).
+      const cards = [
+        ...drawer!.matchAll(/<article\b[^>]*data-testid="event-card"[^>]*>[\s\S]*?<\/article>/g),
+      ];
+      expect(cards).toHaveLength(titles.length);
+      for (const title of titles) expect(cards.some(([card]) => card.includes(title))).toBe(true);
+      expect(filtered).not.toContain("Archive Go Match");
+      if (query.startsWith("q=")) {
+        expect(filtered).not.toContain("Unrelated Chess Result");
+        expect(filtered).toContain('data-view="list"');
+        expect(statusInner(filtered, EVENTS_SEARCH_STATUS_TESTID)).toContain("Archive");
+      }
+    });
+
+    // Break: the actual grid event link omits state.game. Interleaving makes
+    // target rank 20 (page 2/2) with Chess, but 41 (page 3/3) without the facet.
+    it("follows a rendered grid day-jump to the filtered page and target card", async () => {
+      const upcoming = Array.from({ length: 21 }, (_, i) => [
+        eventRow({
+          title: `Jump Go ${i}`,
+          game: "Go",
+          startsAt: new Date(Date.UTC(2099, 6, 1, 18 + i * 2)),
+        }),
+        eventRow({
+          title: `Jump Chess ${i}`,
+          game: "Chess",
+          startsAt: new Date(Date.UTC(2099, 6, 1, 19 + i * 2)),
+        }),
+      ]).flat();
+      const target = upcoming.at(-1)!;
+      const fixture = () => gameScheduleFixture({ upcoming, monthRows: upcoming });
+      const grid = await htmlFor("/events?view=calendar&month=2099-07&game=Chess", fixture());
+      const jumps = [...grid.matchAll(/<a\b[^>]*\bdata-cal-jump(?:="[^"]*")?[^>]*>[\s\S]*?<\/a>/g)];
+      const targetLink = jumps.find(([tag]) => tag.includes("Jump Chess 20"))?.[0];
+      expect(targetLink).toBeDefined();
+      const href = /href="([^"]+)"/.exec(targetLink!)?.[1]?.replaceAll("&amp;", "&");
+      expect(href).toBeDefined();
+      const url = new URL(href!, APP_URL);
+      expect(url.searchParams.get("game")).toBe("Chess");
+      expect(url.searchParams.get("event")).toBe(target.eventKey);
+      const jumped = await htmlFor(`${url.pathname}${url.search}`, fixture());
+      expect(jumped).toContain("Page 2 of 2.");
+      expect(jumped).toContain(`id="event-${target.eventKey}"`);
+      expect(jumped).toContain("Jump Chess 20");
+      expect(jumped).not.toContain("Jump Chess 19");
+      expect(jumped).not.toContain("Jump Go ");
+      const control = await htmlFor(`/events?event=${target.eventKey}`, fixture());
+      expect(control).toContain("Page 3 of 3.");
+      expect(control).toContain(`id="event-${target.eventKey}"`);
+    });
+
+    // Break: returning raw.trim() instead of the stored canonical game leaves
+    // lowercase/uppercase requests with no selected option and misleading copy.
+    for (const view of ["list", "calendar"]) {
+      it.each(["chess", "CHESS", "  Chess  "])(
+        `selects and announces canonical Chess for %j (${view})`,
+        async (raw) => {
+          const { chessAlpha, goGamma } = chessGoFixture();
+          const src = gameScheduleFixture({
+            upcoming: [chessAlpha, goGamma],
+            monthRows: [chessAlpha, goGamma],
+          });
+          const html = await htmlFor(
+            `/events?view=${view}&month=2099-07&game=${encodeURIComponent(raw)}`,
+            src,
+          );
+          const select = selectFor(html);
+          expect(select).not.toBeNull();
+          expect(optionsOf(select!).filter((option) => option.selected)).toEqual([
+            { value: "Chess", label: "Chess", selected: true },
+          ]);
+          expect(statusInner(html, EVENTS_SEARCH_STATUS_TESTID)).toBe(
+            "Showing events for “Chess”.",
+          );
+          expect(html).toContain("Chess Night Alpha");
+          expect(html).not.toContain("Go Night Gamma");
+        },
+      );
+
+      it(`CONTROL: unknown game selects only All games (${view})`, async () => {
+        const { chessAlpha, goGamma } = chessGoFixture();
+        const src = gameScheduleFixture({
+          upcoming: [chessAlpha, goGamma],
+          monthRows: [chessAlpha, goGamma],
+        });
+        const html = await htmlFor(`/events?view=${view}&month=2099-07&game=Unknown`, src);
+        const select = selectFor(html);
+        expect(select).not.toBeNull();
+        expect(optionsOf(select!).filter((option) => option.selected)).toEqual([
+          { value: "", label: "All games", selected: true },
+        ]);
+        expect((statusInner(html, EVENTS_SEARCH_STATUS_TESTID) ?? "").trim()).toBe("");
+        expect(html).toContain("Chess Night Alpha");
+        expect(html).toContain("Go Night Gamma");
+      });
+    }
+  });
+}
