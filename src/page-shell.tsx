@@ -4,6 +4,7 @@ import type { Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
+import { shareImageUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -87,6 +88,8 @@ export const Layout: FC<
             {shareDescription ? (
               <meta property="og:description" content={shareDescription} />
             ) : null}
+            <meta property="og:image" content={shareImageUrl(canonical)} />
+            <meta property="og:image:alt" content="Together We Own community logo" />
             <meta name="twitter:card" content="summary" />
             <meta name="twitter:title" content={shareTitle ?? title} />
             {shareDescription ? (
