@@ -120,10 +120,10 @@
       "@puppeteer/browsers": "3.2.3"
     },
     "basic-ftp": "6.2.1",
-    "sharp": "0.35.5",
-    "puppeteer-core": {
-      "proxy-agent": "6.5.0"
-    }
+    "lighthouse": {
+      "puppeteer-core": "25.16.0"
+    },
+    "sharp": "0.35.5"
   },
   "engines": {
     "node": "^22.23.0 || >=24"
