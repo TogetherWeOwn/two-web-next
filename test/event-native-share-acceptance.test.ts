@@ -12,6 +12,26 @@ import {
   SHARE_VIEWS,
 } from "./fixtures/event-native-share";
 
+describe("native Share SSR recognizer controls", () => {
+  it.each([
+    '<button type="button" hidden>Share event</button>',
+    '<button type="button" hidden aria-label="Share"><svg></svg></button>',
+    '<span id="share-name">Share this event</span><button hidden aria-labelledby="share-name"><svg></svg></button>',
+    '<span id="verb">Share</span><span id="object">event</span><button hidden aria-labelledby="verb object" aria-label="Other"></button>',
+    "<button hidden><!-- decorative --><span>Share</span> event</button>",
+  ])("recognizes the accessible Share name in %s", (html) => {
+    expect(nativeShareButtonMarkup(html)).toHaveLength(1);
+  });
+
+  it.each([
+    '<button aria-label="Copy link">Share</button>',
+    '<span id="copy-name">Copy link</span><button aria-labelledby="copy-name">Share</button>',
+    "<button><!-- Share --><svg></svg></button>",
+  ])("does not mistake another accessible name for Share in %s", (html) => {
+    expect(nativeShareButtonMarkup(html)).toEqual([]);
+  });
+});
+
 for (const view of SHARE_VIEWS) {
   describe(`${view} native event sharing server acceptance`, () => {
     it.each(["guest", "member"] as const)(
@@ -29,9 +49,9 @@ for (const view of SHARE_VIEWS) {
         const opening = buttons[0]!.slice(0, buttons[0]!.indexOf(">") + 1);
         expect(opening).toMatch(/\btype="button"/);
         expect(opening).toMatch(/\shidden(?:[\s=>])/);
-        expect(html).toMatch(
-          new RegExp(`<a[^>]*href="${SHARE_CANONICAL}"[^>]*data-copy-link="${SHARE_CANONICAL}"`),
-        );
+        const copy = html.match(/<a\b[^>]*\sdata-copy-link="[^"]*"[^>]*>/)?.[0];
+        expect(copy).toContain(`href="${SHARE_CANONICAL}"`);
+        expect(copy).toContain(`data-copy-link="${SHARE_CANONICAL}"`);
       },
     );
 
@@ -39,7 +59,9 @@ for (const view of SHARE_VIEWS) {
       const { html, status } = await nativeShareFixture(view);
       expect(status).toBe(200);
       expect(html).toContain(`rel="canonical" href="${SHARE_CANONICAL}"`);
-      expect(html).toContain(`data-copy-link="${SHARE_CANONICAL}"`);
+      const copy = html.match(/<a\b[^>]*\sdata-copy-link="[^"]*"[^>]*>/)?.[0];
+      expect(copy).toContain(`href="${SHARE_CANONICAL}"`);
+      expect(copy).toContain(`data-copy-link="${SHARE_CANONICAL}"`);
       expect(html).toContain(`href="/events/${SHARE_KEY}.ics"`);
       expect(html).toContain('data-testid="event-google-calendar"');
       expect(html).toContain("https://calendar.google.com/calendar/render?");
