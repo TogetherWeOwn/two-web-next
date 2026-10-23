@@ -1,6 +1,8 @@
 <script lang="ts">
 import { shareImageUrl } from "../../../src/seo";
 
+const SITE_NAME = "Together We Own";
+
 let {
   title,
   canonical,
@@ -30,7 +32,7 @@ let {
   leafCss?: string;
 } = $props();
 
-const fullTitle = $derived(exactTitle ?? `${title} — Together We Own`);
+const fullTitle = $derived(exactTitle ?? `${title} — ${SITE_NAME}`);
 const share = $derived(shareTitle ?? fullTitle);
 const themeStylesheet = $derived(
   theme === "schedule"
