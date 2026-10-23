@@ -195,11 +195,12 @@ exceptions also fail closed.
 Each lockfile gets 3 attempts with 5s/15s backoff and a fresh owned cache per
 attempt. When every attempt fails with a positively identified registry
 transport fault, the gate records that lockfile as unavailable, never clean:
-a timeout kill, a transient network code (ECONNREFUSED, ECONNRESET, EPIPE,
-ETIMEDOUT, EAI_AGAIN, ENOTFOUND, ECONNABORTED, ENETUNREACH, EHOSTUNREACH,
-ENETRESET, ENETDOWN, EHOSTDOWN) at the bulk advisory endpoint, or an HTTP 5xx
-from that endpoint, each confirmed by the preload's observation of the bulk
-request. The gate still audits the other lockfile, so an advisory there keeps
+three exhausted 120s timeout kills (no preload observation survives the kill,
+so the kill shape itself is the signal), or a fault confirmed by the preload's
+observation of the bulk request: a transient network code (ECONNREFUSED,
+ECONNRESET, EPIPE, ETIMEDOUT, EAI_AGAIN, ENOTFOUND, ECONNABORTED, ENETUNREACH,
+EHOSTUNREACH, ENETRESET, ENETDOWN, EHOSTDOWN) at the bulk advisory endpoint, or
+an HTTP 5xx from that endpoint. The gate still audits the other lockfile, so an advisory there keeps
 blocking. On `pull_request` and `merge_group` an outage with no blocking
 finding annotates a bounded, redacted `::warning::` (lockfile, kind, attempts;
 no URLs, bodies, or tokens) and exits 0. On `push` (main), `schedule`,
