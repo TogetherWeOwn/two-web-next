@@ -100,6 +100,21 @@ Engineer, never a silent threshold relaxation.
 
 No new infrastructure, no Logpush, no external shipper, no new pager.
 
+**Production source precondition:** the producer split below is the checked-in
+expectation, not proof that the live jobs transfer completed. Before choosing a
+queue or scheduled source in either dashboard or live tail, have the authorized
+Operator record read-only consumer and cron ownership using
+`node ci/check-production-triggers.mjs` and the
+[environment-specific readback](runbook.md#queue-incident-targets-by-environment-checked-in-expectations-live-readback-required).
+Exit 0 confirms both production queues and crons match the jobs topology. A
+version promotion or an active jobs deployment alone does not prove trigger
+ownership. Transfer pending: queue consumers and crons may still run on
+`two-web-next-production`; use that source for the corresponding failures.
+If ownership is partial or unreadable, inspect both production source streams,
+report the gap rather than infer health from silence, and reconcile through
+[the production jobs handoff](production-jobs-handoff.md) before owner-sensitive
+actions. These recipes do not authorize the transfer or any trigger mutation.
+
 1. **Cloudflare dashboard, Workers & Pages, Observability > Logs.**
    Workers Logs is enabled on the web and jobs producers and their corresponding
    Tail Worker (`wrangler.jsonc`, `wrangler.jobs.jsonc`, `tail/wrangler.jsonc`).
@@ -110,25 +125,34 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
      5xx rate per class above; `"event":"error.alert"` with `fingerprint`
      (`ExceptionClass@/route/pattern`) for 5xx attribution, correlated by
      `request_id` with the `http.request` record.
-   - Jobs `two-web-jobs-production` (staging `two-web-jobs`):
-     `"event":"queue.failing"` with job class and attempts for queue failure
-     spikes; `"event":"scheduled.failing"` with job and exception class for
-     reconcile/prune failures, including handled partial or capped outcomes
-     whose scheduled handler can still resolve.
+   - Jobs `two-web-jobs-production` after confirmed transfer (staging
+     `two-web-jobs`): `"event":"queue.failing"` with job class and attempts for
+     queue failure spikes; `"event":"scheduled.failing"` with job and exception
+     class for reconcile/prune failures, including handled partial or capped
+     outcomes whose scheduled handler can still resolve. Until the corresponding
+     consumer or cron moves, apply these same filters to `two-web-next-production`
+     instead, as determined by the readback above.
    - Tail `two-web-next-alerts-production` (staging `two-web-next-alerts`):
      `"delivery":"ops.alert.delivered"` and
      `"delivery":"ops.alert.delivery_failed"` for redacted delivery receipts
      versus loss. A source alert line alone does not prove pager delivery.
 2. **Live tail on production (authorized Cloudflare access only).**
+   Choose queue/scheduled sources from the readback above; keep the web error
+   and Tail receipt streams in either topology.
    ```sh
    npx wrangler tail two-web-next-production --format json \
      | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"error[.]alert\""))'
+   # Confirmed jobs ownership for the corresponding consumer or cron:
    npx wrangler tail two-web-jobs-production --format json \
+     | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(queue[.]failing|scheduled[.]failing)\""))'
+   # Transfer pending: corresponding consumer or cron still on the web Worker:
+   npx wrangler tail two-web-next-production --format json \
      | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(queue[.]failing|scheduled[.]failing)\""))'
    npx wrangler tail two-web-next-alerts-production --search '"delivery":"ops.alert.'
    ```
    Staging comparison only: substitute `two-web-next`, `two-web-jobs` and
-   `two-web-next-alerts`, respectively, keeping each command's filter.
+   `two-web-next-alerts` for the web error, jobs and receipt commands, respectively,
+   keeping each filter. The transfer-pending web queue/cron fallback is production-only.
    Source traces remain the private diagnostic fallback, distinct from redacted
    delivery receipts. Never publish raw source traces or receipt streams; retain
    only redacted receipt lines as evidence. See the canonical
