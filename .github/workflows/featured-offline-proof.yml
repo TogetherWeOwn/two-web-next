@@ -63,6 +63,9 @@ jobs:
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
             "src/brand-lockup.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
