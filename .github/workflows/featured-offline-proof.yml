@@ -160,7 +160,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Credential-free guard selftests (no browser)
-        run: node --test ci/featured-proof/run-capture.test.cjs
+        run: node --test ci/featured-proof/run-capture.test.cjs ci/featured-proof/capture-current.test.cjs
       - name: Generate fictional SSR from the exact PR source
         run: |
           test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"

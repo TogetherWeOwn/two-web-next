@@ -162,9 +162,10 @@ export function getOpenApiDocument(appUrl: string) {
         "Session-free, published-only reads for search and AI assistants: events, one event, " +
         "the community snapshot and the Discord join handoff. No member directory, no " +
         "attendee identities, no model-training permission. Collections cap at 20 rows and " +
-        "32 KiB; errors use { error: { code, message } } with code internal, " +
-        "invalid_request, not_found, rate_limited or unavailable. On internal, " +
-        "retry the read; the envelope never carries exception text. Freshness: a cache " +
+        "32 KiB; errors use { error: { code, message, request_id, next } } with code internal, " +
+        "invalid_request, not_found, rate_limited or unavailable. request_id matches the " +
+        "x-request-id response header for correlation; next names one safe action. " +
+        "On internal, retry the read; the envelope never carries exception text. Freshness: a cache " +
         "hit carries only the remaining freshness of the original 60s window — a hit " +
         "just before expiry answers max-age=1, never a fresh full window — and a " +
         "fresh miss re-arms the full 60s bound. Committed moderator or agent " +
@@ -284,8 +285,13 @@ export function getOpenApiDocument(appUrl: string) {
                   enum: ["internal", "invalid_request", "not_found", "rate_limited", "unavailable"],
                 },
                 message: { type: "string" },
+                request_id: {
+                  type: "string",
+                  description: "Matches the x-request-id response header, for correlation.",
+                },
+                next: { type: "string", description: "One safe next action for the caller." },
               },
-              required: ["code", "message"],
+              required: ["code", "message", "request_id", "next"],
             },
           },
           required: ["error"],
