@@ -1,6 +1,20 @@
 # Kit server gzip: join freshness prerequisite
 
-## Current reconciliation — 2026-10-23
+## Latest base reconciliation — 2026-10-23
+
+Base `2540adb21d03c0e36eab1ca9fd8c6fbbbdabe106` adds only budget decision
+history to the previously measured base `46e4ef79b`; no numeric limit, source,
+lockfile or checker changes. Preserve that new base history verbatim, followed
+by this branch's existing two decision notes exactly once. Every numeric limit
+still equals the new base, including the **329472-byte** server gzip ceiling.
+
+The double-build measurements below remain evidence from the earlier run,
+not newly executed builds. This prose-only follow-up reruns the unchanged
+checker selftests, checker tests, documentation checks and floor guard; it
+does not rerun the full check, builds or feature fixture suites. Required CI
+and independent review must still pass on the new PR head.
+
+## Measured reconciliation — 2026-10-23
 
 Base `46e4ef79b80e13470795d3608bf45fde73aad39f` now carries a larger
 `server.js.maxGzipBytes` ceiling of **329472 bytes**. Resolve the budget conflict
@@ -139,5 +153,7 @@ public-projection and stale-render tests there. Do not push to the feature ref.
 The PR records the executed results separately from this reproduction recipe.
 
 No production/staging database, network probe or deployment is needed for these
-fixture/build checks. Revert this prerequisite to restore the prior ceiling;
-that deliberately makes the integrated feature fail its size gate again.
+fixture/build checks. Reverting the original proposal would have restored its
+prior ceiling and made the feature fail again. After reconciliation, this PR
+changes no numeric limit: its rollback removes only decision/evidence prose,
+leaving the independently landed base ceilings intact.
