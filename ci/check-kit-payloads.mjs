@@ -1,7 +1,7 @@
 // No-member-data contract on public Kit payloads: one JSON-reporting check.
 //
-// Static half: every Kit server file (web/src/routes/**/+page.server.ts,
-// +server.ts, +layout.server.ts) must be classified in
+// Static half: every Kit server file (web/src/routes/**/+page.server.{ts,js},
+// +server.{ts,js}, +layout.server.{ts,js}) must be classified in
 // ci/kit-public-payloads.json (public check, session-required, or
 // out-of-scope), so a new route cannot escape the contract by omission.
 // Dynamic half: runs the hostile-fixture acceptance suite and maps each
@@ -13,12 +13,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const TRUTH_PATH = join(ROOT, "ci/kit-public-payloads.json");
 const ROUTES_DIR = join(ROOT, "web/src/routes");
-const SERVER_FILES = new Set(["+page.server.ts", "+server.ts", "+layout.server.ts"]);
+// Include unknown extensions/shapes too: a new server binding must not pass
+// unseen just because the classifier has not learned its suffix yet.
+const SERVER_FILE = /^\+(?:.*\.)?server\./;
 
 // Stable check ID -> suite-name matcher. The IDs live in
 // ci/kit-public-payloads.json; this table owns the describe/it mapping and
@@ -27,6 +29,11 @@ const CHECK_MATCHERS = [
   { id: "kit-payload-detector", describe: "no-member-data detector", testContains: null },
   { id: "kit-payload-home", describe: "Kit GET / anonymous payload", testContains: null },
   { id: "kit-payload-events", describe: "Kit GET /events anonymous payload", testContains: null },
+  {
+    id: "kit-payload-events-binding",
+    describe: "Kit GET /events binding anonymous payload",
+    testContains: null,
+  },
   {
     id: "kit-payload-events-past",
     describe: "Kit GET /events/past anonymous payload",
@@ -90,7 +97,7 @@ export function listKitServerFiles(routesDir = ROUTES_DIR) {
         walk(abs);
         continue;
       }
-      if (SERVER_FILES.has(entry)) found.push(relative(ROOT, abs).split(sep).join("/"));
+      if (SERVER_FILE.test(entry)) found.push(relative(ROOT, abs).split(sep).join("/"));
     }
   };
   walk(routesDir);
@@ -170,23 +177,47 @@ function runStatic(truth) {
   return { ok, ...coverage };
 }
 
-function runDynamic(truth) {
-  const scratch = mkdtempSync(join(tmpdir(), "kit-payloads-"));
+export function runDynamic(truth, runner = spawnSync) {
+  const scratch = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-payloads-"),
+  );
   const outputFile = join(scratch, "vitest.json");
+  const suites = [truth.suite, ...(truth.additionalSuites ?? [])];
+  const failure = (code) => ({
+    code,
+    retryable: false,
+    next_action: `Run npx vitest run ${suites.join(" ")} and fix the Vitest process, hooks or assertions before rerunning this check.`,
+  });
   try {
-    const run = spawnSync(
+    const run = runner(
       "npx",
-      ["vitest", "run", truth.suite, "--reporter=json", `--outputFile=${outputFile}`],
+      ["vitest", "run", ...suites, "--reporter=json", `--outputFile=${outputFile}`],
       { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
+    const execution = {
+      suite: truth.suite,
+      suites,
+      exitStatus: run.status ?? null,
+      signal: run.signal ?? null,
+      spawnError: run.error ? (run.error.code ?? run.error.name) : null,
+    };
     if (!existsSync(outputFile)) {
-      return {
-        ok: false,
-        suite: truth.suite,
-        error: `suite did not write a JSON report (exit ${run.status}): ${(run.stderr ?? "").slice(0, 500)}`,
-      };
+      return { ok: false, ...execution, ...failure("suite_report_missing") };
     }
-    const report = JSON.parse(readFileSync(outputFile, "utf8"));
+    let report;
+    try {
+      report = JSON.parse(readFileSync(outputFile, "utf8"));
+    } catch {
+      return { ok: false, ...execution, ...failure("suite_report_invalid") };
+    }
+    if (!report || !Array.isArray(report.testResults)) {
+      return { ok: false, ...execution, ...failure("suite_report_invalid") };
+    }
+    const runOk = run.status === 0 && !run.error && !run.signal;
+    const reportOk =
+      report.success === true &&
+      report.numFailedTestSuites === 0 &&
+      report.testResults.every((result) => result.status === "passed");
     // Matcher drift fails closed: the script must name exactly the JSON's IDs.
     const checkIds = (truth.checks ?? []).map((c) => c.id);
     const matcherIds = CHECK_MATCHERS.map((m) => m.id);
@@ -200,11 +231,19 @@ function runDynamic(truth) {
     ];
     const summary = summarizeSuite(CHECK_MATCHERS, checkIds, report);
     const ok =
+      runOk &&
+      reportOk &&
       drift.length === 0 &&
       summary.failed === 0 &&
       summary.unmapped.length === 0 &&
       summary.checks.every((c) => c.status === "pass");
-    return { ok, suite: truth.suite, drift, ...summary };
+    return {
+      ok,
+      ...execution,
+      drift,
+      ...summary,
+      ...(ok ? {} : failure(!runOk || !reportOk ? "suite_run_failed" : "suite_contract_failed")),
+    };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -310,16 +349,18 @@ function selftest() {
   return 0;
 }
 
-const args = process.argv.slice(2);
-try {
-  if (args.length === 1 && args[0] === "--selftest") process.exitCode = selftest();
-  else if (args.length === 0) process.exitCode = run(false);
-  else if (args.length === 1 && args[0] === "--static-only") process.exitCode = run(true);
-  else {
-    console.error("Usage: node ci/check-kit-payloads.mjs [--selftest] [--static-only]");
-    process.exitCode = 2;
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const args = process.argv.slice(2);
+  try {
+    if (args.length === 1 && args[0] === "--selftest") process.exitCode = selftest();
+    else if (args.length === 0) process.exitCode = run(false);
+    else if (args.length === 1 && args[0] === "--static-only") process.exitCode = run(true);
+    else {
+      console.error("Usage: node ci/check-kit-payloads.mjs [--selftest] [--static-only]");
+      process.exitCode = 2;
+    }
+  } catch (err) {
+    console.error(`kit-payloads: error: ${err instanceof Error ? err.message : err}`);
+    process.exitCode = 1;
   }
-} catch (err) {
-  console.error(`kit-payloads: error: ${err instanceof Error ? err.message : err}`);
-  process.exitCode = 1;
 }

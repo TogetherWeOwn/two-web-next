@@ -12,11 +12,24 @@ contract pins the public side only.
 npm run check:kit-payloads            # JSON report: static coverage + hostile-fixture suite
 npm run check:kit-payloads -- --static-only   # fast half: enumeration coverage only
 node ci/check-kit-payloads.mjs | jq .ok       # pipeable form (pure JSON on stdout)
-npx vitest run test/kit-no-member-data-contract.test.ts  # the suite directly
+npx vitest run test/kit-no-member-data-contract.test.ts test/kit-public-events-payload.test.ts  # both suites directly
+npm run check:kit-payloads:selftest          # checker regression tests, no dependencies
 ```
 
 Stdout is pure JSON (`check`, `ok`, per-check `id`/`status`); exit 0 only
-when every check passes. The suite also runs in CI under `npm test`.
+when every check passes. `dynamic.exitStatus`, `signal` and `spawnError`
+record the Vitest process outcome. A nonzero exit, signal, spawn error,
+failed suite/hook or unsuccessful report fails even when all assertions
+passed. Dynamic failures include a stable `code` (`suite_run_failed`,
+`suite_report_missing`, `suite_report_invalid` or `suite_contract_failed`),
+`retryable: false` and `next_action`: run the listed Vitest suites directly,
+fix the failure, then rerun the checker.
+
+The root `npm run check` runs the full checker plus its selftests. CI's
+blocking `check` job runs the dependency-free selftests and static audit
+before installing dependencies, then the full JSON checker after the root
+and Kit installs. Both suites also run under the coverage gate. Fixtures
+only: no network, production flags or database required.
 
 ## Source of truth
 
@@ -24,7 +37,16 @@ when every check passes. The suite also runs in CI under `npm test`.
 checks with stable `kit-payload-*` IDs, session-required routes with their
 audited reads, and out-of-scope Hono-owned surfaces with reasons. The check
 fails closed on drift in either direction (unlisted file, stale binding,
-unmapped test, vacuous check).
+unmapped test, vacuous check). Enumeration includes both `.ts` and `.js`
+page, layout and endpoint server files, and unknown `+*.server.*` or
+`+server.*` file shapes rather than silently ignoring them.
+
+The protected acceptance suite pins page loads and model/render behavior.
+`test/kit-public-events-payload.test.ts` additionally executes the real
+bundled `/events` GET with hostile database rows and checks the final full
+page and island response bytes. Its separate `kit-payload-events-binding`
+ID makes missing endpoint coverage fail vacuously instead of being masked
+by the model-level tests.
 
 ## Fixing a leak
 

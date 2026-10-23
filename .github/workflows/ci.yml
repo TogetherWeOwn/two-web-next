@@ -383,6 +383,9 @@ jobs:
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
+      - name: Kit public payload enumeration and checker selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -445,6 +448,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Kit public payload contract (hostile fixtures, no network or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs

@@ -3,6 +3,7 @@
   "contract": "no-member-data",
   "version": 1,
   "suite": "test/kit-no-member-data-contract.test.ts",
+  "additionalSuites": ["test/kit-public-events-payload.test.ts"],
   "checks": [
     {
       "id": "kit-payload-detector",
@@ -22,6 +23,13 @@
       "route": "GET /events",
       "binding": "web/src/routes/events/+server.ts",
       "tests": ["Kit GET /events anonymous payload"]
+    },
+    {
+      "id": "kit-payload-events-binding",
+      "route": "GET /events",
+      "binding": "web/src/routes/events/+server.ts",
+      "tests": ["Kit GET /events binding anonymous payload"],
+      "note": "Executes the bundled GET with hostile database rows; checks response bytes, not a source substring."
     },
     {
       "id": "kit-payload-events-past",
