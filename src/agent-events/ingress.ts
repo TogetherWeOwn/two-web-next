@@ -86,9 +86,9 @@ export async function admitAgentEvent(
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
   // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and at
   // most a sampled denied/rate_limited audit row with this admission's
-  // request_id, with every refusal counted in memory and the running count
-  // surfaced on the sampled warn (see shield.ts for the bucket-class encoding
-  // and the sampling bound).
+  // request_id, with every over-budget verdict counted in memory. Final 429s
+  // emit token-bucketed class/outcome telemetry or a bounded shed count; audit
+  // failures that return 503 emit neither refusal code (see shield.ts).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
