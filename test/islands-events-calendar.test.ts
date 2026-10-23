@@ -174,6 +174,19 @@ function calendar(
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // The facet projects one trimmed game column, not a full event row.
+    if (sql.startsWith('select distinct trim("game") from "events"')) {
+      const games = [
+        ...new Set(
+          [...up, ...past]
+            .filter((r) => r.status === "published" && r.game?.trim())
+            .map((r) => r.game!.trim()),
+        ),
+      ];
+      return {
+        rows: games.slice(0, Number(params.at(-1))).map((game) => [game]),
+      };
+    }
     // Identity probes ignore search, visibility and the past drawer's limit.
     if (sql.startsWith('select "discord_event_id" from "events"')) {
       return {
@@ -572,6 +585,7 @@ describe("EventsCalendar contract drift", () => {
       view: "list",
       month: "2026-10",
       q: "",
+      game: "",
       past: false,
       page: 1,
       ...o,
@@ -689,21 +703,27 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).not.toContain(EVENTS_PAST_TOGGLE_TESTID); // no past rows → no toggle
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
-    // Concurrent reads start together (perf(events)): the upcoming page
-    // count and the past drawer read are issued synchronously, then one page
-    // of upcoming rows, then their two grouped going aggregates (attributable
-    // + occupancy; empty past page → no aggregate). Never a per-card query,
-    // never more than a page of rows.
-    expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
-      "events",
-      "events",
-      "events",
-      "rsvps",
-      "rsvps",
-    ]);
-    expect(source.queries[0]!.sql).toMatch(/^select count/i);
-    expect(source.queries[3]!.sql).toContain('group by "rsvps"."event_id"');
+    // One bounded published-games projection precedes the concurrent upcoming
+    // count and past drawer reads, then one upcoming page and its two grouped
+    // going aggregates (attributable + occupancy; empty past → no aggregate).
+    // Never a per-card query, never more than a page of event rows.
+    expect(
+      source.queries.map((q) =>
+        /^select distinct/i.test(q.sql) ? "games" : q.sql.includes("rsvps") ? "rsvps" : "events",
+      ),
+    ).toEqual(["games", "events", "events", "events", "rsvps", "rsvps"]);
+    const distinct = source.queries[0]!;
+    expect(distinct.sql).toMatch(/^select distinct trim\("game"\) from "events"/i);
+    expect(distinct.sql).toContain('"events"."status" = \'published\'');
+    expect(distinct.sql).toContain('"events"."game" is not null');
+    expect(distinct.sql).toContain('trim("events"."game") <> \'\'');
+    expect(distinct.sql).toMatch(/limit \$1$/i);
+    expect(distinct.params).toHaveLength(1);
+    expect(Number.isSafeInteger(distinct.params[0])).toBe(true);
+    expect(Number(distinct.params[0])).toBeGreaterThan(0);
+    expect(source.queries[1]!.sql).toMatch(/^select count/i);
     expect(source.queries[4]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[5]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {
@@ -711,7 +731,9 @@ describe("EventsCalendar SSR drift", () => {
     const res = await source.request("/events?q=" + encodeURIComponent("100% legit"));
     const html = await res.text();
     expect(res.status).toBe(200);
-    const up = source.queries.find((q) => q.sql.includes('from "events"'))!;
+    const up = source.queries.find(
+      (q) => /^select count/i.test(q.sql) && q.sql.includes('from "events"'),
+    )!;
     expect(up.sql).toContain("ilike");
     expect(up.params.filter((p) => p === "%100\\% legit%")).toHaveLength(2);
     expect(up.sql).toContain("'draft'"); // guests never see drafts, even in search
@@ -736,14 +758,16 @@ describe("EventsCalendar SSR drift", () => {
     const guestHtml = await (await guestSrc.request("/events")).text();
     expect(guestHtml).not.toContain("Secret draft");
     expect(guestHtml).toContain(EVENTS_EMPTY_NEVER_TESTID);
-    expect(guestSrc.queries[0]!.sql).toContain("'draft'");
+    expect(guestSrc.queries.find((q) => /^select count/i.test(q.sql))!.sql).toContain("'draft'");
+    expect(guestSrc.queries[0]!.sql).toContain('"events"."status" = \'published\'');
     // Moderator: the draft clause is absent, page is private.
     const modSrc = calendar([draft], [], okSource(), envSlots);
     const res = await app.request("/events", { headers: { cookie } }, modSrc.env);
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(modSrc.queries[0]!.sql).not.toContain("'draft'");
+    expect(modSrc.queries.find((q) => /^select count/i.test(q.sql))!.sql).not.toContain("'draft'");
+    expect(modSrc.queries[0]!.sql).toContain('"events"."status" = \'published\'');
     expect(html).toContain("Secret draft");
     expect(html).toContain(`data-testid="${EVENT_DRAFT_TESTID}"`);
   });
