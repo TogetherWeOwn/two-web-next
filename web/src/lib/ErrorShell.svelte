@@ -13,6 +13,14 @@ let {
 } = $props();
 
 const copy = $derived(kitErrorCopy(code));
+
+// Outage headers point at the Discord invite, never the OAuth start:
+// during a store outage or throttle the sign-in round trip is dead, so the
+// header carries Hono's cta-branch contract instead (src/page-shell.tsx:
+// guest caption plus an invite "Open Discord" link on data-testid="signin").
+// 400/404/410 keep the default sign-in header — OAuth is alive there.
+const OUTAGE_CODES: KitErrorStatus[] = [403, 429, 500, 503];
+const isOutage = $derived(OUTAGE_CODES.includes(code));
 </script>
 
 {#snippet eventSearch()}
@@ -34,7 +42,19 @@ const copy = $derived(kitErrorCopy(code));
   </form>
 {/snippet}
 
-<Shell title={copy.title} robots="noindex, nofollow" theme="home">
+{#snippet outageAccount()}
+  <div>
+    <span class="account-caption">Welcome, guest</span>
+    <a class="btn" href={inviteUrl} data-testid="signin">Open Discord</a>
+  </div>
+{/snippet}
+
+<Shell
+  title={copy.title}
+  robots="noindex, nofollow"
+  theme="home"
+  accountChrome={isOutage ? outageAccount : undefined}
+>
   <section class="hero recovery-hero" aria-labelledby="error-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
       <span></span>
