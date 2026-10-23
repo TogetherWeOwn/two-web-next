@@ -1,5 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { adminReadRetryHref } from "../web/src/lib/admin-read-retry";
+import { resolve } from "node:path";
+import { build } from "esbuild";
+import { beforeAll, describe, expect, it } from "vitest";
+
+let adminReadRetryHref: typeof import("../web/src/lib/admin-read-retry").adminReadRetryHref;
+
+beforeAll(async () => {
+  // Root Vitest does not run Kit's sync hook to resolve `$app/tsconfig`.
+  const { outputFiles } = await build({
+    entryPoints: [resolve("web/src/lib/admin-read-retry.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    tsconfigRaw: { compilerOptions: {} },
+    write: false,
+  });
+  const source = outputFiles[0]?.text;
+  if (!source) throw new Error("Retry helper bundle is empty");
+  const bundled = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  ({ adminReadRetryHref } = await import(bundled));
+});
 
 const origin = "https://retry.example.test";
 
