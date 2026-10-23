@@ -4,6 +4,8 @@
 // Routes behind adminGuard (non-moderator 403, guest OAuth redirect).
 // Queue preview additionally requires default-off staging/operator admission:
 // - GET  /admin                      dashboard (index of resources)
+// - GET  /admin/moderation           live automod settings form (versioned write)
+// - POST /admin/moderation           validate, live role re-check, queue settings.set, audit
 // - GET  /admin/events               list (search, status/series/fill, sort, page)
 // - GET  /admin/events/new           create form
 // - POST /admin/events               create-as-draft (no delete anywhere)
@@ -38,7 +40,17 @@ import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./que
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
-import { badRequest, prefersHtmlError, varyAccept } from "../errors";
+import { badRequest, forbidden, prefersHtmlError, varyAccept } from "../errors";
+import {
+  auditModerationWrite,
+  buildSettingsSetMessage,
+  dispatchSettingsSet,
+  isModerationDispatchBound,
+  moderationPageModel,
+  parseModerationSubmission,
+  readModerationSettings,
+  verifyModeratorLive,
+} from "./moderation";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
 import {
@@ -90,6 +102,7 @@ import {
   FeaturedPage,
   JoinAttemptPage,
   JoinAttemptsPage,
+  ModerationPage,
 } from "./pages";
 
 type Vars = QueuePreviewVars;
@@ -133,7 +146,7 @@ async function dbOr503(c: Context<Vars>) {
 function errorPage(
   c: Context<Vars>,
   // hono's text/html helpers only accept literal status codes.
-  status: 404 | 422 | 503,
+  status: 404 | 409 | 422 | 503,
   heading: string,
   detail?: string,
 ) {
@@ -365,6 +378,102 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       />,
     );
   });
+
+  admin.get("/moderation", async (c) => {
+    declareAccess(c, {
+      resource: "moderation_settings",
+      action: "view",
+      route: "admin.moderation.show",
+    });
+    // Reads use the session bit only: no per-click Discord dependency, and no
+    // database read either — the values come live from the bot on every load.
+    const read = await readModerationSettings(c.env);
+    if (!read.ok) {
+      console.warn("moderation settings read failed; answering 503");
+      c.header("cache-control", "private, no-store");
+      return errorPage(
+        c,
+        503,
+        "Moderation settings unavailable",
+        "The live bot settings could not be read. Try again in a moment.",
+      );
+    }
+    const model = moderationPageModel(read.settings);
+    if (!model) {
+      console.warn("moderation settings read omitted the pinned hot key; answering 503");
+      c.header("cache-control", "private, no-store");
+      return errorPage(
+        c,
+        503,
+        "Moderation settings unavailable",
+        "The live bot settings could not be read. Try again in a moment.",
+      );
+    }
+    return bufferedMemberHtml(c, <ModerationPage model={model} />);
+  });
+
+  admin.post(
+    "/moderation",
+    // Cap before throttle: oversized bodies 413 with zero admin-write spend.
+    requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const db = await dbOr503(c);
+      if (!db) return writeUnavailable(c);
+      const values = await parsedForm(c);
+      if (!values) return badRequest(c);
+      const parsed = parseModerationSubmission(values);
+      if (!parsed.ok) return errorPage(c, 422, "Moderation write refused", parsed.detail);
+      // Static misconfiguration fails before any network call or audit row.
+      if (!isModerationDispatchBound(c.env)) {
+        console.warn("moderation write refused: dispatch queue is not bound");
+        return writeUnavailable(c);
+      }
+      const actor = c.get("adminActor");
+      // Single-guild site: the dispatch always carries the session guild,
+      // never a form field. The live role re-check runs at write time.
+      const guildId = c.env.DISCORD_GUILD_ID;
+      if (!(await verifyModeratorLive(c.env, guildId, actor.id))) return forbidden(c);
+      const read = await readModerationSettings(c.env);
+      if (!read.ok) return writeUnavailable(c);
+      const live = read.settings.find((s) => s.key === parsed.submission.key);
+      if (!live) return writeUnavailable(c);
+      if (live.version !== parsed.submission.expectedVersion) {
+        return errorPage(
+          c,
+          409,
+          "Settings changed elsewhere",
+          "Version mismatch: these settings changed since you loaded the page. " +
+            "Re-read the latest values and try again.",
+        );
+      }
+      await auditModerationWrite(db, {
+        actorId: actor.id,
+        key: parsed.submission.key,
+        before: live.value,
+        after: parsed.submission.value,
+        expectedVersion: parsed.submission.expectedVersion,
+      });
+      const msg = buildSettingsSetMessage({
+        key: parsed.submission.key,
+        value: parsed.submission.value,
+        expectedVersion: parsed.submission.expectedVersion,
+        actorId: actor.id,
+        guildId,
+      });
+      try {
+        if (!(await dispatchSettingsSet(c.env, msg))) return writeUnavailable(c);
+      } catch (err) {
+        // The audit row above already records the attempt; this 503 says the
+        // write did not go out. Class-only: queue errors can carry payloads.
+        console.error("moderation dispatch failed after audit", {
+          exception: err instanceof Error ? err.name : "unknown",
+        });
+        return writeUnavailable(c);
+      }
+      return c.redirect("/admin/moderation", 303);
+    },
+  );
 
   admin.get("/events", async (c) => {
     declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });

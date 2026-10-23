@@ -200,6 +200,12 @@ export const coverage = {
       { path: "/admin/activity-log?subject=zz-no-matches", identity: "moderator" },
     ],
   },
+  // The audit worker has no bot binding, so the live settings read fails
+  // closed to the 503 unavailable state; that state is itself audited here.
+  // The 200 form state carries PR-time axe evidence plus the staging check.
+  "/admin/moderation": {
+    cases: [{ path: "/admin/moderation", identity: "moderator", status: 503 }],
+  },
   "/__a11y/404": { cases: [{ path: "/__a11y/404", status: 404 }] },
   "/__a11y/404-empty": { cases: [{ path: "/__a11y/404-empty", status: 404 }] },
   "/__a11y/429": { cases: [{ path: "/__a11y/429", status: 429 }] },

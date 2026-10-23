@@ -163,6 +163,8 @@ const cards = [
   { title: "Featured content", href: "/admin/featured" },
   { title: "Activity log", href: "/admin/activity-log" },
   { title: "Join attempts", href: "/admin/join-attempts" },
+  // Fifth card ships on both twins with the moderation page; all four existing pins stay exact.
+  { title: "Moderation settings", href: "/admin/moderation" },
 ];
 const widgets = [
   {
@@ -182,14 +184,14 @@ const widgets = [
 for (const renderer of renderers) {
   describe(`${renderer.name} dashboard shared card/table acceptance`, () => {
     it.each<State>(["populated", "empty", "unavailable"])(
-      "offers all four resource cards even when analytics are %s",
+      "offers all five resource cards even when analytics are %s",
       (state) => {
         const links = elements(renderer.render(state), "li")
           .filter((item) => attr(item, "class")?.split(/\s+/).includes("card"))
           .flatMap((item) => elements(item.body, "h2"))
           .flatMap((heading) => elements(heading.body, "a"))
           .map((link) => ({ title: text(link.body), href: attr(link, "href") }));
-        expect(links).toHaveLength(4);
+        expect(links).toHaveLength(5);
         expect(links).toEqual(expect.arrayContaining(cards));
       },
     );

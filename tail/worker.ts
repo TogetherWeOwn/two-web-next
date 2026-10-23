@@ -383,6 +383,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured-contents/create",
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
+  "/admin/moderation",
   "/admin/queue/failed/:id/preview",
   "/admin/queue/failed/:id/redispatch",
   "/admin/queue/source-evidence/:id",

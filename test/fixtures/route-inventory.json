@@ -141,6 +141,11 @@
   },
   {
     "method": "GET",
+    "path": "/admin/moderation",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
     "path": "/admin/queue/failed/:id/preview",
     "auth": "staging-operator"
   },
@@ -442,6 +447,11 @@
   {
     "method": "POST",
     "path": "/admin/featured/:id/delete",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/moderation",
     "auth": "moderator"
   },
   {

@@ -11,11 +11,14 @@
 //
 // Shape: a runtime inventory scan over the mounted Hono app (every
 // registration's path + handler source) plus a static scan of the web entry
-// files for dispatch tokens. The only admitted INTERNAL_ACTION_QUEUE sender
-// is the staging alert probe (`POST /__probe/alert`, kind alert-probe only —
-// a QA-gated synthetic job, never announcement/role-assign). The only
-// admitted drivers of the CallInternalAction producers/consumer are the queue
-// consumer and the drill probe + CLI.
+// files for dispatch tokens. The admitted INTERNAL_ACTION_QUEUE senders are
+// the staging alert probe (`POST /__probe/alert`, kind alert-probe only —
+// a QA-gated synthetic job, never announcement/role-assign) and the
+// dashboard moderation page (`src/admin/moderation.ts`, kind settings-set
+// only — a queued settings.set the worker delivers, never
+// announcement/role-assign). The only admitted drivers of the
+// CallInternalAction producers/consumer are the queue consumer and the drill
+// probe + CLI.
 //
 // Fixture-only: no staging dispatch, no network, no database.
 import { readdirSync, readFileSync } from "node:fs";
@@ -158,15 +161,28 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
     expect(scanFiles(webFiles(), DISPATCH_TOKENS)).toEqual([]);
   });
 
-  it("INTERNAL_ACTION_QUEUE is sent only by the staging alert probe, as alert-probe only", () => {
+  it("INTERNAL_ACTION_QUEUE is sent only by the staging alert probe and the moderation settings dispatch", () => {
     const senders = srcFiles().filter((file) => read(file).includes("INTERNAL_ACTION_QUEUE"));
-    // src/env.ts declares the binding type; src/alert-probe.ts is the send site.
-    expect(senders).toEqual(["src/alert-probe.ts", "src/env.ts"]);
+    // src/env.ts declares the binding type; src/alert-probe.ts is the probe
+    // send site. The second send site is narrow: the dashboard moderation
+    // page queues settings.set (parent spec section 4.3: queue-carried,
+    // UUID idempotency keys, worker-delivered) and nothing else. Any third
+    // sender, or any widening of the moderation sender past its kind, fails
+    // here instead of silently wiring production dispatch.
+    expect(senders).toEqual(["src/admin/moderation.ts", "src/alert-probe.ts", "src/env.ts"]);
     const probe = read("src/alert-probe.ts");
     expect(probe).toContain('kind: "alert-probe"');
     expect(probe).not.toContain("announcement");
     expect(probe).not.toContain("role-assign");
     expect(probe).not.toContain("CallInternalAction");
+    const moderation = read("src/admin/moderation.ts");
+    expect(moderation).toContain('kind: "settings-set"');
+    expect(moderation).toContain("settings.set");
+    expect(moderation).not.toContain("announcement");
+    expect(moderation).not.toContain("role-assign");
+    expect(moderation).not.toContain("role.assign");
+    expect(moderation).not.toContain("CallInternalAction");
+    expect(moderation).not.toContain("call-internal-action");
   });
 
   it("the only producer/consumer drivers are the queue consumer and the drill", () => {

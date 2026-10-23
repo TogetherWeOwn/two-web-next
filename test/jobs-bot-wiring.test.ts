@@ -190,6 +190,61 @@ describe("handleQueue with the live bot client", () => {
   });
 });
 
+describe("settings-set through the live settings writer", () => {
+  const settingsSet = () => ({
+    kind: "settings-set",
+    idempotencyKey: uuid,
+    guildId: "326474832151838730",
+    actor: "dashboard:100000000000000103",
+    action: {
+      verb: "settings.set",
+      key: "TWO_AUTOMOD_MENTION_LIMIT",
+      value: "8",
+      expected_version: 7,
+    },
+  });
+
+  it("signs and sends settings.set with its carrier key, then acks", async () => {
+    const { fn, seen } = fetchDouble(
+      json(200, { ok: true, request_id: "r1", result: { applied: true } }),
+    );
+    vi.stubGlobal("fetch", fn);
+    const m = delivery(settingsSet());
+
+    await handleQueue(batch(m), envWith(configured));
+
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(m.retry).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("https://bot-staging.internal.example/internal/actions");
+    const headers = seen[0]!.init.headers as Record<string, string>;
+    expect(headers["X-TWO-Key-Id"]).toBe("web-staging");
+    expect(headers["X-TWO-Signature"]).toMatch(/^sha256=[0-9a-f]{64}$/);
+    expect(headers["Idempotency-Key"]).toBe(uuid);
+    expect(seen[0]!.init.body).toBe(
+      '{"action":"settings.set","guild_id":"326474832151838730",' +
+        '"key":"TWO_AUTOMOD_MENTION_LIMIT","value":"8",' +
+        '"expected_version":7,"updated_by":"dashboard:100000000000000103"}',
+    );
+    expect(queueFailingAlerts()).toEqual([]);
+  });
+
+  it("missing BOT_* config is a terminal alerting failure and sends nothing", async () => {
+    const { fn } = fetchDouble();
+    vi.stubGlobal("fetch", fn);
+    const m = delivery(settingsSet());
+
+    await handleQueue(batch(m), envWith({}));
+
+    expect(fn).not.toHaveBeenCalled();
+    expect(m.retry).not.toHaveBeenCalled();
+    expect(m.ack).toHaveBeenCalledOnce();
+    const alerts = queueFailingAlerts();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("BotTerminalError");
+  });
+});
+
 describe("sync-event through the live bot client", () => {
   function attemptFor(action: SyncAttempt["action"]): SyncAttempt {
     const base = {

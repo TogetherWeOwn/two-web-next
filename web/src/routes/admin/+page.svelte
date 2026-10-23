@@ -35,6 +35,10 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       <h2><a href="/admin/join-attempts">Join attempts</a></h2>
       <p>Every join try, outcome and refusal. Read-only.</p>
     </li>
+    <li class="card">
+      <h2><a href="/admin/moderation">Moderation settings</a></h2>
+      <p>Live automod limits over the bot settings path. Writes re-check the Discord role.</p>
+    </li>
   </ul>
   {#if funnel}
     <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">

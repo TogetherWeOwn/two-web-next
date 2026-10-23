@@ -205,6 +205,7 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
       'href="/admin/featured"',
       'href="/admin/activity-log"',
       'href="/admin/join-attempts"',
+      'href="/admin/moderation"',
     ]) {
       expect(page).toContain(needle);
     }

@@ -13,6 +13,34 @@ export type EventUpsert = {
 export type Announcement = { channelKey: string; body: string };
 export type RoleAssignment = { userId: string; roleKey: string };
 
+/**
+ * One dashboard settings write, queued by the moderation page and delivered
+ * to the bot's settings.set. The verb rides in the carrier so operators can
+ * read the payload; the envelope admits exactly "settings.set", never an
+ * arbitrary verb smuggled under the kind.
+ */
+export type SettingsSetAction = {
+  verb: "settings.set";
+  key: string;
+  value: string;
+  expected_version: number;
+};
+export type SettingsSetRequest = {
+  key: string;
+  value: string;
+  expectedVersion: number;
+  actor: string;
+  guildId: string;
+};
+export type SettingsSetResult = BotSuccess<{ replayed: boolean }>;
+/** Narrow seam for the queued settings writer (src/bot/settings.ts). */
+export interface SettingsWriter {
+  setSetting(
+    r: SettingsSetRequest,
+    idempotencyKey: string,
+  ): Promise<SettingsSetResult | BotFailure>;
+}
+
 export type BotFailure = {
   ok: false;
   code: string;
@@ -214,6 +242,14 @@ export type QueueMessage = QueueCorrelation &
       }
     | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
     | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+    | {
+        kind: "settings-set";
+        idempotencyKey: string;
+        guildId: string;
+        actor: string;
+        action: SettingsSetAction;
+        jobId?: string;
+      }
     | { kind: "alert-probe"; probeId?: string; jobId?: never }
   );
 

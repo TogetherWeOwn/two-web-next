@@ -5,13 +5,14 @@ import { describe, expect, it } from "vitest";
 const guide = readFileSync(new URL("../docs/moderator-admin-guide.md", import.meta.url), "utf8");
 
 describe("dashboard guide parity", () => {
-  it("lists the four dashboard resource cards", () => {
+  it("lists the five dashboard resource cards", () => {
     const intro = /`\/admin` has ([\s\S]*?)cards plus/.exec(guide)?.[1] ?? "";
     expect([...intro.matchAll(/\*\*([^*]+)\*\*/g)].map((match) => match[1])).toEqual([
       "Events",
       "Featured content",
       "Activity log",
       "Join attempts",
+      "Moderation settings",
     ]);
   });
 

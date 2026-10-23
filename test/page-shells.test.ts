@@ -213,6 +213,7 @@ it.each([
   ["/admin/featured/999", 404],
   ["/admin/join-attempts/999", 404],
   ["/admin/join-attempts/not-an-id", 404],
+  ["/admin/moderation", 503],
   ["/members/100000000000000002", 404],
   ["/missing-page", 404],
   [`/e/${EVENT_KEY}`, 410],

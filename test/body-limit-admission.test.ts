@@ -33,11 +33,12 @@ const sharedRoutes = [
   ),
 ];
 
-// Moderator event writes, admin event forms, admin lifecycle actions, and the
-// staging alert probe refuse oversized bodies before the shared throttle (and
-// before any session read): cap-first, not throttle-first. The probe's QA gate
-// still runs before its cap. Every other shared-throttle route keeps the
-// throttle-before-buffering order.
+// Moderator event writes, admin event forms, admin lifecycle actions, the
+// moderation settings write, and the staging alert probe refuse oversized
+// bodies before the shared throttle (and before any session read):
+// cap-first, not throttle-first. The probe's QA gate still runs before its
+// cap. Every other shared-throttle route keeps the throttle-before-buffering
+// order.
 const CAP_FIRST_ROUTES = new Set([
   "POST /events",
   "PATCH /events/:key",
@@ -51,6 +52,7 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /admin/events/:key/cancel",
   "POST /admin/events/:key/rsvp-pause",
   "POST /admin/events/:key/rsvp-reopen",
+  "POST /admin/moderation",
   "POST /admin/queue/failed/:id/redispatch",
   "POST /__probe/alert",
 ]);
