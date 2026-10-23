@@ -50,7 +50,7 @@ import type { MemberStats } from "../../../src/profiles/stats";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
-import { canonicalUrl } from "../../../src/seo";
+import { SHARE_IMAGE_ALT, canonicalUrl, shareImageUrl } from "../../../src/seo";
 
 // Markup contract of ProfilePage (src/profiles/pages.tsx): the header bar,
 // test ids and copy are shared, so the existing profile tests and islands
@@ -130,6 +130,8 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
   <meta property="og:url" content={canonical} />
   <meta property="og:title" content={title} />
   <meta property="og:description" content={PROFILE_SHARE_DESCRIPTION} />
+  <meta property="og:image" content={shareImageUrl(canonical)} />
+  <meta property="og:image:alt" content={SHARE_IMAGE_ALT} />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content={title} />
   <meta name="twitter:description" content={PROFILE_SHARE_DESCRIPTION} />

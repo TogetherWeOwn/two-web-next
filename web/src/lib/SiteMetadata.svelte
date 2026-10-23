@@ -1,4 +1,6 @@
 <script lang="ts">
+import { SHARE_IMAGE_ALT, shareImageUrl } from "../../../src/seo";
+
 const SITE_NAME = "Together We Own";
 
 let {
@@ -63,6 +65,8 @@ const leafStyleBlock = $derived(leafCss ? `<style>${leafCss}</style>` : "");
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={share} />
     {#if description}<meta property="og:description" content={description} />{/if}
+    <meta property="og:image" content={shareImageUrl(canonical)} />
+    <meta property="og:image:alt" content={SHARE_IMAGE_ALT} />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={share} />
     {#if description}<meta name="twitter:description" content={description} />{/if}
