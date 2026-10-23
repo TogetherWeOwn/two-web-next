@@ -58,7 +58,7 @@ It preserves original casing and code-point boundaries, including length-changin
 lowercase mappings. It does not build HTML or a regular expression from the query.
 SQL remains the matching authority: a returned row with no faithfully locatable
 JavaScript span stays visible with an unhighlighted leading passage. Highlighting
-never filters rows, performs reads, records an audit, or adds browser code.
+never filters rows, performs reads, records an audit, or loads an extra browser script.
 
 Design contract: members should recognize a relevant passage before following the
 existing title link. Retain the archive row, metadata, typography, theme tokens,
