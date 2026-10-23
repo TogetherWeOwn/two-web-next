@@ -262,7 +262,34 @@ export async function nativeShareFixture(
 }
 
 export function nativeShareButtonMarkup(html: string) {
-  return (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).filter((button) =>
-    /^share(?: this)?(?: event)?$/i.test(button.replace(/<!--[\s\S]*?-->|<[^>]+>/g, "").trim()),
-  );
+  // Recognize SSR controls, not sanitize HTML. Chromium checks the actual accessible name.
+  const text = (markup: string) =>
+    Array.from(markup.matchAll(/<!--[\s\S]*?-->|<[^>]*>|([^<]+)/g), (match) => match[1] ?? "")
+      .join("")
+      .trim();
+  const attributes = (opening: string) =>
+    new Map(
+      Array.from(opening.matchAll(/\s([\w-]+)=(?:"([^"]*)"|'([^']*)')/g), (match) => [
+        match[1]!,
+        match[2] ?? match[3]!,
+      ]),
+    );
+  const labels = new Map<string, string>();
+  for (const opening of html.matchAll(/<([a-z][\w:-]*)\b[^>]*>/gi)) {
+    const id = attributes(opening[0]).get("id");
+    if (!id) continue;
+    const start = opening.index + opening[0].length;
+    const end = html.indexOf(`</${opening[1]}>`, start);
+    if (end !== -1) labels.set(id, text(html.slice(start, end)));
+  }
+  return (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).filter((button) => {
+    const attrs = attributes(button.slice(0, button.indexOf(">") + 1));
+    const labelledBy = (attrs.get("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .filter((id) => labels.has(id));
+    const name = labelledBy.length
+      ? labelledBy.map((id) => labels.get(id)).join(" ")
+      : attrs.get("aria-label") || text(button);
+    return /^share(?: this)?(?: event)?$/i.test(name.trim());
+  });
 }

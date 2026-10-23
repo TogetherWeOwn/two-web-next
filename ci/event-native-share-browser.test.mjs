@@ -46,16 +46,26 @@ function stubDevice({ mode, clipboard }) {
   window.addEventListener("unhandledrejection", (event) =>
     window.shareTrace.rejections.push(String(event.reason)),
   );
-  Object.defineProperty(navigator, "clipboard", {
-    configurable: true,
-    value: {
-      writeText: async (value) => {
-        window.shareTrace.copied.push(value);
-        if (clipboard === "denied")
-          throw new DOMException("Fixture clipboard refused", "NotAllowedError");
+  if (isSecureContext)
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value) => {
+          window.shareTrace.copied.push(value);
+          if (clipboard === "denied")
+            throw new DOMException("Fixture clipboard refused", "NotAllowedError");
+        },
       },
-    },
-  });
+    });
+  else {
+    const execCommand = document.execCommand.bind(document);
+    document.execCommand = (...args) => {
+      const selected = document.activeElement?.value;
+      const copied = execCommand(...args);
+      if (args[0] === "copy" && copied) window.shareTrace.copied.push(selected);
+      return copied;
+    };
+  }
   if (clipboard === "denied") document.execCommand = () => false;
   Object.defineProperty(navigator, "permissions", {
     configurable: true,
@@ -125,7 +135,11 @@ async function open(t, view, options = {}) {
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === origin && url.pathname === SHARE_PATH) {
-      await route.fulfill({ contentType: "text/html; charset=utf-8", body: fixture.html });
+      await route.fulfill({
+        status: fixture.status,
+        contentType: "text/html; charset=utf-8",
+        body: fixture.html,
+      });
       return;
     }
     const file = resolve(ROOT, `.${url.pathname}`);
@@ -157,7 +171,8 @@ async function open(t, view, options = {}) {
     dialogs.push(dialog.message());
     await dialog.dismiss();
   });
-  await page.goto(origin + SHARE_PATH + SHARE_QUERY, { waitUntil: "load" });
+  const response = await page.goto(origin + SHARE_PATH + SHARE_QUERY, { waitUntil: "load" });
+  assert.equal(response.status(), fixture.status, "browser must receive the actual route status");
   if (javaScriptEnabled) assert.equal(await page.evaluate(() => isSecureContext), !insecure);
   assert.equal(
     (await page.getByTestId("event-attendees").count()) > 0,
@@ -367,6 +382,8 @@ for (const view of SHARE_VIEWS) {
       });
       assert.equal(await nativeButton(f.page).count(), 0);
       assert.deepEqual((await trace(f.page)).calls, []);
+      if (capability === "insecure")
+        assert.equal(await f.page.evaluate(() => navigator.clipboard), undefined);
       await calendarAndCopy(f.page);
       const copy = f.page.getByTestId("event-copy-link");
       await tabTo(f.page, copy);
