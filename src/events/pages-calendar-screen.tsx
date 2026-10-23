@@ -68,6 +68,10 @@ export const EventsCalendarPage: FC<{
   totalPages: number;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
+  /** Distinct published games backing the facet select. */
+  games: string[];
+  /** Effective facet: the canonical stored game, or null when unfiltered. */
+  gameFilter: string | null;
   member: boolean;
   inviteUrl: string;
   appUrl: string;
@@ -91,6 +95,8 @@ export const EventsCalendarPage: FC<{
   totalPages,
   emptyState,
   discordFailed,
+  games,
+  gameFilter,
   member,
   inviteUrl,
   appUrl,
@@ -208,11 +214,17 @@ export const EventsCalendarPage: FC<{
           emptyState={emptyState}
           hasVisibleResults={hasVisibleResults}
           outOfRange={outOfRange}
+          gameFilter={gameFilter}
         />
 
         <CalendarHead state={state} appUrl={appUrl} />
 
-        <CalendarSearchForm state={state} searching={searching} />
+        <CalendarSearchForm
+          state={state}
+          searching={searching}
+          games={games}
+          gameFilter={gameFilter}
+        />
 
         {/* Beside the search box, so the over-limit notice shows where the query is typed. */}
         <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />

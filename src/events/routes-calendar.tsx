@@ -31,6 +31,7 @@ export function registerCalendarRoutes(
   app.get("/events", async (c) => {
     const input = resolveCalendarInput({
       q: c.req.query("q"),
+      game: c.req.query("game"),
       view: c.req.query("view"),
       past: c.req.query("past"),
       page: c.req.query("page"),
@@ -126,6 +127,8 @@ export function registerCalendarRoutes(
       emptyState,
       robots,
       discordFailed,
+      games,
+      gameFilter,
     } = model;
 
     // One-shot join confirmation (legacy join_result flash): /events is a
@@ -169,6 +172,8 @@ export function registerCalendarRoutes(
         emptyState={emptyState}
         robots={robots}
         discordFailed={discordFailed}
+        games={games}
+        gameFilter={gameFilter}
         member={session?.member ?? false}
         inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
