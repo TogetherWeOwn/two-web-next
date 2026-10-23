@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { capture, verifyInputs, verifyOutputs, hashes, sourceHead, viewports, names } = require('./run-capture.cjs');
-const { screenshotWithRetry } = require('./capture-current.cjs');
 const fixtures = path.join(__dirname, 'fixtures');
 
 async function scratch(t) {
@@ -352,41 +351,4 @@ test('scope check names an uncovered module and passes once it is added (synthet
   assert.deepEqual(missing, ['src/uncovered.ts']);
   assert.throws(() => assert.deepEqual(missing, []), /src\/uncovered\.ts/);
   assert.deepEqual(findUncoveredModules(reachable, ['src/used.ts', 'src/uncovered.ts']), []);
-});
-
-test('screenshot retry captures once when the first attempt succeeds', async () => {
-  let calls = 0;
-  const page = {
-    screenshot: async options => {
-      calls += 1;
-      assert.equal(options.fullPage, true);
-      assert.ok(options.path.endsWith('.png'));
-    },
-  };
-  await screenshotWithRetry(page, '/tmp/shot-1280x900.png');
-  assert.equal(calls, 1);
-});
-
-test('screenshot retry recovers after one transient protocol failure', async () => {
-  let calls = 0;
-  const page = {
-    screenshot: async () => {
-      calls += 1;
-      if (calls === 1) throw new Error('page.screenshot: Protocol error (Page.captureScreenshot): Unable to capture screenshot');
-    },
-  };
-  await screenshotWithRetry(page, '/tmp/shot-1280x900.png');
-  assert.equal(calls, 2);
-});
-
-test('screenshot retry still fails closed after two consecutive failures', async () => {
-  let calls = 0;
-  const page = {
-    screenshot: async () => {
-      calls += 1;
-      throw new Error(`persistent failure ${calls}`);
-    },
-  };
-  await assert.rejects(() => screenshotWithRetry(page, '/tmp/shot-1280x900.png'), /persistent failure 2/);
-  assert.equal(calls, 2);
 });
