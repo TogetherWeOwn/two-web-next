@@ -190,13 +190,33 @@ export async function investigationDocument(
 
 // Read attributes from emitted HTML, not source. This is deliberately independent
 // of the product URL builder, and tolerates both Hono and Svelte escaping.
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&quot;": '"',
+  "&#34;": '"',
+  "&#39;": "'",
+  "&#x27;": "'",
+  "&lt;": "<",
+  "&gt;": ">",
+};
+// Single scan: each entity decodes exactly once, so a decoded ampersand is
+// never re-scanned into a second entity (no double unescaping).
 export const decode = (text: string) =>
-  text
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;|&#34;/g, '"')
-    .replace(/&#39;|&#x27;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  text.replace(/&(amp|quot|lt|gt|#34|#39|#x27);/g, (entity) => ENTITIES[entity]!);
+// Remove HTML comments without regular expressions: scan for each opener and
+// drop everything through its closer, so no opener can survive stripping.
+export function stripComments(html: string): string {
+  let out = "";
+  let rest = html;
+  for (;;) {
+    const open = rest.indexOf("<!--");
+    if (open === -1) return out + rest;
+    out += rest.slice(0, open);
+    const close = rest.indexOf("-->", open + 4);
+    if (close === -1) return out;
+    rest = rest.slice(close + 3);
+  }
+}
 export function links(html: string) {
   return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].flatMap((m) => {
     const href = /\bhref="([^"]*)"/.exec(m[1]!);

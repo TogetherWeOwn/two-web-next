@@ -12,6 +12,7 @@ import {
   listState,
   plain,
   recorded,
+  stripComments,
   twins,
 } from "./helpers/join-investigation";
 
@@ -289,9 +290,9 @@ for (const twin of twins) {
         const content = result.html.slice(result.html.indexOf("<main"));
         expect(content).not.toContain("<img src=x");
         const fields = [...content.matchAll(/<(?:td|dd)\b[^>]*>([\s\S]*?)<\/(?:td|dd)>/g)];
-        expect(
-          fields.filter((m) => decode(m[1]!.replace(/<!--[\s\S]*?-->/g, "")) === value),
-        ).toHaveLength(path === listPath ? 2 : 3);
+        expect(fields.filter((m) => decode(stripComments(m[1]!)) === value)).toHaveLength(
+          path === listPath ? 2 : 3,
+        );
         expect(plain(content)).toContain('<img src=x onerror="window.injected=1"> & recorded');
       }
     });
