@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { URL as NodeURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page, Route } from "playwright";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
@@ -31,6 +31,8 @@ import {
   normalizeEventSearch,
 } from "../src/islands/contracts-calendar";
 import { MAX_QUERY_LENGTH, matchQuery, normalizeQuery } from "../src/events/search-log";
+import { renderEventsHtml } from "../src/kit-events-html";
+import { cancellationData } from "./helpers/calendar-cancellation";
 
 vi.mock("../src/events/reads", async (original) => ({
   ...(await original<typeof import("../src/events/reads")>()),
@@ -344,6 +346,117 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       await page.locator('[role="search"] button[type="submit"]').click();
       await page.waitForURL(/\/events\?/);
       expect(submissions).toHaveLength(1);
+    }
+
+    // Reuse this CI-wired Chromium gate for cancellation semantics after an
+    // actual keyboard-driven swap. Only HTTP is faked; HTML and binder are real.
+    for (const member of [false, true]) {
+      it.each([
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ])(
+        `cancellation survives native and enhanced keyboard navigation (member=${member}, $width)`,
+        async (viewport) => {
+          const base = "https://schedule.example.test";
+          const key = "01ARZ3NDEKTSV4RRFFQ69G5FAA";
+          const initialPath = "/events?view=list&month=2099-01&past=1";
+          const swaps: string[] = [];
+          const documents: string[] = [];
+          const context = await browser.newContext({ viewport });
+          contexts.push(context);
+          const island = readFileSync(
+            new NodeURL("../public/islands/events-calendar.js", import.meta.url),
+            "utf8",
+          );
+          const routeFixture = async (route: Route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (url.origin !== base) return route.abort();
+            if (url.pathname === "/islands/events-calendar.js") {
+              return route.fulfill({ contentType: "text/javascript", body: island });
+            }
+            if (url.pathname !== "/events") return route.abort();
+            if (request.headers()["x-two-island"] === "events-calendar")
+              swaps.push(url.pathname + url.search);
+            else documents.push(url.pathname + url.search);
+            const data = cancellationData(member);
+            // Serve the ephemeral origin so the rendered canonical stays same-origin.
+            data.appUrl = base;
+            data.state.view = url.searchParams.get("view") === "calendar" ? "calendar" : "list";
+            data.loginReturnTo = url.pathname + url.search;
+            const html = await renderEventsHtml(data, {});
+            return route.fulfill({
+              status: html.status,
+              contentType: "text/html",
+              body: html.body,
+            });
+          };
+          await context.route("**/*", routeFixture);
+          const page = await context.newPage();
+          await page.goto(base + initialPath);
+          const root = page.locator('[data-island="events-calendar"]');
+          const before = await page.locator(`[data-event-key="${key}"]`).innerText();
+          const calendar = page.getByTestId("events-view-calendar");
+          await calendar.focus();
+          await page.keyboard.press("Enter");
+          await expect.poll(() => root.getAttribute("data-view")).toBe("calendar");
+          const jump = page.locator("a[data-cal-jump]").filter({ hasText: "Chess night" });
+          expect(await jump.count()).toBe(1);
+          const gridText = await jump.innerText();
+          const gridName = await jump.ariaSnapshot();
+          expect(await jump.getAttribute("href")).toBe(`/events?event=${key}&past=1#event-${key}`);
+          await jump.focus();
+          await page.keyboard.press("Enter");
+          const retained = page.locator(`[data-event-key="${key}"]`);
+          await retained.waitFor();
+          await expect.poll(() => page.evaluate("document.activeElement.id")).toBe(`event-${key}`);
+          expect(await root.getAttribute("data-view")).toBe("list");
+          expect(new URL(page.url()).hash).toBe(`#event-${key}`);
+          expect(swaps).toEqual([
+            "/events?past=1&view=calendar&month=2099-01",
+            `/events?event=${key}&past=1`,
+          ]);
+          expect(documents).toEqual([initialPath]);
+          expect(await retained.innerText()).toBe(before);
+          expect(await retained.locator("h3 a").count()).toBe(0);
+          expect(await retained.locator("time").getAttribute("datetime")).toBe(
+            "2099-01-15T20:00:00.000Z",
+          );
+          // Repeat the day jump without JS: native GET + fragment navigation
+          // must reach the same retained card as the two enhanced fetches.
+          const nativeContext = await browser.newContext({ viewport, javaScriptEnabled: false });
+          contexts.push(nativeContext);
+          await nativeContext.route("**/*", routeFixture);
+          const nativePage = await nativeContext.newPage();
+          await nativePage.goto(base + "/events?past=1&view=calendar&month=2099-01");
+          const nativeJump = nativePage
+            .locator("a[data-cal-jump]")
+            .filter({ hasText: "Chess night" });
+          expect(await nativeJump.innerText()).toBe(gridText);
+          expect(await nativeJump.ariaSnapshot()).toBe(gridName);
+          await nativeJump.focus();
+          await nativePage.keyboard.press("Enter");
+          await nativePage.locator(`[data-event-key="${key}"]`).waitFor();
+          expect(new URL(nativePage.url()).hash).toBe(`#event-${key}`);
+          expect(await nativePage.locator(`[data-event-key="${key}"]`).innerText()).toBe(before);
+          expect(swaps).toHaveLength(2);
+          // Assert the contract after completing the real keyboard journey, so
+          // RED names presentation defects, not an unexercised swap fixture.
+          expect.soft(gridText).toMatch(/cancelled/i);
+          expect.soft(gridName).toMatch(/cancelled/i);
+          expect.soft(before).not.toMatch(/sign in|\bgoing\b|available|remaining/i);
+          const invitationCopy =
+            /sign in|^rsvp$|rsvp (?:now|in discord|to |for )|join (?:this|the) event/i;
+          const invitations = page
+            .locator(`[data-event-key="${key}"] a`)
+            .filter({ hasText: invitationCopy });
+          expect.soft(await invitations.count()).toBe(0);
+          if (!member)
+            expect(
+              await page.getByText("Join the Discord", { exact: true }).count(),
+            ).toBeGreaterThan(0);
+        },
+      );
     }
 
     for (const method of ["typing", "paste"] as const) {
