@@ -157,3 +157,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/hono-no-member-data-contract\.test\.ts$''']
 regexes = ['''^111222333444555667$''', '''^222333444555666778$''']
+
+[[allowlists]]
+description = "Two synthetic offline PUBLIC Discord event fixtures in the Kit public-payload contract tests, not credentials or member identities"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']
