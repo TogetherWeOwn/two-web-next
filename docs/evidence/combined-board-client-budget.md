@@ -1,6 +1,6 @@
 # Combined board-caption and profile-composition budget
 
-Measured 2026-10-22. This is a budget-only prerequisite for
+Measured 2026-10-22; refreshed 2026-10-23. This is a budget-only prerequisite for
 [#1493](https://github.com/TogetherWeOwn/two-web-next/pull/1493), not approval
 of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
@@ -186,3 +186,53 @@ guard pass on the resolved prerequisite. No acceptance test was edited.
 This is local measurement, not exact-head CI, feature approval, a completed
 full `npm run check`, a browser run, startup measurement or staging proof.
 Rollback restores main's 247296 B raw ceiling.
+
+## Second base-conflict reconciliation: unchanged proposal
+
+On 2026-10-23 GitHub reported another conflict, authorizing a merge of main
+`02af9e5ef` ([#1467](https://github.com/TogetherWeOwn/two-web-next/pull/1467)).
+Only `ci/kit-perf-budget.json` conflicted. The resolution keeps main's full
+422-notice decision history and both prerequisite records above, without
+repeating their common history. Incoming source and acceptance tests are
+unchanged. The PR still differs from main only in budget and this evidence.
+
+Reproduce with the same five-path overlay described above, substituting
+`git archive 02af9e5ef` for the main archive. Node `v24.22.1`, fresh external
+root/web `npm ci --include=dev` installations and both lockfile hashes are
+unchanged. Two builds per tree give:
+
+| Group | Current main 1 | Current main 2 | Current combined 1 | Current combined 2 |
+| --- | --- | --- | --- | --- |
+| Client JS raw/gzip | 247165/99460 | 247165/99460 | 247930/99710 | 247930/99710 |
+| Client JS files | 52 | 52 | 52 | 52 |
+| Server JS raw/gzip | 1109636/326237 | 1109638/326238 | 1111152/326737 | 1111152/326735 |
+| Server JS files | 122 | 122 | 123 | 123 |
+| Worker raw/gzip | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 |
+| Client CSS raw/gzip | 2660/891 | 2660/891 | 2660/891 | 2660/891 |
+
+Each pair has identical 52-file client path/hash maps; 50 path/hash pairs
+match across trees. The board node remains 3600/1722 → 4365/1972 B
+(**+765/+250 B**); app entries remain 5318/1475 B with hash-only relinking.
+Client `drizzle-orm` references remain zero. First-build measurements append
+to the TSV as `422-main` and `422-combined`; earlier rows are unchanged.
+
+The current combined tree is **634 B over main's 247296 B raw cap** and
+**122 B over the initial 247808 B proposal**. The existing **248320 B**
+proposal still fits and remains the first fitting 512 B boundary: **390 B
+raw and 130 B gzip margins**. No additional allowance is added. Every other
+numeric ceiling remains exactly main's. Combined server gzip fits by at
+least 943 B; worker, CSS and counts fit. Same-output cap swaps
+247296/247808/248320 exit **1/1/0**, twice without rebuilding. The actual
+budget-only resolved worktree also builds and passes its budget checker.
+
+Unchanged frozen feature acceptance passes **20/20**. Checker selftests
+**6/6**, checker tests **13/13**, parity-gate unit tests **67/67**, config
+selftests **34/34**, lint, typecheck, asset drift, Hono asset budgets, docs
+links and strict test inventory pass. The incoming error-shell suites report
+**31 passed / 29 DB-gated skipped** without a test URL, not complete incoming
+acceptance verification. Migration selftests report **23/23** but internally
+omit the existing-role collision probe because another suite owns that role.
+No acceptance test is edited. Full `npm run check`, browser parity, startup
+latency and staging are not run or claimed; exact-head CI and independent
+review remain required. Rollback restores main's 247296 B raw cap. The source
+feature ref remains untouched.
