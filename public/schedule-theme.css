@@ -47,6 +47,9 @@
 .events-page .member-board-table :is(caption, td, th[scope=row]) { overflow-wrap: anywhere; }
 .events-page .member-board-table :is(th, td):first-child { width: 5.5rem; }
 .events-page .member-board-table :is(th, td):last-child { width: 5rem; }
+.events-page [data-island=past-events][data-query]:not([data-query=""]) .schedule-info h2 a { display: block; width: fit-content; }
+.events-page [data-island=past-events] mark { background: var(--brand); color: var(--paper); }
+.events-page .archive-passage { max-width: 72ch; }
 .events-page [data-archive-state] { overflow-wrap: anywhere; }
 .events-page [data-archive-pager] { display: flex; flex-wrap: wrap; gap: 1.5rem; }
 .events-page .subscription-help { margin: 1rem 0; padding: .75rem 1rem; border: 1px solid var(--line); }
