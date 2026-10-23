@@ -1,7 +1,5 @@
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
-/* Latin-only, Arial-metric fallback; arrows (U+2192) keep prior rendering.
-   Overrides = Display's 93%/34.6% ascent/descent at 77% + margin: fallback
-   hero paints >= swapped-in text (no larger repaint). */
+/* Latin Arial fallback: 77% × Display 93%/34.6% + margin avoids larger repaint; U+2192 stays native. */
 @font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('Liberation Sans'), local('Arimo'), local('Arial'); size-adjust: 77%; ascent-override: 123%; descent-override: 46%; line-gap-override: 0%; unicode-range: U+0000-00FF; }
 .base-theme { min-height: 100vh; background: var(--color-page); color: var(--color-text); font: 17px/1.65 system-ui, sans-serif; }
 .base-theme a { color: var(--brand); text-underline-offset: .25em; }
