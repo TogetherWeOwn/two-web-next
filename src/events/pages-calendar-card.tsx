@@ -52,7 +52,6 @@ export const CalCard: FC<{
   const startDay = wallDateIso(e.startsAt, tz);
   const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
   const descriptionPoints = [...(e.description ?? "")];
-  const longDescription = descriptionPoints.length > DESCRIPTION_LIMIT;
   return (
     <li>
       <article
@@ -91,16 +90,9 @@ export const CalCard: FC<{
               <>
                 {" · "}
                 <time datetime={e.endsAt.toISOString()}>
-                  {endDay !== startDay ? (
-                    <>
-                      {cardDayLabel(e.endsAt, tz)}
-                      {endDay!.slice(0, -6) !== startDay.slice(0, -6)
-                        ? ` ${endDay!.slice(0, -6)}`
-                        : ""}
-                      {", "}
-                    </>
-                  ) : null}
-                  {wallTimeHm(e.endsAt, tz)}
+                  {(endDay !== startDay
+                    ? `${cardDayLabel(e.endsAt, tz)}${endDay!.slice(0, -6) !== startDay.slice(0, -6) ? ` ${endDay!.slice(0, -6)}` : ""}, `
+                    : "") + wallTimeHm(e.endsAt, tz)}
                 </time>
               </>
             ) : null}{" "}
@@ -112,7 +104,7 @@ export const CalCard: FC<{
               </>
             ) : null}
           </p>
-          {longDescription ? (
+          {descriptionPoints.length > DESCRIPTION_LIMIT ? (
             <details class="schedule-description">
               <summary>
                 <span class="schedule-excerpt">
