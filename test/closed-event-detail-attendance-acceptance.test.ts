@@ -32,7 +32,8 @@ import { build } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsx } from "hono/jsx/jsx-runtime";
-import { beforeAll, describe, expect, it } from "vitest";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -315,26 +316,62 @@ async function kitDetailHtml(status: DetailStatus, counts: DetailCounts): Promis
 }
 
 // Visible copy only: head metadata, JSON-LD and scripts are not attendance.
-function visibleText(html: string): string {
-  return html
-    .replace(/<head>[\s\S]*?<\/head>/g, " ")
-    .replace(/<script[\s\S]*?<\/script>/g, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
+// Parse HTML rather than filtering tags with regexes. A second pass reads only
+// surviving text, including the separators inserted around adjacent elements.
+let textParser: Miniflare | undefined;
+afterAll(async () => {
+  await textParser?.dispose();
+});
+
+async function visibleText(html: string): Promise<string> {
+  textParser ??= new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      compatibilityDate: "2026-09-29",
+      outboundService: async () => {
+        throw new Error("External network forbidden in visible-copy parser");
+      },
+      script: `export default {
+        async fetch(request) {
+          const copy = new HTMLRewriter()
+            .on("head, script", { element(element) { element.remove(); } })
+            .on("*", { element(element) { element.before(" "); element.after(" "); } })
+            .transform(new Response(await request.text()));
+          let text = "";
+          await new HTMLRewriter().onDocument({
+            text(chunk) { text += chunk.text; }
+          }).transform(copy).text();
+          return new Response(text);
+        }
+      };`,
+    }),
+  );
+  const response = await textParser.dispatchFetch("https://copy.example.test", {
+    method: "POST",
+    body: html,
+  });
+  return (await response.text()).replaceAll("&amp;", "&").replace(/\s+/g, " ").trim();
 }
 
-function expectPastLineup(html: string, counts: DetailCounts): void {
-  const text = visibleText(html);
+it("visible copy excludes mixed-case head and script markup, not adjacent attendance", async () => {
+  const html = `<HEAD data-note=">"><title>Full</title></hEaD><body>
+    <SCRIPT type="application/ld+json">{"copy":"spots left"}</SCRIPT >
+    <p>7 existing responses &amp; <b>friends</b></p>
+    <sCrIpT>Full</sCrIpT data-end=">"><p>Still visible</p>
+  </body>`;
+  expect(await visibleText(html)).toBe("7 existing responses & friends Still visible");
+});
+
+async function expectPastLineup(html: string, counts: DetailCounts): Promise<void> {
+  const text = await visibleText(html);
   expect(text).toContain(goingCountText(counts.going, counts.capacity));
   expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
   expect(text).not.toMatch(/spots left/i);
   expect(text).not.toMatch(/\bFull\b/);
 }
 
-function expectCancelledLineup(html: string, counts: DetailCounts): void {
-  const text = visibleText(html);
+async function expectCancelledLineup(html: string, counts: DetailCounts): Promise<void> {
+  const text = await visibleText(html);
   expect(text).toContain(existingResponsesText(counts.going));
   expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
   expect(text).not.toMatch(/\bgoing\b/i);
@@ -351,7 +388,7 @@ describe("Hono past detail (RED: final attendance, no spots line)", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('data-testid="event-past">Past event');
-    expectPastLineup(html, counts);
+    await expectPastLineup(html, counts);
   });
 });
 
@@ -361,7 +398,7 @@ describe("Hono cancelled detail (RED: existing responses, no capacity)", () => {
     expect(res.status).toBe(410);
     const html = await res.text();
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
-    expectCancelledLineup(html, counts);
+    await expectCancelledLineup(html, counts);
   });
 });
 
@@ -369,7 +406,7 @@ describe("Kit past detail (RED: final attendance, no spots line)", () => {
   it.each(CASES)("shows the going count with no spots/full line ($name)", async (counts) => {
     const html = await kitDetailHtml("past", counts);
     expect(html).toContain('data-testid="event-past">Past event');
-    expectPastLineup(html, counts);
+    await expectPastLineup(html, counts);
   });
 });
 
@@ -377,7 +414,7 @@ describe("Kit cancelled detail (RED: existing responses, no capacity)", () => {
   it.each(CANCELLED_CASES)("shows existing responses with no capacity ($name)", async (counts) => {
     const html = await kitDetailHtml("cancelled", counts);
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
-    expectCancelledLineup(html, counts);
+    await expectCancelledLineup(html, counts);
   });
 });
 
@@ -523,7 +560,7 @@ describe("island refresh keeps the closed-event rendering (RED: no spots node ap
 
   it("Hono cancelled: refresh leaves no spots node", async () => {
     const html = await (await honoFixture("cancelled", cancelledNearlyFull).request()).text();
-    expect(visibleText(html)).toContain(existingResponsesText(cancelledNearlyFull.going));
+    expect(await visibleText(html)).toContain(existingResponsesText(cancelledNearlyFull.going));
     if (!html.includes(`data-testid="${GOING_COUNT_TESTID}"`)) {
       // Static rendering is trivially refresh-safe: no island, no spots node.
       expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
@@ -548,7 +585,7 @@ describe("island refresh keeps the closed-event rendering (RED: no spots node ap
 
   it("Kit cancelled: refresh leaves no spots node", async () => {
     const html = await kitDetailHtml("cancelled", cancelledNearlyFull);
-    expect(visibleText(html)).toContain(existingResponsesText(cancelledNearlyFull.going));
+    expect(await visibleText(html)).toContain(existingResponsesText(cancelledNearlyFull.going));
     if (!html.includes(`data-testid="${GOING_COUNT_TESTID}"`)) {
       expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
       return;
@@ -576,7 +613,7 @@ describe("published detail keeps count plus spots-left (CONTROL: green before an
     const res = await honoFixture("published", counts).request();
     expect(res.status).toBe(200);
     const html = await res.text();
-    const text = visibleText(html);
+    const text = await visibleText(html);
     expect(text).toContain(goingCountText(counts.going, counts.capacity));
     if (counts.capacity === null) {
       expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
@@ -588,7 +625,7 @@ describe("published detail keeps count plus spots-left (CONTROL: green before an
 
   it.each(CASES)("Kit published keeps the invitation line ($name)", async (counts) => {
     const html = await kitDetailHtml("published", counts);
-    const text = visibleText(html);
+    const text = await visibleText(html);
     expect(text).toContain(goingCountText(counts.going, counts.capacity));
     if (counts.capacity === null) {
       expect(html).not.toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
@@ -631,11 +668,11 @@ describe("schedule cards already suppress both lines (CONTROL: green before and 
 describe("keyboard and no-JS detail journeys (CONTROL: green before and after)", () => {
   const full = CASES[0]!;
 
-  function expectPastJourney(html: string): void {
+  async function expectPastJourney(html: string): Promise<void> {
     // Closed RSVP is a status notice, never a form: nothing to submit, focus,
     // or trap without JS.
     expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
-    expect(visibleText(html)).toContain(rsvpClosedCopy("past"));
+    expect(await visibleText(html)).toContain(rsvpClosedCopy("past"));
     expect(html).not.toContain("data-rsvp-form");
     expect(html).not.toContain('data-testid="rsvp-going"');
     // The device-timezone action ships hidden with an empty live region; the
@@ -662,11 +699,11 @@ describe("keyboard and no-JS detail journeys (CONTROL: green before and after)",
   }
 
   it("Hono past keeps the closed no-JS journey", async () => {
-    expectPastJourney(await (await honoFixture("past", full).request()).text());
+    await expectPastJourney(await (await honoFixture("past", full).request()).text());
   });
 
   it("Kit past keeps the closed no-JS journey", async () => {
-    expectPastJourney(await kitDetailHtml("past", full));
+    await expectPastJourney(await kitDetailHtml("past", full));
   });
 
   it("Hono cancelled keeps alternatives, ICS and the way back", async () => {
