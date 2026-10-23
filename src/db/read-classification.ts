@@ -39,6 +39,10 @@ const fillCount =
 // complete bound-ID query permits its computed projections, never arbitrary SQL.
 const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at", CASE WHEN isfinite("starts_at") THEN to_char("starts_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "starts_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "starts_at"::text END, CASE WHEN isfinite("ends_at") THEN to_char("ends_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "ends_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "ends_at"::text END from "featured_contents" where "featured_contents"."id" = $1`;
 
+// The series reader bounds public text before transport. Admit only this complete
+// projection and bound-root query, never arbitrary computed event expressions.
+const seriesContextRead = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $6 from "events" where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10)) order by "events"."recurrence_index" asc, "events"."id" asc limit $11`;
+
 export function validateNonSensitiveRead(
   classification: NonSensitiveRead,
   statement: string,
@@ -62,6 +66,7 @@ export function validateNonSensitiveRead(
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
+  if (classification === "events" && fields?.length && query === seriesContextRead) return;
   const table =
     classification === "events"
       ? "events"
