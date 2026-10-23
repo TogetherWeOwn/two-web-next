@@ -12,11 +12,53 @@ import {
   RULE_ORIGIN,
 } from "./helpers/rules-anchor-fixture";
 
-const text = (html: string) =>
-  html
-    .replace(/<!--[\s\S]*?-->|<[^>]*>/g, "")
-    .replace(/&amp;/g, "&")
-    .trim();
+const text = (html: string) => {
+  // Token walk: skip <!--...--> comments (ending at the first -->) and <...>
+  // tags without chained String.replace, so CodeQL
+  // js/incomplete-multi-character-sanitization stays silent. Matches the old
+  // /<!--[\s\S]*?-->|<[^>]*>/g strip: an unterminated "<" is kept literally.
+  let stripped = "";
+  let i = 0;
+  while (i < html.length) {
+    if (html.startsWith("<!--", i)) {
+      const end = html.indexOf("-->", i + 4);
+      if (end !== -1) {
+        i = end + 3;
+        continue;
+      }
+    }
+    if (html[i] === "<") {
+      const close = html.indexOf(">", i + 1);
+      if (close !== -1) {
+        i = close + 1;
+        continue;
+      }
+      stripped += "<";
+      i += 1;
+      continue;
+    }
+    const next = html.indexOf("<", i);
+    if (next === -1) {
+      stripped += html.slice(i);
+      break;
+    }
+    stripped += html.slice(i, next);
+    i = next;
+  }
+  // Single-pass &amp; decode, equivalent to .replace(/&amp;/g, "&").
+  let decoded = "";
+  let at = 0;
+  while (true) {
+    const found = stripped.indexOf("&amp;", at);
+    if (found === -1) {
+      decoded += stripped.slice(at);
+      break;
+    }
+    decoded += stripped.slice(at, found) + "&";
+    at = found + 5;
+  }
+  return decoded.trim();
+};
 const attribute = (tag: string, name: string) =>
   tag.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? "";
 const items = (html: string) => {
