@@ -35,7 +35,7 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { isValidZone } from "./date-format";
+import { isEditedEvent, isValidZone, updatedStampLabel } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
@@ -149,6 +149,10 @@ export interface KitEventDetailModel {
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
   timeDatetime: string;
+  /** Edited-event stamp: the shared human date plus the machine instant, or
+   * null on fresh rows. Derived from the already-read event row — no new
+   * store call — and required so a missed wiring fails typecheck. */
+  updatedStamp: { text: string; datetime: string } | null;
   /** Member-only projection: always [] for anonymous viewers. */
   attendees: EventAttendee[];
   /** Native attendee page window for the rendered page, mirroring Hono. */
@@ -523,6 +527,12 @@ export async function resolveKitEventDetail(
           endsWhenText: formatEventWhen(event.endsAt, event.timezone),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
+          updatedStamp: isEditedEvent(event.createdAt, event.updatedAt)
+            ? {
+                text: updatedStampLabel(event.updatedAt, event.timezone),
+                datetime: event.updatedAt.toISOString(),
+              }
+            : null,
           attendees,
           attendeesPaging,
           answer,
