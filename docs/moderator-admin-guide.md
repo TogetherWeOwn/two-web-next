@@ -616,13 +616,15 @@ row, the same rule as join attempts. Keep member identifiers private.
 ### Dashboard
 
 `/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
-cards plus these diagnostic sections when their data is available:
+cards plus two diagnostic sections. Both headings remain visible even when an
+optional read is unavailable for this load:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
   identifiers; a `denied` count is not a ban count. Counts are cached for 60 seconds
   and may lag a new attempt; refreshing is not a live recount. An empty result
-  says **No join attempts in the window.**
+  says **No join attempts in the window.** Each outcome links to page 1 of the
+  read-only join-attempt list with that exact recorded outcome filter.
 - **Top searches with no results:** the top 10 normalized search queries, miss
   counts and last-searched timestamps. Queries are lowercased, whitespace-collapsed
   and capped at 255 characters; there is no searcher identity/IP attribution.
@@ -633,9 +635,11 @@ cards plus these diagnostic sections when their data is available:
   genuine no-match. A query absent from this list may still have been tried during
   a Discord outage, so never read a missing row as proof nobody searched for it.
 
-A missing section is not proof of zero incidents: failing/slow optional funnel
-or missed-search reads can omit their section while the dashboard remains
-available. Both reads start together with a 1.5 s budget; that optional
+A successful empty search result says **No recorded missed searches.** This is
+not proof that nobody searched. Failing/slow optional funnel or missed-search
+reads instead say **unavailable for this load**, never zero or empty success;
+the other section can still show its result. Both reads start together with a
+1.5 s budget; that optional
 widget behavior does not relax authorization or access-log enforcement.
 Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request
