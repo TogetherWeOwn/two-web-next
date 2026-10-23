@@ -93,6 +93,18 @@ html body {
   --line: var(--color-border);
 }
 
+/* Hono keeps its light admin palette. Kit's shared admin chrome adapts only
+ * help/footer ink and the repeat surface to the root layout's dark canvas. */
+.kit-admin {
+  --muted: var(--color-lobby-muted);
+}
+.kit-admin :is(.field .hint, .hint) {
+  color: var(--muted);
+}
+.kit-admin fieldset {
+  background: var(--color-lobby-raised);
+}
+
 .base-theme.schedule-theme,
 .base-theme[data-theme="schedule"] {
   --color-text: var(--theme-schedule-text, var(--color-lobby-ink));
