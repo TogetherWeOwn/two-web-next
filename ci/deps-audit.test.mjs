@@ -352,6 +352,10 @@ async function withRegistry(run) {
         response.setHeader("Content-Encoding", advisory.encoding);
       }
       response.statusCode = advisory.status ?? 200;
+      if (advisory.stallBulkBody) {
+        response.flushHeaders();
+        return;
+      }
       if (advisory.status === 302) response.setHeader("Location", "/redirected-advisories");
       if (advisory.truncated) {
         response.setHeader("Content-Length", body.length + 1);
@@ -524,6 +528,25 @@ test("real npm response tokens never turn HTTP or malformed JSON into outages", 
     }
   });
 });
+
+for (const status of [401, 403]) {
+  test(`real npm HTTP ${status} headers block despite a stalled bulk body`, {
+    timeout: 30_000,
+  }, async () => {
+    await withRegistry(async ({ advisory, bulkBodies, oneAudit }) => {
+      advisory.status = status;
+      // Deliver permanent status evidence without ever completing the body, so
+      // end-of-body validation cannot independently make this test pass.
+      advisory.stallBulkBody = true;
+      const result = await oneAudit(2_000);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Registry advisory response was not schema-validated/);
+      assert.doesNotMatch(result.stderr, /retrying|TRANSPORT|::warning::/);
+      assert.equal(result.stdout, "");
+      assert.equal(bulkBodies.length, 1, "permanent HTTP headers must block the first attempt");
+    });
+  });
+}
 
 test("real npm malformed bulk validation survives a later metadata timeout", {
   timeout: 30_000,
