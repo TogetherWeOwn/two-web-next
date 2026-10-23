@@ -284,5 +284,83 @@ pr_commit
 expect "merge_group: unfetched base branch fails the scan" 2 \
   "$(scan_rc merge_group refs/heads/missing-branch)"
 
+# -- candidate Hono fixture exception: real rules, exact git-relative paths ---
+# Read the actual candidate policy, not a copy of the entry under test. These
+# direct scans test the policy before it becomes the wrapper's trusted base.
+hono_policy="${here}/../../.gitleaks.toml"
+hono_path="test/hono-no-member-data-contract.test.ts"
+hono_id_one="$(printf '%s' 111 222 333 444 555 667)"
+hono_id_two="$(printf '%s' 222 333 444 555 666 778)"
+
+plant_hono_ids() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'discord_client_id = "%s"\ndiscord_client_id = "%s"\n' \
+    "${hono_id_one}" "${hono_id_two}" > "${repo}/$1"
+}
+
+# expect_policy_scan NAME CONFIG WANT_RC EXPECTED_JSON
+# Compare the complete redacted report, including count, rule, path and line.
+# A scanner error, missing/empty report or unexpected finding fails closed.
+expect_policy_scan() {
+  local rc=0 report="${work}/hono-report.json" verdict=0
+  rm -f "${report}"
+  (cd "${repo}" && "${GITLEAKS_BIN}" git . --config "$2" --log-opts=HEAD \
+    --redact=100 --no-banner --ignore-gitleaks-allow --gitleaks-ignore-path "${work}/empty.ignore" \
+    --exit-code 1 --report-format json --report-path "${report}" \
+    >"${work}/last.log" 2>&1) || rc=$?
+  python3 - "${report}" "${rc}" "$3" "$4" <<'PY' || verdict=$?
+import json
+import sys
+
+try:
+    report = json.load(open(sys.argv[1], encoding="utf-8"))
+    expected = json.loads(sys.argv[4])
+    if sys.argv[2] != sys.argv[3]:
+        raise ValueError(f"scanner exit: expected {sys.argv[3]}, got {sys.argv[2]}")
+    if not isinstance(report, list) or len(report) != len(expected):
+        raise ValueError(f"report count: expected {len(expected)} findings")
+    actual = sorted([row["RuleID"], row["File"], row["StartLine"]] for row in report)
+    if actual != sorted(expected):
+        raise ValueError(f"rule/path/line mismatch: expected {sorted(expected)}, got {actual}")
+    if any(row["Secret"] != "REDACTED" or "REDACTED" not in row["Match"] for row in report):
+        raise ValueError("report is not fully redacted")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print(f"FAIL Hono policy report: {error}")
+    sys.exit(1)
+PY
+  expect "$1" 0 "${verdict}"
+}
+
+# An empty ignore file prevents any caller-local fingerprint exemptions.
+: > "${work}/empty.ignore"
+new_repo hono-approved
+plant_hono_ids "${hono_path}"
+base_commit
+expect_policy_scan "Hono: stock rules detect both approved fixture ids" "${work}/stock.toml" 1 \
+  '[["discord-client-id","test/hono-no-member-data-contract.test.ts",1],["discord-client-id","test/hono-no-member-data-contract.test.ts",2]]'
+expect_policy_scan "Hono: candidate excludes both approved ids at the exact path" "${hono_policy}" 0 '[]'
+
+new_repo hono-other-secrets
+mkdir -p "${repo}/test"
+printf 'discord_client_id = "%s"\nvalue = "%s"\n' \
+  "$(printf '%s' 333 444 555 666 777 889)" "${token}" > "${repo}/${hono_path}"
+base_commit
+expect_policy_scan "Hono: another Discord id and another secret rule remain detected at the allowed path" \
+  "${hono_policy}" 1 \
+  '[["discord-client-id","test/hono-no-member-data-contract.test.ts",1],["github-pat","test/hono-no-member-data-contract.test.ts",2]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/hono-no-member-data-contract.test.ts \
+  test/hono-no-member-data-contract.test.ts.bak \
+  test/hono-no-member-data-contractXtest.ts \
+  test/hono-no-member-data-contract.testXts; do
+  new_repo "hono-path-${cases}"
+  plant_hono_ids "${path}"
+  base_commit
+  expected="$(printf '[["discord-client-id","%s",1],["discord-client-id","%s",2]]' "${path}" "${path}")"
+  expect_policy_scan "Hono: both approved ids remain detected at ${path}" "${hono_policy}" 1 "${expected}"
+done
+
 printf '\n%d cases, %d failed\n' "${cases}" "${failures}"
 [[ "${failures}" -eq 0 ]]
