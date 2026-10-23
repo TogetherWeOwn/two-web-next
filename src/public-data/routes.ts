@@ -14,6 +14,7 @@ import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { varyAccept } from "../errors";
+import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
@@ -453,8 +454,14 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
 
   // Static discovery document, database-free like robots.txt: no admission,
   // no session, unchanged bytes per APP_URL with a long edge TTL.
-  app.get("/openapi.json", (c) => {
+  app.get("/openapi.json", async (c) => {
+    const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
+    const etag = await etagFor(body);
     c.header("cache-control", "public, max-age=3600");
-    return c.json(getOpenApiDocument(c.env.APP_URL));
+    c.header("etag", etag);
+    const robots = stagingRobots(c);
+    if (robots) c.header("x-robots-tag", robots);
+    if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
+    return c.body(body, 200, { "content-type": "application/json" });
   });
 }

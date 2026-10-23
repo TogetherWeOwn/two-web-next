@@ -796,11 +796,22 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       requestAttempts: 1,
     });
     await makeDue();
-    await reconcileEvents({
-      events: pgEventStore(sql),
-      queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
-      lock: pgUniqueLock(sql),
-    });
+    // This case proves request identity/budget, not SQL wall-clock latency.
+    // Keep real SQL/locks/ledger, but advance no producer deadline while they
+    // settle. sync-producer-deadline.test.ts independently exercises expiry.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(
+        await reconcileEvents({
+          events: pgEventStore(sql),
+          queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
+          lock: pgUniqueLock(sql),
+        }),
+      ).toMatchObject({ resynced: 1, absorbed: 0, failed: 0 });
+      expect(sent).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
     await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
     expect(await sql`select request_attempts, state from event_sync_attempts`).toEqual([
