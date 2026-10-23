@@ -45,7 +45,7 @@ A separate scratch regression reproduced a Hono render-time `RangeError` from an
 
 The event-theme compactness regression initially rejected 6277 characters against its existing `<6150` limit. Reusing the existing related-event metadata styles reduced the stylesheet to 6125 bytes; the unchanged regression then passed. No threshold was relaxed.
 
-`npm run build --prefix web` and `npm run kit-perf` passed. Measured server JS gzip was 328079/329472 bytes, client JS gzip 98792/101632 and client CSS gzip 983/1024. No budget changed.
+`npm run build --prefix web` and `npm run kit-perf` passed. Final measured server JS gzip was 328092/329472 bytes, client JS gzip 98792/101632 and client CSS gzip 983/1024. No budget changed.
 
 Hono's `npm run a11y`, `npm run lighthouse` and `npm run lighthouse:quality` do **not** exercise Kit routes. Kit's evidence is its real SSR fixture screenshots, browser acceptance and build/budget checks, not an inference from Hono's scores. Full-check and remote CI outcomes are recorded in the pull request. The pinned CI visual comparison refuses local execution; any intentional baseline updates must come from reviewed CI failure artifacts, not these documentation images.
 
