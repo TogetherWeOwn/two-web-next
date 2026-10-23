@@ -450,6 +450,15 @@ describe("recognized game month-jump regression", () => {
     const gameSelect = { value: "Chess", addEventListener: vi.fn() };
     const feedback = { textContent: "" };
     const content = { hidden: false };
+    const statusNodes = new Map(
+      [
+        "events-loading",
+        "events-view-status",
+        "events-search-status",
+        "events-past-status",
+        "calendar-month-status",
+      ].map((testid) => [`[data-testid="${testid}"]`, { hidden: true, textContent: "" }]),
+    );
     const root = {
       dataset: { searchMaxLength: "255", loadError: "Unavailable" },
       querySelectorAll: () => [content],
@@ -459,7 +468,7 @@ describe("recognized game month-jump regression", () => {
         if (selector === 'select[name="game"]') return gameSelect;
         if (selector === '[data-cal-zone="content"]') return content;
         if (selector === "[data-cal-feedback]") return feedback;
-        return { hidden: true, textContent: "" };
+        return statusNodes.get(selector) ?? null;
       },
       setAttribute: vi.fn(),
       removeAttribute: vi.fn(),
