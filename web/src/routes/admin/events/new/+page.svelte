@@ -18,9 +18,11 @@ let { data }: PageProps = $props();
 const errors = $derived(data.errors ?? {});
 const hasErrors = $derived(data.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => data.values?.[name] ?? "";
-const fieldAria = (name: string, hint?: string) => {
+const fieldAria = (name: string, withHint = false) => {
   const error = errors[name];
-  const errorId = `f-${name.replaceAll("_", "-")}-error`;
+  const id = `f-${name.replaceAll("_", "-")}`;
+  const hint = withHint ? `${id}-hint` : undefined;
+  const errorId = `${id}-error`;
   return {
     "aria-invalid": error ? true : undefined,
     "aria-describedby": error ? (hint ? `${hint} ${errorId}` : errorId) : hint,
@@ -145,7 +147,7 @@ const islands =
         id="f-timezone"
         name="timezone"
         value={val("timezone") || "Europe/London"}
-        {...fieldAria("timezone", "f-timezone-hint")}
+        {...fieldAria("timezone", true)}
       />
       <p id="f-timezone-hint" class="hint">
         The IANA zone the wall time above is typed in. Storage is UTC.
@@ -170,7 +172,7 @@ const islands =
         name="organizer_name"
         value={val("organizer_name")}
         data-event-text-limit={500}
-        {...fieldAria("organizer_name", "f-organizer-name-hint")}
+        {...fieldAria("organizer_name", true)}
       />
       <p id="f-organizer-name-hint" class="hint">
         Use a name the organizer has agreed to show publicly. Do not enter contact details.
@@ -184,7 +186,7 @@ const islands =
         name="join_url"
         type="url"
         value={val("join_url")}
-        {...fieldAria("join_url", "f-join-url-hint")}
+        {...fieldAria("join_url", true)}
       />
       <p id="f-join-url-hint" class="hint">
         HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.
@@ -198,7 +200,7 @@ const islands =
         name="join_instructions"
         rows={4}
         data-event-text-limit={5000}
-        {...fieldAria("join_instructions", "f-join-instructions-hint")}
+        {...fieldAria("join_instructions", true)}
       >{val("join_instructions")}</textarea>
       <p id="f-join-instructions-hint" class="hint">
         Share only verified details that are safe for anyone to see. Do not enter contact details.
@@ -223,7 +225,7 @@ const islands =
         <select
           id="f-recurrence-frequency"
           name="recurrence_frequency"
-          {...fieldAria("recurrence_frequency", "f-recurrence-frequency-hint")}
+          {...fieldAria("recurrence_frequency", true)}
         >
           <option value="" selected={val("recurrence_frequency") === ""}>Does not repeat</option>
           <option value="weekly" selected={val("recurrence_frequency") === "weekly"}>Weekly</option>
