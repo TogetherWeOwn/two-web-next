@@ -44,7 +44,10 @@ const lighthouserc = require("../ci/lighthouserc.cjs").ci;
 // exist to stop the fix (or any later change) from regrowing homepage weight
 // while headroom is being restored. Gzip is deliberately not asserted: the
 // repetitive face bytes compress away (7 B), so a gzip ratchet would be noise.
-const MAX_HOMEPAGE_HTML_RAW_BYTES = 24650;
+// The brand unfurl tags (og:image + og:image:alt) add exactly 154 raw bytes
+// to every canonical page including the homepage (measured 24,588 -> 24,742),
+// so the HTML budget below carries that delta with the same <100 B slack.
+const MAX_HOMEPAGE_HTML_RAW_BYTES = 24800;
 const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18850;
 
 const context = {

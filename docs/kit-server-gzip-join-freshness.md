@@ -2,19 +2,53 @@
 
 ## Latest base reconciliation — 2026-10-23
 
-Base `2540adb21d03c0e36eab1ca9fd8c6fbbbdabe106` adds only budget decision
-history to the previously measured base `46e4ef79b`; no numeric limit, source,
-lockfile or checker changes. Preserve that new base history verbatim, followed
-by this branch's existing two decision notes exactly once. Every numeric limit
-still equals the new base, including the **329472-byte** server gzip ceiling.
+Merge base `2b4f1902e096d969ad4a909a085fb6e221ddfc3a`, including the separately
+approved moderation allocation in
+[#1686](https://github.com/TogetherWeOwn/two-web-next/pull/1686), which raises
+the inherited server gzip ceiling from 329472 to **333312 bytes**. Retain every
+numeric limit from this base unchanged. This PR adds no allowance. Preserve
+the full incoming decision history verbatim and the existing branch-only
+join-freshness notes exactly once, followed by the latest reconciliation.
 
-The double-build measurements below remain evidence from the earlier run,
-not newly executed builds. This prose-only follow-up reruns the unchanged
-checker selftests, checker tests, documentation checks and floor guard; it
-does not rerun the full check, builds or feature fixture suites. Required CI
-and independent review must still pass on the new PR head.
+This base also includes schedule game filtering, metadata, privacy checks,
+profile/admin stylesheet fixes and RUM retry changes. Two fresh production
+builds of the resolved prerequisite tree, with Node 24.22.1 and identical
+locked root/web dependencies installed outside the checkout, produce:
 
-## Measured reconciliation — 2026-10-23
+| Artifact | Two resolved-tree builds | Inherited limit |
+| --- | ---: | ---: |
+| Server JS files | 117 | 126 |
+| Server JS raw bytes | 1129528–1129530 | 1203200 |
+| Server JS gzip bytes | 328710 | 333312 |
+| Client JS files | 53 | 54 |
+| Client JS raw/gzip bytes | 245331/99255 | 251904/101632 |
+| Client CSS files | 2 | 4 |
+| Client CSS raw/gzip bytes | 2878/1024 | 3072/1024 |
+| Worker entry raw/gzip bytes | 2551/1219 | 3584/1536 |
+
+Both unchanged checker runs pass. The server gzip margin is **4602 bytes**;
+client CSS gzip sits exactly at its inherited ceiling, which is not raised.
+These are prerequisite-tree measurements, **not** fresh measurements of the
+feature integration. No source, dependency, checker, workflow or test file
+differs from this base; only budget decision prose and this document do.
+
+Fresh verification: six checker selftests, thirteen checker tests and 76
+schedule game-filter fixture tests pass; lint, typecheck, documentation links
+and the floor guard pass. The full `npm run check`, feature-integration builds,
+join-freshness fixture suites and browser/staging checks were not rerun in this
+follow-up. Earlier results below remain historical; the original full check
+was not green. Exact-head CI and independent review must pass again after
+this conflict resolution. The feature ref remains untouched.
+
+## Earlier history-only reconciliation — 2026-10-23
+
+Base `2540adb21d03c0e36eab1ca9fd8c6fbbbdabe106` added only budget decision
+history to the previously measured base `46e4ef79b`, without numeric, source,
+lockfile or checker changes. That follow-up preserved its full history and
+all limits, including the then-current 329472-byte server gzip ceiling, and
+reran checker, documentation and floor checks without fresh builds.
+
+## Measured reconciliation — 2026-10-23 (historical)
 
 Base `46e4ef79b80e13470795d3608bf45fde73aad39f` now carries a larger
 `server.js.maxGzipBytes` ceiling of **329472 bytes**. Resolve the budget conflict
