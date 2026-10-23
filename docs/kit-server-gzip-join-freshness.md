@@ -1,6 +1,47 @@
 # Kit server gzip: join freshness prerequisite
 
-## Decision — 2026-10-23
+## Current reconciliation — 2026-10-23
+
+Base `46e4ef79b80e13470795d3608bf45fde73aad39f` now carries a larger
+`server.js.maxGzipBytes` ceiling of **329472 bytes**. Resolve the budget conflict
+by keeping **every numeric limit from that base**, with no additional allowance.
+The original 327936-byte proposal below is historical, not the current limit.
+Retain the base's complete decision history and the original join-freshness
+decision exactly once, then record this reconciliation.
+
+Rebuild both that base and its merge with the unchanged feature head
+`99a4516f9811a1bf6a9660ddd900da8818e0c8d9`, using Node 24.22.1 and the same
+current locked root/web dependencies. The feature integration's only merge
+conflict is the budget file; supply the inherited limits there. Neither the
+feature ref nor runtime code is changed by this prerequisite.
+
+| Artifact | Current base, two builds | Current feature integration, two builds | Inherited limit |
+| --- | ---: | ---: | ---: |
+| Server JS files | 118 | 118 | 126 |
+| Server JS raw bytes | 1124086 | 1124709–1124711 | 1203200 |
+| Server JS gzip bytes | 327993–327995 | 328146–328148 | 329472 |
+| Client JS files | 53 | 53 | 54 |
+| Client JS raw bytes | 243912 | 244032 | 251904 |
+| Client JS gzip bytes | 98767 | 98813 | 101632 |
+| Client CSS files | 2 | 2 | 4 |
+| Client CSS raw/gzip bytes | 2737/983 | 2737/983 | 3072/1024 |
+| Worker entry raw/gzip bytes | 2551/1219 | 2551/1219 | 3584/1536 |
+
+All four current checker runs exit **0** with the inherited limits. The
+worst measured integration leaves **1324 bytes** of server gzip margin; do not
+add the old 256-byte increment on top of the base's newer ceiling. Against the
+second base build, the feature adds 623 raw and 151 gzip bytes: `chunks/src.js`
++291/+78, `chunks/admin.js` +136/+18, join load +41/+15, join SSR +155/+41,
+and hash/version effects net −1 gzip. No new server file is introduced.
+These are new measurements, not a claim that the historical builds below
+changed or were byte-identical to the current build.
+
+The existing six checker selftests, thirteen checker tests and 131 freshness
+fixture tests pass on the current integration. A controlled ceiling one byte
+below its measured server gzip still exits **1**; restoring the inherited
+budget exits **0**. The feature still needs its own current-head CI and review.
+
+## Original decision — 2026-10-23 (superseded numeric proposal)
 
 Allow the measured server footprint of
 [the join freshness fix, #1547](https://github.com/TogetherWeOwn/two-web-next/pull/1547)
