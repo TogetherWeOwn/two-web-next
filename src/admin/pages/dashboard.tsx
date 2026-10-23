@@ -11,7 +11,7 @@ export const AdminDashboard: FC<{
   funnel?: Record<string, number>;
   zeroSearches?: ZeroResultSearch[];
 }> = ({ actor, funnel, zeroSearches }) => (
-  <Shell title="Dashboard">
+  <Shell title="Dashboard" current={{ href: "/admin", exact: true }}>
     <section>
       <h1>Moderation</h1>
       <p class="lead">

@@ -11,7 +11,7 @@ export const JoinAttemptsPage: FC<{
   hasNext: boolean;
   outcomes: readonly string[];
 }> = ({ rows, query, hasNext, outcomes }) => (
-  <Shell title="Join attempts">
+  <Shell title="Join attempts" current={{ href: "/admin/join-attempts", exact: true }}>
     <section>
       <h1>Join attempts</h1>
       <p class="hint">
@@ -114,7 +114,7 @@ export const JoinAttemptsPage: FC<{
 );
 
 export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
-  <Shell title={`Join attempt ${row.id}`}>
+  <Shell title={`Join attempt ${row.id}`} current={{ href: "/admin/join-attempts", exact: false }}>
     <section>
       <p>
         <a href="/admin/join-attempts">Back to join attempts</a>

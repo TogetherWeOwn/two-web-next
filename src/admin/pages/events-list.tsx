@@ -52,7 +52,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
   query,
   hasNext,
 }) => (
-  <Shell title="Events">
+  <Shell title="Events" current={{ href: "/admin/events", exact: true }}>
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">

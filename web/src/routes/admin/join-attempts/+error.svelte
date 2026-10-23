@@ -13,6 +13,15 @@ import AdminShell from "#lib/AdminShell.svelte";
 // so no client script ships. Guard refusals never reach this boundary:
 // SvelteKit renders a layout failure above the layout, so the root boundary
 // keeps serving those unchanged. noindex travels via AdminShell.
+const routeId = $derived(page.route.id ?? "");
+// Same truthful-section rule as the admin group boundary: the list route is
+// the exact page, a detail failure resolves to the ancestor.
+const section = $derived.by(() => {
+  if (routeId === "/admin/join-attempts") return { href: routeId, exact: true };
+  if (routeId.startsWith("/admin/join-attempts/"))
+    return { href: "/admin/join-attempts", exact: false };
+  return null;
+});
 const missing = $derived(page.status === 404);
 const outage = $derived(page.status === 503);
 const title = $derived(
@@ -24,7 +33,7 @@ const title = $derived(
 );
 </script>
 
-<AdminShell {title}>
+<AdminShell {title} section={section?.href ?? null} exact={section?.exact ?? false}>
 <section aria-labelledby="join-attempts-error-heading">
   <p>
     <a href="/admin/join-attempts">Back to join attempts</a>

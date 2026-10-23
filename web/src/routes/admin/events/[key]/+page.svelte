@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminBreadcrumb from "#lib/AdminBreadcrumb.svelte";
 import AdminShell from "#lib/AdminShell.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
@@ -33,8 +34,9 @@ const textLimitsIsland =
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title={`Edit ${view.title}`}>
+<AdminShell title={`Edit ${view.title}`} section="/admin/events">
 <section>
+  <AdminBreadcrumb section="/admin/events" />
   <h1>Edit {view.title}</h1>
   {#if hasErrors}
     <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">

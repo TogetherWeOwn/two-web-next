@@ -3,6 +3,12 @@
 body { margin: 0; font: 17px/1.55 system-ui, sans-serif; color: var(--ink); background: var(--paper); }
 .bar { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 2px solid var(--ink); }
 .brand { font-weight: 900; font-size: 1.4rem; letter-spacing: .08em; color: var(--ink); text-decoration: none; }
+/* Admin current section: the selected nav link reads in brand and bold; the
+   dashboard state rides the brand link, already bold, so it underlines. */
+.bar nav a[aria-current] { color: var(--brand); font-weight: 700; }
+.bar .brand[aria-current] { text-decoration: underline; text-underline-offset: 4px; }
+/* Compact editor breadcrumb above the h1; inline links wrap at 390px. */
+.crumbs { margin: 0 0 1rem; }
 main { max-width: 52rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
 .hero h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.1; margin: .4rem 0 1rem; }
 .strap { text-transform: uppercase; letter-spacing: .12em; font-size: .8rem; color: var(--muted); }

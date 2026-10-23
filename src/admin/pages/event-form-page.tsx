@@ -9,7 +9,7 @@ import type { RosterQuery } from "../table-list";
 import { EventFormFields } from "./event-form-fields";
 import { EventRosterSection } from "./event-form-roster";
 import { EventStatusSection } from "./event-form-status";
-import { Shell } from "./shell";
+import { AdminBreadcrumb, Shell } from "./shell";
 
 export const EventFormPage: FC<{
   mode: "new" | "edit";
@@ -22,8 +22,12 @@ export const EventFormPage: FC<{
 }> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
-    <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
+    <Shell
+      title={mode === "new" ? "New event" : `Edit ${row!.title}`}
+      current={{ href: "/admin/events", exact: false }}
+    >
       <section>
+        <AdminBreadcrumb section="/admin/events" />
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
         <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}

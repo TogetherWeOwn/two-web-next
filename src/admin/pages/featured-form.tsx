@@ -4,7 +4,7 @@ import type { FC } from "hono/jsx";
 import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import type { FeaturedRow } from "../store";
-import { Field, Shell, val } from "./shell";
+import { AdminBreadcrumb, Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
 export const FeaturedFormPage: FC<{
@@ -20,8 +20,12 @@ export const FeaturedFormPage: FC<{
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
-    <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
+    <Shell
+      title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}
+      current={{ href: "/admin/featured", exact: false }}
+    >
       <section class="featured-form">
+        <AdminBreadcrumb section="/admin/featured" />
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
         {mode === "edit" && row ? (
           <section

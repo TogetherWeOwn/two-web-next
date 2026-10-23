@@ -20,7 +20,7 @@ export const ActivityLogPage: FC<{
   query: ActivityLogQuery;
   hasNext: boolean;
 }> = ({ rows, query, hasNext }) => (
-  <Shell title="Activity log">
+  <Shell title="Activity log" current={{ href: "/admin/activity-log", exact: true }}>
     <section>
       <h1>Activity log</h1>
       <p class="hint">
