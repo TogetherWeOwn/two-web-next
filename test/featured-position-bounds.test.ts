@@ -7,6 +7,7 @@ import type { EnvWithAdminDb } from "../src/admin/db";
 import { activityLog, featuredContents } from "../src/db/admin-schema";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const rejected = [
@@ -105,13 +106,19 @@ describe.skipIf(!process.env.DATABASE_URL)(
       bindings = { ...env, ADMIN_DB: fixture.db };
     });
 
-    function post(path: string, raw: string | undefined, title = "Featured") {
+    async function post(path: string, raw: string | undefined, title = "Featured") {
+      // Edit posts submit the row's fresh saved-content baseline, the way a
+      // rendered edit form carries it; creates have no saved content to pin.
+      const editId = /^\/featured\/(\d+)$/.exec(path)?.[1];
       return app.request(
         path,
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams(form(raw, title)),
+          body: new URLSearchParams({
+            ...(editId ? await featuredBaselineFields(fixture.db, Number(editId)) : {}),
+            ...form(raw, title),
+          }),
         },
         bindings,
       );

@@ -20,7 +20,7 @@ import { alertRequestError } from "../alerts";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
-import type { FeaturedEditRow } from "./store-featured";
+import { featuredSaveBaseline, type FeaturedEditRow } from "./store-featured";
 
 /** The edit-form values the Hono featuredValues() helper renders. */
 export type KitFeaturedEditValues = {
@@ -50,6 +50,8 @@ export type KitFeaturedEditView = {
   imageSrc: string | null;
   /** Homepage alt fallback (imageAlt?.trim() || title). */
   imageAlt: string;
+  /** Server-derived saved-content baseline for the Hono-owned Save POST. */
+  baseline: string;
 };
 
 export type KitFeaturedEditOutcome =
@@ -100,11 +102,13 @@ export async function resolveKitFeaturedEdit(
   const imageSrc = row.imageUrl
     ? featuredImageSrc(row.imageUrl, deps.appUrl ?? "", deps.imageHosts)
     : null;
+  const baseline = await featuredSaveBaseline(row);
   return {
     kind: "ok",
     view: {
       id: row.id,
       title: row.title,
+      baseline,
       values: {
         title: row.title,
         body: row.body ?? "",

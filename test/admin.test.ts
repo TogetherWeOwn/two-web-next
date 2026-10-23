@@ -39,6 +39,7 @@ import {
 } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -391,7 +392,13 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
 
     const update = await app().request(
       `/featured/${id}`,
-      form({ title: "Slot one", body: "Hello", is_published: "on", position: "0" }),
+      form({
+        ...(await featuredBaselineFields(db, id)),
+        title: "Slot one",
+        body: "Hello",
+        is_published: "on",
+        position: "0",
+      }),
       liveEnv(),
     );
     expect(update.status).toBe(303);

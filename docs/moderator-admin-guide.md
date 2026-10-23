@@ -554,6 +554,18 @@ seems interrupted, reopen the slot and check its stored settings before saving
 again. An expired session shows a notice and keeps the edits; use its sign-in
 link to recover.
 
+If another moderator saves the slot after you opened it, your **Save** is
+refused with a conflict notice instead of overwriting their change: nothing is
+saved, and your complete draft stays in the form for reference. Follow the
+**Review the current version** link to load the current saved row, re-apply
+the change you still intend, and save again. Pressing **Save** again on the
+conflict page without reviewing still refuses — it never silently rebases or
+overwrites — and reloading the conflict page resubmits the refused save
+instead of clearing it. To start over with the current saved row, follow
+**Review the current version** or reopen the slot. When two
+moderators must edit one slot, take turns: the second saver always reviews
+first.
+
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.
 **Delete this slot** removes the row immediately, without a confirmation dialog;

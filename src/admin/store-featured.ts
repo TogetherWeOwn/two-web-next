@@ -65,6 +65,45 @@ const NULL_FEATURED_SNAPSHOT = {
   endsAt: null,
 };
 
+/** A form Save arrived with a baseline that no longer matches the saved row. */
+export class StaleFeaturedSaveError extends Error {
+  constructor(readonly slotId: number) {
+    super(`featured content ${slotId} changed since the form was rendered`);
+  }
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+/**
+ * Server-derived baseline for exactly the saved content an edit form displays.
+ * The payload mirrors featuredValues()/KitFeaturedEditValues field-for-field —
+ * title, body, url, image fields, publish flag, position and the microsecond
+ * window texts — so any saved change, even two updates inside one JavaScript
+ * millisecond or one microsecond apart, mints a different baseline, while a
+ * content-identical re-read mints the same one. updatedAt is deliberately
+ * excluded: it is not displayed and must not invalidate a fresh form.
+ */
+export async function featuredSaveBaseline(row: FeaturedEditRow): Promise<string> {
+  const payload = JSON.stringify({
+    title: row.title,
+    body: row.body ?? "",
+    url: row.url ?? "",
+    image_url: row.imageUrl ?? "",
+    image_alt: row.imageAlt ?? "",
+    is_published: row.isPublished ? "on" : "",
+    position: String(row.position),
+    starts_at: row.startsAtText ?? "",
+    ends_at: row.endsAtText ?? "",
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export async function createFeatured(
   db: Db,
   actor: Actor,
@@ -107,6 +146,7 @@ export async function updateFeatured(
   actor: Actor,
   id: number,
   input: FeaturedFormInput,
+  opts?: { expectedBaseline?: string },
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
@@ -116,6 +156,15 @@ export async function updateFeatured(
       .where(eq(featuredContents.id, id))
       .for("update");
     if (!locked) throw new NotFoundError("featured content");
+    // Form-save precondition, compared after the committing lock resolves so a
+    // contender blocked on another moderator's lock refuses against the
+    // committed successor, not the pre-lock read. A mismatch throws before any
+    // content write, audit insert or cache retirement. Callers without a form
+    // baseline keep the unconditional low-level contract.
+    if (opts?.expectedBaseline !== undefined) {
+      const current = await featuredSaveBaseline(locked);
+      if (!timingSafeEqualHex(current, opts.expectedBaseline)) throw new StaleFeaturedSaveError(id);
+    }
     const [row] = await tx
       .update(featuredContents)
       .set({
