@@ -135,6 +135,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
   <meta name="twitter:title" content={title} />
   <meta name="twitter:description" content={PROFILE_SHARE_DESCRIPTION} />
   <link rel="alternate" type="application/rss+xml" title="Together We Own Events" href="/events.rss" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/theme.css" />
+  <link rel="stylesheet" href="/profile-theme.css" />
 </svelte:head>
 <!-- Open Lobby chrome: colours resolve through web/src/app.css semantic
   tokens; the profile theme class matches the Hono Layout theme. -->
