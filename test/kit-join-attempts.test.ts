@@ -109,14 +109,16 @@ describe("Kit join-attempts page: the Hono markup contract, no JavaScript", () =
     expect(html).toContain('data-testid="join-attempts-table-scroll"');
     expect(html).toContain('data-testid="join-attempts-table"');
     expect(html).toContain('data-testid="join-attempts-empty"');
-    expect(html).toContain("No join attempts.");
+    expect(html).toContain("joinAttemptsEmptyText(query, data.retentionDays)");
+    expect(html).not.toContain("No join attempts.");
     expect(html.match(/<th scope="col">/g)).toHaveLength(5);
     expect(html.match(/<th\b(?![^>]*scope="col")/g)).toBeNull();
   });
 
   it("links rows to the Kit-owned detail pages with the same accessible names", () => {
     const html = page();
-    expect(html).toContain("`/admin/join-attempts/${r.id}`");
+    expect(html).toContain("`/admin/join-attempts/${r.id}${contextSearch}`");
+    expect(html).toContain("joinAttemptContextSearch");
     expect(html).toContain("View join attempt");
   });
 

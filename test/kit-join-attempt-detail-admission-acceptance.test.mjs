@@ -104,10 +104,11 @@ beforeEach(() => {
   globalThis.__kitDetailGetImpl = async () => ({ attempt: ROW });
 });
 
-const eventFor = ({ parent, id = "7" }) => ({
+const eventFor = ({ parent, id = "7", url }) => ({
   parent,
   params: { id },
   setHeaders: vi.fn(),
+  url: new URL(url ?? `https://next.example.test/admin/join-attempts/${id}`),
 });
 
 describe("acceptance: detail load admission (role denial)", () => {
@@ -147,6 +148,7 @@ describe("acceptance: detail load admission (role denial)", () => {
         discordId: "100000000000000201",
         createdAt: "2026-10-01T12:00:00.000Z",
       },
+      returnUrl: "/admin/join-attempts",
     });
   });
 });
@@ -163,6 +165,7 @@ describe("acceptance: detail load outcomes for an admitted moderator", () => {
         discordId: "100000000000000201",
         createdAt: "2026-10-01T12:00:00.000Z",
       },
+      returnUrl: "/admin/join-attempts",
     });
     expect(globalThis.__kitDetailGetCalls).toHaveLength(1);
     expect(event.setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
