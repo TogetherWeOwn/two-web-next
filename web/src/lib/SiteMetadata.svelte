@@ -45,7 +45,7 @@ const themeStylesheet = $derived(
 );
 // Content leaves inline the exact bytes the Hono shell inlines
 // (src/page-shell.tsx): styles.css + theme-tokens.css + theme.css in one
-// <style> block, allowlisted by hash in the leaf CSP (src/headers.ts). The
+// CSS block, allowlisted by hash in the leaf CSP (src/headers.ts). The
 // external links cost ~150 ms of render-blocking time on mobile, which the
 // 2000 ms LCP budget on these pages cannot spare.
 </script>
