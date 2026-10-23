@@ -8,7 +8,15 @@ import { SUBSCRIPTION_GUIDANCE } from "./events/subscription-copy";
 export const FAQS: Array<{
   section: string;
   sectionId: string;
-  items: Array<[string, string, { label: string; href: string }?]>;
+  // IDs are published bookmarks: keep them when editing or reordering copy.
+  items: Array<
+    [
+      question: string,
+      answer: string,
+      link: { label: string; href: string } | undefined,
+      id: string,
+    ]
+  >;
 }> = [
   {
     section: "Getting in",
@@ -17,18 +25,26 @@ export const FAQS: Array<{
       [
         "What is Together We Own?",
         "A close-knit gaming clan, running since 1998, mostly evenings, 18+. We spent most of our life private; now the lobby is open and you can just turn up. Small enough that people notice when you come back.",
+        undefined,
+        "faq-about-two",
       ],
       [
         "How do I join?",
         "Approve once with Discord on the join page and we'll add you to the server — or use the Discord invite link instead. Then accept the rules on Discord's membership screen: that's the gate, and it's how we know you're really in.",
+        undefined,
+        "faq-join",
       ],
       [
         "Do I need an invite, referral, or eligibility check?",
         "No. The doors are open — no invite code, no referral, no waitlist. If you can open the join page, you're eligible.",
+        undefined,
+        "faq-eligibility",
       ],
       [
         "Is there an application, interview, or skill requirement?",
         "No application, no interview, no tryout. Everyone starts as a Prospect: show up a few times, play, become a Member. The ladder records trust and time, not grind.",
+        undefined,
+        "faq-applications",
       ],
     ],
   },
@@ -39,10 +55,14 @@ export const FAQS: Array<{
       [
         "I joined but I can't post — what now?",
         "You're at a locked door: Discord holds new members as pending until they accept the rules on the membership screen. Accept them and you're in.",
+        undefined,
+        "faq-pending-membership",
       ],
       [
         "What should I do first?",
         "Three things: pick your games, say hi in general, and come back once that week. Saying hi is genuinely contributing.",
+        undefined,
+        "faq-first-steps",
       ],
     ],
   },
@@ -53,10 +73,14 @@ export const FAQS: Array<{
       [
         "How do ranks, XP, and role rewards work?",
         "Hanging out earns XP: messages earn 15 XP (at most once a minute), voice time earns 5 XP per minute. At certain levels the bot grants you a role reward automatically — it never takes an earned reward away.",
+        undefined,
+        "faq-rank-rewards",
       ],
       [
         "What are the rank rungs?",
         "Five, in order: Prospect → Member → Soldier → Veteran → Legend. Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.",
+        undefined,
+        "faq-rank-rungs",
       ],
     ],
   },
@@ -67,23 +91,33 @@ export const FAQS: Array<{
       [
         "When do you actually play together?",
         "Game nights are scheduled in Discord — see the Events page for what's on. Times are posted there, so you always see the current plan.",
+        undefined,
+        "faq-game-nights",
       ],
       [
         "Where do I find events, and do I need an account to look?",
         "On the site's Events page: game nights, tournaments, whatever the community puts on. Anyone can read it — including signed-out visitors arriving from a Discord link.",
+        undefined,
+        "faq-find-events",
       ],
       [
         "How do I subscribe to events in my calendar?",
         "On Events or Past events, open “How to subscribe to the calendar”. " +
           SUBSCRIPTION_GUIDANCE.join(" ").replace("feed URL below", "feed URL shown there"),
+        undefined,
+        "faq-calendar-subscription",
       ],
       [
         "How do I RSVP, and what do the answers mean?",
         "Log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Use I'm in for an open seat, or Join the waitlist when full. Going (You're in) reserves a seat; it is not measured attendance. Waitlisted is a place in line, not a held seat. One answer per member per event: changing your mind updates the same answer. Use Can't make it to withdraw, or Leave the waitlist to leave the line, when those controls are available.",
+        undefined,
+        "faq-rsvp-answers",
       ],
       [
         "How do waitlist promotions work?",
         "While the event is published, taking RSVPs and not ended, a released seat promotes the earliest waiting member in first-in, first-out (FIFO) order. Reload the event to check your current answer and position. Do not rely on a notification: the site cannot guarantee Discord delivery. Leaving and rejoining is a new place in line, not your old priority.",
+        undefined,
+        "faq-waitlist-promotions",
       ],
       [
         "What if my RSVP is syncing, or I couldn't confirm it?",
@@ -92,6 +126,7 @@ export const FAQS: Array<{
           label: "RSVP recovery guide",
           href: "https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/rsvp-recovery.md",
         },
+        "faq-rsvp-recovery",
       ],
     ],
   },
@@ -102,6 +137,8 @@ export const FAQS: Array<{
       [
         "How does the game picker work?",
         "After you accept the rules, the welcome post in the landing channel mentions you with a game picker attached. Pick your games and the bot grants the matching roles. It never DMs you. Changed your mind later? Pick again.",
+        undefined,
+        "faq-game-picker",
       ],
     ],
   },
@@ -112,6 +149,8 @@ export const FAQS: Array<{
       [
         "How do I open a private support ticket?",
         "Use the ticket or support button in the server: a private channel opens for you and staff, and a staff member claims it. One active ticket at a time — finish or close the open one before starting another.",
+        undefined,
+        "faq-support-ticket",
       ],
     ],
   },
@@ -122,6 +161,8 @@ export const FAQS: Array<{
       [
         "How do I fill in my profile?",
         "Sign in with Discord and open your profile. Three things are yours to write: a short bio, your games, and your timezone. We never ask for or store your email.",
+        undefined,
+        "faq-edit-profile",
       ],
     ],
   },
@@ -132,6 +173,8 @@ export const FAQS: Array<{
       [
         "What do you store about me, and what are the rules?",
         "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. Ask anytime to be removed and we delete your rows.",
+        undefined,
+        "faq-data-and-rules",
       ],
     ],
   },

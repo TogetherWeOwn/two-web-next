@@ -41,6 +41,10 @@ dl.facts > div { display: block; }
 .skip-link:focus { transform: none; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
+/* FAQ jumps and bookmarks work without script, including visible hash targets. */
+.faq-target { align-self: start; scroll-margin-top: 1rem; }
+.faq-target:target { outline: 3px solid var(--brand); outline-offset: 5px; }
+
 /* Admin forms and tables share the external stylesheet with the page shells. */
 .admin-table { width: 100%; border-collapse: collapse; }
 .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
