@@ -155,3 +155,58 @@ selftests, floor guard, 1150/1150 test inventory and diff checks pass. Full
 for this configuration-only repair. Their earlier evidence is not a current
 whole-app or deployment PASS. Exact-head CI and independent review remain required.
 Undo is to revert the SSR grouping repair; no data rollback is involved.
+
+## Client CSS source-boundary repair
+
+The next CI failure is separate from the server grouping. CI run `40016741381`
+checks synthetic merge `5db7b9981a80177ff781faf6acad9da23655111c`, with base
+`2b4f1902e096d969ad4a909a085fb6e221ddfc3a`, not the unmerged head alone.
+Archiving and building that exact tree reproduces **1042/1024 B** client CSS
+while server JS passes. Pristine base CSS is **1024/1024 B**. No main merge,
+rerun, budget edit or test suppression is needed.
+
+Tailwind's automatic scanning treats prose as utility candidates: `fixed` in
+the pure retry helper, `grid` in server-loader comments, and `inline` in the
+head-only metadata component. None is a standalone rendered class. Restrict
+utility detection to `web/src/**/*.svelte`, retaining the existing join-attempt
+exclusion and excluding class-free `SiteMetadata.svelte`. All other components,
+including future components, remain discoverable. Utility class construction
+outside Svelte components requires an explicit source registration.
+
+| Build | Client CSS raw B | Client CSS gzip B | Unchanged ceiling B | Gate |
+| --- | ---: | ---: | ---: | --- |
+| Exact CI merge, original sources | 2925 | 1042 | 1024 | FAIL |
+| Exact CI merge, component sources | 2861 | 1019 | 1024 | PASS |
+| Branch head, component sources | 2720 | 977 | 1024 | PASS |
+
+The emitted merge stylesheet differs only by removal of
+`.fixed{position:fixed}`, `.grid{display:grid}` and `.inline{display:inline}`:
+**64 raw / 23 gzip B** saved. Every other rule and theme token is byte-identical,
+including the white focus token. No selector, alias, color, font or page markup
+is rewritten. An intermediate component-only scan still included metadata prose
+and failed at **1026/1024 B**; that is not counted as a passing build.
+
+`test/kit-tailwind-sources.test.ts` pins the component source boundary and checks
+that the excluded metadata still contains only class-free head content. Before
+the fix, its source-policy test fails and its metadata check passes; after the
+fix, both pass. The actual build/budget gate above remains the size oracle.
+
+Fresh targeted verification passes **361/361 tests in 15 files, zero skips**,
+including all twelve native retry keyboard/no-JS cases and the existing browser
+suite. Root lint/types, Kit check/build, floor guard, **1151/1151** test inventory,
+13 budget/registrar tests and diff checks pass. The independently authored
+acceptance files, route helpers, boundaries and all budgets are unchanged.
+
+Eight new synthetic 503 captures compare both real boundary components with
+exact-merge before/after generated CSS, at **1280×800** and **390×844**. Every
+image was opened. All **four pairs are pixel-identical**; browser-computed retry
+outlines remain white and visible, and hrefs preserve the filtered/page-2 GET.
+This is a component fixture, not a full deployed route or a visual-baseline
+acceptance. The existing header brand has low contrast on the dark fixture
+canvas in both versions; no broad chrome accessibility claim is made here.
+The capture/log bundle is registered with the QA evidence work product.
+
+Full `npm run check`, Hono accessibility/Lighthouse/visual gates and deployment
+are not repeated for this unused-CSS-only delta. Earlier evidence retains its
+recorded limits; exact-head required CI and independent 5/5 still gate merge.
+Undo is to revert the source-boundary repair; no data change needs rollback.
