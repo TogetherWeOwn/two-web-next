@@ -33,6 +33,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../ci/a11y-policy.mjs";
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
 import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
+import { registerPastSearchContextAcceptance } from "./helpers/past-search-context-browser-acceptance";
 
 const WCAG_AA_TAGS = gateTags as string[];
 const assertNoViolations = gateAssert as (
@@ -236,6 +237,7 @@ export function renderErrorShell(code, adminBack) {
     });
 
     registerPastArchiveBrowserAcceptance(() => browser);
+    registerPastSearchContextAcceptance(() => browser);
 
     async function loadShell(
       code: KitErrorStatus,
