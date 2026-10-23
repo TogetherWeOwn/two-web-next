@@ -6,7 +6,7 @@ exports[`machine-doc validator: /e/00000000000000000000000081.md > preserves the
 
 exports[`machine-doc validator: /events.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"8cfcba942a5a8b1c79c33aea022896e311f0ada0e8366563df8686ede445752f"`;
 
-exports[`machine-doc validator: /faq.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"43fbd8944cbcff7b45649730c88a1e2440ef1c4017b180ca446fc5e7970466ac"`;
+exports[`machine-doc validator: /faq.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"73c23610c2d81b516669f949b6f3909f5ad6ee42dc364706f8111757729f4647"`;
 
 exports[`machine-doc validator: /join.md > preserves the public 200 media type, TTL, robots and body bytes 1`] = `"62bb3fd33fc540aef835f499e72622e0655928ddb3fd382f7d11fb17fd7919e6"`;
 
