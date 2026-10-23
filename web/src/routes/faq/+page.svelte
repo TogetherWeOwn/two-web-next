@@ -36,7 +36,7 @@ const { appUrl, faqs, leafCss } = $derived(data);
     <p class="strap">New here? Start here</p>
     <p class="lead">Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.</p>
     <nav aria-label="FAQ topics"><p>Jump to a topic</p><div class="facts rank-stack">{#each faqs as group (group.sectionId)}<a href={`#${group.sectionId}`}>{group.section}</a>{/each}</div></nav>
-    <div data-testid="faq-list">{#each faqs as group (group.sectionId)}<section aria-labelledby={group.sectionId}><h2 id={group.sectionId} class="faq-target" tabindex="-1">{group.section}</h2><div>{#each group.items as [question, answer, link, id] (id)}<div class="card"><h3 id={id} class="faq-target" tabindex="-1">{question}</h3><p>{answer}{#if link}{" "}<a href={link.href}>{link.label}</a>{/if}</p><a href={`#${id}`} aria-label={`Link to this answer — ${question}`}>Link to this answer</a></div>{/each}</div></section>{/each}</div>
+    <div data-testid="faq-list">{#each faqs as group (group.sectionId)}<section aria-labelledby={group.sectionId}><h2 id={group.sectionId} class="faq-target" tabindex="-1">{group.section}</h2><div>{#each group.items as [question, answer, link, id] (id)}<div class="card"><h3 id={id} class="faq-target" tabindex="-1">{question}</h3><p>{answer}{#if link}{" "}<a href={link.href}>{link.label}</a>{/if}</p><a href={`#${id}`} class="faq-permalink" aria-label={`Link to this answer — ${question}`}>Link to this answer</a></div>{/each}</div></section>{/each}</div>
     <p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a>{" "}<a href="/">Back to the homepage</a></p>
   </ContentLeaf>
 </Shell>

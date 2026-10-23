@@ -49,7 +49,7 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
                     </>
                   ) : null}
                 </p>
-                <a href={`#${id}`} aria-label={`Link to this answer — ${q}`}>
+                <a href={`#${id}`} class="faq-permalink" aria-label={`Link to this answer — ${q}`}>
                   Link to this answer
                 </a>
               </div>
