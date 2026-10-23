@@ -73,6 +73,8 @@ jobs:
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:
