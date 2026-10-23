@@ -39,7 +39,9 @@ NODE_OPTIONS=--import=tsx npx playwright test \
 
 Before implementation, the five-suite Vitest run observed 16 failures and 67 passes; browser acceptance observed 16 failures and 8 passes. Failures were the missing destination date, native time and venue.
 
-After implementation, the nine-suite run (the five above plus `event-theme`, `event-navigation`, `kit-event-detail` and `event-detail-decorative-fail-open`) observed 171 passes and 21 skips with `DATABASE_URL` unset. The new actual-SQL acceptance controls use their own guarded disposable schemas and all executed. The 24 browser cases passed: both renderers, both widths, JavaScript on/off, accessible link names, long unbroken text without horizontal scroll, and native Tab/Enter navigation.
+After implementation, the nine-suite run (the five above plus `event-theme`, `event-navigation`, `kit-event-detail` and `event-detail-decorative-fail-open`) first observed 171 passes and 21 skips with `DATABASE_URL` unset. The final run supplied the run-owned disposable database and passed all **192/192** cases, with no skips. The new actual-SQL acceptance controls use their own guarded disposable schemas. The 24 browser cases passed: both renderers, both widths, JavaScript on/off, accessible link names, long unbroken text without horizontal scroll, and native Tab/Enter navigation.
+
+A separate scratch regression reproduced a Hono render-time `RangeError` from an imported destination date outside JavaScript's representable range. The preview now omits only the unusable time while retaining the title link and known venue. That scratch assertion failed before the guard and passed after it; no acceptance-author file was edited. This does not change neighbor selection or the pre-existing Kit model's handling of impossible dates.
 
 The event-theme compactness regression initially rejected 6277 characters against its existing `<6150` limit. Reusing the existing related-event metadata styles reduced the stylesheet to 6125 bytes; the unchanged regression then passed. No threshold was relaxed.
 

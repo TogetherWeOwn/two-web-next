@@ -22,10 +22,14 @@ import { formatEventWhen as fmtWithOffset } from "./date-format";
 
 const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
   <>
-    {" "}
-    <time datetime={event.startsAt.toISOString()}>
-      {fmtWithOffset(event.startsAt, event.timezone)}
-    </time>
+    {Number.isFinite(event.startsAt.getTime()) ? (
+      <>
+        {" "}
+        <time datetime={event.startsAt.toISOString()}>
+          {fmtWithOffset(event.startsAt, event.timezone)}
+        </time>
+      </>
+    ) : null}
     {event.location ? <span class="event-related-location">{event.location}</span> : null}
   </>
 );
