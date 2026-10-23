@@ -11,7 +11,7 @@ written for a laptop fail under normal queue load (TOG-12177).
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| `check` job | 40 min | `.github/workflows/ci.yml`, pinned by `ci/a11y-policy.test.mjs` |
+| `check` job | 60 min | `.github/workflows/ci.yml`, pinned by `ci/a11y-policy.test.mjs` |
 | Default test timeout | 30 s | `vitest.config.ts` (`testTimeout`) |
 | Default hook timeout | 60 s | `vitest.config.ts` (`hookTimeout`) |
 
