@@ -6,10 +6,14 @@
 // contract: each read kind accepts only its intended shape, PII-bearing reads
 // never classify as public, and unknown kinds fail closed.
 //
-// Pure unit tests: validateNonSensitiveRead and rawMemberOwner are pure
-// functions, so no database connection is needed.
+// No database connection: the upcoming reader's real prepared statement is
+// captured at the Drizzle adapter, then classified and adversarially weakened.
 
-import { describe, expect, it } from "vitest";
+import { PgDialect, type PgSession } from "drizzle-orm/pg-core";
+import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { beforeAll, describe, expect, it } from "vitest";
+import type { Db } from "../src/db/index";
+import { readProfileUpcoming } from "../src/profiles/upcoming";
 import { events, featuredContents } from "../src/db/admin-schema";
 import {
   normalizedStatement,
@@ -46,11 +50,9 @@ const MILESTONE_ROW =
   "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101";
 const SELF_POSITION =
   "select event_id, user_id, position from ( select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position from rsvps where event_id in ($1, $2) and status = 'waitlisted' ) line where user_id = $3";
-// Self-profile upcoming game nights (src/profiles/upcoming.ts): the viewer's
-// own going/waitlisted answers joined to published upcoming events, soonest
-// first, capped at PROFILE_UPCOMING_LIMIT. Kept in sync on purpose — if the
-// read changes shape, this pin must change too.
-const PROFILE_UPCOMING_READ =
+// Historical unsafe shape: malformed imported windows can consume the cap.
+// It must not remain an alternative classified shape after the reader is fixed.
+const UNSAFE_PROFILE_UPCOMING_READ =
   "select r.user_id as user_id, e.event_key as event_key, e.title as title, e.starts_at as starts_at, e.timezone as timezone, e.location as location, r.status as status, case when r.status = 'waitlisted' then ( select count(*)::int + 1 from rsvps as w where w.event_id = e.id and w.status = 'waitlisted' and (w.created_at, coalesce(w.legacy_id, w.id), w.id) < (r.created_at, coalesce(r.legacy_id, r.id), r.id) ) else null end as waitlist_position from rsvps as r inner join events as e on e.id = r.event_id where r.user_id = $1 and r.status in ('going', 'waitlisted') and e.status = 'published' and e.ends_at >= $2 order by e.starts_at asc, e.id asc limit 10";
 // Relative-scope member board (src/leaderboards/members.ts): exact normalized
 // statements from the query builder, full-filter variants. Kept in sync on
@@ -63,6 +65,18 @@ const RELATIVE_WINDOW_READ =
 // form needs PostgreSQL timestamp text, not lossy JS Dates. Kept in sync on
 // purpose — if the module changes this shape, this test must change too.
 const FEATURED_EDIT_READ = `select "id", "legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at", CASE WHEN isfinite("starts_at") THEN to_char("starts_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "starts_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "starts_at"::text END, CASE WHEN isfinite("ends_at") THEN to_char("ends_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "ends_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "ends_at"::text END from "featured_contents" where "featured_contents"."id" = $1`;
+
+let profileUpcomingRead = "";
+beforeAll(async () => {
+  const session = {
+    prepareQuery(query: { sql: string }) {
+      profileUpcomingRead = normalizedStatement(query.sql);
+      return { execute: async () => [] };
+    },
+  } as unknown as PgSession;
+  const db = new PostgresJsDatabase(new PgDialect(), session, undefined) as Db;
+  await readProfileUpcoming(db, "100000000000000001", new Date("2070-01-01T00:00:00Z"));
+});
 
 const eventFields = (...names: Array<keyof typeof events>): SelectedField[] =>
   names.map((name) => ({ path: [name], field: events[name] }));
@@ -236,7 +250,46 @@ describe("rawMemberOwner", () => {
   });
 
   it("returns user_id for the profile upcoming game nights shape", () => {
-    expect(rawMemberOwner(PROFILE_UPCOMING_READ)).toBe("user_id");
+    expect(profileUpcomingRead).not.toBe("");
+    expect(rawMemberOwner(profileUpcomingRead)).toBe("user_id");
+  });
+
+  it("refuses the historical upcoming query without whole-window guards", () => {
+    expect(rawMemberOwner(UNSAFE_PROFILE_UPCOMING_READ)).toBeUndefined();
+  });
+
+  it("refuses each missing outer predicate in the real upcoming statement", () => {
+    const [projection, outer] = profileUpcomingRead.split(" where r.user_id = ");
+    expect(outer).toBeDefined();
+    const [predicate, order] = outer!.split(" order by ");
+    expect(order).toBeDefined();
+    const conjuncts = predicate!.split(" and ");
+    expect(conjuncts.length).toBeGreaterThan(3);
+    for (let index = 0; index < conjuncts.length; index++) {
+      const remaining = conjuncts.filter((_, position) => position !== index).join(" and ");
+      const weakened =
+        index === 0
+          ? `${projection} where ${remaining} order by ${order}`
+          : `${projection} where r.user_id = ${remaining} order by ${order}`;
+      expect(weakened).not.toBe(profileUpcomingRead);
+      expect(rawMemberOwner(weakened), `missing predicate: ${conjuncts[index]}`).toBeUndefined();
+    }
+  });
+
+  it("refuses widened owners, projections, FIFO order, cap and appended statements", () => {
+    for (const [from, to] of [
+      ["where r.user_id = ", "where r.user_id <> "],
+      ["e.title as title", "r.user_id as title"],
+      ["coalesce(w.legacy_id, w.id)", "w.id"],
+      ["order by e.starts_at asc, e.id asc", "order by e.starts_at asc"],
+      ["limit 10", "limit 11"],
+    ]) {
+      const widened = profileUpcomingRead.replace(from!, to!);
+      expect(widened).not.toBe(profileUpcomingRead);
+      expect(rawMemberOwner(widened)).toBeUndefined();
+    }
+    expect(rawMemberOwner(`${profileUpcomingRead} or true`)).toBeUndefined();
+    expect(rawMemberOwner(`${profileUpcomingRead}; select * from users`)).toBeUndefined();
   });
 
   it("returns user_id for the relative-board rank and window shapes", () => {
@@ -261,9 +314,9 @@ describe("rawMemberOwner", () => {
       rawMemberOwner(RELATIVE_WINDOW_READ.replace("order by ranked.rank asc", "")),
     ).toBeUndefined();
     expect(rawMemberOwner(`with grouped as (${RELATIVE_RANK_READ})`)).toBeUndefined();
-    expect(rawMemberOwner(PROFILE_UPCOMING_READ.replace("limit 10", "limit 11"))).toBeUndefined();
+    expect(rawMemberOwner(profileUpcomingRead.replace("limit 10", "limit 11"))).toBeUndefined();
     expect(
-      rawMemberOwner(PROFILE_UPCOMING_READ.replace("and e.status = 'published'", "")),
+      rawMemberOwner(profileUpcomingRead.replace("and e.status = 'published'", "")),
     ).toBeUndefined();
     expect(rawMemberOwner("")).toBeUndefined();
   });

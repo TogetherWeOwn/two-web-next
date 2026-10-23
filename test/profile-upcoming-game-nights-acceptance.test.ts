@@ -51,6 +51,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { serializeSigned } from "hono/utils/cookie";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { memberReadResponse } from "../src/member-reads";
+import { normalizedStatement, rawMemberOwner } from "../src/db/read-classification";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { events } from "../src/db/admin-schema";
@@ -59,8 +62,9 @@ import type { EnvWithAdminDb } from "../src/admin/db";
 import type { AccessEntry } from "../src/access-log";
 import type { Env } from "../src/env";
 import type { KitLocals } from "../src/kit-session";
-import { resolveKitProfile } from "../src/profiles/kit";
+import { kitProfileDeps, resolveKitProfile } from "../src/profiles/kit";
 import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
+import { readProfileUpcoming } from "../src/profiles/upcoming";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import {
   dispatchHookRequest,
@@ -405,6 +409,21 @@ function itemChunk(html: string, key: string): string {
   return found;
 }
 
+/** Only the position element's normalized text, never digits elsewhere in an item. */
+function positionText(html: string): string[] {
+  return [
+    ...html.matchAll(
+      /<([a-z][\w-]*)\b[^>]*data-testid="profile-upcoming-position"[^>]*>([\s\S]*?)<\/\1>/gi,
+    ),
+  ].map((match) =>
+    match[2]!
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<[^>]*>/g, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
 const BETA: UpcomingGameNight = {
   eventKey: "01J0000000000000000000B01",
   title: "Beta Night Beta Night",
@@ -456,7 +475,7 @@ for (const renderer of renderers) {
       const beta = itemChunk(html, BETA.eventKey);
       expect(beta).toContain('data-testid="profile-upcoming-position"');
       expect(beta).toMatch(/waitlist/i);
-      expect(beta).toContain("2");
+      expect(positionText(beta)).toEqual(["Waitlist position 2"]);
       expect(itemChunk(html, ALPHA.eventKey)).not.toContain("profile-upcoming-position");
       // One bounded read for the viewer's own answers; the profile read,
       // stats reads and cache posture are unchanged; own reads stay unaudited.
@@ -499,6 +518,30 @@ for (const renderer of renderers) {
       expect(html).not.toContain('<script>alert("x")</script>');
       expect(html).toContain("&lt;script&gt;");
       expect(html).not.toContain("<img src=x onerror");
+    });
+
+    it("escapes quote and markup event keys inside the event href", async () => {
+      const hostile = {
+        ...ALPHA,
+        eventKey: 'night" data-upcoming-injected="yes"><img data-upcoming-injected src=x>&tail',
+      };
+      const fixture = await upcomingFixture("owner", [hostile]);
+      const response = await fixture.request(fixture.path, {}, renderer);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(
+        'href="/e/night&quot; data-upcoming-injected=&quot;yes&quot;&gt;&lt;img data-upcoming-injected src=x&gt;&amp;tail"',
+      );
+      expect(eventLinksInOrder(html)).toEqual([
+        "night&quot; data-upcoming-injected=&quot;yes&quot;&gt;&lt;img data-upcoming-injected src=x&gt;&amp;tail",
+      ]);
+      // Ignore attribute *values*: the escaped key intentionally contains
+      // attribute-like text, which must not be mistaken for a real attribute.
+      const openingTags = html.match(/<[a-z][\w:-]*\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi) ?? [];
+      const attributes = openingTags.map((tag) => tag.replace(/"[^"]*"|'[^']*'/g, '""'));
+      expect(attributes.join(" ")).not.toMatch(/\sdata-upcoming-injected(?:\s|=|>)/i);
+      expect(html).not.toContain("<img data-upcoming-injected");
+      expect(html).not.toContain(hostile.eventKey);
     });
 
     it("keeps other-member renders self-only and byte-identical", async () => {
@@ -550,6 +593,58 @@ for (const renderer of renderers) {
     });
   });
 }
+
+// Measure the real SQL inside the same keyed/audited boundary used by both
+// renderers. Only the logger observes it; neither the reader nor the factory
+// is replaced. The supplied pool belongs to the fixture's private schema.
+async function observedUpcoming(
+  fixture: MemberDataFixture,
+  memberId: string,
+  read: (db: Db) => Promise<UpcomingGameNight[] | null>,
+) {
+  const statements: { sql: string; params: unknown[] }[] = [];
+  const measuredDb = drizzle(fixture.client, {
+    logger: {
+      logQuery: (sql, params) => statements.push({ sql: normalizedStatement(sql), params }),
+    },
+  }) as Db;
+  const audit: AccessEntry[] = [];
+  let rows: UpcomingGameNight[] | null = null;
+  const response = await memberReadResponse(
+    { method: "GET", route: "/profile" },
+    { viewer: memberId, resource: "profiles", action: "view", route: "/profile" },
+    async (entry) => {
+      audit.push(entry);
+      return true;
+    },
+    async () => {
+      rows = await read(measuredDb);
+      return Response.json(rows);
+    },
+  );
+  return { rows, response, statements, audit };
+}
+
+// Strings go straight to PostgreSQL so infinity and years outside Date's
+// domain are not silently normalized by a JS Date before the reader sees them.
+async function addImportedAnswer(
+  fixture: MemberDataFixture,
+  eventKey: string,
+  startsAt: string,
+  endsAt: string,
+) {
+  const [event] = await fixture.client`
+    insert into events (event_key, title, starts_at, ends_at, timezone, location, status)
+    values (${eventKey}, ${eventKey}, ${startsAt}::timestamptz, ${endsAt}::timestamptz,
+      'Europe/London', 'Main Hall', 'published') returning id`;
+  await fixture.client`insert into rsvps (event_id, user_id, status)
+    values (${event!.id}, ${OWNER}, 'going')`;
+}
+
+it("hides real Kit upcoming data when no web database is configured", async () => {
+  const { upcomingFor } = kitProfileDeps({ APP_URL: ORIGIN, SESSION_SECRET: SECRET } as Env);
+  await expect(upcomingFor(OWNER)).resolves.toBeNull();
+});
 
 const dbUrl = process.env.DATABASE_URL;
 describe.skipIf(!dbUrl)("profile upcoming game nights SQL pin (disposable test DB)", () => {
@@ -773,14 +868,238 @@ describe.skipIf(!dbUrl)("profile upcoming game nights SQL pin (disposable test D
     const waitlisted = itemChunk(dbHtml, W1_KEY);
     expect(waitlisted).toContain('data-testid="profile-upcoming-position"');
     expect(waitlisted).toMatch(/waitlist/i);
-    expect(waitlisted).toContain("3");
+    expect(positionText(waitlisted)).toEqual(["Waitlist position 3"]);
     expect(waitlisted).toContain("2070-01-05");
     expect(waitlisted).toContain("Side Room");
+  });
+
+  it("returns the exact waitlisted reader row with FIFO position three", async () => {
+    const rows = await readProfileUpcoming(db(), OWNER, new Date("2070-01-01T00:00:00Z"));
+    expect(rows?.filter((row) => row.eventKey === W1_KEY)).toEqual([
+      {
+        eventKey: W1_KEY,
+        title: "Waitlisted Night",
+        startsAt: new Date("2070-01-05T19:00:00Z"),
+        timezone: "Europe/London",
+        location: "Side Room",
+        status: "waitlisted",
+        waitlistPosition: 3,
+      },
+    ]);
   });
 
   it("leaves the self-view unaudited with private no-store caching", async () => {
     expect(await db().select().from(memberDataAccessLogs)).toEqual([]);
     expect(dbCache).toContain("private");
     expect(dbCache).toContain("no-store");
+  });
+
+  // Ten imported bad windows must not fill the SQL cap before a valid RSVP.
+  // Replaying the observed statement separately also pins SQL-side exclusion:
+  // dropping invalid Dates only in the result mapper cannot satisfy this test.
+  it.each([
+    { name: "negative-infinite start", start: "-infinity", end: "2070-01-01 20:00:00+00" },
+    { name: "positive-infinite start", start: "infinity", end: "infinity" },
+    { name: "positive-infinite end", start: "2070-01-01 18:00:00+00", end: "infinity" },
+    { name: "negative-infinite end", start: "2070-01-01 18:00:00+00", end: "-infinity" },
+    {
+      name: "finite end outside Date range",
+      start: "2070-01-01 18:00:00+00",
+      end: "294000-01-01 20:00:00+00",
+    },
+    {
+      name: "finite start outside Date range",
+      start: "294000-01-01 18:00:00+00",
+      end: "294000-01-01 20:00:00+00",
+    },
+    {
+      name: "end one millisecond outside Date range",
+      start: "2070-01-01 18:00:00+00",
+      end: "275760-09-13 00:00:00.001+00",
+    },
+  ])("filters $name before the bounded keyed read", async ({ start, end }) => {
+    const isolated = await createMemberDataFixture(dbUrl!);
+    try {
+      await isolated.db.insert(users).values({ id: OWNER, username: "window-owner", member: true });
+      for (let index = 0; index < PROFILE_UPCOMING_LIMIT; index++) {
+        await addImportedAnswer(isolated, `invalid-window-${index}`, start, end);
+      }
+      await addImportedAnswer(
+        isolated,
+        "valid-window",
+        "2070-02-01 18:00:00+00",
+        "2070-02-01 20:00:00+00",
+      );
+      const result = await observedUpcoming(isolated, OWNER, (db) =>
+        readProfileUpcoming(db, OWNER, new Date("2070-01-01T00:00:00Z")),
+      );
+      expect(result.response.status).toBe(200);
+      expect(result.rows).toEqual([
+        {
+          eventKey: "valid-window",
+          title: "valid-window",
+          startsAt: new Date("2070-02-01T18:00:00Z"),
+          timezone: "Europe/London",
+          location: "Main Hall",
+          status: "going",
+          waitlistPosition: null,
+        },
+      ]);
+      expect(result.statements).toHaveLength(1);
+      const statement = result.statements[0]!;
+      expect(statement.sql).toMatch(/limit 10$/);
+      expect(statement.sql).not.toContain(OWNER);
+      expect(statement.params.filter((value) => value === OWNER)).toEqual([OWNER]);
+      expect(rawMemberOwner(statement.sql)).toBe("user_id");
+      const rawRows = await isolated.client.unsafe(statement.sql, statement.params as string[]);
+      expect(rawRows.map((row) => row.event_key)).toEqual(["valid-window"]);
+      expect(result.audit).toEqual([]);
+      expect(await isolated.db.select().from(memberDataAccessLogs)).toEqual([]);
+    } finally {
+      await isolated.dispose();
+    }
+  });
+
+  it("preserves the existing finite reversed-window behavior instead of inventing chronology rules", async () => {
+    const isolated = await createMemberDataFixture(dbUrl!);
+    try {
+      await isolated.db
+        .insert(users)
+        .values({ id: OWNER, username: "reversed-owner", member: true });
+      await addImportedAnswer(
+        isolated,
+        "reversed-window",
+        "2070-01-02 18:00:00+00",
+        "2070-01-01 20:00:00+00",
+      );
+      const result = await observedUpcoming(isolated, OWNER, (db) =>
+        readProfileUpcoming(db, OWNER, new Date("2070-01-01T00:00:00Z")),
+      );
+      // Public event reads define renderability by finite Date endpoints, not
+      // chronology (isRenderableEventWindow); this fix must not change that.
+      expect(result.response.status).toBe(200);
+      expect(result.rows).toEqual([
+        {
+          eventKey: "reversed-window",
+          title: "reversed-window",
+          startsAt: new Date("2070-01-02T18:00:00Z"),
+          timezone: "Europe/London",
+          location: "Main Hall",
+          status: "going",
+          waitlistPosition: null,
+        },
+      ]);
+      expect(result.statements).toHaveLength(1);
+      expect(result.audit).toEqual([]);
+    } finally {
+      await isolated.dispose();
+    }
+  });
+
+  it("accepts a whole window ending exactly at the inclusive Date maximum", async () => {
+    const isolated = await createMemberDataFixture(dbUrl!);
+    try {
+      await isolated.db
+        .insert(users)
+        .values({ id: OWNER, username: "boundary-owner", member: true });
+      await addImportedAnswer(
+        isolated,
+        "last-valid-window",
+        "275760-09-12 00:00:00+00",
+        "275760-09-13 00:00:00+00",
+      );
+      const result = await observedUpcoming(isolated, OWNER, (db) =>
+        readProfileUpcoming(db, OWNER, new Date("2070-01-01T00:00:00Z")),
+      );
+      expect(result.response.status).toBe(200);
+      expect(result.rows).toEqual([
+        {
+          eventKey: "last-valid-window",
+          title: "last-valid-window",
+          startsAt: new Date("+275760-09-12T00:00:00Z"),
+          timezone: "Europe/London",
+          location: "Main Hall",
+          status: "going",
+          waitlistPosition: null,
+        },
+      ]);
+      expect(result.statements).toHaveLength(1);
+      expect(result.audit).toEqual([]);
+    } finally {
+      await isolated.dispose();
+    }
+  });
+
+  it("executes real Kit upcoming wiring with exact rows, FIFO ties and member isolation", async () => {
+    const isolated = await createMemberDataFixture(dbUrl!);
+    const third = "100000000000000003";
+    const fourth = "100000000000000004";
+    const fifth = "100000000000000005";
+    try {
+      await isolated.db.insert(users).values(
+        [OWNER, VIEWER, third, fourth, fifth].map((id) => ({
+          id,
+          username: `member-${id}`,
+          member: true,
+        })),
+      );
+      await isolated.client`insert into events (id, event_key, title, starts_at, ends_at, timezone, location, status)
+        values
+          (1, 'going-night', 'Going Night', '2070-05-01 18:00:00+00', '2070-05-01 20:00:00+00', 'Europe/London', 'Main Hall', 'published'),
+          (2, 'fifo-night', 'FIFO Night', '2070-05-01 18:00:00+00', '2070-05-01 20:00:00+00', 'Europe/London', 'Side Room', 'published')`;
+      // Same timestamp: legacy key wins first, then id breaks equal legacy keys.
+      // The going peer never counts toward waitlist position, even with a lower key.
+      await isolated.client`insert into rsvps (id, legacy_id, event_id, user_id, status, created_at)
+        values
+          (97, null, 1, ${OWNER}, 'going', '2069-01-01 00:00:00+00'),
+          (98, 1, 2, ${fifth}, 'going', '2069-01-01 00:00:00+00'),
+          (99, 20, 2, ${third}, 'waitlisted', '2069-01-01 00:00:00+00'),
+          (100, 20, 2, ${OWNER}, 'waitlisted', '2069-01-01 00:00:00+00'),
+          (101, 20, 2, ${fourth}, 'waitlisted', '2069-01-01 00:00:00+00'),
+          (102, 10, 2, ${VIEWER}, 'waitlisted', '2069-01-01 00:00:00+00')`;
+      const expectedWaitlist = {
+        eventKey: "fifo-night",
+        title: "FIFO Night",
+        startsAt: new Date("2070-05-01T18:00:00Z"),
+        timezone: "Europe/London",
+        location: "Side Room",
+        status: "waitlisted",
+        waitlistPosition: 3,
+      };
+      for (const memberId of [OWNER, VIEWER, "100000000000000099"]) {
+        const result = await observedUpcoming(isolated, memberId, (db) => {
+          const env = { APP_URL: ORIGIN, SESSION_SECRET: SECRET, ADMIN_DB: db } as EnvWithAdminDb;
+          return kitProfileDeps(env).upcomingFor(memberId);
+        });
+        expect(result.response.status).toBe(200);
+        expect(result.rows).toEqual(
+          memberId === OWNER
+            ? [
+                {
+                  eventKey: "going-night",
+                  title: "Going Night",
+                  startsAt: new Date("2070-05-01T18:00:00Z"),
+                  timezone: "Europe/London",
+                  location: "Main Hall",
+                  status: "going",
+                  waitlistPosition: null,
+                },
+                expectedWaitlist,
+              ]
+            : memberId === VIEWER
+              ? [{ ...expectedWaitlist, waitlistPosition: 1 }]
+              : [],
+        );
+        expect(result.statements).toHaveLength(1);
+        expect(result.statements[0]!.params.filter((value) => value === memberId)).toEqual([
+          memberId,
+        ]);
+        expect(result.statements[0]!.sql).toMatch(/limit 10$/);
+        expect(result.audit).toEqual([]);
+      }
+      expect(await isolated.db.select().from(memberDataAccessLogs)).toEqual([]);
+    } finally {
+      await isolated.dispose();
+    }
   });
 });
