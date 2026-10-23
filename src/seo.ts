@@ -49,6 +49,26 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
+// Brand share image (rich unfurls): one approved static asset reused as the
+// og:image on every canonical page — no new artwork, no per-event covers.
+// PNG, not the SVG logo: Discord and X crawlers unfurl PNG reliably while
+// SVG support is spotty. Shared by the Hono Layout (page-shell.tsx) and the
+// Kit heads (SiteMetadata.svelte, ProfileView.svelte) so both renderers emit
+// identical share image tags.
+export const SHARE_IMAGE_PATH = "/og-1200x630.png";
+
+// Absolute share-image URL from the page canonical's origin (og:image must be
+// absolute; deriving from the canonical keeps every environment self-
+// describing). A relative canonical cannot happen (canonicalUrl always
+// prefixes APP_URL); the fallback keeps the tag well-formed anyway.
+export function shareImageUrl(canonical: string): string {
+  try {
+    return new URL(SHARE_IMAGE_PATH, canonical).href;
+  } catch {
+    return SHARE_IMAGE_PATH;
+  }
+}
+
 // Static entries come from the public route slots (seo-slots.ts); published
 // /e/{key} rows follow at 0.6. A sitemap must never list a URL that 404s, and
 // /events/past stays out.

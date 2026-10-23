@@ -5,20 +5,9 @@ import type { Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
+import { shareImageUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
-
-// Absolute share-image URL from the page canonical's origin: og:image and
-// twitter:image must be absolute, and the render is a new file so no cache
-// entry needs invalidating. A relative canonical cannot happen (canonicalUrl
-// always prefixes APP_URL); the fallback keeps the tag well-formed anyway.
-const shareImageUrl = (canonical: string): string => {
-  try {
-    return new URL("/og-1200x630.png", canonical).href;
-  } catch {
-    return "/og-1200x630.png";
-  }
-};
 
 export const SkipLink: FC = () => (
   <a class="skip-link" href="#main">
@@ -103,6 +92,7 @@ export const Layout: FC<
               <meta property="og:description" content={shareDescription} />
             ) : null}
             <meta property="og:image" content={shareImageUrl(canonical)} />
+            <meta property="og:image:alt" content="Together We Own community logo" />
             <meta name="twitter:card" content="summary_large_image" />
             <meta name="twitter:title" content={shareTitle ?? title} />
             {shareDescription ? (

@@ -273,6 +273,8 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain(`name="twitter:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).not.toContain("<script> & friends");
+    expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
+    expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 
   it("renders escaped accessibility notes for guests and members without changing the description", async () => {

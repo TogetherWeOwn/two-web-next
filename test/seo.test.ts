@@ -8,7 +8,13 @@ import { describe, expect, it } from "vitest";
 import app, { FALLBACK_INVITE } from "./app";
 import { readCounts } from "../src/counts";
 import type { Env } from "../src/env";
-import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "../src/seo";
+import {
+  buildRobots,
+  buildSitemapUrls,
+  crawlableEvents,
+  renderSitemap,
+  shareImageUrl,
+} from "../src/seo";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -169,7 +175,7 @@ describe("sitemap + robots (per-env host)", () => {
 });
 
 describe("share meta parity (TOG-5624)", () => {
-  it("home carries canonical + OG/Twitter tags and the share image", async () => {
+  it("home carries canonical + OG/Twitter tags and the brand og:image", async () => {
     const html = await (await app.request("/", {}, env)).text();
     expect(html).toContain('<link rel="canonical" href="https://next.example.test/"');
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/"');
@@ -182,6 +188,9 @@ describe("share meta parity (TOG-5624)", () => {
     );
     expect(html).toContain(
       '<meta name="twitter:image" content="https://next.example.test/og-1200x630.png"',
+    );
+    expect(html).toContain(
+      '<meta property="og:image:alt" content="Together We Own community logo"',
     );
   });
 
@@ -220,5 +229,20 @@ describe("URL freeze (W4 slice)", () => {
 
   it("/discord redirects", async () => {
     expect((await app.request("/discord", {}, env)).status).toBe(302);
+  });
+});
+
+describe("shareImageUrl (rich unfurls)", () => {
+  it("derives the absolute brand image URL from the page canonical", () => {
+    expect(shareImageUrl("https://next.example.test/about")).toBe(
+      "https://next.example.test/og-1200x630.png",
+    );
+    expect(shareImageUrl("https://next.example.test:8443/e/abc?x=1")).toBe(
+      "https://next.example.test:8443/og-1200x630.png",
+    );
+  });
+
+  it("falls back to the rooted path when the canonical is not parseable", () => {
+    expect(shareImageUrl("::::")).toBe("/og-1200x630.png");
   });
 });

@@ -228,6 +228,12 @@ function expectHead(
     ]);
   // The share image is part of the head contract now: exactly one og:image.
   expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
+  expect(html, "og:image").toContain(
+    `property="og:image" content="${new URL("/og-1200x630.png", canonical).href}"`,
+  );
+  expect(html, "og:image:alt").toContain(
+    'property="og:image:alt" content="Together We Own community logo"',
+  );
 }
 
 beforeEach(() => {
