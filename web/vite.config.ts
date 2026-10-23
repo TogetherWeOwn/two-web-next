@@ -39,9 +39,12 @@ export default defineConfig({
                   name: "site-shell",
                   test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/(?:SiteHeader|ErrorShell)\.svelte)$/,
                 },
-                // The Kit homepage already imports the Hono shared chunk.
-                // Co-locate its mirror markup so both home renderers gzip together.
-                { name: "admin", test: /\/(?:src\/admin\/|web\/src\/routes\/\+page\.svelte$)/ },
+                // Compress Kit's home and admin markup with the Hono renderers
+                // rather than using separate gzip streams for mirrored pages.
+                {
+                  name: "admin",
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                },
                 { name: "profiles", test: /\/src\/profiles\// },
                 {
                   name: "events",
