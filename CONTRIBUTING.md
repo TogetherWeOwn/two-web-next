@@ -97,7 +97,7 @@ OPERATOR step after merge plus green probes — never part of a PR.
 
 During Node 22 lint/typecheck/tests, `ci/node22-progress.mjs` emits a
 `[node22-progress]` JSON snapshot immediately and every 60 seconds, at most
-28 times (through minute 27). Each snapshot has at most 32 process rows and
+43 times (through minute 42). Each snapshot has at most 32 process rows and
 8 KiB of output. It observes the step shell's main-thread descendant tree,
 excluding itself: numeric PIDs/parents, state, cumulative CPU ticks, RSS pages,
 thread counts and process-start ticks. Compare consecutive rows for CPU or
@@ -106,7 +106,7 @@ not proof of a particular hang or its cause. `truncated` marks incomplete tree
 reads/caps; unavailable or replaced roots stop the sampler with a fixed message.
 No argv, environment, names, test output, stack/heap dumps or database queries
 are collected. The sidecar never signals the suite, and its cleanup does not
-replace the original command's exit status or extend the 30-minute job timeout.
+replace the original command's exit status or extend the 45-minute job timeout.
 Its selftests use only local proc fixtures and controlled child processes.
 
 ### What fails `pr-lint` today vs what only warns
