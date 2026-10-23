@@ -30,7 +30,7 @@
 // - Upstream failure degrades honestly: 502/503, or a 200 explicitly
 //   marked stale/unavailable — never a silent current-looking record.
 //
-// The upstream stub answers any bot-origin fetch with the bot's real
+// The upstream stub answers only the exact configured /ops/config URL with the bot's real
 // GET /ops/config shape ({ epoch, overrides, baseline, enforcement }).
 // Run: npx vitest run test/dashboard-operator-override-panel-acceptance.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,7 +110,8 @@ function stubBot(status = 200) {
   const stub = async (input: unknown) => {
     const url = String(input instanceof Request ? input.url : input);
     seen.push(url);
-    if (!url.startsWith(BOT_ORIGIN)) throw new Error(`unexpected fetch: ${url}`);
+    if (url !== new URL("/ops/config", BOT_ORIGIN).href)
+      throw new Error(`unexpected fetch: ${url}`);
     if (status !== 200) return new Response("bot down", { status });
     return Response.json(cannedRecord());
   };
