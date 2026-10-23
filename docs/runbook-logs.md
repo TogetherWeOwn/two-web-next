@@ -992,19 +992,21 @@ identity. The `code` is a fixed allowlisted class, not a message.
 
 ## CSP sink shed signal
 
-`POST /csp-reports` (`src/csp-reports.ts`) logs through one in-memory token
-bucket per isolate (20 warnings, one token per 3 seconds, shared by violation
-and oversize warnings). When the bucket is spent, drops emit a bounded shed
-signal instead of going silent, so operators can tell a shedding sink from a
-quiet one under flood.
+`POST /csp-reports` (`src/csp-reports.ts`) owns one in-memory token bucket
+per isolate (20 warnings, one token per 3 seconds, shared by violation,
+oversize, malformed and sink-failure warnings). Its policy is implemented in
+`src/log-budget.ts`, but its state is independent of human and shield refusal
+budgets. When the bucket is spent, drops emit a bounded shed signal instead of
+going silent, so operators can tell a shedding sink from a quiet one under flood.
 
 | Message | Meaning | Severity | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
 | `csp.report.shed` | Log-budget drops were shed: at most one line per 3-second refill window per isolate, counting drops since the previous shed emit. | Warns only: every report still answers 204 `no-store`, session-free and DB-free. | Filter logs for the line and compare against `http.request` volume on `/csp-reports` for the same window; an isolated sighting is a burst, a sustained one is a flood or a misbehaving reporter. | `dropped` (positive integer count, never request content) |
 
 The signal carries no URI, directive, sample, header, cookie or identity: only
-the fixed `dropped` count. Sampled-out (`CSP_REPORT_SAMPLE_RATE`) and
-malformed reports never touch the budget and never shed.
+the fixed `dropped` count. Sampled-out (`CSP_REPORT_SAMPLE_RATE`) and empty
+reports never touch the budget and never shed. Non-empty malformed reports
+follow the same sampling and budget as violations.
 
 ## Local regression check
 

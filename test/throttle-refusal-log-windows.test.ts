@@ -151,6 +151,41 @@ describe.each(["guard", "shield"] as const)("%s refusal log windows", (source) =
   });
 });
 
+describe("CSP and refusal budgets stay independent", () => {
+  it.each(["csp-first", "refusals-first"])("preserves each full burst (%s)", async (order) => {
+    const guard = await refusalSource("guard");
+    const shield = await refusalSource("shield");
+    const { cspReportsRoute } = await import("../src/csp-reports");
+    const app = new Hono<{ Bindings: EnvWithThrottle }>();
+    app.post("/csp-reports", cspReportsRoute);
+    const csp = async () => {
+      for (let i = 0; i < 21; i++) {
+        const response = await app.request(
+          "/csp-reports",
+          { method: "POST", body: "malformed" },
+          {} as EnvWithThrottle,
+        );
+        expect(response.status).toBe(204);
+      }
+    };
+    const refusals = async () => {
+      for (const probe of [guard, shield]) {
+        for (let i = 0; i < 21; i++) expect(await probe.call()).toBe(429);
+      }
+    };
+    for (const run of order === "csp-first" ? [csp, refusals] : [refusals, csp]) await run();
+    for (const code of [guard.code, shield.code, "csp.report.malformed"]) {
+      expect(warn.mock.calls.filter(([event]: unknown[]) => event === code)).toHaveLength(20);
+    }
+    for (const code of [`${guard.code}.shed`, `${shield.code}.shed`, "csp.report.shed"]) {
+      expect(warn.mock.calls.filter(([event]: unknown[]) => event === code)).toEqual([
+        [code, { dropped: 1 }],
+      ]);
+    }
+    expect(warn).toHaveBeenCalledTimes(63);
+  });
+});
+
 describe("shield refusal telemetry follows the final audit decision", () => {
   it.each(["55P03", "57014", "23505"])(
     "does not log a 429 when audit fails with %s",

@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { createLogBudget } from "../log-budget";
 import type { Answer, IngressConfig } from "./types";
 import { audit } from "./audit";
 import { ingressDenial } from "./envelope";
@@ -58,41 +59,7 @@ export const SHIELD_REFUSAL_AUDIT_RATE = 0.01;
  */
 export const shieldRefusalCounters = { credential: 0, anonymous: 0 };
 
-const SHIELD_REFUSAL_LOG_BURST = 20;
-const SHIELD_REFUSAL_LOG_REFILL_MS = 3_000;
-let refusalLogTokens = SHIELD_REFUSAL_LOG_BURST;
-let lastRefusalLogRefill = 0;
-
-// Fixed-size isolate state, no client keys or timers. Consume synchronously
-// just before logging so concurrent refusals cannot overspend the budget.
-// Same shape as takeCspLogToken (src/csp-reports.ts).
-function takeShieldRefusalLogToken(): boolean {
-  const now = Date.now();
-  const elapsed = Math.max(0, now - lastRefusalLogRefill);
-  refusalLogTokens = Math.min(
-    SHIELD_REFUSAL_LOG_BURST,
-    refusalLogTokens + elapsed / SHIELD_REFUSAL_LOG_REFILL_MS,
-  );
-  lastRefusalLogRefill = Math.max(lastRefusalLogRefill, now);
-  if (refusalLogTokens < 1) return false;
-  refusalLogTokens -= 1;
-  return true;
-}
-
-// Bounded shed signal: at most one warn per refill window, fixed keys only,
-// no request content. Counts log-budget drops since the previous shed emit so
-// operators can tell a shedding shield from a quiet one without flooding.
-let refusalShedDropped = 0;
-let lastRefusalShedEmit = 0;
-function warnShieldRefusalShed(): void {
-  refusalShedDropped += 1;
-  const now = Date.now();
-  if (now - lastRefusalShedEmit < SHIELD_REFUSAL_LOG_REFILL_MS) return;
-  lastRefusalShedEmit = now;
-  const dropped = refusalShedDropped;
-  console.warn("agent-events.shield.refused.shed", { dropped });
-  refusalShedDropped -= dropped;
-}
+const takeShieldLogToken = createLogBudget("agent-events.shield.refused.shed");
 
 /** Test seam: reset {@link shieldRefusalCounters} between cases. */
 export function __resetShieldRefusalCountersForTests(): void {
@@ -175,11 +142,10 @@ export async function shield(
   }
   // Only final 429s spend log tokens: a sampled audit failure above can instead
   // return 503 or throw. Class + outcome only, never identity or body bytes.
-  if (takeShieldRefusalLogToken())
+  if (takeShieldLogToken())
     console.warn("agent-events.shield.refused", {
       bucket_class: bucketClass.kind,
       outcome: "rate_limited",
     });
-  else warnShieldRefusalShed();
   return throttleEnvelope(retryAfter ?? 1, requestId);
 }
