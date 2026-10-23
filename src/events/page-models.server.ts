@@ -114,29 +114,31 @@ export async function loadCalendarPageModel(args: {
   const { q, game: rawGame, searching, view, past, page, jumpKey, jumpRequested } = input;
   const match = matchQuery(q);
 
-  // The distinct-games list scopes every list read below, so it resolves
-  // before them — overlapped with the Discord read (snapshot store, at most
-  // one live Discord GET), which shares nothing with it. The list reads then
-  // start together like the homepage (perf(home) #856).
-  const [games, discordRows] = await Promise.all([listPublishedGames(db), discord.upcoming(now)]);
-  const gameFilter = resolveGameFilter(games, rawGame);
-  const opts = { includeDrafts, search: match, game: gameFilter };
+  // Only the web DB reads depend on the game list. Keep their whole pipeline
+  // parallel with Discord, so a pending snapshot never delays the list reads.
+  const [{ games, gameFilter, opts, listPage, upcomingPage, localPast }, discordRows] =
+    await Promise.all([
+      (async () => {
+        const games = await listPublishedGames(db);
+        const gameFilter = resolveGameFilter(games, rawGame);
+        const opts = { includeDrafts, search: match, game: gameFilter };
 
-  // Grid day-jumps resolve the list page holding the card, even past page one.
-  let listPage = view === "calendar" ? 1 : page;
-  if (view === "list" && jumpKey !== "") {
-    const rank = await rankUpcoming(db, jumpKey, now, opts);
-    if (rank !== null) listPage = Math.floor(rank / EVENTS_UPCOMING_PAGE_SIZE) + 1;
-  }
+        // Grid day-jumps resolve the list page holding the card, even past page one.
+        let listPage = view === "calendar" ? 1 : page;
+        if (view === "list" && jumpKey !== "") {
+          const rank = await rankUpcoming(db, jumpKey, now, opts);
+          if (rank !== null) listPage = Math.floor(rank / EVENTS_UPCOMING_PAGE_SIZE) + 1;
+        }
 
-  // Independent reads start together like the homepage (perf(home) #856):
-  // the upcoming page and the past drawer (web DB) share nothing, so
-  // sequential awaits would sum every round trip into /events server time.
-  // Keep the rows and failure flag on the same resolved source instance.
-  const [upcomingPage, localPast] = await Promise.all([
-    listUpcoming(db, now, opts, listPage),
-    listCalendarPast(db, now, opts),
-  ]);
+        // Independent reads start together like the homepage (perf(home) #856).
+        const [upcomingPage, localPast] = await Promise.all([
+          listUpcoming(db, now, opts, listPage),
+          listCalendarPast(db, now, opts),
+        ]);
+        return { games, gameFilter, opts, listPage, upcomingPage, localPast };
+      })(),
+      discord.upcoming(now),
+    ]);
   const { rows: pageRows, totalPages, total: totalUpcoming } = upcomingPage;
   const persistedIds = await persistedDiscordIds(
     db,
