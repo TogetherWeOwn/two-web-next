@@ -38,7 +38,7 @@ const badge = $derived(dateParts(e.startsAt, e.timezone));
   <span class="schedule-date" aria-hidden="true"><span>{badge.month}</span><strong>{badge.day}</strong></span>
   <div class="schedule-info">
     <h2>
-      <a href={`/e/${e.eventKey}`}>{#if q}{#each searchContext(e.title, q) as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}{:else}{e.title}{/if}</a>
+      <a href={`/e/${e.eventKey}`}>{#if q}<span>{#each searchContext(e.title, q) as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
     </h2>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}<span>{e.timezone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}{#if q && e.description}<p class="archive-passage">{#each searchContext(e.description, q, true) as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}

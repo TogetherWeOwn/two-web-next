@@ -31,11 +31,15 @@ const Card: FC<{ e: PublicEvent; q: string }> = ({ e, q }) => (
     <div class="schedule-info">
       <h2>
         <a href={`/e/${e.eventKey}`}>
-          {q
-            ? searchContext(e.title, q).map((part) =>
+          {q ? (
+            <span>
+              {searchContext(e.title, q).map((part) =>
                 part.match ? <mark>{part.text}</mark> : part.text,
-              )
-            : e.title}
+              )}
+            </span>
+          ) : (
+            e.title
+          )}
         </a>
       </h2>
       {/* Upcoming-card shape (time · zone · location): the zone always
