@@ -2,6 +2,50 @@
 
 Measured 2026-10-23. Prerequisite for [#1495](https://github.com/TogetherWeOwn/two-web-next/pull/1495), not delivery or approval of that feature.
 
+## Current-base conflict reconciliation: no additional allowance
+
+The original **329,984B** proposal below is **superseded**, not the current numeric change. Merge base update `2b4f1902e096d969ad4a909a085fb6e221ddfc3a` into this prerequisite after GitHub reports a conflict. Only `ci/kit-perf-budget.json` conflicts. Keep **every numeric limit identical to incoming main**, including its independently approved **333,312B** server gzip ceiling from [#1686](https://github.com/TogetherWeOwn/two-web-next/pull/1686). Do not add the old RSVP allowance to it or reduce main's allocation. The final PR changes only decision history and this evidence document relative to that base.
+
+Preserve incoming main's complete **277,974-character** decision history as a verbatim prefix, then append the original **2,579-character** RSVP record exactly once and a superseding reconciliation. The original record refers only to its frozen inputs, not the current base.
+
+### New frozen measurements
+
+- Current main: `2b4f1902e096d969ad4a909a085fb6e221ddfc3a`.
+- Same frozen RSVP feature: `d806da154fbe0ec1bd1e5805db1bfa469e45df36`.
+- Scratch composition tree: `9107b24f3352505b9cf58a8e282c71b0eecab825`. Created with `git merge-tree --write-tree <main> <feature>`, resolving its sole budget conflict to main's exact budget. No feature ref was changed. All other paths are Git's normal merge result.
+- Same root/web lock blobs listed below, Node `24.22.1`, npm `11.19.1`, fresh external `npm ci --include=dev --no-audit --no-fund` installs. Two clean production builds per pinned archive: `NODE_ENV=production npm run build --prefix web`. The unchanged checker measures default Node gzip per emitted file.
+
+| Source / build | Server files | Server raw B | Server gzip B | Current cap 333,312B | Original cap 329,472B |
+| --- | ---: | ---: | ---: | --- | --- |
+| Current main 1 | 117 | 1,129,528 | 328,710 | pass | fits |
+| Current main 2 | 117 | 1,129,528 | 328,710 | pass | fits |
+| Current-base RSVP composition 1 | 117 | 1,132,085 | 329,218 | pass | fits, 254B margin |
+| Current-base RSVP composition 2 | 117 | 1,132,085 | 329,218 | pass | fits, 254B margin |
+
+Current main includes a profile-view co-compression rule in `web/vite.config.ts` absent from the original frozen base. Its emitted server count is now 117 rather than 118. This prerequisite changes neither grouping nor enumeration and claims no optimization of its own. Current RSVP growth is **+2,557 raw / +508 gzip B** relative to current main. Do not compare these deltas as identical to the historical builds below. Both current compositions fit even the original 329,472B limit: the new main allocation is not needed to justify this frozen RSVP integration. These results authorize no simultaneous integration with the distinct moderation feature whose prerequisite allocated 333,312B.
+
+Other groups are stable across each tree's two rebuilds, including client paths and SHA-256 hashes:
+
+- Current main client JS: **53 files, 245,331 raw / 99,255 gzip B**.
+- Composed RSVP client JS: **53 files, 246,285 / 99,471B**, delta **+954 / +216B**; zero client `drizzle-orm` references in either tree.
+- CSS in both trees: **2 files, 2,878 / 1,024B**. Gzip is exactly at its unchanged cap: **zero margin**, not permission to increase it.
+- Worker entry in both trees: **2,551 / 1,219B**, identical SHA-256. All other byte, count and startup limits remain unchanged.
+
+### Current verification and boundaries
+
+- All four clean builds and their unchanged asset gates exit 0 under incoming main's budget.
+- Scratch real-artifact boundary harness: **24/24 pass** (six per build): current main cap passes; exact measured server gzip passes; one byte under server gzip rejects; one byte under server raw rejects; one file under server count rejects; superseded 329,984B cap passes. Each negative control produces exactly one server-group error. Numeric equality to incoming main, full history-prefix preservation and exactly-once RSVP history are asserted separately.
+- `node --test ci/check-kit-perf.test.mjs`: **13 passed, 0 skipped**; `npm run kit-perf:selftest`: **6 passed**. Checker and all test files remain unchanged.
+- The same four RSVP regression files listed below run on the new scratch composition: **107 passed, no skips**. Feature-only acceptance files retain their frozen feature blobs; the prerequisite contains no test edit relative to main.
+- The first scratch harness run misclassified the checker's informational startup line as an error. Correct the scratch collector to distinguish `log` from `error`, then rerun all 24 cases. No repository checker or test was changed to accommodate that harness mistake.
+- Full `npm run check`, browser/staging/visual/deploy checks are not claimed. This PR changes no application/UI source relative to current main. Fresh exact-head CI and independent review remain required; after merge, #1495 must consume normally and remeasure its actual integrated head. CSS's zero margin and any further composition remain the feature owner's verification obligation.
+
+Undo of this history/evidence-only prerequisite restores only its added records; it must not undo main's independently approved numeric limits.
+
+## Original source-pinned proposal (superseded)
+
+The sections below retain the original evidence and decision, valid only for main `46332992` and feature `d806da154`. Their proposed numeric edit and undo description are historical, not the current diff.
+
 ## Frozen inputs and method
 
 - Pristine main: `46332992eb1b40ae729b47dbb092ec03c5af4c49`.
