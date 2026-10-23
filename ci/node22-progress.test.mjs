@@ -210,7 +210,10 @@ console.error("err:" + stage);
 setTimeout(() => {
   if (process.env.FAIL_AT === "signal" && stage === "test") process.kill(process.pid, "SIGTERM");
   else process.exit(process.env.FAIL_AT === stage ? { lint: 7, typecheck: 8, test: 9 }[stage] : 0);
-}, 100);
+  // 500ms per stage: the lint case fails after the first stage, and the
+  // sidecar's node startup can exceed a 100ms window on a loaded runner,
+  // leaving no [node22-progress] line to assert (red node22-compat).
+}, 500);
 `,
       { mode: 0o755 },
     );
