@@ -15,6 +15,7 @@ import {
   ulid,
 } from "./payload";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
@@ -72,11 +73,7 @@ export async function admitAgentEvent(
     warnPreAuthRefusal(requestId);
     return {
       status: 401,
-      body: {
-        reason: "unauthenticated",
-        message: "A valid machine credential is required.",
-        request_id: requestId,
-      },
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
     };
   }
 
@@ -89,9 +86,9 @@ export async function admitAgentEvent(
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
   // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and at
   // most a sampled denied/rate_limited audit row with this admission's
-  // request_id, with every refusal counted in memory and the running count
-  // surfaced on the sampled warn (see shield.ts for the bucket-class encoding
-  // and the sampling bound).
+  // request_id, with every over-budget verdict counted in memory. Final 429s
+  // emit token-bucketed class/outcome telemetry or a bounded shed count; audit
+  // failures that return 503 emit neither refusal code (see shield.ts).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
@@ -134,20 +131,16 @@ async function processAgentEvent(
     if (hasIngressControlBytes(doc.op) || hasIngressControlBytes(doc.idempotency_key)) {
       return {
         status: 422,
-        body: {
-          reason: "validation_failed",
-          message: "The `op` and `idempotency_key` fields must not contain control characters.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "validation_failed",
+          "The `op` and `idempotency_key` fields must not contain control characters.",
+          requestId,
+        ),
       };
     }
     return {
       status: 401,
-      body: {
-        reason: "unauthenticated",
-        message: "A valid machine credential is required.",
-        request_id: requestId,
-      },
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
     };
   }
 
@@ -171,11 +164,7 @@ async function processAgentEvent(
       );
       return {
         status: 422,
-        body: {
-          reason: "payload_too_deep",
-          message: PAYLOAD_TOO_DEEP_MESSAGE,
-          request_id: requestId,
-        },
+        body: ingressDenial("payload_too_deep", PAYLOAD_TOO_DEEP_MESSAGE, requestId),
       };
     }
     throw err;
@@ -210,7 +199,7 @@ async function processAgentEvent(
     eventKey: string | null = null,
   ): Promise<Answer> => {
     await audit(sql, grant, op, eventKey, key, dig, requestId, result, reason);
-    return { status, body: { reason, message, request_id: requestId } };
+    return { status, body: ingressDenial(reason, message, requestId) };
   };
 
   if (!cfg.enabled) {
@@ -246,11 +235,11 @@ async function processAgentEvent(
   if (hasIngressControlBytes(op) || hasIngressControlBytes(idem)) {
     return {
       status: 422,
-      body: {
-        reason: "validation_failed",
-        message: "The `op` and `idempotency_key` fields must not contain control characters.",
-        request_id: requestId,
-      },
+      body: ingressDenial(
+        "validation_failed",
+        "The `op` and `idempotency_key` fields must not contain control characters.",
+        requestId,
+      ),
     };
   }
 
@@ -451,12 +440,11 @@ async function processAgentEvent(
       }
       return {
         status: 503,
-        body: {
-          reason: "operation_busy",
-          message:
-            "Another operation on this event is still running. Retry with the same idempotency key.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "operation_busy",
+          "Another operation on this event is still running. Retry with the same idempotency key.",
+          requestId,
+        ),
       };
     }
     throw err;

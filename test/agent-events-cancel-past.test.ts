@@ -30,8 +30,10 @@ const cfg: IngressConfig = {
 };
 
 const REFUSAL = {
+  code: "event_not_open",
   reason: "event_not_open",
   message: "That event is not in a position to make this move.",
+  next: "Read the event and use a move it is open for.",
 };
 
 type SeedStatus = "draft" | "published" | "cancelled" | "past";
