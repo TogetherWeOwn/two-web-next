@@ -16,6 +16,7 @@ import {
   ATTENDEE_PAGE_SIZE,
   attendeePageHref,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
@@ -24,12 +25,14 @@ import {
   parseAttendeePageParam,
   type EventLink,
   type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
 } from "./reads";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
 import {
+  dbUnavailableJson,
   eventJson,
   jsonResponse,
   jsonSession,
@@ -55,6 +58,8 @@ export function registerDetailRoutes(
   readFragmentSession: SessionReader,
 ): void {
   app.get("/events/:key", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const key = c.req.param("key");
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.
@@ -69,7 +74,7 @@ export function registerDetailRoutes(
     if (session instanceof Response) return session;
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    if (!db) return dbUnavailableJson(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.json({ error: "not_found" }, 404);
     if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
@@ -202,9 +207,14 @@ export function registerDetailRoutes(
             (related) => related,
             (): EventLink[] => [],
           );
-          const [neighbors, related, attendees, position, answer] = await Promise.all([
+          const seriesSettled = getEventSeriesContext(db, e).then(
+            (series) => series,
+            (): EventSeriesContext | null => null,
+          );
+          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
             neighborsSettled,
             relatedSettled,
+            seriesSettled,
             session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
@@ -236,6 +246,7 @@ export function registerDetailRoutes(
               e={e}
               neighbors={neighbors}
               related={related}
+              series={series}
               attendees={attendees}
               attendeesPaging={attendeesPaging}
               appUrl={c.env.APP_URL}

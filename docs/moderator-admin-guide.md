@@ -572,7 +572,7 @@ and **Attempted** (UTC). It shows up to **100 rows per page** from the last
 **90 days**, newest first, not every server join or sign-in. Use **Next** for older
 rows and **Previous** to return, retaining filters; **Filter** returns to page 1.
 
-Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`) and
+Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`, `rate_limited`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
 a username/substring search. Empty cells mean unavailable values, not verified
 anonymity. Source is attribution, not authenticated identity. Select an outcome
@@ -615,8 +615,8 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content** and **Activity log** cards plus
-these diagnostic sections when their data is available:
+`/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
+cards plus these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -699,6 +699,7 @@ through the approved private support process.
 | Report | Moderator response |
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
+| RSVP seat, waitlist, pending mirror or uncertain write | Follow [RSVP states and safe recovery](rsvp-recovery.md). Pending sync is not a failed reservation; an unknown result needs a refreshed event read before another write. For this support report collect only the sanitized page path, exact visible sentence and approximate time/timezone through the approved private support process. Do not request roster/member exports, callback queries, cookies, headers or credentials, or attempt manual SQL or queue replay. |
 | **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Copy the Support reference from the page into the incident report. Do not repeatedly click or bypass the limit. |
 | **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Order is guard, then cap, then throttle: sign-in and moderator role still come first (a guest redirect or 403 takes precedence), but the cap runs before the write throttle, so an oversized body answers 413 even when the budget is spent, and 429 applies only to bodies at or under the cap. |
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording, Support reference and time. Do not guess the cause. |
