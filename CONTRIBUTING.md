@@ -184,7 +184,8 @@ the exact raw bulk advisory response before npm can normalize it. A clean `{}`
 is valid; `null`, arrays and missing/unknown advisory severities are not. The
 preload observes bounded HTTP/HTTPS bodies (including compressed responses),
 without changing registry selection, authentication or response bytes. Its
-separate validation pipe contains only counters/booleans, not registry data.
+separate validation pipe journals counters/booleans and fixed transport codes/statuses,
+not registry data. Progress is written before npm consumes it and survives a timeout kill.
 Missing/incomplete validation, unsupported audit redirects/legacy quick fallback,
 and a future npm transport that escapes observation fail closed. The gate requires
 an observed valid bulk response, even for a lockfile with no audit candidates.
@@ -195,13 +196,17 @@ exceptions also fail closed.
 Each lockfile gets 3 attempts with 5s/15s backoff and a fresh owned cache per
 attempt. When every attempt fails with a positively identified registry
 transport fault, the gate records that lockfile as unavailable, never clean:
-three exhausted 120s timeout kills (no preload observation survives the kill,
-so the kill shape itself is the signal), or a fault confirmed by the preload's
-observation of the bulk request: a transient network code (ECONNREFUSED,
+a 120s timeout with an observed bulk request still pending and no permanent
+validation failure, or a fault confirmed by the preload's observation of the
+bulk request: a typed request-error code (ECONNREFUSED,
 ECONNRESET, EPIPE, ETIMEDOUT, EAI_AGAIN, ENOTFOUND, ECONNABORTED, ENETUNREACH,
 EHOSTUNREACH, ENETRESET, ENETDOWN, EHOSTDOWN) at the bulk advisory endpoint, or
-an HTTP 5xx from that endpoint. The gate still audits the other lockfile, so an advisory there keeps
-blocking. On `pull_request` and `merge_group` an outage with no blocking
+an HTTP 5xx from that endpoint. Response-body/message/URL tokens never supply
+transport evidence. Invalid responses remain blocking even if npm later stalls;
+a timeout before any observed bulk request and mixed crash/outage exhaustion also
+remain blocking. Policy schema, duplicates and expiry are validated before any
+audit, independently of availability. The gate still audits the other lockfile,
+so an advisory there keeps blocking. On `pull_request` and `merge_group` an outage with no blocking
 finding annotates a bounded, redacted `::warning::` (lockfile, kind, attempts;
 no URLs, bodies, or tokens) and exits 0. On `push` (main), `schedule`,
 `workflow_dispatch`, and local runs the same outage fails closed with exit 1.

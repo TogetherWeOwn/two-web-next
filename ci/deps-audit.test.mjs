@@ -315,6 +315,7 @@ async function withRegistry(run) {
   const server = createServer(async (request, response) => {
     response.setHeader("Content-Type", "application/json");
     if (request.url === "/-/npm/v1/security/advisories/bulk") {
+      if (advisory.stallBulk) return;
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const requestBody = Buffer.concat(chunks);
@@ -361,6 +362,7 @@ async function withRegistry(run) {
     } else if (request.url === "/redirected-advisories") {
       response.end("{}");
     } else if (request.url === "/lodash") {
+      if (advisory.stallMetadata) return;
       response.end(
         JSON.stringify({
           name: "lodash",
@@ -466,6 +468,27 @@ async function withRegistry(run) {
       setAllowlist: (allowlist) =>
         writeFileSync(join(dir, "ci/deps-audit-allowlist.json"), JSON.stringify(allowlist)),
       gate: (overrides) => execute(process.execPath, [join(dir, "ci/deps-audit.mjs")], overrides),
+      // Real npm and preload; only the exported timeout/backoff seams are shortened.
+      oneAudit: (timeoutMs = 10_000) =>
+        execute(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `
+        import { auditOneLockfile, RegistryTransportExhausted } from './ci/deps-audit.mjs';
+        try {
+          auditOneLockfile({ label: '.', dir: process.cwd(), guard: ${JSON.stringify(join(dir, "ci/deps-audit-registry.cjs"))},
+            allowlist: { version: 1, exceptions: [] }, cacheParent: ${JSON.stringify(mkdtempSync(join(dir, "one-cache-")))},
+            timeoutMs: ${timeoutMs}, retryDelaysMs: [0, 0] });
+        } catch (error) {
+          console.error(error instanceof RegistryTransportExhausted ? 'TRANSPORT ' + error.kind : error.message);
+          process.exitCode = error instanceof RegistryTransportExhausted ? 0 : 1;
+        }
+      `,
+          ],
+          { GITHUB_EVENT_NAME: "pull_request", npm_config_fetch_retries: "0" },
+        ),
       audit: () => execute("npm", ["audit", "--offline=false", "--package-lock-only", "--json"]),
     });
   } finally {
@@ -474,6 +497,92 @@ async function withRegistry(run) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("real npm response tokens never turn HTTP or malformed JSON into outages", {
+  timeout: 90_000,
+}, async () => {
+  await withRegistry(async ({ advisory, oneAudit, gate }) => {
+    for (const status of [401, 403, 400]) {
+      advisory.status = status;
+      advisory.response = { error: "ECONNRESET ETIMEDOUT ENOTFOUND" };
+      const result = await oneAudit();
+      assert.equal(result.status, 1, `HTTP ${status}: ${result.stderr}`);
+      assert.match(result.stderr, /schema-validated/);
+      assert.doesNotMatch(result.stderr, /retrying|TRANSPORT|::warning::/);
+    }
+    advisory.status = 200;
+    advisory.raw = "ECONNRESET ETIMEDOUT not JSON";
+    const malformed = await oneAudit();
+    assert.equal(malformed.status, 1, malformed.stderr);
+    assert.doesNotMatch(malformed.stderr, /retrying|TRANSPORT/);
+    delete advisory.raw;
+    advisory.status = 401;
+    for (const event of ["pull_request", "merge_group"]) {
+      const result = await gate({ GITHUB_EVENT_NAME: event, npm_config_fetch_retries: "0" });
+      assert.equal(result.status, 1, result.stderr);
+      assert.doesNotMatch(result.stderr, /retrying|::warning::/);
+    }
+  });
+});
+
+test("real npm malformed bulk validation survives a later metadata timeout", {
+  timeout: 30_000,
+}, async () => {
+  await withRegistry(async ({ advisory, bulkBodies, oneAudit }) => {
+    advisory.severity = undefined;
+    advisory.stallMetadata = true;
+    const result = await oneAudit(1_500);
+    assert.ok(bulkBodies.length > 0, "bulk response must be consumed before the metadata stall");
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /schema-validated/);
+    assert.doesNotMatch(result.stderr, /retrying|TRANSPORT/);
+  });
+});
+
+test("real npm pending bulk evidence survives timeout termination", {
+  timeout: 30_000,
+}, async () => {
+  await withRegistry(async ({ advisory, oneAudit }) => {
+    advisory.stallBulk = true;
+    const result = await oneAudit(1_500);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /TRANSPORT timeout/);
+    assert.equal((result.stderr.match(/retrying/g) ?? []).length, 2);
+  });
+});
+
+test("CLI validates policy even when both lockfiles would be unavailable", {
+  timeout: 120_000,
+}, async () => {
+  await withRegistry(async ({ advisory, bulkBodies, gate, setAllowlist }) => {
+    advisory.status = 503;
+    for (const event of ["pull_request", "merge_group"]) {
+      const duplicate = validException();
+      // Keep the duplicate otherwise valid regardless of when the suite runs.
+      duplicate.exceptions[0].reviewed = "2020-01-01";
+      duplicate.exceptions[0].expires = "2099-01-01";
+      duplicate.exceptions.push({ ...duplicate.exceptions[0] });
+      for (const [allowlist, message] of [
+        [fixture("expired-allowlist"), /Expired/],
+        [{ version: 1, exceptions: [{}] }, /Invalid exception/],
+        [{ version: 9, exceptions: [] }, /Invalid dependency audit allowlist/],
+        [duplicate, /Duplicate exception/],
+      ]) {
+        setAllowlist(allowlist);
+        const before = bulkBodies.length;
+        const result = await gate({ GITHUB_EVENT_NAME: event, npm_config_fetch_retries: "0" });
+        assert.equal(result.status, 1, result.stdout || result.stderr);
+        assert.match(result.stderr, message);
+        assert.equal(
+          bulkBodies.length,
+          before,
+          "invalid policy must fail before any registry request",
+        );
+        assert.doesNotMatch(result.stderr, /::warning::/);
+      }
+    }
+  });
+});
 
 test("real npm ignores inherited offline configuration only when the gate forces online", {
   timeout: 30_000,
@@ -935,14 +1044,14 @@ function completedNpm({ stdout, status = 0, boundary = validBoundary }) {
 // Real spawnSync error shape: { code } only. spawnSync never sets `killed` (a
 // ChildProcess instance property), so fixtures must not either: a fake
 // `killed: true` would let the ETIMEDOUT retry term be deleted unnoticed.
-function failedNpm({ code, status = null, signal = null }) {
+function failedNpm({ code, status = null, signal = null, boundary = null }) {
   return {
     error: Object.assign(new Error(`spawn npm ${code ?? signal}`), { code }),
     status,
     signal,
     stdout: "",
     stderr: "",
-    output: [null, "", "", null],
+    output: [null, "", "", boundary],
   };
 }
 
@@ -1160,7 +1269,155 @@ exit 0
 
 // --- Registry-outage classification: warn on pull_request/merge_group, fail closed elsewhere ---
 
-const invalidBoundary = JSON.stringify({ version: 1, valid: false, responses: 1, pending: 0 });
+const invalidBoundary = JSON.stringify({
+  version: 1,
+  valid: false,
+  responses: 1,
+  pending: 0,
+  permanent: true,
+  transport: null,
+});
+const transportBoundary = (transport, overrides = {}) =>
+  JSON.stringify({
+    version: 1,
+    valid: false,
+    responses: 1,
+    pending: 0,
+    permanent: false,
+    transport,
+    ...overrides,
+  });
+const httpBoundary = (statusCode) => transportBoundary({ kind: "http", statusCode });
+const networkBoundary = (code) => transportBoundary({ kind: "network", code });
+const pendingBoundary = transportBoundary(null, { valid: true, responses: 0, pending: 1 });
+
+function auditSequence(runs) {
+  const dir = retryHarnessDir();
+  let calls = 0;
+  const sleeps = [];
+  try {
+    const result = auditOneLockfile({
+      label: ".",
+      dir,
+      guard: join(dir, "guard"),
+      allowlist: empty,
+      cacheParent: join(dir, "cache"),
+      spawn: () => runs[Math.min(calls++, runs.length - 1)],
+      sleep: (ms) => sleeps.push(ms),
+    });
+    return { result, calls, sleeps };
+  } catch (error) {
+    return { error, calls, sleeps };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const httpFailure = (statusCode = 503, overrides = {}) =>
+  completedNpm({
+    status: 1,
+    stdout: npmHttpError(statusCode, "ECONNRESET"),
+    boundary: httpBoundary(statusCode),
+    ...overrides,
+  });
+
+test("response-body transport tokens cannot override permanent registry evidence", () => {
+  for (const stdout of [
+    npmHttpError(401, "ECONNRESET"),
+    npmHttpError(403, "ETIMEDOUT"),
+    npmHttpError(400, "ENOTFOUND"),
+    npmNetworkError(`invalid json response body ECONNRESET at ${deadBulkUrl}`),
+  ]) {
+    const { error, calls, sleeps } = auditSequence([
+      completedNpm({ status: 1, stdout, boundary: invalidBoundary }),
+    ]);
+    assert.ok(error && !(error instanceof RegistryTransportExhausted), stdout);
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  }
+});
+
+test("transport evidence rejects invalid boundary fields and HTTP range edges", () => {
+  for (const changes of [
+    { version: 0 },
+    { version: 2 },
+    { valid: null },
+    { responses: 0 },
+    { responses: -1 },
+    { responses: 1.5 },
+    { responses: "1" },
+    { pending: 1 },
+    { pending: -1 },
+    { pending: "0" },
+    { permanent: true },
+    { permanent: undefined },
+    { transport: null },
+    { transport: { kind: "network", code: "UNKNOWN" } },
+  ]) {
+    const boundary = transportBoundary({ kind: "http", statusCode: 503 }, changes);
+    const { error, calls } = auditSequence([httpFailure(503, { boundary })]);
+    assert.ok(error && !(error instanceof RegistryTransportExhausted), boundary);
+    assert.equal(calls, 1, boundary);
+  }
+  for (const statusCode of [499, 500, 599, 600]) {
+    const { error, calls } = auditSequence([httpFailure(statusCode)]);
+    assert.equal(
+      error instanceof RegistryTransportExhausted,
+      statusCode >= 500 && statusCode <= 599,
+      `HTTP ${statusCode}`,
+    );
+    assert.equal(calls, statusCode >= 500 && statusCode <= 599 ? 3 : 1);
+  }
+});
+
+test("timeouts preserve permanent validation and require a pending observed bulk request", () => {
+  for (const boundary of [
+    null,
+    validBoundary,
+    invalidBoundary,
+    httpBoundary(503),
+    networkBoundary("ECONNRESET"),
+    transportBoundary(null, { pending: 0, responses: 0 }),
+    transportBoundary(null, { pending: 1, permanent: true }),
+  ]) {
+    const { error } = auditSequence([
+      failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM", boundary }),
+    ]);
+    assert.ok(error && !(error instanceof RegistryTransportExhausted), String(boundary));
+  }
+  const { error, calls } = auditSequence([
+    failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM", boundary: invalidBoundary }),
+  ]);
+  assert.match(error.message, /schema-validated/);
+  assert.equal(calls, 1, "already-invalid registry data must not retry");
+});
+
+test("mixed crash and transport exhaustion stays blocking in either order", () => {
+  const crash = signalKilledNpm({});
+  const timeout = failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM", boundary: pendingBoundary });
+  const unknownTimeout = failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM" });
+  for (const runs of [
+    [crash, crash, httpFailure()],
+    [crash, httpFailure(), httpFailure()],
+    [httpFailure(), crash, httpFailure()],
+    [httpFailure(), httpFailure(), crash],
+    [crash, crash, timeout],
+    [timeout, crash, timeout],
+    [unknownTimeout, httpFailure(), httpFailure()],
+  ]) {
+    const { error, calls, sleeps } = auditSequence(runs);
+    assert.ok(error && !(error instanceof RegistryTransportExhausted));
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [5_000, 15_000]);
+  }
+  const recovered = auditSequence([
+    crash,
+    httpFailure(),
+    completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
+  ]);
+  assert.deepEqual(recovered.result, { blocked: [], allowed: [], nonBlocking: [] });
+  assert.equal(recovered.calls, 3);
+});
 // Dead loopback port shape (mirrors real npm error JSON; no real registry, no credentials).
 const deadBulkUrl = "http://127.0.0.1:9/-/npm/v1/security/advisories/bulk";
 const npmHttpError = (statusCode, phrase) =>
@@ -1186,7 +1443,7 @@ test("audit retries registry HTTP 5xx with a fresh cache, then succeeds", () => 
       completedNpm({
         stdout: npmHttpError(503, "Service Unavailable"),
         status: 1,
-        boundary: invalidBoundary,
+        boundary: httpBoundary(503),
       }),
       completedNpm({ stdout: JSON.stringify(fixture("clean")) }),
     ];
@@ -1222,7 +1479,7 @@ test("exhausted HTTP 5xx throws transport-unavailable, never a generic failure",
       return completedNpm({
         stdout: npmHttpError(503, "Service Unavailable"),
         status: 1,
-        boundary: invalidBoundary,
+        boundary: httpBoundary(503),
       });
     };
     assert.throws(
@@ -1256,6 +1513,17 @@ test("exhausted transient network errors throw transport-unavailable", () => {
     "connect ECONNREFUSED 127.0.0.1:9",
     "read ECONNRESET",
     "getaddrinfo EAI_AGAIN registry.npmjs.org",
+    ...[
+      "EPIPE",
+      "ETIMEDOUT",
+      "ENOTFOUND",
+      "ECONNABORTED",
+      "ENETUNREACH",
+      "EHOSTUNREACH",
+      "ENETRESET",
+      "ENETDOWN",
+      "EHOSTDOWN",
+    ].map((code) => `read ${code}`),
   ]) {
     const dir = retryHarnessDir();
     try {
@@ -1266,7 +1534,7 @@ test("exhausted transient network errors throw transport-unavailable", () => {
         return completedNpm({
           stdout: npmNetworkError(reason),
           status: 1,
-          boundary: invalidBoundary,
+          boundary: networkBoundary(reason.match(/\bE[A-Z_]+\b/)[0]),
         });
       };
       assert.throws(
@@ -1301,7 +1569,7 @@ test("exhausted timeouts throw transport-unavailable", () => {
     const sleeps = [];
     const spawn = () => {
       calls++;
-      return failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM" });
+      return failedNpm({ code: "ETIMEDOUT", signal: "SIGTERM", boundary: pendingBoundary });
     };
     assert.throws(
       () =>
@@ -1646,24 +1914,26 @@ for (const event of ["pull_request", "merge_group"]) {
   });
 }
 
-test("blocked registry fails closed on push after 3 attempts per lockfile", {
-  timeout: 150_000,
-}, async () => {
-  await withBlockedRegistry(async ({ gate }) => {
-    const result = await gate({ GITHUB_EVENT_NAME: "push" });
-    assert.equal(result.status, 1, result.stdout);
-    assert.ok(!result.stderr.includes("::warning::"), "fail-closed must not warn");
-    assert.match(result.stderr, /unavailable/);
-    assert.match(result.stderr, /failing closed/);
-    const parsed = JSON.parse(result.stdout);
-    for (const label of [".", "web"]) {
-      assert.equal(parsed[label].unavailable, true, `lockfile ${label}`);
-      assert.ok(!("blocked" in parsed[label]), `lockfile ${label} must never look clean`);
-    }
-    const retries = result.stderr.match(/retrying in/g) ?? [];
-    assert.equal(retries.length, 4, "two retries per lockfile before exhaustion");
+for (const event of ["push", "schedule"]) {
+  test(`blocked registry fails closed on ${event} after 3 attempts per lockfile`, {
+    timeout: 150_000,
+  }, async () => {
+    await withBlockedRegistry(async ({ gate }) => {
+      const result = await gate({ GITHUB_EVENT_NAME: event });
+      assert.equal(result.status, 1, result.stdout);
+      assert.ok(!result.stderr.includes("::warning::"), "fail-closed must not warn");
+      assert.match(result.stderr, /unavailable/);
+      assert.match(result.stderr, /failing closed/);
+      const parsed = JSON.parse(result.stdout);
+      for (const label of [".", "web"]) {
+        assert.equal(parsed[label].unavailable, true, `lockfile ${label}`);
+        assert.ok(!("blocked" in parsed[label]), `lockfile ${label} must never look clean`);
+      }
+      const retries = result.stderr.match(/retrying in/g) ?? [];
+      assert.equal(retries.length, 4, "two retries per lockfile before exhaustion");
+    });
   });
-});
+}
 
 test("outage in one lockfile still blocks on an advisory in the other", {
   timeout: 90_000,
@@ -1704,7 +1974,7 @@ esac
         GITHUB_EVENT_NAME: "pull_request",
         AUDIT_FIXTURE_ROOT: npmNetworkError("connect ECONNREFUSED 127.0.0.1:9"),
         AUDIT_STATUS_ROOT: "1",
-        AUDIT_BOUNDARY_ROOT: invalidBoundary,
+        AUDIT_BOUNDARY_ROOT: networkBoundary("ECONNREFUSED"),
         AUDIT_FIXTURE_WEB: JSON.stringify(fixture("high")),
         AUDIT_STATUS_WEB: "1",
         AUDIT_BOUNDARY_WEB: validBoundary,

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import registry from "./deps-audit-registry.cjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const knownSeverities = new Set(["info", "low", "moderate", "high", "critical"]);
@@ -13,8 +14,8 @@ const lockfileLabels = [".", "web"];
 // A single attempt can catch a registry-edge stall that a fresh attempt sails
 // through (npm normally answers in seconds), so retry the *execution* of
 // `npm audit` a bounded number of times. Findings, invalid reports and
-// registry-boundary failures still fail immediately, and the gate still fails
-// closed after the last attempt. Attempts = delays + 1.
+// permanent registry-boundary failures still fail immediately. Exhaustion stays
+// blocking unless every attempt proves a registry outage. Attempts = delays + 1.
 const auditTimeoutMs = 120_000;
 const auditRetryDelaysMs = [5_000, 15_000];
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -30,6 +31,44 @@ function date(value) {
     throw new Error("Allowlist dates must be real YYYY-MM-DD UTC dates");
   }
   return value;
+}
+
+function validateAllowlist(allowlist, today = new Date().toISOString().slice(0, 10)) {
+  date(today);
+  if (!isObject(allowlist) || allowlist.version !== 1 || !Array.isArray(allowlist.exceptions)) {
+    throw new Error("Invalid dependency audit allowlist");
+  }
+  const seen = new Set();
+  for (const entry of allowlist.exceptions) {
+    if (
+      !isObject(entry) ||
+      !text(entry.package) ||
+      !text(entry.range) ||
+      !text(entry.reason) ||
+      !["high", "critical"].includes(entry.severity) ||
+      !Array.isArray(entry.advisoryIds) ||
+      entry.advisoryIds.length === 0 ||
+      entry.advisoryIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(entry.advisoryIds).size !== entry.advisoryIds.length
+    ) {
+      throw new Error(
+        "Invalid exception: package, range, severity, advisoryIds and reason are required",
+      );
+    }
+    if (entry.lockfile !== undefined && !lockfileLabels.includes(entry.lockfile)) {
+      throw new Error(`Invalid lockfile scope for ${entry.package}`);
+    }
+    if (
+      date(entry.reviewed) > today ||
+      date(entry.expires) <= today ||
+      entry.expires <= entry.reviewed
+    ) {
+      throw new Error(`Expired or invalid exception dates for ${entry.package}`);
+    }
+    const scopeKey = `${entry.lockfile ?? "*"}:${entry.package}`;
+    if (seen.has(scopeKey)) throw new Error(`Duplicate exception for ${entry.package}`);
+    seen.add(scopeKey);
+  }
 }
 
 export function evaluateAudit(
@@ -78,40 +117,7 @@ export function evaluateAudit(
   if ([...knownSeverities].some((severity) => counts[severity] !== counters[severity])) {
     throw new Error("Audit severity counts do not match the package records");
   }
-  if (!isObject(allowlist) || allowlist.version !== 1 || !Array.isArray(allowlist.exceptions)) {
-    throw new Error("Invalid dependency audit allowlist");
-  }
-  const seen = new Set();
-  for (const entry of allowlist.exceptions) {
-    if (
-      !isObject(entry) ||
-      !text(entry.package) ||
-      !text(entry.range) ||
-      !text(entry.reason) ||
-      !["high", "critical"].includes(entry.severity) ||
-      !Array.isArray(entry.advisoryIds) ||
-      entry.advisoryIds.length === 0 ||
-      entry.advisoryIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
-      new Set(entry.advisoryIds).size !== entry.advisoryIds.length
-    ) {
-      throw new Error(
-        "Invalid exception: package, range, severity, advisoryIds and reason are required",
-      );
-    }
-    if (entry.lockfile !== undefined && !lockfileLabels.includes(entry.lockfile)) {
-      throw new Error(`Invalid lockfile scope for ${entry.package}`);
-    }
-    if (
-      date(entry.reviewed) > today ||
-      date(entry.expires) <= today ||
-      entry.expires <= entry.reviewed
-    ) {
-      throw new Error(`Expired or invalid exception dates for ${entry.package}`);
-    }
-    const scopeKey = `${entry.lockfile ?? "*"}:${entry.package}`;
-    if (seen.has(scopeKey)) throw new Error(`Duplicate exception for ${entry.package}`);
-    seen.add(scopeKey);
-  }
+  validateAllowlist(allowlist, today);
 
   // npm's string "via" entries reference another vulnerable package. Include its
   // advisory IDs so a new transitive advisory cannot silently inherit an exception.
@@ -209,45 +215,46 @@ export class RegistryTransportExhausted extends Error {
   }
 }
 
-// Positive transport identification only. The bulk advisory path proves the
-// failure happened at the registry endpoint npm audits against (not some other
-// host), and the allowlisted codes prove a transient network fault rather than
-// a permanent verdict (401/403), a malformed body, or an unrelated crash.
-// Never match raw stderr, and never treat a bare non-0/1 exit as network.
-const bulkAdvisoriesPath = "/-/npm/v1/security/advisories/bulk";
-const transientNetworkCode = new RegExp(
-  String.raw`\b(ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNABORTED|ENETUNREACH|EHOSTUNREACH|ENETRESET|ENETDOWN|EHOSTDOWN)\b`,
-);
-
-function classifyRegistryTransport({ boundary, stdout }) {
-  // The preload must have observed at least one bulk attempt that produced no
-  // valid response. A missing boundary (no preload), zero observed responses
-  // (unobserved transport), or a valid observation contradicting npm's error
-  // all stay blocking.
-  if (!isObject(boundary) || boundary.version !== 1 || boundary.valid === true) return null;
-  if (!Number.isSafeInteger(boundary.responses) || boundary.responses < 1) return null;
-  if (boundary.pending !== 0) return null;
-  let report;
+// fd 3 is a journal of synchronous preload snapshots. Parse every entry so a
+// malformed/truncated journal stays blocking; the last snapshot survives kills.
+function readBoundary(audit) {
   try {
-    report = JSON.parse(stdout);
+    const lines = (audit.output?.[3] ?? "").trim().split("\n");
+    const states = lines.map((line) => JSON.parse(line));
+    return states.at(-1);
   } catch {
     return null;
   }
-  if (!isObject(report) || !isObject(report.error)) return null;
-  const hitsBulk = (value) => typeof value === "string" && value.includes(bulkAdvisoriesPath);
+}
+
+function observedBoundary(boundary) {
+  return (
+    isObject(boundary) &&
+    boundary.version === 1 &&
+    typeof boundary.valid === "boolean" &&
+    Number.isSafeInteger(boundary.responses) &&
+    boundary.responses >= 0 &&
+    Number.isSafeInteger(boundary.pending) &&
+    boundary.pending >= 0
+  );
+}
+
+function classifyRegistryTransport(boundary, timedOut = false) {
+  // Only typed request errors / HTTP status captured at the actual bulk request
+  // are evidence. npm's message may contain arbitrary response-body or URL text.
+  if (!observedBoundary(boundary) || boundary.permanent !== false) return null;
+  if (timedOut) return boundary.pending > 0 ? { kind: "timeout" } : null;
+  if (boundary.valid !== false || boundary.responses < 1 || boundary.pending !== 0) return null;
+  const transport = boundary.transport;
+  if (!isObject(transport)) return null;
   if (
-    Number.isSafeInteger(report.statusCode) &&
-    report.statusCode >= 500 &&
-    report.statusCode <= 599 &&
-    (hitsBulk(report.uri) || hitsBulk(report.message))
-  ) {
+    transport.kind === "http" &&
+    Number.isSafeInteger(transport.statusCode) &&
+    transport.statusCode >= 500 &&
+    transport.statusCode <= 599
+  )
     return { kind: "http-5xx" };
-  }
-  if (
-    typeof report.message === "string" &&
-    report.message.includes(bulkAdvisoriesPath) &&
-    transientNetworkCode.test(report.message)
-  ) {
+  if (transport.kind === "network" && registry.transientNetworkCodes.has(transport.code)) {
     return { kind: "network" };
   }
   return null;
@@ -270,6 +277,7 @@ export function auditOneLockfile({
   }
   const attempts = retryDelaysMs.length + 1;
   let exhaustedTransport = null;
+  let allTransport = true;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     // No install scripts, node_modules or application/database credentials needed.
     // npm's advisory cache can retain old severity even after an online response.
@@ -307,15 +315,19 @@ export function auditOneLockfile({
         },
       },
     );
-    // npm produced no verdict. Timeout kills are registry transport: the same
-    // registry answers other attempts in seconds. Other spawn errors (ENOENT,
-    // EACCES) are deterministic environment bugs, so fail fast.
+    const boundary = readBoundary(audit);
+    if (observedBoundary(boundary) && boundary.permanent === true) {
+      throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
+    }
+    // A timeout is transport only while an observed bulk request is pending and
+    // no permanent failure has been seen. Unknown local stalls can retry, but
+    // can never make the exhausted sequence outage-eligible.
     if (audit.error !== undefined) {
-      if (audit.error.code === "ETIMEDOUT" || audit.error.killed === true) {
-        if (attempt === attempts) {
-          exhaustedTransport = { kind: "timeout" };
-          break;
-        }
+      if (audit.error.code === "ETIMEDOUT") {
+        const transport = classifyRegistryTransport(boundary, true);
+        allTransport &&= transport !== null;
+        exhaustedTransport = transport;
+        if (attempt === attempts) break;
         retryLog("did not complete");
         sleep(retryDelaysMs[attempt - 1]);
         continue;
@@ -326,23 +338,22 @@ export function auditOneLockfile({
     // before, but a bare non-0/1 exit is never transport: exhaustion stays
     // blocking.
     if (![0, 1].includes(audit.status)) {
+      allTransport = false;
       if (attempt === attempts) break;
       retryLog("did not complete");
       sleep(retryDelaysMs[attempt - 1]);
       continue;
     }
     try {
-      // fd 3 contains only validation state, never registry data or credentials.
-      const boundary = JSON.parse(audit.output[3] || "null");
+      const report = JSON.parse(audit.stdout);
       if (
-        !isObject(boundary) ||
-        boundary.version !== 1 ||
+        !observedBoundary(boundary) ||
         boundary.valid !== true ||
-        !Number.isSafeInteger(boundary.responses) ||
         boundary.responses < 1 ||
         boundary.pending !== 0
       ) {
-        const transport = classifyRegistryTransport({ boundary, stdout: audit.stdout });
+        const transport =
+          isObject(report) && isObject(report.error) ? classifyRegistryTransport(boundary) : null;
         if (transport !== null) {
           if (attempt === attempts) {
             exhaustedTransport = transport;
@@ -354,14 +365,13 @@ export function auditOneLockfile({
         }
         throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
       }
-      const report = JSON.parse(audit.stdout);
       return evaluateAudit(report, allowlist, undefined, label);
     } catch (error) {
       if (error instanceof SyntaxError) throw new Error(`Invalid JSON for "${label}"`);
       throw error;
     }
   }
-  if (exhaustedTransport !== null) {
+  if (allTransport && exhaustedTransport !== null) {
     throw new RegistryTransportExhausted(label, exhaustedTransport.kind, attempts);
   }
   throw new Error(`npm audit did not complete successfully for "${label}"`);
@@ -381,6 +391,7 @@ export function runAudit() {
     const allowlist = JSON.parse(
       readFileSync(new URL("./deps-audit-allowlist.json", import.meta.url), "utf8"),
     );
+    validateAllowlist(allowlist);
     const lockfiles = [
       { label: ".", dir: root },
       { label: "web", dir: join(root, "web") },
