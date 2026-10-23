@@ -113,6 +113,118 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
           { ...env, ADMIN_DB: fixture.db } as Env,
         );
 
+  const save = (key: string, values: Record<string, string> = {}) =>
+    adminApp({ sessionStore: store, db: fixture.db }).request(
+      `/events/${key}`,
+      {
+        method: "POST",
+        headers: { cookie, origin: env.APP_URL },
+        body: new URLSearchParams({
+          title: "Rolling plan night",
+          starts_at: "2099-06-04 19:00",
+          ends_at: "2099-06-04 21:00",
+          timezone: "Europe/London",
+          location: "Voice",
+          ...values,
+        }),
+      },
+      { ...env, ADMIN_DB: fixture.db } as Env,
+    );
+
+  it.each([
+    { column: "starts_at", instant: "infinity" },
+    { column: "ends_at", instant: "infinity" },
+    { column: "starts_at", instant: "-infinity" },
+    { column: "ends_at", instant: "-infinity" },
+  ])("repairs $instant $column after a duplicate refusal", async ({ column, instant }) => {
+    const source = await seed({ status: "draft" });
+    await fixture.client`update events set ${fixture.client(column)} = ${instant}::timestamptz where id = ${source.id}`;
+    const refusal = await request("HTML", source.eventKey);
+    expect(refusal.status).toBe(422);
+    expect(await refusal.text()).toMatch(new RegExp(`name="${column}"[^>]*value=""`));
+
+    const res = await save(source.eventKey);
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`/admin/events/${source.eventKey}`);
+    const rows = await fixture.db.select().from(events);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: source.id,
+      eventKey: source.eventKey,
+      status: "draft",
+      startsAt: new Date("2099-06-04T18:00:00.000Z"),
+      endsAt: new Date("2099-06-04T20:00:00.000Z"),
+    });
+    const audits = await fixture.db.select().from(activityLog);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      description: "updated event Rolling plan night",
+      subjectId: source.eventKey,
+      causerId: moderator.id,
+      properties: {
+        [column === "starts_at" ? "startsAt" : "endsAt"]: {
+          before: null,
+          after: column === "starts_at" ? "2099-06-04T18:00:00.000Z" : "2099-06-04T20:00:00.000Z",
+        },
+      },
+    });
+    expect(await fixture.client`select * from queue_jobs`).toEqual([]);
+  });
+
+  it.each(["starts_at", "ends_at"])(
+    "still refuses an invalid submitted %s while repairing a nonfinite source",
+    async (column) => {
+      const source = await seed({ status: "draft" });
+      await fixture.client`update events set ${fixture.client(column)} = 'infinity'::timestamptz where id = ${source.id}`;
+      expect((await request("HTML", source.eventKey)).status).toBe(422);
+      const before = await fixture.client`select to_jsonb(events) as row from events`;
+      const res = await save(source.eventKey, { [column]: "not-a-wall-time" });
+      expect(res.status).toBe(422);
+      expect(await res.text()).toContain(`href="#f-${column.replaceAll("_", "-")}"`);
+      expect(await fixture.client`select to_jsonb(events) as row from events`).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      expect(await fixture.client`select * from queue_jobs`).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      column: "ends_at",
+      startsAt: "2099-10-25T00:30:27.125Z",
+      endsAt: "2099-10-25T03:00:00.000Z",
+      starts_at: "2099-10-25 01:30",
+      ends_at: "2099-10-25 03:00",
+      expectedStart: "2099-10-25T00:30:27.125Z",
+      expectedEnd: "2099-10-25T03:00:00.000Z",
+    },
+    {
+      column: "starts_at",
+      startsAt: "2099-10-24T22:00:00.000Z",
+      endsAt: "2099-10-25T00:30:44.875Z",
+      starts_at: "2099-10-24 23:00",
+      ends_at: "2099-10-25 01:30",
+      expectedStart: "2099-10-24T22:00:00.000Z",
+      expectedEnd: "2099-10-25T00:30:44.875Z",
+    },
+  ])("repairing $column preserves the finite peer's fold instant and precision", async (entry) => {
+    const source = await seed({
+      status: "draft",
+      startsAt: new Date(entry.startsAt),
+      endsAt: new Date(entry.endsAt),
+    });
+    await fixture.client`update events set ${fixture.client(entry.column)} = 'infinity'::timestamptz where id = ${source.id}`;
+    expect((await request("HTML", source.eventKey)).status).toBe(422);
+    const res = await save(source.eventKey, {
+      starts_at: entry.starts_at,
+      ends_at: entry.ends_at,
+    });
+    expect(res.status).toBe(303);
+    const rows = await fixture.db.select().from(events);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.startsAt.toISOString()).toBe(entry.expectedStart);
+    expect(rows[0]!.endsAt.toISOString()).toBe(entry.expectedEnd);
+  });
+
   for (const surface of ["HTML", "JSON"] as const) {
     it.each(invalidSources)(
       `${surface} refuses $label with a field-specific 422 and no mutation`,

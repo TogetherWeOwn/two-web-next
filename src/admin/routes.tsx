@@ -479,10 +479,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
-      // instant (TOG-6805 — see validation.preservedOrParsed).
+      // instant. A nonfinite stored date has no hint; parse its replacement.
       const carriers = {
-        startsAtUtc: existing.startsAt.toISOString(),
-        endsAtUtc: existing.endsAt.toISOString(),
+        startsAtUtc: Number.isFinite(existing.startsAt.getTime())
+          ? existing.startsAt.toISOString()
+          : undefined,
+        endsAtUtc: Number.isFinite(existing.endsAt.getTime())
+          ? existing.endsAt.toISOString()
+          : undefined,
       };
       let input;
       try {
