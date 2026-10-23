@@ -34,7 +34,10 @@
 .event-theme .event-pitch p { max-width: 60ch; }
 .event-theme .event-share h2 { font-size: 1.6rem; }
 .event-theme .event-share a { display: inline-flex; min-height: 44px; align-items: center; }
+.event-theme .event-share button:not([hidden]) { display: inline-flex; min-height: 44px; align-items: center; padding: 0; border: 0; background: transparent; color: var(--brand); font: inherit; text-decoration: underline; cursor: pointer; }
 .event-theme [data-copy-toast] { min-height: 1.65em; margin-bottom: 0; }
+.event-theme [data-native-share-status] { margin: 0; }
+.event-theme [data-native-share-status]:not(:empty) { margin-top: .5rem; }
 .event-theme .event-attendee-grid, .event-theme .event-related-grid { list-style: none; padding: 0; margin: 1.5rem 0 0; display: grid; gap: 1rem; }
 .event-theme .event-attendee-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
 .event-theme .event-attendee-grid li { display: flex; align-items: center; gap: 1rem; min-width: 0; background: var(--surface); padding: 1rem; border-left: 2px solid var(--brand); }
