@@ -24,6 +24,7 @@ import { safeRequestId } from "../request-log";
 import {
   calendarGridRange,
   dedupeTransients,
+  EVENTS_DISTINCT_GAMES_LIMIT,
   EVENTS_MONTH_GRID_LIMIT,
   EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_UPCOMING_PAGE_SIZE,
@@ -113,24 +114,58 @@ export function searchCondition(q: string | null): SQL | undefined {
   return or(ilike(events.title, term), ilike(events.description, term));
 }
 
+/** Game-facet match: trim + case-insensitive exact, like the leaderboard
+ * `?activity=` facet. The game arrives already resolved against the distinct
+ * published list (canonical stored form); blank/unknown never reaches a read. */
+export function gameCondition(game: string | null | undefined): SQL | undefined {
+  if (!game) return undefined;
+  return sql`lower(trim(${events.game})) = ${game.toLowerCase()}`;
+}
+
 /**
  * The EventsCalendar visibility clause (legacy `visible()`): drafts are
  * invisible to non-moderators — inside a search too, so a member searching a
  * draft's title learns nothing — and a non-blank search narrows title OR
  * description via a bound, wildcard-escaped ilike. Cancelled rows stay listed
- * (somebody RSVP'd to them); the draft filter is the only status gate.
+ * (somebody RSVP'd to them); the draft filter is the only status gate. The
+ * game facet narrows to one stored game when set.
  */
 export interface CalendarReadOpts {
   includeDrafts?: boolean;
   search?: string | null;
+  game?: string | null;
 }
 
 function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   const clauses: SQL[] = [];
+  // First: pg-proxy fixtures route reads by bound params, so the game
+  // binding precedes the month grid's bound 'cancelled' and every timestamp.
+  const game = gameCondition(opts.game);
+  if (game) clauses.push(game);
   if (!opts.includeDrafts) clauses.push(sql`${events.status} != 'draft'`);
   const condition = searchCondition(opts.search?.trim() ?? null);
   if (condition) clauses.push(condition);
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
+}
+
+/** Distinct published games for the schedule facet: one LIMIT-bound read per
+ * render, nulls and blanks excluded, sorted for a stable select. The status
+ * gate is an inlined literal like the draft gate above, so fixtures route on
+ * statement shape instead of bound params. */
+export async function listPublishedGames(db: Db): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ game: sql<string>`trim(${events.game})` })
+    .from(events)
+    .where(
+      and(
+        sql`${events.status} = 'published'`,
+        sql`${events.game} is not null`,
+        sql`trim(${events.game}) <> ''`,
+      ),
+    )
+    .orderBy(sql`trim(${sql.identifier(events.game.name)})`)
+    .limit(EVENTS_DISTINCT_GAMES_LIMIT);
+  return rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
 }
 
 /** Invalid list-page numbers retain the page-one fallback, like the archive —
