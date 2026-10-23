@@ -29,6 +29,14 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## Event search
 
+The upcoming schedule's **Filter by game** select works in list and calendar views.
+Choose a game and submit **Search**, with or without JavaScript; combine it with a
+title/description search when needed. Share the resulting `?game=` URL. Matching
+ignores case and surrounding whitespace. Blank or unknown games show **All games**.
+Options come from one published-only distinct read, capped at 100 games per request.
+The facet stays on schedule paging, view changes, month jumps and the past drawer;
+the separate past-event archive and calendar feeds are not game-filtered.
+
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)

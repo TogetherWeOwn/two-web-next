@@ -17,6 +17,9 @@
 //   calendar-month-jump-submit form submitter (focus restoration target)
 //   calendar-month-empty       month-local guidance block (names the month)
 // No live sources, no real DB: pg-proxy fakes + fixed clocks only.
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
+import { runInNewContext } from "node:vm";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,9 +105,9 @@ function discordSource(
 // pg-proxy fake routing every calendar read by its SQL shape: rsvp aggregates
 // stay empty, the month-grid read (the only one carrying a bound starts_at
 // upper bound) answers from monthRows, the past drawer answers from past,
-// and the paged upcoming read answers from upcoming. The Builder must not
-// add reads: the budget test pins the exact query count for the empty-month
-// render below.
+// and the paged upcoming read answers from upcoming. The game facet projects
+// only its selected game column. The budget pins the unchanged non-facet read
+// count plus the one bounded facet read for the empty-month render below.
 function calendarFixture(args: {
   upcoming?: (typeof events.$inferSelect)[];
   monthRows?: (typeof events.$inferSelect)[];
@@ -125,6 +128,17 @@ function calendarFixture(args: {
     });
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
+    if (sql.startsWith("select distinct")) {
+      const games = [
+        ...new Set(
+          [...upcoming, ...monthRows, ...past]
+            .filter((row) => row.status === "published")
+            .map((row) => row.game?.trim())
+            .filter((game): game is string => !!game),
+        ),
+      ];
+      return { rows: games.slice(0, Number(params.at(-1))).map((game) => [game]) };
+    }
     if (sql.includes('from "rsvps"')) return { rows: [] };
     if (sql.startsWith('select "discord_event_id" from "events"')) {
       return {
@@ -367,6 +381,121 @@ describe("native GET month-jump form", () => {
   });
 });
 
+// Removing either the form's hidden game or the island's jumpUrl game field
+// must lose Chess here. Native submission serializes the actual rendered form;
+// the enhanced case executes the shipped binder and observes its real GET.
+// The VM only supplies the DOM boundary needed to submit, not a URL builder.
+describe("recognized game month-jump regression", () => {
+  function gameFixture() {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
+    const chess = eventRow({ game: "Chess", title: "December chess night" });
+    return calendarFixture({ upcoming: [chess], monthRows: [chess] });
+  }
+
+  function jumpFields(form: string): Map<string, { value: string }> {
+    return new Map(
+      [...form.matchAll(/<input\b[^>]*>/g)].map(([tag]) => [
+        /\bname="([^"]+)"/.exec(tag)![1]!,
+        { value: /\bvalue="([^"]*)"/.exec(tag)?.[1] ?? "" },
+      ]),
+    );
+  }
+
+  it.each([false, true])("native GET retains a recognized game (past=%s)", async (past) => {
+    const src = gameFixture();
+    const response = await src.request(
+      `/events?view=calendar&month=2026-10&game=Chess${past ? "&past=1" : ""}`,
+    );
+    expect(response.status).toBe(200);
+    const form = formFor(await response.text(), MONTH_JUMP_TESTID);
+    expect(form).not.toBeNull();
+    const fields = jumpFields(form!);
+    fields.get("month")!.value = "2026-12";
+    const params = new URLSearchParams([...fields].map(([name, field]) => [name, field.value]));
+    expect(params.get("game")).toBe("Chess");
+    expect(params.get("view")).toBe("calendar");
+    expect(params.get("past")).toBe(past ? "1" : null);
+    expect(params.has("q")).toBe(false);
+    const jumped = await src.request(`/events?${params}`);
+    expect(jumped.status).toBe(200);
+    const html = await jumped.text();
+    expect(html).toContain('data-month="2026-12"');
+    expect(html).toMatch(/<option\b[^>]*value="Chess"[^>]*\bselected/);
+    expect(html).toContain("December chess night");
+  });
+
+  it.each([false, true])("island GET retains a recognized game (past=%s)", async (past) => {
+    const src = gameFixture();
+    const address = `${APP_URL}/events?view=calendar&month=2026-10&game=Chess${past ? "&past=1" : ""}`;
+    const response = await src.request(address);
+    expect(response.status).toBe(200);
+    const formHtml = formFor(await response.text(), MONTH_JUMP_TESTID);
+    expect(formHtml).not.toBeNull();
+    const fields = jumpFields(formHtml!);
+    fields.get("month")!.value = "2026-12";
+    let submit: ((event: { preventDefault: () => void; submitter: null }) => void) | undefined;
+    const jumpForm = {
+      querySelector: (selector: string) => {
+        const name = /^\[name="([^"]+)"\]$/.exec(selector)?.[1];
+        return name ? (fields.get(name) ?? null) : null;
+      },
+      addEventListener: (name: string, handler: typeof submit) => {
+        if (name === "submit") submit = handler;
+      },
+      contains: () => false,
+    };
+    const searchForm = { addEventListener: vi.fn() };
+    const searchInput = { value: "", closest: () => searchForm, addEventListener: vi.fn() };
+    const gameSelect = { value: "Chess", addEventListener: vi.fn() };
+    const feedback = { textContent: "" };
+    const content = { hidden: false };
+    const root = {
+      dataset: { searchMaxLength: "255", loadError: "Unavailable" },
+      querySelectorAll: () => [content],
+      querySelector: (selector: string) => {
+        if (selector === `[data-testid="${MONTH_JUMP_TESTID}"]`) return jumpForm;
+        if (selector === '[data-testid="events-search"]') return searchInput;
+        if (selector === 'select[name="game"]') return gameSelect;
+        if (selector === '[data-cal-zone="content"]') return content;
+        if (selector === "[data-cal-feedback]") return feedback;
+        return { hidden: true, textContent: "" };
+      },
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn(),
+    };
+    // A failed response settles the outbound-only probe without faking fragment
+    // admission or replacement; those behaviors remain covered in island suites.
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    runInNewContext(
+      readFileSync(new NodeURL("../public/islands/events-calendar.js", import.meta.url), "utf8"),
+      {
+        URL,
+        AbortController,
+        fetch,
+        document: { querySelector: () => root, activeElement: null },
+        window: { location: new URL(address), addEventListener: vi.fn() },
+      },
+    );
+    expect(submit).toBeDefined();
+    const preventDefault = vi.fn();
+    submit!({ preventDefault, submitter: null });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    const [href, init] = fetch.mock.calls[0]! as unknown as [string, RequestInit];
+    const requested = new URL(href, APP_URL);
+    expect(requested.pathname).toBe("/events");
+    expect(requested.searchParams.get("game")).toBe("Chess");
+    expect(requested.searchParams.get("month")).toBe("2026-12");
+    expect(requested.searchParams.get("view")).toBe("calendar");
+    expect(requested.searchParams.get("past")).toBe(past ? "1" : null);
+    expect(requested.searchParams.has("q")).toBe(false);
+    expect(init.headers).toMatchObject({ "x-two-island": "events-calendar" });
+    await fetch.mock.results[0]!.value;
+  });
+});
+
 describe("empty-month guidance and recovery", () => {
   it("keeps the grid and names the empty month with a list recovery link", async () => {
     const src = boundaryFixture("2026-10-31T23:30:00Z", "Etc/GMT-1");
@@ -509,11 +638,19 @@ describe("read budget", () => {
     const response = await src.request("/events?view=calendar&month=2026-10");
     expect(response.status).toBe(200);
     await response.text();
-    // Upcoming count + page + its going pair, the past drawer + its going
-    // pair, and the month-grid read: a next-event finder or any new query
-    // grows this count and fails. No search ran, so no analytics write.
+    // Preserve the eight non-facet reads: upcoming count/page/going pair,
+    // past drawer/going pair, and month grid. Only the separate bounded
+    // published-games read is new; month-empty guidance adds no reads.
+    // No search ran, so no analytics write.
     expect(src.logs).toEqual([]);
-    expect(src.queries).toHaveLength(8);
+    expect(src.queries.filter((query) => !query.sql.startsWith("select distinct"))).toHaveLength(8);
+    const facets = src.queries.filter((query) => query.sql.startsWith("select distinct"));
+    expect(facets).toHaveLength(1);
+    expect(facets[0]!.sql).toMatch(/^select distinct trim\("game"\) from "events"/);
+    expect(facets[0]!.sql).toContain('"events"."status" = \'published\'');
+    expect(facets[0]!.sql).toContain('trim("events"."game") <> \'\'');
+    expect(facets[0]!.sql).toMatch(/limit \$\d+$/);
+    expect(facets[0]!.params).toEqual([100]);
     for (const query of src.queries) {
       expect(query.sql).toMatch(/from "(events|rsvps)"/);
     }
@@ -540,6 +677,8 @@ describe("Kit shared render", () => {
     now: new Date("2026-10-31T23:30:00Z"),
     totalPages: 1,
     emptyState: null,
+    games: [],
+    gameFilter: null,
     robots: undefined,
     discordFailed: false,
     member: false,
