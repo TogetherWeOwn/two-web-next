@@ -15,16 +15,33 @@ import type { PageProps } from "./$types";
 // like the Hono panel. The text-limit and editor islands enhance it when
 // JavaScript runs.
 let { data }: PageProps = $props();
-const values = $derived(data.values ?? {});
 const errors = $derived(data.errors ?? {});
 const hasErrors = $derived(data.hasErrors ?? Object.keys(errors).length > 0);
-const val = (name: string) => values[name] ?? "";
-const timezoneVal = $derived(val("timezone") || "Europe/London");
+const val = (name: string) => data.values?.[name] ?? "";
+const fieldAria = (name: string, withHint = false) => {
+  const error = errors[name];
+  const id = `f-${name.replaceAll("_", "-")}`;
+  const hint = withHint ? `${id}-hint` : undefined;
+  const errorId = `${id}-error`;
+  return {
+    "aria-invalid": error ? true : undefined,
+    "aria-describedby": error ? (hint ? `${hint} ${errorId}` : errorId) : hint,
+  };
+};
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
-const textLimitsIsland =
-  '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
-const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const islands =
+  '<script type="module" src="/islands/admin-event-text-limits.js"></' +
+  'script><script src="/islands/admin-event-editor.js" defer></' +
+  "script>";
 </script>
+
+{#snippet fieldError(name: string, testId: string)}
+  {#if errors[name]}
+    <p id={`f-${name.replaceAll("_", "-")}-error`} class="error" role="alert" data-testid={testId}>
+      {errors[name]}
+    </p>
+  {/if}
+{/snippet}
 
 <AdminShell title="New event">
 <section>
@@ -56,31 +73,23 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <input
         id="f-title"
         name="title"
-        type="text"
         value={val("title")}
         data-event-text-limit={100}
         required
-        aria-invalid={errors.title ? "true" : undefined}
-        aria-describedby={errors.title ? "f-title-error" : undefined}
+        {...fieldAria("title")}
       />
-      {#if errors.title}
-        <p id="f-title-error" class="error" role="alert" data-testid="error-title">{errors.title}</p>
-      {/if}
+      {@render fieldError("title", "error-title")}
     </div>
     <div class="field">
       <label for="f-game">Game</label>
       <input
         id="f-game"
         name="game"
-        type="text"
         value={val("game")}
         data-event-text-limit={100}
-        aria-invalid={errors.game ? "true" : undefined}
-        aria-describedby={errors.game ? "f-game-error" : undefined}
+        {...fieldAria("game")}
       />
-      {#if errors.game}
-        <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
-      {/if}
+      {@render fieldError("game", "error-game")}
     </div>
     <div class="field">
       <label for="f-description">Description</label>
@@ -89,101 +98,125 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         name="description"
         rows={4}
         data-event-text-limit={1000}
-        aria-invalid={errors.description ? "true" : undefined}
-        aria-describedby={errors.description ? "f-description-error" : undefined}
+        {...fieldAria("description")}
       >{val("description")}</textarea>
-      {#if errors.description}
-        <p id="f-description-error" class="error" role="alert" data-testid="error-description">
-          {errors.description}
-        </p>
-      {/if}
+      {@render fieldError("description", "error-description")}
+    </div>
+    <div class="field">
+      <label for="f-accessibility-notes">Accessibility notes</label>
+      <textarea
+        id="f-accessibility-notes"
+        name="accessibility_notes"
+        rows={4}
+        data-event-text-limit={1000}
+        aria-invalid={errors.accessibility_notes ? "true" : undefined}
+        aria-describedby={errors.accessibility_notes
+          ? "f-accessibility-notes-hint f-accessibility-notes-error"
+          : "f-accessibility-notes-hint"}
+      >{val("accessibility_notes")}</textarea>
+      <p id="f-accessibility-notes-hint" class="hint">
+        Optional; include only confirmed details, not personal contact information.
+      </p>
+      {@render fieldError("accessibility_notes", "error-accessibility_notes")}
     </div>
     <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
         id="f-starts-at"
         name="starts_at"
-        type="text"
         value={val("starts_at")}
         required
-        aria-invalid={errors.starts_at ? "true" : undefined}
-        aria-describedby={errors.starts_at ? "f-starts-at-error" : undefined}
+        {...fieldAria("starts_at")}
       />
-      {#if errors.starts_at}
-        <p id="f-starts-at-error" class="error" role="alert" data-testid="error-starts_at">
-          {errors.starts_at}
-        </p>
-      {/if}
+      {@render fieldError("starts_at", "error-starts_at")}
     </div>
     <div class="field">
       <label for="f-ends-at">Ends (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
         id="f-ends-at"
         name="ends_at"
-        type="text"
         value={val("ends_at")}
         required
-        aria-invalid={errors.ends_at ? "true" : undefined}
-        aria-describedby={errors.ends_at ? "f-ends-at-error" : undefined}
+        {...fieldAria("ends_at")}
       />
-      {#if errors.ends_at}
-        <p id="f-ends-at-error" class="error" role="alert" data-testid="error-ends_at">
-          {errors.ends_at}
-        </p>
-      {/if}
+      {@render fieldError("ends_at", "error-ends_at")}
     </div>
     <div class="field">
       <label for="f-timezone">Timezone</label>
       <input
         id="f-timezone"
         name="timezone"
-        type="text"
-        value={timezoneVal}
-        aria-invalid={errors.timezone ? "true" : undefined}
-        aria-describedby={errors.timezone ? "f-timezone-hint f-timezone-error" : "f-timezone-hint"}
+        value={val("timezone") || "Europe/London"}
+        {...fieldAria("timezone", true)}
       />
       <p id="f-timezone-hint" class="hint">
         The IANA zone the wall time above is typed in. Storage is UTC.
       </p>
-      {#if errors.timezone}
-        <p id="f-timezone-error" class="error" role="alert" data-testid="error-timezone">
-          {errors.timezone}
-        </p>
-      {/if}
+      {@render fieldError("timezone", "error-timezone")}
     </div>
     <div class="field">
       <label for="f-location">Location</label>
       <input
         id="f-location"
         name="location"
-        type="text"
         value={val("location")}
         data-event-text-limit={255}
-        aria-invalid={errors.location ? "true" : undefined}
-        aria-describedby={errors.location ? "f-location-error" : undefined}
+        {...fieldAria("location")}
       />
-      {#if errors.location}
-        <p id="f-location-error" class="error" role="alert" data-testid="error-location">
-          {errors.location}
-        </p>
-      {/if}
+      {@render fieldError("location", "error-location")}
+    </div>
+    <div class="field">
+      <label for="f-organizer-name">Organizer display name (optional)</label>
+      <input
+        id="f-organizer-name"
+        name="organizer_name"
+        value={val("organizer_name")}
+        data-event-text-limit={500}
+        {...fieldAria("organizer_name", true)}
+      />
+      <p id="f-organizer-name-hint" class="hint">
+        Use a name the organizer has agreed to show publicly. Do not enter contact details.
+      </p>
+      {@render fieldError("organizer_name", "error-organizer_name")}
+    </div>
+    <div class="field">
+      <label for="f-join-url">Public joining link (optional)</label>
+      <input
+        id="f-join-url"
+        name="join_url"
+        type="url"
+        value={val("join_url")}
+        {...fieldAria("join_url", true)}
+      />
+      <p id="f-join-url-hint" class="hint">
+        HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.
+      </p>
+      {@render fieldError("join_url", "error-join_url")}
+    </div>
+    <div class="field">
+      <label for="f-join-instructions">Public joining instructions (optional)</label>
+      <textarea
+        id="f-join-instructions"
+        name="join_instructions"
+        rows={4}
+        data-event-text-limit={5000}
+        {...fieldAria("join_instructions", true)}
+      >{val("join_instructions")}</textarea>
+      <p id="f-join-instructions-hint" class="hint">
+        Share only verified details that are safe for anyone to see. Do not enter contact details.
+      </p>
+      {@render fieldError("join_instructions", "error-join_instructions")}
     </div>
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input
         id="f-capacity"
         name="capacity"
-        type="text"
         inputmode="numeric"
         value={val("capacity")}
-        aria-invalid={errors.capacity ? "true" : undefined}
-        aria-describedby={errors.capacity ? "f-capacity-error" : undefined}
+        {...fieldAria("capacity")}
       />
-      {#if errors.capacity}
-        <p id="f-capacity-error" class="error" role="alert" data-testid="error-capacity">
-          {errors.capacity}
-        </p>
-      {/if}
+      {@render fieldError("capacity", "error-capacity")}
     </div>
     <fieldset>
       <legend>Repeat</legend>
@@ -192,10 +225,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         <select
           id="f-recurrence-frequency"
           name="recurrence_frequency"
-          aria-invalid={errors.recurrence_frequency ? "true" : undefined}
-          aria-describedby={errors.recurrence_frequency
-            ? "f-recurrence-frequency-hint f-recurrence-frequency-error"
-            : "f-recurrence-frequency-hint"}
+          {...fieldAria("recurrence_frequency", true)}
         >
           <option value="" selected={val("recurrence_frequency") === ""}>Does not repeat</option>
           <option value="weekly" selected={val("recurrence_frequency") === "weekly"}>Weekly</option>
@@ -204,59 +234,28 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           Empty = a one-off event. Weeks keep the same wall time in the zone above across clock
           changes.
         </p>
-        {#if errors.recurrence_frequency}
-          <p
-            id="f-recurrence-frequency-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_frequency"
-          >
-            {errors.recurrence_frequency}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_frequency", "error-recurrence_frequency")}
       </div>
       <div class="field">
         <label for="f-recurrence-count">Occurrences (including the first, max 52)</label>
         <input
           id="f-recurrence-count"
           name="recurrence_count"
-          type="text"
-          inputmode="numeric"
+            inputmode="numeric"
           value={val("recurrence_count")}
-          aria-invalid={errors.recurrence_count ? "true" : undefined}
-          aria-describedby={errors.recurrence_count ? "f-recurrence-count-error" : undefined}
+          {...fieldAria("recurrence_count")}
         />
-        {#if errors.recurrence_count}
-          <p
-            id="f-recurrence-count-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_count"
-          >
-            {errors.recurrence_count}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_count", "error-recurrence_count")}
       </div>
       <div class="field">
         <label for="f-recurrence-ends-on">Repeat until (YYYY-MM-DD)</label>
         <input
           id="f-recurrence-ends-on"
           name="recurrence_ends_on"
-          type="text"
-          value={val("recurrence_ends_on")}
-          aria-invalid={errors.recurrence_ends_on ? "true" : undefined}
-          aria-describedby={errors.recurrence_ends_on ? "f-recurrence-ends-on-error" : undefined}
+            value={val("recurrence_ends_on")}
+          {...fieldAria("recurrence_ends_on")}
         />
-        {#if errors.recurrence_ends_on}
-          <p
-            id="f-recurrence-ends-on-error"
-            class="error"
-            role="alert"
-            data-testid="error-recurrence_ends_on"
-          >
-            {errors.recurrence_ends_on}
-          </p>
-        {/if}
+        {@render fieldError("recurrence_ends_on", "error-recurrence_ends_on")}
       </div>
     </fieldset>
     <div class="actions">
@@ -264,7 +263,6 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
-  {@html textLimitsIsland}
-  {@html editorIsland}
+  {@html islands}
 </section>
 </AdminShell>
