@@ -141,6 +141,8 @@ export function titleFixture(vector) {
     totalPages: 0,
     emptyState: "never",
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
     moderator: false,
     inviteUrl: "https://discord.gg/example",
