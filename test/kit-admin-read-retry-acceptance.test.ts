@@ -41,23 +41,28 @@ function expectSafeRetry(href: string) {
 
 describe("RED: transient admin failures offer Retry loading for the same GET", () => {
   for (const status of [503, 500]) {
-    it.each(ADMIN_RETRY_VIEWS)(`${status} $path keeps the current filtered/paged read`, (view) => {
-      const { body } = kit.render(view.boundary, retryPage(status, view.path, view.routeId));
-      const retry = retryAnchors(body);
-      expect(retry, "missing native Retry loading link for the failed read").toHaveLength(1);
-      expect(retry[0]!.href).toBe(view.path);
-      expectSafeRetry(retry[0]!.href);
-      expect(retry[0]!.attributes).not.toMatch(/\b(?:onclick|download|target|aria-disabled)\s*=/i);
-    });
+    it.each(ADMIN_RETRY_VIEWS)(
+      `${status} $path keeps the current filtered/paged read`,
+      async (view) => {
+        const { body } = kit.render(view.boundary, retryPage(status, view.path, view.routeId));
+        const retry = await retryAnchors(body);
+        expect(retry, "missing native Retry loading link for the failed read").toHaveLength(1);
+        expect(retry[0]!.href).toBe(view.path);
+        expectSafeRetry(retry[0]!.href);
+        expect(retry[0]!.attributes).not.toMatch(
+          /\b(?:onclick|download|target|aria-disabled)\s*=/i,
+        );
+      },
+    );
   }
 
   it.each(boundaries)(
     "%s preserves an escaped hostile query as data, not executable markup",
-    (boundary) => {
+    async (boundary) => {
       const pathname = boundary === "admin" ? "/admin/activity-log" : "/admin/join-attempts";
       const path = `${pathname}?page=2&q=%22%3E%3Cimg%20src=x%20onerror=alert(1)%3E&next=https%3A%2F%2Foutside.example%2F&tag=one&tag=two`;
       const { body } = kit.render(boundary, retryPage(503, path, pathname));
-      const retry = retryAnchors(body);
+      const retry = await retryAnchors(body);
       expect(retry, "hostile text must not remove the usable same-view GET retry").toHaveLength(1);
       expect(retry[0]!.href).toBe(path);
       expectSafeRetry(retry[0]!.href);
@@ -68,10 +73,10 @@ describe("RED: transient admin failures offer Retry loading for the same GET", (
 
   it.each(boundaries)(
     "%s drops the fragment, rather than replacing the read with an in-page jump",
-    (boundary) => {
+    async (boundary) => {
       const path = boundary === "admin" ? "/admin/events?page=2" : "/admin/join-attempts?page=2";
       const { body } = kit.render(boundary, retryPage(500, `${path}#old-row`, path.split("?")[0]!));
-      const retry = retryAnchors(body);
+      const retry = await retryAnchors(body);
       expect(retry).toHaveLength(1);
       expect(retry[0]!.href).toBe(path);
     },
@@ -101,10 +106,10 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
       exit: "/admin/join-attempts",
       title: "Join attempt not found",
     },
-  ] as const)("$path 404 has a list exit but no misleading retry", (view) => {
+  ] as const)("$path 404 has a list exit but no misleading retry", async (view) => {
     const { head, body } = kit.render(view.boundary, retryPage(404, view.path, view.routeId));
-    expect(retryAnchors(body)).toHaveLength(0);
-    expect(anchors(body).map((anchor) => anchor.href)).toContain(view.exit);
+    expect(await retryAnchors(body)).toHaveLength(0);
+    expect((await anchors(body)).map((anchor) => anchor.href)).toContain(view.exit);
     expect(head).toContain(view.title);
     expect(head).toContain("noindex");
     expect(body).not.toContain(ADMIN_RETRY_CANARY);
@@ -134,7 +139,7 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
   for (const boundary of boundaries) {
     it.each(malformedUrls)(
       `${boundary}: $label page.url is total and has only safe fallback navigation`,
-      ({ value }) => {
+      async ({ value }) => {
         const { head, body } = kit.render(boundary, {
           status: 503,
           url: value,
@@ -145,9 +150,9 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
         expect(head).toContain("noindex");
         expect(body).toContain("TWO admin");
         expect(body).not.toContain(ADMIN_RETRY_CANARY);
-        const links = anchors(body);
+        const links = await anchors(body);
         expect(links.some((anchor) => safeFallbacks.has(anchor.href))).toBe(true);
-        for (const retry of retryAnchors(body)) {
+        for (const retry of await retryAnchors(body)) {
           expect(
             safeFallbacks.has(retry.href),
             "unusable page.url may only use a fixed safe GET fallback",
@@ -175,7 +180,7 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
           : unsafePaths;
       it.each(paths)(
         `${boundary}: ${representation} refuses unsafe or mutation pathname %s`,
-        (pathname) => {
+        async (pathname) => {
           const { body } = kit.render(boundary, {
             status: 503,
             url:
@@ -184,14 +189,14 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
                 : { pathname, search: "?page=2" },
             route: { id: "/admin/events" },
           });
-          for (const retry of retryAnchors(body)) {
+          for (const retry of await retryAnchors(body)) {
             expect(
               safeFallbacks.has(retry.href),
               "invalid targets may only offer a fixed safe fallback",
             ).toBe(true);
             expectSafeRetry(retry.href);
           }
-          expect(anchors(body).some((anchor) => safeFallbacks.has(anchor.href))).toBe(true);
+          expect((await anchors(body)).some((anchor) => safeFallbacks.has(anchor.href))).toBe(true);
         },
       );
     }
@@ -199,44 +204,47 @@ describe("CONTROL: missing rows and safe fallback remain recoverable without rep
 
   it.each(boundaries)(
     "%s cannot turn an absolute page URL into an external retry destination",
-    (boundary) => {
+    async (boundary) => {
       const path = boundary === "admin" ? "/admin/events?page=2" : "/admin/join-attempts?page=2";
       const { body } = kit.render(boundary, {
         ...retryPage(503, path, path.split("?")[0]!),
         url: new URL(path, "https://outside.example"),
       });
-      for (const retry of retryAnchors(body)) expectSafeRetry(retry.href);
+      for (const retry of await retryAnchors(body)) expectSafeRetry(retry.href);
     },
   );
 
-  it("the join-attempt boundary never retries a different admin cohort", () => {
+  it("the join-attempt boundary never retries a different admin cohort", async () => {
     const { body } = kit.render(
       "join-attempts",
       retryPage(503, "/admin/events?page=2", "/admin/events"),
     );
-    for (const retry of retryAnchors(body))
+    for (const retry of await retryAnchors(body))
       expect(["/admin", "/admin/join-attempts"]).toContain(retry.href);
   });
 });
 
 describe("CONTROL: pure rendering preserves status copy, chrome, noindex and exits", () => {
-  it.each(ADMIN_RETRY_VIEWS)("$path keeps 500/503 distinct and the existing exits", (view) => {
-    const unavailable = kit.render(view.boundary, retryPage(503, view.path, view.routeId));
-    const unexpected = kit.render(view.boundary, retryPage(500, view.path, view.routeId));
-    expect(unavailable.head).toContain("Admin temporarily unavailable");
-    expect(unexpected.head).toContain("Something went wrong");
-    expect(unavailable.body).not.toBe(unexpected.body);
-    for (const rendered of [unavailable, unexpected]) {
-      expect(rendered.head).toContain("noindex");
-      expect(rendered.body).toContain('aria-label="Administration"');
-      expect(rendered.body).not.toContain(ADMIN_RETRY_CANARY);
-      const hrefs = anchors(rendered.body).map((anchor) => anchor.href);
-      expect(hrefs).toContain("/admin");
-      if (view.boundary === "join-attempts") expect(hrefs).toContain("/admin/join-attempts");
-      if (view.routeId === "/admin/events/[key]") expect(hrefs).toContain("/admin/events");
-      if (view.routeId === "/admin/featured/[id]") expect(hrefs).toContain("/admin/featured");
-    }
-  });
+  it.each(ADMIN_RETRY_VIEWS)(
+    "$path keeps 500/503 distinct and the existing exits",
+    async (view) => {
+      const unavailable = kit.render(view.boundary, retryPage(503, view.path, view.routeId));
+      const unexpected = kit.render(view.boundary, retryPage(500, view.path, view.routeId));
+      expect(unavailable.head).toContain("Admin temporarily unavailable");
+      expect(unexpected.head).toContain("Something went wrong");
+      expect(unavailable.body).not.toBe(unexpected.body);
+      for (const rendered of [unavailable, unexpected]) {
+        expect(rendered.head).toContain("noindex");
+        expect(rendered.body).toContain('aria-label="Administration"');
+        expect(rendered.body).not.toContain(ADMIN_RETRY_CANARY);
+        const hrefs = (await anchors(rendered.body)).map((anchor) => anchor.href);
+        expect(hrefs).toContain("/admin");
+        if (view.boundary === "join-attempts") expect(hrefs).toContain("/admin/join-attempts");
+        if (view.routeId === "/admin/events/[key]") expect(hrefs).toContain("/admin/events");
+        if (view.routeId === "/admin/featured/[id]") expect(hrefs).toContain("/admin/featured");
+      }
+    },
+  );
 
   it.each(boundaries)(
     "%s derives recovery without a fetch or a server/session dependency",
