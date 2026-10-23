@@ -30,6 +30,25 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
   </div>
 {/snippet}
 
+{#snippet eventSearch()}
+  <form action="/events" method="get" role="search" class="error-events-search">
+    <label for="error-events-search">Search events</label>
+    <div>
+      <input
+        id="error-events-search"
+        name="q"
+        type="search"
+        placeholder="Search events…"
+        autocomplete="off"
+        data-testid="error-events-search"
+      />
+      <button type="submit" class="btn" data-testid="error-events-search-submit">
+        Search events
+      </button>
+    </div>
+  </form>
+{/snippet}
+
 <Shell
   title={copy.title}
   robots="noindex, nofollow"
@@ -59,22 +78,7 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
       <!-- Static recovery: the EventMissing search form, copied verbatim. No
         loader, session or database reads — suggestions stay Hono-only. -->
-      <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search">Search events</label>
-        <div>
-          <input
-            id="error-events-search"
-            name="q"
-            type="search"
-            placeholder="Search events…"
-            autocomplete="off"
-            data-testid="error-events-search"
-          />
-          <button type="submit" class="btn" data-testid="error-events-search-submit">
-            Search events
-          </button>
-        </div>
-      </form>
+      {@render eventSearch()}
     {:else if code === 400 || code === 410}
       <!-- 400/410 share recovery links; each keeps its status-specific copy. -->
       <p class="recovery-actions">
@@ -82,22 +86,14 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
         <a href="/" data-testid="error-home">Back to the homepage</a>
       </p>
       <!-- Same static search form as the 404 block above. -->
-      <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search">Search events</label>
-        <div>
-          <input
-            id="error-events-search"
-            name="q"
-            type="search"
-            placeholder="Search events…"
-            autocomplete="off"
-            data-testid="error-events-search"
-          />
-          <button type="submit" class="btn" data-testid="error-events-search-submit">
-            Search events
-          </button>
-        </div>
-      </form>
+      {@render eventSearch()}
+    {:else if code === 422}
+      <!-- 422: an overlong search renders the Hono notice copy, never outage
+           copy, with the same way back to events the Hono notice offers. -->
+      <p class="recovery-actions">
+        <a class="btn" href="/events" data-testid="error-events">Back to events</a>
+        <a href="/" data-testid="error-home">Back to the homepage</a>
+      </p>
     {:else if code === 403}
       <!-- 403 names the join-to-unlock path; re-signing in cannot mint the member bit. -->
       <p class="recovery-actions">
