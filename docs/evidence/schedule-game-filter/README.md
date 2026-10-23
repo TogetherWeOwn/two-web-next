@@ -33,6 +33,13 @@ Chromium exercised the native select using keyboard ArrowDown/Enter, then submit
 
 The same browser harness reproduced month-jump filter loss before its fix (`null !== 'Chess'`), then passed with JavaScript both enabled and disabled: jumping from July to August retained `game=Chess`. The harness uses the serving origin in `APP_URL`, so island navigation is exercised rather than rejected as cross-origin.
 
-The immutable acceptance suite also checks Hono/Kit filtering, blank/unknown fallback, escaping, combined queries, paging and the single bounded distinct read. The separate archive and feeds intentionally remain unfiltered, as documented in the root README.
+A follow-up Chromium proof submitted Chess, then Go, then navigated Back and Forward. The select, results and search-status region agreed on Chess after Back and Go after Forward. A window marker survived both turns, proving fragment navigation rather than a full-document reload. Keyboard selection and Search also passed with JavaScript disabled. All four history captures were opened:
+
+| History state | Desktop, 1280 × 800 | Mobile, 390 × 844 |
+| --- | --- | --- |
+| Back: Chess | [PNG](history-back-chess-1280.png) | [PNG](history-back-chess-390.png) |
+| Forward: Go | [PNG](history-forward-go-1280.png) | [PNG](history-forward-go-390.png) |
+
+The immutable acceptance suite also checks Hono/Kit filtering, blank/unknown fallback, escaping, combined queries, paging and the single bounded distinct read. Independent history regressions additionally cover canonical options, newer text and game intent (including edits away and back), failed reads and superseded response bodies. The separate archive and feeds intentionally remain unfiltered, as documented in the root README.
 
 The Hono quality gates do not exercise a deployed Kit route. The Kit captures here exercise its shared loader/HTML renderer, not Svelte hydration or route enablement. Changed-revision staging verification follows deployment; these local captures are not staging evidence.

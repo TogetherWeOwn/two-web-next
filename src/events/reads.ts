@@ -163,6 +163,7 @@ export async function listPublishedGames(db: Db): Promise<string[]> {
         sql`trim(${events.game}) <> ''`,
       ),
     )
+    .orderBy(sql`trim(${sql.identifier(events.game.name)})`)
     .limit(EVENTS_DISTINCT_GAMES_LIMIT);
   return rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
 }

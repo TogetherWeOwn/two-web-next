@@ -15,6 +15,8 @@
   var feedback = root.querySelector("[data-cal-feedback]");
   var input = root.querySelector('[data-testid="events-search"]');
   var form = input && input.closest("form");
+  var gameField = root.querySelector('select[name="game"]');
+  var gameRevision = 0;
   var LIVE_TESTIDS = [
     "events-view-status",
     "events-search-status",
@@ -143,6 +145,8 @@
     opts = opts || {};
     var inputAtStart = input.value;
     var inputRevisionAtStart = inputRevision;
+    var gameAtStart = gameField && gameField.value;
+    var gameRevisionAtStart = gameRevision;
     var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
@@ -296,6 +300,17 @@
         var sourceInput = page.querySelector('[data-testid="events-search"]');
         if (sourceInput) input.value = sourceInput.getAttribute("value") || "";
       }
+      // The persistent select owns its intent independently of text edits,
+      // including changing away and back while a history read is in flight.
+      if (
+        opts.syncInput &&
+        gameField &&
+        gameField.value === gameAtStart &&
+        gameRevision === gameRevisionAtStart
+      ) {
+        var sourceGame = page.querySelector('select[name="game"]');
+        if (sourceGame) gameField.value = sourceGame.value;
+      }
       var canonicalLink = document.querySelector('link[rel="canonical"]');
       var ogUrl = document.querySelector('meta[property="og:url"]');
       if (canonicalLink) canonicalLink.href = canonical.href;
@@ -349,7 +364,6 @@
     if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
     }
-    var gameField = root.querySelector('select[name="game"]');
     var game = gameField ? gameField.value : current.get("game");
     if (game !== null && game !== undefined && String(game).trim() !== "") {
       url.searchParams.set("game", String(game).trim());
@@ -446,6 +460,11 @@
     if (event && event.isComposing) composing = true;
     scheduleSearch();
   });
+
+  if (gameField)
+    gameField.addEventListener("change", function () {
+      gameRevision += 1;
+    });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();

@@ -118,7 +118,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
       if (method === "all") {
         if (
           sql ===
-            `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') limit $1` &&
+            `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1` &&
           sameParams(params, [EVENTS_DISTINCT_GAMES_LIMIT])
         ) {
           return { rows: [[fixture.game]] };
