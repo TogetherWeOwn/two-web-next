@@ -234,10 +234,26 @@ export function boardPeriodHarness(
 }
 
 function decode(value: string) {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&#(?:39|x27);/gi, "'")
-    .replace(/&quot;/g, '"');
+  // Match only original entities; decoded ampersands are never scanned again.
+  return value.replace(/&(?:amp|quot|#39|#[xX]27);/g, (entity) => {
+    if (entity === "&amp;") return "&";
+    if (entity === "&quot;") return '"';
+    return "'";
+  });
+}
+function linkText(markup: string) {
+  // Walk original tokens, not successively rewritten markup. Svelte comments
+  // contribute no text; element boundaries retain the existing word separator.
+  let text = "";
+  let last = 0;
+  for (const token of markup.matchAll(/<!--[\s\S]*?-->|<[^>]*>/g)) {
+    text += markup.slice(last, token.index);
+    if (!token[0].startsWith("<!--")) text += " ";
+    last = token.index + token[0].length;
+  }
+  return decode(text + markup.slice(last))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 function attribute(attrs: string, name: string) {
   return decode(attrs.match(new RegExp(`(?:^|\\s)${name}=["']([^"']*)["']`, "i"))?.[1] ?? "");
@@ -246,13 +262,9 @@ export function currentMark(attrs: string) {
   return ["page", "date", "true"].includes(attribute(attrs, "aria-current"));
 }
 export function namedLink(html: string, name: string) {
-  const links = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].filter((match) => {
-    // Svelte markers are comments, never part of the accessible name.
-    const text = decode(match[2]!.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]*>/g, " "))
-      .replace(/\s+/g, " ")
-      .trim();
-    return text === name;
-  });
+  const links = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].filter(
+    (match) => linkText(match[2]!) === name,
+  );
   assert.equal(links.length, 1, `Expected one native ${name} shortcut/link`);
   const attrs = links[0]![1]!;
   const href = attribute(attrs, "href");
