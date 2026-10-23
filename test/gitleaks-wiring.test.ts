@@ -118,6 +118,25 @@ paths = ['''^test/bot-settings\.test\.ts$''']
 regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']`,
     ]);
   });
+
+  it("keeps the operator fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Synthetic operator bearer fixture in the local accessibility harness"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic operator bearer fixture in the local accessibility harness, including its committed history; never provisioned as a live credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^ci/a11y-cases\.mjs$''']
+regexes = ['''^a11y-operator-fixture-$''']`,
+    ]);
+  });
 });
 
 describe("gitleaks job wiring", () => {
