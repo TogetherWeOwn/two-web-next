@@ -77,7 +77,12 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Closed events never invite: past detail shows the final going count
+    // with no spots-left/full line, matching the Hono twin and the
+    // schedule-card precedent. Cancelled rows resolve to the gone outcome,
+    // so this guard is unreachable for them, but it keeps the twin logic
+    // identical rather than relying on the resolver.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled",
     announcement: null,
   }),
 );
