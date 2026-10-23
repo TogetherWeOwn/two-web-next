@@ -45,7 +45,11 @@ export default defineConfig({
                   name: "admin",
                   test: /\/src\/(?:admin\/|routes\/admin\/events\/(?:\[key\]|new)\/\+page\.svelte$)/,
                 },
-                { name: "profiles", test: /\/src\/profiles\// },
+                // Co-compress the Kit profile view with its Hono markup twin.
+                {
+                  name: "profiles",
+                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
+                },
                 {
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
