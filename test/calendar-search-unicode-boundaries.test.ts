@@ -418,8 +418,13 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
           expect(documents).toEqual([initialPath]);
           expect(await retained.innerText()).toBe(before);
           expect(await retained.locator("h3 a").count()).toBe(0);
-          expect(await retained.locator("time").getAttribute("datetime")).toBe(
+          const retainedTimes = retained.locator("time");
+          expect(await retainedTimes.count()).toBe(2);
+          expect(await retainedTimes.nth(0).getAttribute("datetime")).toBe(
             "2099-01-15T20:00:00.000Z",
+          );
+          expect(await retainedTimes.nth(1).getAttribute("datetime")).toBe(
+            "2099-01-15T22:00:00.000Z",
           );
           // Repeat the day jump without JS: native GET + fragment navigation
           // must reach the same retained card as the two enhanced fetches.
