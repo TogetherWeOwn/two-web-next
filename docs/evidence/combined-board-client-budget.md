@@ -6,10 +6,10 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current proposal after base-conflict reconciliation:** raw client JS
-247296 → 248320 B (+1024 B). The initial 247808 B proposal below is historical
-and does not fit the refreshed integration. See the final section for the
-new repeated measurements and unchanged guards.
+**Current proposal after the third base-conflict reconciliation:** raw client JS
+248832 B (+1024 B vs current main) and gzip client JS 100096 B (+256 B vs
+current main). Earlier proposals below are historical. See the final section
+for the new repeated measurements and unchanged guards.
 
 ## Inputs and method
 
@@ -236,3 +236,62 @@ No acceptance test is edited. Full `npm run check`, browser parity, startup
 latency and staging are not run or claimed; exact-head CI and independent
 review remain required. Rollback restores main's 247296 B raw cap. The source
 feature ref remains untouched.
+
+## Third base-conflict reconciliation: raw and gzip move
+
+On 2026-10-23 GitHub reported a third conflict, authorizing a merge of main
+`114084bf8` ([#1445](https://github.com/TogetherWeOwn/two-web-next/pull/1445)).
+Only `ci/kit-perf-budget.json` conflicted. Main raised client raw 247296 to
+247808 B for its admin dashboard twin change. The resolution keeps main's
+full admin decision history and all three unique prerequisite records, without
+repeating their common history. Incoming source and acceptance tests are
+unchanged. The PR still differs from main only in budget and this evidence.
+
+Reproduce with the same five-path overlay described above, substituting
+`git archive 114084bf8` for the main archive; the overlay applies cleanly
+because main touched the admin route, not the board files. Node `v24.22.1`,
+fresh external root/web `npm ci --include=dev` installations and both
+lockfile hashes are unchanged. Two builds per tree give:
+
+| Group | Current main 1 | Current main 2 | Current combined 1 | Current combined 2 |
+| --- | --- | --- | --- | --- |
+| Client JS raw/gzip | 247753/99617 | 247753/99617 | 248518/99867 | 248518/99867 |
+| Client JS files | 52 | 52 | 52 | 52 |
+| Server JS raw/gzip | 1111270/326489 | 1111268/326485 | 1112784/326979 | 1112784/326982 |
+| Server JS files | 122 | 122 | 123 | 123 |
+| Worker raw/gzip | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 |
+| Client CSS raw/gzip | 2737/983 | 2737/983 | 2737/983 | 2737/983 |
+| Client CSS files | 2 | 2 | 2 | 2 |
+
+A third build per tree confirms every client, CSS and worker path/byte/hash
+row is identical across rebuilds; only server `chunks/instance.js` (+2 B)
+and `chunks/internal.js` (hash/gzip wobble) vary, the known build-ID
+variation. Across trees, 50 of 52 client path/hash pairs match. The board
+node remains 3600/1722 → 4365/1972 B (**+765/+250 B**); the app entry
+hash-relinks at identical 5348/1488 B on both sides. Client `drizzle-orm`
+references remain zero. First-build measurements append to the TSV as
+`admin-main` (177 rows) and `admin-combined` (178 rows); earlier rows are
+unchanged.
+
+The current combined tree is **710 B over main's 247808 B raw cap and 27 B
+over main's 99840 B gzip cap**, and **198 B over the prior 248320 B
+proposal**. The new proposal is **248832 B raw** (+1024 B vs main) and
+**100096 B gzip** (+256 B vs main): the first fitting 512/256 B boundaries,
+with **314 B raw and 229 B gzip margins**, far below x1.25 (310647/124833).
+The gzip move is necessary, not padding: on the same combined output, cap
+pairs 247808/99840, 248320/99840, 248832/99840 and 248832/100096 exit
+**1/1/1/0**, each twice without rebuilding, and 248832/99840 fails on gzip
+alone. Every other numeric ceiling remains exactly main's. Combined server
+gzip fits by at least 698 B; worker, CSS and counts fit.
+
+Unchanged frozen feature acceptance passes **20/20** on the refreshed
+integration. Checker selftests **6/6**, checker tests **13/13**, parity-gate
+unit tests **67/67**, config selftests **34/34**, incoming admin suites
+**48/48**, lint, typecheck, asset drift, Hono asset budgets, docs links,
+floor guard and strict test inventory (**1116/1116**) pass on the resolved
+prerequisite. No acceptance test is edited. The actual budget-only resolved
+worktree builds byte-identical client output to the scratch main tree and
+passes its checker. Full `npm run check`, browser parity, startup latency
+and staging are not run or claimed; exact-head CI and independent review
+remain required. Rollback restores main's 247808 B raw and 99840 B gzip
+caps. The source feature ref remains untouched.
