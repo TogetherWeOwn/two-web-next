@@ -94,13 +94,80 @@ async function render(twin: "Hono" | "Kit", id = 20) {
     headers: outcome.headers,
   };
 }
-function target(html: string, id: string) {
+function link(html: string, id: string) {
   const anchor = [...html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g)].find((m) =>
     m[0].includes(`data-testid="${id}"`),
   )?.[0];
   expect(anchor, id).toBeDefined();
-  return /href="([^"]+)"/.exec(anchor!)?.[1];
+  return anchor!;
 }
+function target(html: string, id: string) {
+  return /href="([^"]+)"/.exec(link(html, id))?.[1];
+}
+function text(html: string) {
+  let content = "";
+  let last = 0;
+  for (const token of html.matchAll(/<!--[\s\S]*?-->|<[^>]*>/g)) {
+    content += html.slice(last, token.index);
+    if (!token[0].startsWith("<!--")) content += " ";
+    last = token.index + token[0].length;
+  }
+  return (content + html.slice(last)).replace(/\s+/g, " ").trim();
+}
+function expectPreview(anchor: string, instant: string, formatted: string, venue: string) {
+  const times = [...anchor.matchAll(/<time\b[^>]*>([\s\S]*?)<\/time>/g)];
+  expect(times).toHaveLength(1);
+  expect(times[0]![0]).toContain(`datetime="${instant}"`);
+  expect(text(times[0]![1]!)).toBe(formatted);
+  const locations = [
+    ...anchor.matchAll(/<span\b[^>]*class="event-related-location"[^>]*>([\s\S]*?)<\/span>/g),
+  ];
+  expect(locations).toHaveLength(1);
+  expect(text(locations[0]![1]!)).toBe(venue);
+}
+
+it("AP15 RED: Hono preserves an imported global neighbor with an unrepresentable instant", async () => {
+  // The three earlier published rows fill related events, keeping this global
+  // next neighbor out of the unrelated related-card toISOString path.
+  await fixture.client`
+    insert into events (id, event_key, title, starts_at, ends_at, timezone, location, status)
+    values
+      (40, ${adjacentKey(40)}, 'Standalone current night', '2030-06-30T19:00Z', '2030-06-30T21:00Z', 'UTC', 'Current lobby', 'published'),
+      (50, ${adjacentKey(50)}, 'Imported far-future night', '280000-01-01 19:00:00+00', '280000-01-01 21:00:00+00', 'UTC', 'Imported north hall', 'published')
+  `;
+  const [imported] = await fixture.client`
+    select starts_at, isfinite(starts_at) as finite, extract(year from starts_at)::integer as year
+    from events where id = 50
+  `;
+  expect(imported!.finite).toBe(true);
+  expect(imported!.year).toBe(280000);
+  expect(new Date(imported!.starts_at).getTime()).toBeNaN();
+
+  const { html, headers } = await render("Hono", 40);
+  const next = link(html, "event-next");
+  expect(target(html, "event-next")).toBe(`/e/${adjacentKey(50)}`);
+  expect(text(next)).toBe("Next event: Imported far-future night → Imported north hall");
+  expect(next).toContain('<span class="event-related-location">Imported north hall</span>');
+  expect(next).not.toMatch(/<time\b/i);
+  const previous = link(html, "event-previous");
+  expect(target(html, "event-previous")).toBe(`/e/${adjacentKey(25)}`);
+  expect(text(previous)).toContain("Friday game night");
+  expectPreview(
+    previous,
+    "2030-06-15T19:00:00.000Z",
+    "Saturday, 15 June 2030 at 19:00 GMT+00:00",
+    "Global next room",
+  );
+  expect(html).not.toContain('data-testid="event-series-nav"');
+  const related = [
+    ...html.matchAll(/<a\b[^>]*data-testid="event-related-link"[^>]*>[\s\S]*?<\/a>/g),
+  ];
+  expect(related).toHaveLength(3);
+  for (const anchor of related) expect(anchor[0]).not.toContain(`/e/${adjacentKey(50)}`);
+  expect(headers["cache-control"]).toBe("private, no-store");
+  expect(traces).toHaveLength(6);
+  expect(traces.filter((q) => isGlobal(q.sql))).toHaveLength(2);
+});
 
 for (const twin of ["Hono", "Kit"] as const) {
   describe(`${twin} adjacent previews preserve production read contracts`, () => {
@@ -110,6 +177,36 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(target(html, "event-next")).toBe(`/e/${adjacentKey(25)}`);
       expect(target(html, "event-series-previous")).toBe(`/e/${adjacentKey(10)}`);
       expect(target(html, "event-series-next")).toBe(`/e/${adjacentKey(30)}`);
+      // Each rail selects different rows. Borrowing the other rail's metadata
+      // must fail even when the title and destination href remain correct.
+      for (const [id, instant, formatted, venue] of [
+        [
+          "event-previous",
+          "2030-06-13T19:00:00.000Z",
+          "Thursday, 13 June 2030 at 19:00 GMT+00:00",
+          "Global previous room",
+        ],
+        [
+          "event-next",
+          "2030-06-15T19:00:00.000Z",
+          "Saturday, 15 June 2030 at 19:00 GMT+00:00",
+          "Global next room",
+        ],
+        [
+          "event-series-previous",
+          "2030-06-21T19:00:00.000Z",
+          "Friday, 21 June 2030 at 20:00 GMT+01:00",
+          "Series previous room",
+        ],
+        [
+          "event-series-next",
+          "2030-06-07T19:00:00.000Z",
+          "Friday, 7 June 2030 at 15:00 GMT-04:00",
+          "Series next room",
+        ],
+      ] as const) {
+        expectPreview(link(html, id), instant, formatted, venue);
+      }
       expect(html).not.toMatch(/Hidden draft|Hidden cancelled|Hidden venue|Ended event/);
       expect(headers["cache-control"]).toBe("private, no-store");
       expect(headers["vary"]).toBe("Cookie");
