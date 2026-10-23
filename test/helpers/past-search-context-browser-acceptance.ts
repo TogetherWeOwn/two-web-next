@@ -245,6 +245,26 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         ]);
       });
 
+      it("PSC-014 windows around the first of two distant matches and excludes the later occurrence", async () => {
+        // Dropping the out-of-window span guard leaks the second match; anchoring
+        // on the last span loses the first passage even if the result stays bounded.
+        const description = `First crew ORBITAL launch. ${"🚀".repeat(400)} Last crew orbital landing.`;
+        const { page } = await documentFor(
+          twin,
+          [archiveRow(1, { title: "Launch notes", description })],
+          "orbital",
+        );
+        const [card] = await cards(page);
+        expect(card?.titleMarks).toEqual([]);
+        expect(card?.excerpts).toHaveLength(1);
+        const excerpt = card!.excerpts[0]!;
+        boundedPassage(excerpt.text);
+        expect(excerpt.text).toMatch(/^First crew ORBITAL launch\. 🚀+…$/u);
+        expect(excerpt.marks).toEqual(["ORBITAL"]);
+        expect(excerpt.text).not.toContain("Last crew");
+        expect(excerpt.text).not.toContain("orbital");
+      });
+
       it("PSC-007 admits a maximum-length supplementary query and never clips its matching span", async () => {
         const q = "🛰".repeat(255);
         const { page } = await documentFor(
