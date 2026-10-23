@@ -69,6 +69,7 @@
     "lighthouse": "lhci autorun --config=ci/lighthouserc.cjs",
     "lighthouse:origin": "node ci/lighthouse-origin-run.mjs",
     "lighthouse:origin:selftest": "node --test ci/lighthouse-origin.test.mjs && node ci/lighthouse-origin-run.mjs --selftest",
+    "lighthouse:evidence:selftest": "node --test ci/lighthouse-evidence.test.mjs",
     "deps:audit": "node ci/deps-audit.mjs",
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",

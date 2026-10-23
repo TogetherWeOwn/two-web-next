@@ -9,6 +9,7 @@ import type { Env } from "./env";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { checkJoinThrottle } from "./join/service";
 import type { Sql } from "./sessions";
+import { createLogBudget } from "./log-budget";
 
 /** `throttle:10,1` — join redirect/callback, login callback, QA login. */
 export const AUTH_THROTTLE_PER_MINUTE = 10;
@@ -105,6 +106,8 @@ function exceptionClass(err: unknown): string {
   return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
 }
 
+const takeThrottleLogToken = createLogBudget("throttle.refused.shed");
+
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
   c: Context<{ Bindings: Env }>,
@@ -127,7 +130,14 @@ export async function throttleGuard(
       });
       return { limited: false } as const;
     });
-  return verdict.limited ? await rateLimitExceeded(c, verdict.retryAfter) : null;
+  if (!verdict.limited) return null;
+  // Refusal telemetry: route class + outcome only — never the "<name>:<client>"
+  // bucket (the client segment is a member IP), never body bytes. One site
+  // covers the middleware and in-handler forms, over-budget and busy-path
+  // verdicts alike; the 429 itself is unchanged.
+  if (takeThrottleLogToken())
+    console.warn("throttle.refused", { throttle: name, outcome: "rate_limited" });
+  return rateLimitExceeded(c, verdict.retryAfter);
 }
 
 /**
