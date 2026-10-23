@@ -192,12 +192,23 @@ describe("bounded RUM HTTP 429 recovery", () => {
   });
 
   it("reuses the exact 24-hour query, identity and credentials across cooldown", async () => {
+    const mutableEnv = { ...env };
     const fetchImpl = vi
       .fn()
       .mockImplementationOnce(async () => limited())
       .mockImplementation(async () => response(healthy()));
-    const run = start(fetchImpl);
-    await vi.advanceTimersByTimeAsync(300_000);
+    const run = start(fetchImpl, { env: mutableEnv });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run.state.settled).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+    mutableEnv.CF_ANALYTICS_READ_TOKEN = "changed-token-marker";
+    mutableEnv.CF_RUM_ACCOUNT_ID = "changed-account-marker";
+    mutableEnv.CF_RUM_SITE_TAG = "changed-site-marker";
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run.state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect(resultOf(run)).toMatchObject({ code: 0, kind: "pass" });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const [url1, init1] = fetchImpl.mock.calls[0] ?? [];
@@ -508,9 +519,12 @@ describe("obsolete HTTP-date Retry-After admission", () => {
   // Treating a valid obsolete date as malformed can retry before the provider's
   // requested delay; permissive date normalization can admit impossible dates.
   it.each([
-    ["RFC850", "Friday, 23-Oct-26 12:00:07 GMT"],
-    ["asctime", "Fri Oct 23 12:00:07 2026"],
-  ])("honors a valid %s date at exactly seven seconds", async (_form, header) => {
+    ["RFC850", "Friday, 23-Oct-26 12:00:07 GMT", "2026-10-23T12:00:00Z"],
+    ["asctime", "Fri Oct 23 12:00:07 2026", "2026-10-23T12:00:00Z"],
+    ["single-digit asctime", "Tue Nov  3 12:00:07 2026", "2026-11-03T12:00:00Z"],
+    ["RFC850 current-year 50", "Sunday, 23-Oct-50 12:00:07 GMT", "2050-10-23T12:00:00Z"],
+  ])("honors a valid %s date at exactly seven seconds", async (_form, header, clock) => {
+    vi.setSystemTime(new Date(clock));
     const fetchImpl = vi
       .fn()
       .mockImplementationOnce(async () => limited(header))
@@ -531,20 +545,26 @@ describe("obsolete HTTP-date Retry-After admission", () => {
   });
 
   it.each([
-    ["RFC850", "Friday, 23-Oct-26 12:05:01 GMT"],
-    ["asctime", "Fri Oct 23 12:05:01 2026"],
-  ])("refuses a valid %s date above five minutes without retrying early", async (_form, header) => {
-    const fetchImpl = vi.fn(async () => limited(header));
-    const run = start(fetchImpl);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(resultOf(run)).toMatchObject({ code: 1, kind: "query-failed" });
-    expect(resultOf(run).summary).toContain("HTTP 429");
-    expect(resultOf(run).summary).toContain("Budgets not evaluated.");
-    expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(600_000);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
+    ["RFC850", "Friday, 23-Oct-26 12:05:01 GMT", "2026-10-23T12:00:00Z"],
+    ["asctime", "Fri Oct 23 12:05:01 2026", "2026-10-23T12:00:00Z"],
+    ["single-digit asctime", "Tue Nov  3 12:05:01 2026", "2026-11-03T12:00:00Z"],
+    ["RFC850 current-year 50", "Sunday, 23-Oct-50 12:05:01 GMT", "2050-10-23T12:00:00Z"],
+  ])(
+    "refuses a valid %s date above five minutes without retrying early",
+    async (_form, header, clock) => {
+      vi.setSystemTime(new Date(clock));
+      const fetchImpl = vi.fn(async () => limited(header));
+      const run = start(fetchImpl);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(resultOf(run)).toMatchObject({ code: 1, kind: "query-failed" });
+      expect(resultOf(run).summary).toContain("HTTP 429");
+      expect(resultOf(run).summary).toContain("Budgets not evaluated.");
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["RFC850 impossible calendar date", "Wednesday, 31-Feb-27 12:00:07 GMT"],
