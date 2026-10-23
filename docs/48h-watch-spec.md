@@ -127,7 +127,7 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
      | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(queue[.]failing|scheduled[.]failing)\""))'
    npx wrangler tail two-web-next-alerts-production --search '"delivery":"ops.alert.'
    ```
-   For staging comparison, substitute `two-web-next`, `two-web-jobs` and
+   Staging comparison only: substitute `two-web-next`, `two-web-jobs` and
    `two-web-next-alerts`, respectively, keeping each command's filter.
    Source traces remain the private diagnostic fallback, distinct from redacted
    delivery receipts. Never publish raw source traces or receipt streams; retain
