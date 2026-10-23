@@ -239,6 +239,29 @@ const MATRIX: Case[] = [
     body: "_method=PATCH&bio=Fixture&games_text=",
     contentType: "application/x-www-form-urlencoded",
   },
+  // Link-in-bio: the public page reads member data with no gate, so an
+  // outage fails its reads into the branded 503; the editor and both saves
+  // resolve the member first and fail the same way (the links throttle
+  // fails open, like every other write throttle).
+  { method: "GET", route: "/members/:user/links", status: 503, format: "html" },
+  { method: "GET", route: "/profile/links", status: 503, actor: "member", format: "html" },
+  {
+    method: "PATCH",
+    route: "/profile/links",
+    status: 503,
+    actor: "member",
+    format: "json",
+    body: '{"links":[]}',
+  },
+  {
+    method: "POST",
+    route: "/profile/links",
+    status: 503,
+    actor: "member",
+    format: "html",
+    body: "links_text=",
+    contentType: "application/x-www-form-urlencoded",
+  },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },

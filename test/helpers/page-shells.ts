@@ -28,7 +28,9 @@ export const HTML_READS = [
   "/leaderboards/members",
   "/e/:key",
   "/profile",
+  "/profile/links",
   "/members/:user",
+  "/members/:user/links",
   "/admin",
   "/admin/activity-log",
   "/admin/events",
@@ -239,6 +241,13 @@ export function pageShellFixture(status = "published") {
       return {
         rows: [[1, "Fixture activity", "event", "1", null, "created", now.toISOString()]],
       };
+    if (sql.includes('from "member_links"')) {
+      return {
+        rows: params.includes(MEMBER_ID)
+          ? [[[{ label: "Twitch", url: "https://twitch.tv/fixture" }]]]
+          : [],
+      };
+    }
     if (
       sql.includes('from "rsvps"') ||
       sql.includes("from rsvps") ||

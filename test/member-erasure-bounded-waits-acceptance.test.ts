@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, type Sql } from "../src/sessions";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
 import { createEraseClient } from "../bin/erase-member.mjs";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { ensureRuntimeRoleStub, testDatabaseUrl } from "./helpers/member-data-db";
 
 // Acceptance contract: the operator erase-member CLI must bound its own SQL
 // waits with finite server-enforced statement and lock budgets, like
@@ -166,10 +166,11 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
   const password = () => new URL(ambientUrl!).password;
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [l], [s], [g], [j]] = await Promise.all([
       client`select count(*)::int as n from users where id = ${id}`,
       client`select count(*)::int as n from profiles where user_id = ${id}`,
       client`select count(*)::int as n from rsvps where user_id = ${id}`,
+      client`select count(*)::int as n from member_links where user_id = ${id}`,
       client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
@@ -178,6 +179,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: (u as { n: number }).n,
       profiles: (p as { n: number }).n,
       rsvps: (r as { n: number }).n,
+      member_links: (l as { n: number }).n,
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
@@ -209,6 +211,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     if (existing?.n) throw new Error(`refusing to reuse existing database "${DB_NAME}"`);
     await admin.unsafe(`CREATE DATABASE "${DB_NAME}"`);
     created = true;
+    await ensureRuntimeRoleStub(admin); // Roles are cluster-global.
     client = postgres(derivedUrl(ambientUrl!, DB_NAME), {
       max: 6,
       connect_timeout: 5,
@@ -323,6 +326,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
         users: 1,
         profiles: 1,
         rsvps: 1,
+        member_links: 0,
         web_sessions: 2,
         web_session_grace: 0,
         join_attempts: 1,
@@ -334,6 +338,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -353,6 +358,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 0,
       profiles: 0,
       rsvps: 0,
+      member_links: 0,
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
@@ -390,6 +396,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -411,6 +418,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -436,6 +444,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 1,
       profiles: 1,
       rsvps: 1,
+      member_links: 0,
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
@@ -451,6 +460,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       users: 0,
       profiles: 0,
       rsvps: 0,
+      member_links: 0,
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,

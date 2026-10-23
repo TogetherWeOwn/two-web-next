@@ -16,7 +16,7 @@ import { users } from "../src/db/schema";
 import { adminSchema, schema, type Db } from "../src/db/index";
 import { getPublicEvent, listHomeUpcoming, listJson, listUpcoming } from "../src/events/reads";
 import { listVisibleFeatured } from "../src/featured";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { ensureRuntimeRoleStub, testDatabaseUrl } from "./helpers/member-data-db";
 
 // Static containment pin: the guard refuses non-test URLs before any driver
 // exists. Always runs, needs no database.
@@ -61,6 +61,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     db = drizzle(client, { schema: { ...schema, ...adminSchema } });
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
+    await ensureRuntimeRoleStub(admin);
     const migrations = readMigrationFiles({
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href),
     });

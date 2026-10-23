@@ -10,7 +10,7 @@
 //   1. a tee of the full lhci output to stdout (job log) AND
 //      .lighthouseci/quality-collect.log (uploaded artifact);
 //   2. an LHR count vs expected (routes x numberOfRuns from
-//      ci/lighthouserc.quality.cjs: 21 on a deployed origin, 24 on the fixture
+//      ci/lighthouserc.quality.cjs: 21 on a deployed origin, 27 on the fixture
 //      worker), counted from collect's own per-run `.lighthouseci/lhr-*.json`
 //      files — the quality dir holds only the median report per route, so it
 //      can never reach the expected total;

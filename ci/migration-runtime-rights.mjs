@@ -32,6 +32,10 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.web_throttle_hits": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_sessions": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.web_oauth_journeys": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  // Reviewed 2026-10-22 (first GRANT-bearing migration, 1033): links-store
+  // upsert needs SELECT+INSERT+UPDATE, member erasure needs DELETE; no
+  // TRUNCATE or DDL. Matches the rsvps/profiles full-CRUD precedent.
+  "public.member_links": ["DELETE", "INSERT", "SELECT", "UPDATE"],
 });
 
 export const SEQUENCE_RIGHTS = Object.freeze(

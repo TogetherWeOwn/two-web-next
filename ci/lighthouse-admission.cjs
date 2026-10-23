@@ -5,7 +5,18 @@ const { spawn } = require("node:child_process");
 
 const origin = "http://127.0.0.1:8787";
 const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const paths = ["/", "/events", `/e/${key}`, "/join", "/about", "/faq", "/rules", "/privacy"];
+const member = "100000000000000111";
+const paths = [
+  "/",
+  "/events",
+  `/e/${key}`,
+  "/join",
+  "/about",
+  "/faq",
+  "/rules",
+  "/privacy",
+  `/members/${member}/links`,
+];
 // Static leaves have no fixture data: admit the real page heading, not an error or fallback.
 const staticHeadings = {
   "/join": "Join Together We Own",
@@ -90,6 +101,24 @@ function assertFixtureContent(path, response, html, before, after) {
       "Event detail description required",
     );
     assert.match(populated, /data-testid="event-join-pitch"/, "Anonymous detail fixture required");
+  } else if (path === `/members/${member}/links`) {
+    // Fixture-member page, not an event page: assert directly without setting
+    // `populated`, so the event-fixture title/venue/time checks below are skipped.
+    const links = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1];
+    assert.ok(links, "Links page main content required");
+    assert.match(links, /<h1\b[^>]*>Lighthouse Linker<\/h1>/, "Links page fixture heading");
+    assert.match(links, /data-testid="member-links-list"/, "Links page list required");
+    assert.match(
+      links,
+      /https:\/\/example\.com\/lighthouse-live/,
+      "Links page fixture link required",
+    );
+    assert.match(
+      links,
+      /member-links-live-status"[^>]*>[\s\S]{0,300}?Offline/i,
+      "Links page offline stub required",
+    );
+    assert.doesNotMatch(html, /LIVE NOW/, "Links page must not show the subscriber banner");
   } else {
     assert.ok(paths.includes(path), "Unknown fixture path");
     assert.match(

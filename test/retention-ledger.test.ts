@@ -86,6 +86,7 @@ function deleteWindows(body: string, table: string): string[] {
     events: "events",
     featured_contents: "featuredContents",
     job_unique_locks: "jobUniqueLocks",
+    member_links: "memberLinks",
     profiles: "profiles",
     queue_failed_jobs: "queueFailedJobs",
     queue_jobs: "queueJobs",
@@ -1093,6 +1094,7 @@ describe("retention ledger queue mechanisms (no DB)", () => {
       ["import { queueJobs as q } from './schema'; db.delete(q)", "queue_jobs"],
       ["const q = schema.queueJobs; const q2 = q; db.delete(q2)", "queue_jobs"],
       ["db.delete(activityLog)", "activity_log"],
+      ["db.delete(memberLinks)", "member_links"],
       // Drizzle sql-template with an interpolated table object (late-novel).
       ["db.execute(sql`delete from ${queueJobs} where available_at < ${cutoff}`)", "queue_jobs"],
       [
@@ -1525,11 +1527,12 @@ describe("retention ledger L8b core member tables", () => {
     }
   });
 
-  it("pins the erasure lifecycle: users, profiles, rsvps leave only via eraseMember", () => {
+  it("pins the erasure lifecycle: users, profiles, rsvps, member_links leave only via eraseMember", () => {
     expect([...ERASURE_TABLES]).toEqual([
       "users",
       "profiles",
       "rsvps",
+      "member_links",
       "web_sessions",
       "web_session_grace",
       "join_attempts",
@@ -1538,12 +1541,14 @@ describe("retention ledger L8b core member tables", () => {
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
     expect(erasure).toContain("delete from profiles where user_id = ${discordId} returning 1");
     expect(erasure).toContain("delete from rsvps where user_id = ${discordId} returning 1");
+    expect(erasure).toContain("delete from member_links where user_id = ${discordId} returning 1");
     // The roster write refreshes in place and never deletes.
     const roster = read("src/db/roster.ts");
     expect(roster).toContain("ON CONFLICT (id) DO UPDATE");
-    // Repo-wide: only the erasure deletes users/profiles rows. rsvps has two
-    // further member-action writers pinned below, so it is excluded here.
-    for (const table of ["users", "profiles"]) {
+    // Repo-wide: only the erasure deletes users/profiles/member_links rows.
+    // rsvps has two further member-action writers pinned below, so it is
+    // excluded here.
+    for (const table of ["users", "profiles", "member_links"]) {
       const offenders = listTsFiles(join(root, "src")).filter(
         (file) => deleteWindows(readFileSync(file, "utf8"), table).length > 0,
       );

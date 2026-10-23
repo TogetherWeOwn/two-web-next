@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { ensureRuntimeRoleStub, testDatabaseUrl } from "./helpers/member-data-db";
 import { DEFAULT_CONFIG, handleAgentEvent } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 
@@ -63,6 +63,8 @@ async function createMigrationFixture(raw: string) {
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
+    // migrate() below applies 1019..latest (including GRANT-bearing 1033).
+    await ensureRuntimeRoleStub(admin);
     await client.begin(async (sql) => {
       for (const migration of migrations.slice(0, migrationIndex)) await apply(sql, migration.sql);
     });

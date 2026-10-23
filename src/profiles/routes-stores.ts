@@ -8,6 +8,7 @@ import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { recordAccess } from "../admin/store";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
+import { createDbLinksStore, type LinksStore } from "./links-store";
 import type { Ctx, ProfileDeps } from "./routes-shared";
 import {
   MEMBER_STATS_BUDGET_MS,
@@ -22,6 +23,11 @@ export function profileStores(deps: ProfileDeps) {
     if (deps.store) return deps.store;
     const db = await dbFor(c);
     return db ? createDbProfileStore(db) : null;
+  };
+  const linksFor = async (c: { env: Env }): Promise<LinksStore | null> => {
+    if (deps.linksStore) return deps.linksStore;
+    const db = await dbFor(c);
+    return db ? createDbLinksStore(db) : null;
   };
   const statsFor = (c: Ctx, id: string) =>
     memberStatsWithBudget(
@@ -51,7 +57,7 @@ export function profileStores(deps: ProfileDeps) {
     const db = await dbFor(c);
     return db ? (entry) => recordAccess(db, entry) : null;
   };
-  return { storeFor, statsFor, sinkFor };
+  return { storeFor, linksFor, statsFor, sinkFor };
 }
 
 export type ProfileStores = ReturnType<typeof profileStores>;

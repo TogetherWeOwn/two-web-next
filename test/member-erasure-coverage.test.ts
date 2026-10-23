@@ -215,6 +215,11 @@ const MEMBER_BUCKETS = [
     constructedIn: "src/profiles/routes-admission.ts",
     prunedIn: "src/join/service.ts",
   },
+  {
+    prefix: "member-links-write",
+    constructedIn: "src/profiles/routes-links.tsx",
+    prunedIn: "src/join/service.ts",
+  },
 ] as const;
 
 const hasThrottlePrune = (rel: string): boolean => {

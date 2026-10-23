@@ -54,6 +54,22 @@ export function testDatabaseUrl(raw: string, runner = process.env): URL {
   return url;
 }
 
+// In-migration GRANTs (first: 1033 member_links) target the runtime role, so
+// every fixture that applies canonical migrations ensures the NOLOGIN stub
+// first. Roles are cluster-global: parallel fixtures race here and all but
+// one see duplicate_object (42710), which is the expected shared outcome.
+// Live staging/production roles are operator-provisioned instead; see
+// docs/db-migrations.md "Runtime role bootstrap". Never LOGIN, never a secret.
+export async function ensureRuntimeRoleStub(admin: postgres.Sql) {
+  try {
+    await admin.unsafe(
+      `CREATE ROLE "two_web_app" NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION`,
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code !== "42710") throw error;
+  }
+}
+
 export async function createMemberDataFixture(raw: string, opts: { max?: number } = {}) {
   const url = testDatabaseUrl(raw); // Must run before postgres() or any DDL.
   const schemaName = `w15_${randomUUID().replaceAll("-", "")}`;
@@ -92,6 +108,7 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
+    await ensureRuntimeRoleStub(admin);
     // Run canonical migrations, including FKs, inside our schema. No public
     // fallback in search_path and no migration journal or writes in public.
     const migrations = readMigrationFiles({

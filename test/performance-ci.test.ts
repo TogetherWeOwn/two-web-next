@@ -438,7 +438,7 @@ describe("performance CI", () => {
     child.stdout.emit("data", "1:8787\n");
     expect(chunks.join("")).not.toContain(readyPattern);
     await running.admission;
-    expect(fetchPage).toHaveBeenCalledTimes(8);
+    expect(fetchPage).toHaveBeenCalledTimes(9);
     expect(chunks.join("")).toContain(readyPattern);
     expect(stopServer).not.toHaveBeenCalled();
     running.stop();
@@ -501,7 +501,7 @@ describe("performance CI", () => {
     child.emit("exit", 1);
     await expect(running.admission).rejects.toThrow("exited before content admission");
     release();
-    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(8));
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(9));
     expect(chunks.join("")).not.toContain(readyPattern);
     expect(stopServer).toHaveBeenCalledExactlyOnceWith(child);
   });
