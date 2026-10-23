@@ -39,7 +39,12 @@ export default defineConfig({
                   name: "site-shell",
                   test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/(?:SiteHeader|ErrorShell)\.svelte)$/,
                 },
-                { name: "admin", test: /\/src\/admin\// },
+                // The Kit create/edit forms repeat the Hono field markup; keep
+                // their SSR output in the same gzip stream as the admin pages.
+                {
+                  name: "admin",
+                  test: /\/src\/(?:admin\/|routes\/admin\/events\/(?:\[key\]|new)\/\+page\.svelte$)/,
+                },
                 { name: "profiles", test: /\/src\/profiles\// },
                 {
                   name: "events",
