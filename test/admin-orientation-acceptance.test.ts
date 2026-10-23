@@ -4,7 +4,7 @@
 // choosing navigation from a title/query, or moving the up link below fields
 // must fail. Existing route/status/escaping/Save contracts are controls.
 import { beforeAll, describe, expect, it } from "vitest";
-import { EventFormPage, FeaturedFormPage } from "../src/admin/pages";
+import { ErrorPage, EventFormPage, FeaturedFormPage } from "../src/admin/pages";
 import { parseEventListQuery } from "../src/admin/event-list";
 import {
   parseActivityLogQuery,
@@ -196,8 +196,8 @@ const cases: {
   },
 ];
 
-// Exact routes may say page; ancestors must use section/location semantics.
-// Accept both standard non-page tokens; renderer parity prevents divergent UX.
+// Exact roots identify the page; descendants identify their containing location.
+// Loose truthy-token checks would miss an ancestor incorrectly claiming page.
 function expectCurrent(html: string, section: string, exact: boolean) {
   const links = headerLinks(html);
   expect(links.length, "real moderator shell rendered").toBeGreaterThanOrEqual(6);
@@ -206,8 +206,8 @@ function expectCurrent(html: string, section: string, exact: boolean) {
     current.map((link) => link.href),
     "exactly the intended section is current",
   ).toEqual([section]);
-  expect(exact ? ["page", "location", "true"] : ["location", "true"]).toContain(
-    current[0]!.current,
+  expect(current[0]!.current, "exact page versus ancestor location token").toBe(
+    exact ? "page" : "location",
   );
   expect([null, "false"]).toContain(links.find((link) => link.href === "/")?.current ?? null);
 }
@@ -253,6 +253,43 @@ describe("AO-01: current location is truthful in both real shells", () => {
   }
 });
 
+// Removing, retargeting or mislabelling either upper anchor must fail, even
+// when the header and bottom Cancel still offer the same destination. These
+// native text links must expose their visible labels as their accessible names.
+function expectUpperBreadcrumb(html: string, kind: FormFixture["kind"]) {
+  const main = /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+  const firstField = main.search(/<(?:input|textarea|select)\b/);
+  expect(firstField, "the editor has a real field").toBeGreaterThanOrEqual(0);
+  const navs = [...main.slice(0, firstField).matchAll(/<nav\b([^>]*)>([\s\S]*?)<\/nav>/g)].filter(
+    (nav) => /\baria-label="Breadcrumb"/.test(nav[1]!),
+  );
+  expect(navs, "one Breadcrumb nav above the first editor field").toHaveLength(1);
+  const anchors = [...navs[0]![2]!.matchAll(/(<a\b[^>]*>)([\s\S]*?)<\/a>/g)];
+  const expected = [
+    { href: "/admin", label: "Dashboard" },
+    kind === "event"
+      ? { href: "/admin/events", label: "Events" }
+      : { href: "/admin/featured", label: "Featured" },
+  ];
+  expect(
+    anchors.map((anchor) => ({
+      href: /\bhref="([^"]*)"/.exec(anchor[1]!)?.[1],
+      label: anchor[2]!.replace(/<!--[\s\S]*?-->/g, "").trim(),
+    })),
+    "both fixed native breadcrumb destinations and exact visible names",
+  ).toEqual(expected);
+  for (const [index, anchor] of anchors.entries()) {
+    const tag = anchor[1]!;
+    expect(tag, "native, visible, keyboard-reachable text anchor").not.toMatch(
+      /\s(?:onclick(?:\s|=)|role="button"|tabindex="-\d+"|hidden(?:\s|=|>)|aria-hidden="true"|aria-labelledby(?:\s|=))/,
+    );
+    const ariaLabel = /\baria-label="([^"]*)"/.exec(tag)?.[1];
+    expect(ariaLabel ?? expected[index]!.label, "accessible name matches visible name").toBe(
+      expected[index]!.label,
+    );
+  }
+}
+
 const names = [
   "Hono event new",
   "Kit event new",
@@ -266,6 +303,7 @@ const names = [
 for (const name of names) {
   it(`AO-04 ${name}: a native fixed-parent up link precedes the first editor field`, () => {
     const f = forms.find((row) => row.name === name)!;
+    expectUpperBreadcrumb(f.html, f.kind);
     const parent = f.kind === "event" ? "/admin/events" : "/admin/featured";
     const upper = upperLinks(f.html).filter((link) => link.href === parent);
     expect(
@@ -288,6 +326,7 @@ for (const name of names.filter((value) => !value.startsWith("Kit featured"))) {
     const f = rejected.find((row) => row.name === name)!;
     const parent = f.kind === "event" ? "/admin/events" : "/admin/featured";
     expect(upperLinks(f.html).filter((link) => link.href === parent)).toHaveLength(1);
+    expectUpperBreadcrumb(f.html, f.kind);
     expect(f.html).toContain(`action="${f.action}"`);
   });
 }
@@ -338,6 +377,7 @@ it("AO-07 CONTROL: hostile editor labels stay text and cannot select another sec
 for (const [path, section] of [
   ["/admin/events/not-a-key", "/admin/events"],
   ["/admin/featured/not-an-id", "/admin/featured"],
+  ["/admin/featured-contents/not-an-id/edit", "/admin/featured"],
   ["/admin/join-attempts/not-an-id", "/admin/join-attempts"],
 ]) {
   it(`AO-08 Hono ${path}: missing family page keeps ancestor orientation`, async () => {
@@ -349,25 +389,106 @@ for (const [path, section] of [
   });
 }
 
-for (const [path, routeId, section] of [
-  ["/admin/events/missing", "/admin/events/[key]", "/admin/events"],
-  ["/admin/featured/99", "/admin/featured/[id]", "/admin/featured"],
-  ["/admin/join-attempts/99", "/admin/join-attempts/[id]", "/admin/join-attempts"],
-  ["/admin/activity-log", "/admin/activity-log", "/admin/activity-log"],
+// Render roots directly through Hono's actual ErrorPage. Missing-DB middleware
+// can return plain 503 text, and the healthy legacy root redirects: neither
+// executes this error resolver. The malformed legacy editor above is a real 404.
+for (const [path, section, exact] of [
+  ["/admin", "/admin", true],
+  ["/admin/events", "/admin/events", true],
+  ["/admin/featured", "/admin/featured", true],
+  ["/admin/join-attempts", "/admin/join-attempts", true],
+  ["/admin/activity-log", "/admin/activity-log", true],
+  ["/admin/featured-contents", "/admin/featured", false],
+] as const) {
+  it(`AO-19 Hono ${path}: real root error render keeps exact or legacy ancestor semantics`, async () => {
+    const html = await ErrorPage({ heading: "Admin temporarily unavailable", path })!.toString();
+    expectCurrent(html, section, exact);
+    expect(html).toContain("<h1>Admin temporarily unavailable</h1>");
+    expect(html).toContain("Back to the dashboard");
+  });
+}
+
+// Render the actual error components, not the successful pages with an error
+// status. Root resolvers are separate branches from detail-family resolvers.
+for (const [path, routeId, section, missingHeading] of [
+  ["/admin", "/admin", "/admin", "Something went wrong"],
+  ["/admin/events", "/admin/events", "/admin/events", "Something went wrong"],
+  ["/admin/featured", "/admin/featured", "/admin/featured", "Something went wrong"],
+  [
+    "/admin/join-attempts",
+    "/admin/join-attempts",
+    "/admin/join-attempts",
+    "Join attempt not found",
+  ],
+  ["/admin/events/missing", "/admin/events/[key]", "/admin/events", "Event not found"],
+  ["/admin/featured/99", "/admin/featured/[id]", "/admin/featured", "Featured content not found"],
+  [
+    "/admin/join-attempts/99",
+    "/admin/join-attempts/[id]",
+    "/admin/join-attempts",
+    "Join attempt not found",
+  ],
+  ["/admin/activity-log", "/admin/activity-log", "/admin/activity-log", "Something went wrong"],
 ]) {
   for (const status of [404, 503, 500]) {
     it(`AO-09 Kit ${status} ${path}: family chrome is truthful without echoing errors or arbitrary return URLs`, () => {
-      const html = render(
+      const rendered = render(
         section === "/admin/join-attempts" ? "joinError" : "error",
         `${path}?returnTo=https%3A%2F%2Fevil.example%2F`,
         {},
         status,
         routeId,
-      ).body;
+      );
+      const html = rendered.body;
       expectCurrent(html, section!, path === section);
+      expect(html, "error heading remains visible").toMatch(/<h1\b[^>]*>[^<]+<\/h1>/);
+      expect(/<h1\b[^>]*>([^<]+)<\/h1>/.exec(html)?.[1], "status-specific error heading").toBe(
+        status === 503
+          ? "Admin temporarily unavailable"
+          : status === 500
+            ? "Something went wrong"
+            : missingHeading,
+      );
+      expect(rendered.head, "private error pages stay out of search").toContain("noindex");
+      if (section === "/admin/join-attempts") {
+        expect(html, "join boundary retains its recovery destination").toContain(
+          'href="/admin/join-attempts"',
+        );
+        expect(html).toContain("Back to join attempts");
+      }
       expect(html).not.toContain("Private diagnostic must not render");
       expect(html).not.toContain('href="https://evil.example');
       expect(html).toContain('href="/admin"');
+    });
+  }
+}
+
+for (const path of [
+  "/administrator",
+  "/admin/events-archive",
+  "/admin/featured-extra",
+  "/admin/featured-contents-extra",
+  "/admin/join-attempts-extra",
+  "/admin/activity-log-extra",
+]) {
+  it(`AO-18 Hono ${path}: boundary lookalikes mark no section current`, async () => {
+    // Unmatched Hono requests use the public 404, not this admin resolver.
+    // Exercise the real admin ErrorPage explicitly instead of a vacuous public shell.
+    const html = await ErrorPage({ heading: "Not found", path })!.toString();
+    expect(headerLinks(html), "real admin error chrome").toHaveLength(6);
+    expect(headerLinks(html).filter((link) => link.current && link.current !== "false")).toEqual(
+      [],
+    );
+    expect(html).toContain("Back to the dashboard");
+  });
+  for (const boundary of ["error", "joinError"] as const) {
+    it(`AO-18 Kit ${boundary} ${path}: boundary lookalikes mark no section current`, () => {
+      const html = render(boundary, path, {}, 404, path).body;
+      expect(headerLinks(html), "real admin error chrome").toHaveLength(6);
+      expect(headerLinks(html).filter((link) => link.current && link.current !== "false")).toEqual(
+        [],
+      );
+      expect(html).not.toContain("Private diagnostic must not render");
     });
   }
 }
@@ -392,6 +513,7 @@ for (const row of cases.filter((item) =>
       const links = upperLinks(html);
       expect(links.filter((link) => link.href === row.section)).toHaveLength(1);
       expect(links.every((link) => ["/admin", row.section].includes(link.href))).toBe(true);
+      expectUpperBreadcrumb(html, row.section === "/admin/events" ? "event" : "featured");
     }
   });
 }
