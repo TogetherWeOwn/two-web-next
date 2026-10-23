@@ -20,7 +20,11 @@ vi.mock("../src/headers", async (importOriginal) => {
   };
 });
 
-const env = { APP_URL: "https://example.test", SESSION_SECRET: "fixture-only" } as Env;
+const env = {
+  APP_URL: "https://example.test",
+  SESSION_SECRET: "fixture-only",
+  DISCORD_INVITE_URL: "https://discord.gg/invite",
+} as Env;
 const RAY = "0123456789abcdef-LHR";
 const PERSONAL = [
   "cookie-secret",

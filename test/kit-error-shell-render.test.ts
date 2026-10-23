@@ -103,6 +103,10 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[]; searchForm?: b
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
     searchForm: true,
   },
+  {
+    code: 422,
+    links: [{ testid: "error-events", name: "Back to events", href: "/events" }, HOME],
+  },
   { code: 429, links: [INVITE_LINK, HOME] },
   { code: 500, links: [INVITE_LINK, HOME] },
   {
@@ -261,6 +265,11 @@ export function renderErrorShell(code, adminBack) {
       it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
         await loadShell(code);
         const copy = kitErrorCopy(code);
+        if (code === 422) {
+          expect(copy.title).toBe("Events");
+          expect(await page.getByTestId("error-invite").count()).toBe(0);
+          expect(await page.getByTestId("error-retry").count()).toBe(0);
+        }
 
         // String evaluate (the featured-native-length pattern): the root
         // tsconfig has no DOM lib, so the callback runs untyped in the page
