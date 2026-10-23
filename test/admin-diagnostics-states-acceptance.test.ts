@@ -17,8 +17,13 @@ beforeAll(async () => {
 afterAll(() => kit?.dispose());
 
 type Element = { attrs: string; body: string };
+// A literal > inside a quoted attribute does not close the opening tag.
 const elements = (html: string, tag: string): Element[] =>
-  [...html.matchAll(new RegExp(`<${tag}\\b([^>]*)>([\\s\\S]*?)</${tag}>`, "g"))].map((match) => ({
+  [
+    ...html.matchAll(
+      new RegExp(`<${tag}\\b((?:[^>"']|"[^"]*"|'[^']*')*)>([\\s\\S]*?)</${tag}>`, "g"),
+    ),
+  ].map((match) => ({
     attrs: match[1]!,
     body: match[2]!,
   }));
