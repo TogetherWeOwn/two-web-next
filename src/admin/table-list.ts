@@ -119,3 +119,68 @@ export function formatActivityCauser(causerId: string | null): string {
 export function activityLogEmptyText(query: ActivityLogQuery): string {
   return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";
 }
+
+const JOIN_LIST_PATH = "/admin/join-attempts";
+const contextEncoder = new TextEncoder();
+const JOIN_CONTEXT_MAX_BYTES = 4096;
+
+// Navigation bounds only: the list's exact outcome filter remains unbounded.
+function joinContextFits(query: JoinAttemptsQuery): boolean {
+  return (
+    contextEncoder.encode(query.outcome).length <= 256 &&
+    query.q.length <= 128 &&
+    contextEncoder.encode(query.q).length <= 512
+  );
+}
+
+/** Carry normalized structured data, never a URL. Oversized state is not truncated. */
+export function joinAttemptContextSearch(query: JoinAttemptsQuery): string {
+  if (!joinContextFits(query)) return "";
+  const search = `?${new URLSearchParams({
+    from_outcome: query.outcome,
+    from_q: query.q,
+    from_page: String(query.page),
+  })}`;
+  return contextEncoder.encode(search).length <= JOIN_CONTEXT_MAX_BYTES ? search : "";
+}
+
+/** Only reconstruct the fixed protected list path; direct/invalid context stays bare. */
+export function joinAttemptReturnUrl(url: URL): string {
+  if (contextEncoder.encode(url.search).length > JOIN_CONTEXT_MAX_BYTES) return JOIN_LIST_PATH;
+  // URLSearchParams repairs bad percent/UTF-8 sequences. Refuse them before parsing.
+  try {
+    decodeURIComponent(url.search.replaceAll("+", " "));
+  } catch {
+    return JOIN_LIST_PATH;
+  }
+  const params = url.searchParams;
+  if (["from_outcome", "from_q", "from_page"].some((key) => params.getAll(key).length !== 1))
+    return JOIN_LIST_PATH;
+  const outcome = params.get("from_outcome")!;
+  const q = params.get("from_q")!;
+  const page = params.get("from_page")!;
+  const query = parseJoinAttemptsQuery({ outcome, q, page });
+  if (
+    !joinContextFits(query) ||
+    query.outcome !== outcome ||
+    query.q !== q ||
+    String(query.page) !== page
+  )
+    return JOIN_LIST_PATH;
+  return joinAttemptsUrl(query, query.page);
+}
+
+export function joinAttemptsEmptyText(query: JoinAttemptsQuery, retentionDays: number): string {
+  if (query.page > 1) return "No join attempts on this page. Try the first page.";
+  return query.outcome || query.q
+    ? "No join attempts match these filters."
+    : `No join attempts recorded in the last ${retentionDays} days (the retention window).`;
+}
+
+/** Preserve nonblank recorded text; absence is a display state, not an identity decision. */
+export function joinDiagnostic(value: string | null): string {
+  return value === null || value.trim() === "" ? "Not recorded" : value;
+}
+
+export const JOIN_EVIDENCE_NOTE =
+  "Not recorded means evidence is missing, not verified anonymity. Missing evidence does not prove success or that no join was attempted. Ordinary sign-in does not write these records.";

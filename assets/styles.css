@@ -53,6 +53,8 @@ legend { font-weight: 700; padding: 0 .5rem; }
 .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
 .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
 .filters .field { margin: 0; }
+/* Join investigation links retain a visible focus ring in both admin themes. */
+a[href^="/admin/join-attempts"]:focus-visible { outline-color: currentColor; }
 .featured-form { overflow-wrap: anywhere; }
 .featured-table-scroll, .admin-table-scroll { max-width: 100%; overflow-x: auto; }
 .featured-table { min-width: 64rem; }
