@@ -33,8 +33,18 @@ export default defineConfig({
             // separately. This does not change client chunking.
             codeSplitting: {
               groups: [
+                // Compress shared shell markup and both header representations
+                // together instead of placing each in a separate gzip stream.
+                {
+                  name: "site-shell",
+                  test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/(?:SiteHeader|ErrorShell)\.svelte)$/,
+                },
                 { name: "admin", test: /\/src\/admin\// },
-                { name: "profiles", test: /\/src\/profiles\// },
+                // Co-compress the Kit profile view with its Hono markup twin.
+                {
+                  name: "profiles",
+                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
+                },
                 {
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,

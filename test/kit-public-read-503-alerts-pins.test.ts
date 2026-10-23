@@ -113,7 +113,7 @@ const eventsEnv = {
 } as unknown as Env;
 
 const baseModel = () => ({
-  state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", game: "", past: false, page: 1 },
   upcoming: [],
   past: [],
   zone: "Europe/London",
@@ -121,6 +121,8 @@ const baseModel = () => ({
   emptyState: null,
   robots: undefined,
   discordFailed: false,
+  games: [],
+  gameFilter: null,
 });
 
 function eventsArgs(overrides: Record<string, unknown> = {}) {
