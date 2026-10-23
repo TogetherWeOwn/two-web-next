@@ -447,6 +447,7 @@ describe("recognized game month-jump regression", () => {
     };
     const searchForm = { addEventListener: vi.fn() };
     const searchInput = { value: "", closest: () => searchForm, addEventListener: vi.fn() };
+    const gameSelect = { value: "Chess", addEventListener: vi.fn() };
     const feedback = { textContent: "" };
     const content = { hidden: false };
     const root = {
@@ -455,6 +456,7 @@ describe("recognized game month-jump regression", () => {
       querySelector: (selector: string) => {
         if (selector === `[data-testid="${MONTH_JUMP_TESTID}"]`) return jumpForm;
         if (selector === '[data-testid="events-search"]') return searchInput;
+        if (selector === 'select[name="game"]') return gameSelect;
         if (selector === '[data-cal-zone="content"]') return content;
         if (selector === "[data-cal-feedback]") return feedback;
         return { hidden: true, textContent: "" };
