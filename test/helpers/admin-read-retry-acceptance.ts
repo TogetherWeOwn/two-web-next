@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
 export const ADMIN_RETRY_ORIGIN = "https://admin-retry.example.test";
 export const ADMIN_RETRY_CANARY = "private-read-failure-<script>exception</script>";
@@ -143,16 +144,48 @@ function decodeHtml(value: string): string {
   });
 }
 
-export function anchors(html: string) {
-  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)].map((match) => ({
-    attributes: match[1]!,
-    href: decodeHtml(/\bhref="([^"]*)"/i.exec(match[1]!)?.[1] ?? ""),
-    name: decodeHtml(match[2]!.replace(/<[^>]*>/g, ""))
-      .replace(/\s+/g, " ")
-      .trim(),
-  }));
+export async function anchors(html: string) {
+  const matches = [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)];
+  // Extract serialized text tokens, not regex-rewritten HTML; decode once below.
+  const parser = new Miniflare(
+    convertV4MiniflareOptions({
+      modules: true,
+      compatibilityDate: "2026-09-29",
+      outboundService: async () => {
+        throw new Error("External network forbidden in anchor parser");
+      },
+      script: `export default {
+        async fetch(request) {
+          const labels = [];
+          for (const fragment of await request.json()) {
+            let text = "";
+            const parsed = new HTMLRewriter().onDocument({
+              text(chunk) { text += chunk.text; }
+            }).transform(new Response(fragment));
+            await parsed.text();
+            labels.push(text);
+          }
+          return Response.json(labels);
+        }
+      };`,
+    }),
+  );
+  try {
+    const response = await parser.dispatchFetch("https://anchor.example.test", {
+      method: "POST",
+      body: JSON.stringify(matches.map((match) => match[2]!)),
+    });
+    const labels = (await response.json()) as string[];
+    return matches.map((match, index) => ({
+      attributes: match[1]!,
+      href: decodeHtml(/\bhref="([^"]*)"/i.exec(match[1]!)?.[1] ?? ""),
+      name: decodeHtml(labels[index]!).replace(/\s+/g, " ").trim(),
+    }));
+  } finally {
+    await parser.dispose();
+  }
 }
 
-export function retryAnchors(html: string) {
-  return anchors(html).filter((anchor) => /^Retry loading(?:\b|$)/i.test(anchor.name));
+export async function retryAnchors(html: string) {
+  return (await anchors(html)).filter((anchor) => /^Retry loading(?:\b|$)/i.test(anchor.name));
 }
