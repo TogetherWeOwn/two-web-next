@@ -90,6 +90,8 @@ export function cancellationData(member = false): KitEventsLoadData {
     totalPages: 1,
     emptyState: null,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member,
     moderator: false,
     inviteUrl: "https://discord.gg/example",
