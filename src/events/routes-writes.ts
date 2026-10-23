@@ -22,7 +22,14 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { eventKeyAllowed } from "./keys";
 import { getPublicEvent, withGoingCount } from "./reads";
-import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
+import {
+  body,
+  dbUnavailableJson,
+  eventJson,
+  type App,
+  type Ctx,
+  type SessionReader,
+} from "./routes-shared";
 import { SESSION_COOKIE } from "../session-cookie";
 import { isValidSessionToken } from "../sessions";
 
@@ -142,7 +149,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
-      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      if (!db) return dbUnavailableJson(c);
       try {
         const { row } = await createEvent(
           db,
@@ -167,7 +174,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
-      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      if (!db) return dbUnavailableJson(c);
       const key = c.req.param("key");
       if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
       try {
@@ -219,7 +226,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       async (c) => {
         const who = c.get("eventModerator");
         const db = await dbFor(c);
-        if (!db) return c.json({ error: "db_unavailable" }, 503);
+        if (!db) return dbUnavailableJson(c);
         try {
           const actor = { id: who.id, username: who.username };
           const key = c.req.param("key");
