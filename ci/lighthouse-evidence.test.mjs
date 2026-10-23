@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { initializeConfig } from "lighthouse/core/config/config.js";
 import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
@@ -333,6 +337,223 @@ test("invalid, duplicate, absent metadata and timing are unknown, never inferred
     ).requestId,
     "01ARZ3NDEKTSV4RRFFQ69G5FAV",
   );
+});
+
+test("production mobile launcher selects and initializes the diagnostic Lighthouse config", async (t) => {
+  const root = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "lh-launch-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = join(root, ".lighthouseci");
+  const calls = [];
+  const spawn = t.mock.method(childProcess, "spawn", (command, args, options) => {
+    calls.push({ command, args, options });
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+    // Exercise main's default runLhci, replacing only the child-process boundary.
+    // No real CLI, browser or HTTP request can be launched by this test.
+    void (async () => {
+      for (const [i, url] of urls.entries())
+        await writeFile(join(dir, `lhr-${i}.json`), JSON.stringify(lhr(url)));
+      await writeFile(join(dir, "assertion-results.json"), "[]");
+      child.emit("close", 0);
+    })().catch((error) => child.emit("error", error));
+    return child;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+  });
+  assert.equal(
+    await mobile([origin], {
+      dir,
+      env: {},
+      log: () => {},
+      fetchImpl: async () => ({ status: 200, text: async () => "" }),
+    }),
+    0,
+  );
+  assert.equal(calls.length, 1);
+  const [{ command, args, options }] = calls;
+  assert.equal(command, process.execPath);
+  assert.deepEqual(args.slice(0, 3), [
+    require.resolve("@lhci/cli/src/cli.js"),
+    "autorun",
+    "--config=ci/lighthouse-origin.cjs",
+  ]);
+  assert.equal(options.env.LIGHTHOUSE_ORIGIN, origin);
+  const prefix = "--collect.settings.configPath=";
+  const configArgs = args.filter((arg) => arg.startsWith(prefix));
+  assert.equal(configArgs.length, 1);
+  const configPath = configArgs[0].slice(prefix.length);
+  assert.equal(
+    configPath,
+    fileURLToPath(new URL("./lighthouse-diagnostics.config.mjs", import.meta.url)),
+  );
+  const selectedConfig = (await import(pathToFileURL(configPath).href)).default;
+  const resolved = (await initializeConfig("navigation", selectedConfig, collect.settings))
+    .resolvedConfig;
+  assert.equal(
+    resolved.audits.filter((audit) => audit.implementation === DocumentTiming).length,
+    1,
+  );
+  assert.ok(resolved.settings.onlyAudits.includes("main-document-timing"));
+});
+
+const timestampCases = [
+  [undefined, "unknown"],
+  [null, "unknown"],
+  ["1", "unknown"],
+  [true, "unknown"],
+  [NaN, "unknown"],
+  [Infinity, "unknown"],
+  [-Infinity, "unknown"],
+  [-Number.MIN_VALUE, "unknown"],
+  [0, "unknown"],
+  [Number.MIN_VALUE, "1970-01-01T00:00:00.000Z"],
+  [1, "1970-01-01T00:00:01.000Z"],
+  [8639999999999.999, "+275760-09-12T23:59:59.999Z"],
+  [8640000000000, "unknown"],
+  [8640000000000.002, "unknown"],
+  [8640000000001, "unknown"],
+];
+for (const [wallTime, expected] of timestampCases) {
+  test(`matching request timestamp boundary: ${String(wallTime)} => ${expected}`, () => {
+    const log = [{ ...devtoolsLog[0], params: { ...devtoolsLog[0].params, wallTime } }];
+    assert.equal(documentTiming(resource, log).timestamp, expected);
+  });
+}
+
+const timingKeys = [
+  "dnsStart",
+  "dnsEnd",
+  "connectStart",
+  "connectEnd",
+  "sslStart",
+  "sslEnd",
+  "sendStart",
+  "sendEnd",
+  "receiveHeadersStart",
+  "receiveHeadersEnd",
+];
+for (const key of timingKeys) {
+  test(`timing offset boundaries for ${key}`, () => {
+    for (const [value, expected] of [
+      [undefined, "unknown"],
+      [null, "unknown"],
+      ["1", "unknown"],
+      [true, "unknown"],
+      [NaN, "unknown"],
+      [Infinity, "unknown"],
+      [-Infinity, "unknown"],
+      [-1, "unknown"],
+      [-Number.MIN_VALUE, "unknown"],
+      [0, 0],
+      [Number.MIN_VALUE, Number.MIN_VALUE],
+      [86399999.99999999, 86399999.99999999],
+      [86400000, 86400000],
+      [86400000.00000001, "unknown"],
+      [86400001, "unknown"],
+    ]) {
+      const result = documentTiming({ ...resource, timing: { [key]: value } }, devtoolsLog);
+      assert.deepEqual(Object.keys(result.timingMs), timingKeys);
+      for (const field of timingKeys)
+        assert.equal(
+          result.timingMs[field],
+          field === key ? expected : "unknown",
+          `${key}=${String(value)}: ${field}`,
+        );
+      assert.equal(result.serverWaitMs, "unknown");
+    }
+  });
+}
+
+test("timestamp correlation ignores later same-URL requests with other IDs and same-ID requests with other URLs", () => {
+  const matching = { ...devtoolsLog[0], params: { ...devtoolsLog[0].params, wallTime: 100 } };
+  const otherId = {
+    ...matching,
+    params: { ...matching.params, requestId: "other", wallTime: 200 },
+  };
+  const otherUrl = {
+    ...matching,
+    params: { ...matching.params, wallTime: 300, request: { url: `${origin}/about` } },
+  };
+  assert.equal(
+    documentTiming(resource, [matching, otherId, otherUrl]).timestamp,
+    "1970-01-01T00:01:40.000Z",
+  );
+  assert.equal(documentTiming(resource, [otherId, otherUrl]).timestamp, "unknown");
+});
+
+test("real MainResource selects the final document navigation, not a later same-URL XHR", async () => {
+  const { MainResource } = await import("lighthouse/core/computed/main-resource.js");
+  const { default: ServerResponseTime } = await import(
+    "lighthouse/core/audits/server-response-time.js"
+  );
+  const navigation = (requestId, wallTime, timestamp, type, ray, wait) => [
+    {
+      method: "Network.requestWillBeSent",
+      params: {
+        requestId,
+        wallTime,
+        timestamp,
+        type,
+        documentURL: resource.url,
+        frameId: "main",
+        loaderId: requestId,
+        initiator: { type: "other" },
+        request: { url: resource.url },
+      },
+    },
+    {
+      method: "Network.responseReceived",
+      params: {
+        requestId,
+        timestamp: timestamp + 1,
+        type,
+        response: {
+          url: resource.url,
+          status: 200,
+          mimeType: "text/html",
+          protocol: "h2",
+          connectionId: 1,
+          connectionReused: false,
+          headers: { "X-Request-ID": ray, "CF-Ray": ray },
+          timing: { requestTime: timestamp, sendEnd: 1, receiveHeadersStart: 1 + wait },
+          encodedDataLength: 100,
+        },
+      },
+    },
+    {
+      method: "Network.loadingFinished",
+      params: { requestId, timestamp: timestamp + 2, encodedDataLength: 200 },
+    },
+  ];
+  const log = [
+    ...navigation("first", 100, 10, "Document", "1111111111111111-LHR", 100),
+    ...navigation("reload", 200, 20, "Document", "2222222222222222-LHR", 754.261),
+    ...navigation("xhr", 300, 30, "XHR", "3333333333333333-LHR", 900),
+  ];
+  const artifacts = {
+    DevtoolsLog: log,
+    URL: {
+      requestedUrl: resource.url,
+      mainDocumentUrl: resource.url,
+      finalDisplayedUrl: resource.url,
+    },
+    GatherContext: { gatherMode: "navigation" },
+  };
+  const context = { computedCache: new Map() };
+  const selected = await MainResource.request({ devtoolsLog: log, URL: artifacts.URL }, context);
+  assert.equal(selected.requestId, "reload");
+  const diagnostic = await DocumentTiming.audit(artifacts, context);
+  const native = await ServerResponseTime.audit(artifacts, context);
+  assert.equal(diagnostic.details.timestamp, "1970-01-01T00:03:20.000Z");
+  assert.equal(diagnostic.details.requestId, "2222222222222222-LHR");
+  assert.equal(diagnostic.details.cfRay, "2222222222222222-LHR");
+  assert.equal(diagnostic.details.serverWaitMs, 754.261);
+  assert.equal(diagnostic.details.serverWaitMs, native.numericValue);
 });
 
 test("malformed assertions stay failing over full samples, regardless of diagnostics", async (t) => {
