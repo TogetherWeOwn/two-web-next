@@ -264,6 +264,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
+  <p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>
   {@html textLimitsIsland}
   {@html editorIsland}
 </section>

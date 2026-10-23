@@ -128,6 +128,7 @@ export const FeaturedFormPage: FC<{
             <a href="/admin/featured">Cancel</a>
           </div>
         </form>
+        <p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true" />
         {mode === "edit" ? (
           <form method="post" action={`/admin/featured/${row!.id}/delete`}>
             <div class="actions">
