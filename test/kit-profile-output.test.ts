@@ -23,19 +23,7 @@ const { compile } = webRequire("svelte/compiler") as {
   ) => { js: { code: string } };
 };
 
-type RenderView = (props: Record<string, unknown>) => { html: string; head: string };
-
-// Read only the rendered head: a body tag or copied helper value cannot
-// conceal removal of either independent ProfileView share-image tag.
-function expectBrandImage(head: string) {
-  const contents = (property: string) =>
-    [...head.matchAll(/<meta\s+[^>]*>/g)]
-      .map(([tag]) => tag)
-      .filter((tag) => tag.includes(`property="${property}"`))
-      .map((tag) => tag.match(/content="([^"]*)"/)?.[1]);
-  expect(contents("og:image")).toEqual(["https://next.example.test/icons/icon-512.png"]);
-  expect(contents("og:image:alt")).toEqual(["Together We Own community logo"]);
-}
+type RenderView = (props: Record<string, unknown>) => string;
 
 let renderView: RenderView;
 
@@ -88,7 +76,7 @@ import { render } from "svelte/server";
 import View from ${JSON.stringify(join(worktree, "web/src/lib/ProfileView.svelte"))};
 export function renderView(props) {
   const { body, head } = render(View, { props });
-  return { html: head + body, head };
+  return head + body;
 }
 `,
   );
@@ -164,8 +152,7 @@ describe("Kit authenticated public-member profile output", () => {
       appUrl: APP_URL,
       joinResult: outcome.joinResult,
     };
-    const { html: kitHtml, head: kitHead } = renderView(pageProps);
-    expectBrandImage(kitHead);
+    const kitHtml = renderView(pageProps);
     const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
     expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));
@@ -215,8 +202,7 @@ describe("Kit authenticated public-member profile output", () => {
       appUrl: APP_URL,
       joinResult: outcome.joinResult,
     };
-    const { html: kitHtml, head: kitHead } = renderView(pageProps);
-    expectBrandImage(kitHead);
+    const kitHtml = renderView(pageProps);
     const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
     expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));

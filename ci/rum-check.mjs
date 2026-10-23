@@ -21,9 +21,6 @@ const QUERY = `query ($account: String!, $site: String!, $since: Time!, $until: 
 export const RUM_TRANSPORT_TIMEOUT_MS = 10_000;
 // Limit decoded response bytes before JSON parsing; the query returns at most one group.
 export const RUM_MAX_RESPONSE_BYTES = 64 * 1024;
-// Cloudflare GraphQL's default rate window; never retry early to fit the job.
-export const RUM_RATE_LIMIT_COOLDOWN_MS = 300_000;
-export const RUM_MAX_RATE_LIMIT_WAIT_MS = 300_000;
 
 const DEFAULT_MIN_SAMPLES = 50;
 const P75_FIELDS = [
@@ -149,7 +146,6 @@ async function queryRum(fetchImpl, options, timeoutMs, maxResponseBytes) {
       return { kind: "timeout" };
     }
     let body;
-    let bodyComplete = false;
     let jsonFailed = false;
     try {
       reader = res.body.getReader();
@@ -165,12 +161,11 @@ async function queryRum(fetchImpl, options, timeoutMs, maxResponseBytes) {
         bytes.set(value, length);
         length += value.byteLength;
       }
-      bodyComplete = true;
       body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
     } catch {
       jsonFailed = true;
     }
-    return { res, body, jsonFailed, bodyComplete };
+    return { res, body, jsonFailed };
   })();
   let result;
   try {
@@ -192,57 +187,6 @@ async function queryRum(fetchImpl, options, timeoutMs, maxResponseBytes) {
   }
 }
 
-function emitSummary(md) {
-  console.log(md);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
-}
-
-function httpDateMs(header) {
-  let canonical = header;
-  const rfc850 =
-    /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT$/.exec(
-      header,
-    );
-  const asctime =
-    /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([A-Z][a-z]{2}) (\d{2}| [1-9]) (\d{2}:\d{2}:\d{2}) (\d{4})$/.exec(
-      header,
-    );
-  if (rfc850) {
-    const [, weekday, day, month, shortYear, time] = rfc850;
-    const latest = new Date();
-    latest.setUTCFullYear(latest.getUTCFullYear() + 50);
-    let year = Math.floor(latest.getUTCFullYear() / 100) * 100 + Number(shortYear);
-    // HTTP's obsolete two-digit year means the most recent past century if >50 years ahead.
-    if (new Date(`${day} ${month} ${year} ${time} GMT`).getTime() > latest.getTime()) year -= 100;
-    canonical = `${weekday.slice(0, 3)}, ${day} ${month} ${year} ${time} GMT`;
-  } else if (asctime) {
-    const [, weekday, month, day, time, year] = asctime;
-    canonical = `${weekday}, ${day.trim().padStart(2, "0")} ${month} ${year} ${time} GMT`;
-  }
-  if (
-    !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
-      canonical,
-    )
-  )
-    return NaN;
-  const date = new Date(canonical);
-  // Round-trip rejects normalized invalid dates as well as arbitrary numeric fragments.
-  return date.toUTCString() === canonical ? date.getTime() : NaN;
-}
-
-function rateLimitWaitMs(header) {
-  let wait = RUM_RATE_LIMIT_COOLDOWN_MS;
-  if (typeof header === "string" && /^\d+$/.test(header)) {
-    // Overflow is excessive, not malformed: do not fall back to an earlier retry.
-    wait = Number(header) * 1000;
-  } else if (typeof header === "string") {
-    const remaining = httpDateMs(header) - Date.now();
-    if (remaining > 0) wait = remaining;
-  }
-  if (wait > RUM_MAX_RATE_LIMIT_WAIT_MS) return null;
-  return Math.max(1000, wait);
-}
-
 // Summaries are bounded fixed-shape strings: no provider payloads, credentials or identity.
 export async function runRumCheck({
   env = process.env,
@@ -251,10 +195,15 @@ export async function runRumCheck({
   onSummary,
   timeoutMs = RUM_TRANSPORT_TIMEOUT_MS,
   maxResponseBytes = RUM_MAX_RESPONSE_BYTES,
-  until = new Date(),
 } = {}) {
   const { CF_ANALYTICS_READ_TOKEN: token, CF_RUM_ACCOUNT_ID: account, CF_RUM_SITE_TAG: site } = env;
-  const emit = onSummary ?? emitSummary;
+  const emit =
+    onSummary ??
+    ((md) => {
+      console.log(md);
+      if (process.env.GITHUB_STEP_SUMMARY)
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
+    });
   if (!token || !account || !site) {
     const summary =
       "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Skipped.";
@@ -262,6 +211,7 @@ export async function runRumCheck({
     return { code: 0, kind: "skipped", summary };
   }
   const resolvedBudget = budget ?? JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
+  const until = new Date();
   const since = new Date(until.getTime() - 24 * 3600 * 1000);
   const result = await queryRum(
     fetchImpl,
@@ -292,16 +242,7 @@ export async function runRumCheck({
     // Provider error text is omitted on purpose; a non-JSON gateway page keeps its HTTP status.
     const summary = `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}, ${errorCount} GraphQL error(s)). Budgets not evaluated.`;
     emit(summary);
-    const retryWait =
-      res.status === 429 && result.bodyComplete
-        ? rateLimitWaitMs(res.headers.get("retry-after"))
-        : null;
-    return {
-      code: 1,
-      kind: "query-failed",
-      summary,
-      ...(retryWait === null ? {} : { rateLimitWaitMs: retryWait }),
-    };
+    return { code: 1, kind: "query-failed", summary };
   }
   if (jsonFailed) {
     const summary =
@@ -333,25 +274,8 @@ export async function runRumCheck({
   return { code: 0, kind: enoughData ? "pass" : "insufficient", summary };
 }
 
-// Exactly one cooldown and one retry; the second outcome is never converted to success.
-export async function runRumCheckWithRateLimitRetry(options = {}) {
-  const pinned = {
-    ...options,
-    env: { ...(options.env ?? process.env) },
-    until: new Date(options.until ?? new Date()),
-    onSummary: options.onSummary ?? emitSummary,
-  };
-  const first = await runRumCheck(pinned);
-  if (first.kind !== "query-failed" || first.rateLimitWaitMs === undefined) return first;
-  pinned.onSummary(
-    `## Real-user Web Vitals\n\nHTTP 429 rate limit: cooldown ${first.rateLimitWaitMs} ms before one retry. Budgets not evaluated yet.`,
-  );
-  await new Promise((resolve) => setTimeout(resolve, first.rateLimitWaitMs));
-  return runRumCheck(pinned);
-}
-
 async function main() {
-  const { code } = await runRumCheckWithRateLimitRetry();
+  const { code } = await runRumCheck();
   return code;
 }
 

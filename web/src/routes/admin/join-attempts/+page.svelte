@@ -1,5 +1,12 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import {
+  JOIN_EVIDENCE_NOTE,
+  joinAttemptContextSearch,
+  joinAttemptsEmptyText,
+  joinDiagnostic,
+  joinAttemptsUrl,
+} from "../../../../../src/admin/table-list";
 import type { PageProps } from "./$types";
 
 // Markup contract of JoinAttemptsPage (src/admin/pages/join-attempts.tsx):
@@ -16,6 +23,7 @@ import type { PageProps } from "./$types";
 // carries none either (csr=false comes from the admin group layout).
 let { data }: PageProps = $props();
 const query = $derived(data.query);
+const contextSearch = $derived(joinAttemptContextSearch(query));
 const outcomes = $derived(
   query.outcome !== "" && !data.outcomes.includes(query.outcome)
     ? [...data.outcomes, query.outcome]
@@ -46,6 +54,8 @@ const outcomes = $derived(
       <button type="submit" class="btn">Filter</button>
     </div>
   </form>
+  {#if query.outcome || query.q}<p><a href="/admin/join-attempts">Clear filters</a></p>{/if}
+  <p>{JOIN_EVIDENCE_NOTE}</p>
   <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: the labelled scroll region stays keyboard-focusable exactly like the Hono viewer (axe scrollable-region-focusable requires a focusable scroller); role="region" names it, tabindex={0} reaches it. -->
   <div
@@ -71,23 +81,26 @@ const outcomes = $derived(
           <tr>
             <td>
               <a
-                href={`/admin/join-attempts/${r.id}`}
+                href={`/admin/join-attempts/${r.id}${contextSearch}`}
                 aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a
               >
             </td>
-            <td>{r.source ?? ""}</td>
-            <td>{r.discordId ?? ""}</td>
-            <td>{r.requestId ?? ""}</td>
+            <td>{joinDiagnostic(r.source)}</td>
+            <td>{joinDiagnostic(r.discordId)}</td>
+            <td>{joinDiagnostic(r.requestId)}</td>
             <td>{r.createdAt}</td>
           </tr>
         {:else}
           <tr>
-            <td colspan={5} data-testid="join-attempts-empty">No join attempts.</td>
+            <td colspan={5} data-testid="join-attempts-empty">{joinAttemptsEmptyText(query, data.retentionDays)}</td>
           </tr>
         {/each}
       </tbody>
     </table>
   </div>
+  {#if data.rows.length === 0 && query.page > 1}
+    <p><a href={joinAttemptsUrl(query, 1)}>First page</a></p>
+  {/if}
   <nav aria-label="Join attempt pages" class="actions">
     {#if data.prevUrl}
       <a rel="prev" href={data.prevUrl}>Previous</a>

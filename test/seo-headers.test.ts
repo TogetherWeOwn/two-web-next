@@ -128,7 +128,7 @@ describe("share meta (TOG-5624)", () => {
     }
   };
 
-  it("tags home with its canonical + OG/Twitter set and the brand og:image", async () => {
+  it("tags home with its canonical + OG/Twitter set and no og:image", async () => {
     const html = await (await app.request("/", {}, env)).text();
     tags(
       html,
@@ -136,8 +136,7 @@ describe("share meta (TOG-5624)", () => {
       "Together We Own — the lobby is open",
       "We spent most of our life private. Now you can just turn up.",
     );
-    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
-    expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
+    expect(html).not.toContain("og:image");
   });
 
   it("tags the join page with its own canonical (funnel lives on shared links)", async () => {
