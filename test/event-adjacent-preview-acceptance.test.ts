@@ -10,12 +10,17 @@ import {
 } from "./helpers/event-adjacent-preview";
 
 const rails = ["event", "event-series"] as const;
-const text = (html: string) =>
-  html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+// Read text between inert SSR tokens; never rewrite markup into new tags.
+const text = (html: string): string => {
+  let content = "";
+  let last = 0;
+  for (const token of html.matchAll(/<!--[\s\S]*?-->|<[^>]*>/g)) {
+    content += html.slice(last, token.index);
+    if (!token[0].startsWith("<!--")) content += " ";
+    last = token.index + token[0].length;
+  }
+  return (content + html.slice(last)).replace(/\s+/g, " ").trim();
+};
 function link(html: string, testid: string) {
   const found = [...html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g)].find((m) =>
     m[0].includes(`data-testid="${testid}"`),

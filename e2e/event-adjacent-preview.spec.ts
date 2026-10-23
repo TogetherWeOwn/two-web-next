@@ -137,7 +137,7 @@ for (const twin of ["Hono", "Kit"] as const) {
             await expect(anchor).toContainText(previous ? "West room" : "East room");
             await expect(anchor).toHaveAccessibleName(
               new RegExp(
-                `${previous ? "Previous" : "Next"}.*Friday game night.*${when.replace(/[+]/g, "\\+")}`,
+                `${previous ? "Previous" : "Next"}.*Friday game night.*${when.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
               ),
             );
           }
