@@ -64,6 +64,9 @@ export async function readProfileUpcoming(
   // Built from PROFILE_UPCOMING_LIMIT so the constant stays the single source
   // of truth. The now bound is an ISO string: raw sql`` interpolation does
   // not serialize Date bounds (see src/leaderboards/members.ts).
+  // Reject both unsupported boundaries before LIMIT, so imports cannot crowd
+  // out usable links. PostgreSQL's earliest finite timestamp fits in JS Date;
+  // its latest does not, so pin the JS upper bound as well as isfinite().
   const limitClause = sql.raw(`limit ${PROFILE_UPCOMING_LIMIT}`);
   const connection = memberReadDb(db);
   const rows = (await keyedMemberRead(() =>
@@ -83,6 +86,9 @@ export async function readProfileUpcoming(
       where r.user_id = ${memberId}
         and r.status in ('going', 'waitlisted')
         and e.status = 'published'
+        and isfinite(e.starts_at) and isfinite(e.ends_at)
+        and e.starts_at <= '275760-09-13 00:00:00+00'::timestamptz
+        and e.ends_at <= '275760-09-13 00:00:00+00'::timestamptz
         and e.ends_at >= ${now.toISOString()}
       order by e.starts_at asc, e.id asc
       ${limitClause}
