@@ -51,6 +51,41 @@ describe.each(["assets", "public"])("%s roster refresh archive continuity", (dir
     },
   );
 
+  describe.each(["1", "2"])("unfiltered archive page %s", (archivePage) => {
+    it.each(["", "attendees=2&", "attendees=2x&"])(
+      "retains context independent of attendee page %s",
+      (attendees) => {
+        const url = new URL(
+          refresh(source, `?${attendees}archivePage=${archivePage}&next=//evil.example`),
+          "https://example.test",
+        );
+        expect(url.pathname).toBe("/e/evt-1");
+        expect([...url.searchParams]).toEqual([
+          ...(attendees === "attendees=2&" ? [["attendees", "2"]] : []),
+          ["archivePage", archivePage],
+        ]);
+      },
+    );
+  });
+
+  describe.each(["x", "🌌"])("query admission counted in %s code points", (character) => {
+    it.each([254, 255, 256])("checks the outbound URL at %i code points", (length) => {
+      const q = character.repeat(length);
+      const search = new URLSearchParams({ attendees: "2", archivePage: "2", archiveQuery: q });
+      const url = new URL(refresh(source, `?${search}`), "https://example.test");
+      expect(url.pathname).toBe("/e/evt-1");
+      expect([...url.searchParams]).toEqual([
+        ["attendees", "2"],
+        ...(length <= 255
+          ? [
+              ["archivePage", "2"],
+              ["archiveQuery", q],
+            ]
+          : []),
+      ]);
+    });
+  });
+
   it.each([
     "archivePage=2&archivePage=2&archiveQuery=x",
     "archivePage=2&archiveQuery=x&archiveQuery=x",
@@ -60,5 +95,7 @@ describe.each(["assets", "public"])("%s roster refresh archive continuity", (dir
     const url = new URL(refresh(source, `?attendees=2&${archive}`), "https://example.test");
     expect(url.searchParams.get("attendees")).toBe("2");
     expect(archiveContext(url.search)).toBeNull();
+    expect(url.searchParams.has("archivePage")).toBe(false);
+    expect(url.searchParams.has("archiveQuery")).toBe(false);
   });
 });
