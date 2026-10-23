@@ -86,7 +86,16 @@ const env: Env = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
 };
 
-beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
+// The unusable-config warn is rate-limited per isolate: refill the log
+// budget between cases so each single refusal warns exactly once.
+let now = Date.now();
+
+beforeEach(() => {
+  now += 600_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -98,19 +107,27 @@ describe("inviteDestination", () => {
     (configured) => {
       expect(inviteDestination(configured)).toBe(new URL(configured).href);
       expect(console.error).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
     },
   );
 
   it.each(invalidInvites)("falls back without logging the configured value: %s", (configured) => {
     expect(inviteDestination(configured)).toBe(FALLBACK_INVITE);
-    expect(console.error).toHaveBeenCalledExactlyOnceWith(
-      "services.discord.invite_url is unusable; serving the hardcoded fallback invite.",
-    );
+    // Rate-limited warn, class only: the configured value never reaches the log.
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith("invite.config.unusable", {
+      exception: "InviteConfigError",
+    });
+    expect(console.error).not.toHaveBeenCalled();
+    if (configured !== "") {
+      const blob = JSON.stringify(vi.mocked(console.warn).mock.calls);
+      expect(blob).not.toContain(configured);
+    }
   });
 
   it("keeps the hardcoded fallback usable", () => {
     expect(inviteDestination(FALLBACK_INVITE)).toBe(FALLBACK_INVITE);
     expect(console.error).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
   });
 });
 

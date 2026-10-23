@@ -60,6 +60,17 @@ export function robotsTagFor(appUrl: string, servingHost?: string): string | nul
   return null;
 }
 
+/** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
+export function stagingRobots(c: Context<{ Bindings: Env }>): string | null {
+  let serving: string | undefined;
+  try {
+    serving = new URL(c.req.url).hostname;
+  } catch {
+    serving = undefined;
+  }
+  return robotsTagFor(c.env.APP_URL, serving);
+}
+
 // Staging X-Robots-Tag on HTML responses only. Register on the app root
 // (after secureHeaders): mounted sub-apps inherit it because the middleware
 // runs on the outer dispatch. Mutates the finished response's headers
