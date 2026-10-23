@@ -1,12 +1,11 @@
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { archiveContext } from "../src/events/archive-context";
 
 it("retains archive refusal and Unicode normalization after production tree-shaking", async () => {
   const requireWeb = createRequire(new URL("../web/package.json", import.meta.url).href);
-  const { rolldown } = await import(pathToFileURL(requireWeb.resolve("rolldown")).href);
+  const { rolldown } = requireWeb("rolldown");
   const bundle = await rolldown({
     input: resolve("src/events/archive-context.ts"),
     platform: "node",
