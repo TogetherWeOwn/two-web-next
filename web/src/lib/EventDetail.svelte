@@ -308,7 +308,7 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
-        {#if !model.isDraft && !model.isPast}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
+        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
             type="button"
             hidden
             data-native-share
@@ -321,7 +321,7 @@ const lineup = $derived(
         {/if}
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-      {#if !model.isDraft && !model.isPast}
+      {#if model.status === "published"}
         <p
           role="status"
           aria-live="polite"
