@@ -30,8 +30,10 @@ const { rows, page, hasMore, totalPages, appUrl, q = "" } = $derived(data);
 const destination = $derived(pastEventsUrl(page, q));
 const calendarFeedUrl = $derived(feedUrl(appUrl));
 // A component-level <script> is Svelte's own; the island tags are emitted as markup.
-const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
-const island = '<script src="/islands/past-events.js" defer></' + "script>";
+const islands =
+  '<script src="/islands/copy-link.js" defer></' +
+  'script> <script src="/islands/past-events.js" defer></' +
+  "script>";
 </script>
 
 <Shell
@@ -89,6 +91,5 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>
-  {@html copyLinkIsland}
-  {@html island}
+  {@html islands}
 </Shell>
