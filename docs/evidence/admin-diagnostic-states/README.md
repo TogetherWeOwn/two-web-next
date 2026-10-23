@@ -91,9 +91,13 @@ The 47 new Vitest checks initially had 28 expected assertion failures and 19
 passes. After the behavior change, 46 passed: the remaining assertion exposed
 a test HTML parser that stopped at `>` inside a valid quoted Svelte attribute.
 Chromium confirmed the complete descriptive label on both twins at both widths.
-The broader focused run had 343 passes, 13 failures and no skips; twelve failures
-were obsolete omission/empty-copy expectations. Author-owned corrections are
-tracked separately; these results are not a green suite or final QA verdict.
+The broader focused run initially had 343 passes, 13 failures and no skips;
+twelve failures were obsolete omission/empty-copy expectations. A separately
+authored test-only correction updates those pins and makes attribute observation
+quote-aware, without changing the substantive unknown-value assertions. The
+correction was consumed unchanged and the exact ten-suite command rerun:
+**356 passed, zero failures, zero skips**, including all 47 new checks. This is
+focused local verification, not a full-suite or final release verdict.
 
 Executed successfully: root typecheck and lint; Kit warning-enforcing check and
 build; `npm run kit-perf`; four native keyboard/no-JS cases; `npm run a11y`
