@@ -111,6 +111,17 @@ function calendarFixture(upcoming: EventRow[], past: EventRow[], counts: Map<num
       .map(([id, c]) => [id, pick(c)]),
   });
   const db = drizzle(async (sql: string, params: unknown[]) => {
+    if (sql.startsWith("select distinct")) {
+      const games = [
+        ...new Set(
+          [...upcoming, ...past]
+            .filter((row) => row.status === "published")
+            .map((row) => row.game?.trim())
+            .filter((game): game is string => !!game),
+        ),
+      ];
+      return { rows: games.slice(0, Number(params.at(-1))).map((game) => [game]) };
+    }
     if (sql.includes('from "rsvps"')) {
       if (!sql.includes("count(*)")) return { rows: [] };
       // The attributable aggregate joins users; the occupancy aggregate reads
