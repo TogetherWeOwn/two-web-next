@@ -110,7 +110,7 @@ async function renderPage(e: PublicEvent): Promise<string> {
 }
 
 async function renderCalendar(e: PublicEvent, month: string): Promise<string> {
-  const state: CalendarState = { view: "calendar", month, q: "", past: false, page: 1 };
+  const state: CalendarState = { view: "calendar", month, q: "", game: "", past: false, page: 1 };
   const html = await jsx(EventsCalendarPage, {
     state,
     upcoming: [e],
@@ -120,6 +120,8 @@ async function renderCalendar(e: PublicEvent, month: string): Promise<string> {
     totalPages: 1,
     emptyState: null as CalendarEmptyState,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
     inviteUrl: "https://discord.gg/fixture",
     appUrl: APP_URL,
