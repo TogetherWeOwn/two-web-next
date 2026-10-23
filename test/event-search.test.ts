@@ -121,12 +121,20 @@ describe("recordSearch is fail-open", () => {
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
 
+function dashboardSection(html: string, id: "join-funnel" | "top-zero-searches"): string {
+  const section = new RegExp(
+    `<section\\b[^>]*data-testid="${id}"[^>]*>([\\s\\S]*?)</section>`,
+  ).exec(html);
+  expect(section, `${id} remains visible on an admitted dashboard`).not.toBeNull();
+  return section![1]!;
+}
+
 async function cookieFor(store: SessionStore, moderator: boolean): Promise<string> {
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
     userId: moderator ? "100000000000000111" : "100000000000000112",
-    username: "searcher",
+    username: "fixture-searcher-private-name",
     avatar: null,
     member: true,
     moderator,
@@ -296,7 +304,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     ]);
   });
 
-  it("serves /admin 200 with the widget omitted while the search-log table is locked", async () => {
+  it("serves /admin 200 with searches unavailable and a healthy funnel while the search-log table is locked", async () => {
     // P2: the optional widget SELECT must be cancelled DB-side so the
     // dashboard never waits on an analytics-only lock (no Promise.race-only fix).
     const locker = lockClient();
@@ -308,7 +316,18 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         expect(mod.status).toBe(200);
         expect(Date.now() - t0).toBeLessThan(2000);
         const html = await mod.text();
-        expect(html).not.toContain('data-testid="top-zero-searches"');
+        const searchWidget = dashboardSection(html, "top-zero-searches");
+        expect(searchWidget).toMatch(/<h2\b[^>]*>Top searches with no results/);
+        expect(searchWidget).toMatch(/unavailable for this load/i);
+        expect(searchWidget).not.toContain('data-testid="top-zero-searches-empty"');
+        expect(searchWidget).not.toMatch(/<table\b/);
+        expect(searchWidget).not.toMatch(
+          /No (?:recorded )?missed searches|\b0 (?:misses|searches)\b/i,
+        );
+        const funnelWidget = dashboardSection(html, "join-funnel");
+        expect(funnelWidget).toMatch(/<h2\b[^>]*>Join funnel/);
+        expect(funnelWidget).toContain('data-testid="join-funnel-empty"');
+        expect(funnelWidget).not.toMatch(/unavailable/i);
         expect(
           await waitForNoLockWaiters(
             async () =>
@@ -324,7 +343,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     }
   });
 
-  it("serves /admin 200 when a loaded host delays the widget transactions before their DB-side caps (TOG-12177)", async () => {
+  it("serves /admin 200 with searches unavailable and a healthy funnel when a loaded host delays transactions", async () => {
     // CI flake on shared runners: the dashboard's two optional reads share one pooled
     // connection, so a slow funnel transaction pushed the lock-blocked search SELECT past
     // the client deadline; the still-pending read then made the member-read boundary
@@ -351,7 +370,19 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         );
         expect(mod.status).toBe(200);
         expect(Date.now() - t0).toBeLessThan(2000);
-        expect(await mod.text()).not.toContain('data-testid="top-zero-searches"');
+        const html = await mod.text();
+        const searchWidget = dashboardSection(html, "top-zero-searches");
+        expect(searchWidget).toMatch(/<h2\b[^>]*>Top searches with no results/);
+        expect(searchWidget).toMatch(/unavailable for this load/i);
+        expect(searchWidget).not.toContain('data-testid="top-zero-searches-empty"');
+        expect(searchWidget).not.toMatch(/<table\b/);
+        expect(searchWidget).not.toMatch(
+          /No (?:recorded )?missed searches|\b0 (?:misses|searches)\b/i,
+        );
+        const funnelWidget = dashboardSection(html, "join-funnel");
+        expect(funnelWidget).toMatch(/<h2\b[^>]*>Join funnel/);
+        expect(funnelWidget).toContain('data-testid="join-funnel-empty"');
+        expect(funnelWidget).not.toMatch(/unavailable/i);
       });
     } finally {
       await locker.end();
@@ -386,10 +417,18 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     const mod = await req("/admin", { headers: { cookie: await cookieFor(store, true) } });
     expect(mod.status).toBe(200);
     const html = await mod.text();
-    const widget = html.slice(html.indexOf('data-testid="top-zero-searches"'));
+    const widget = dashboardSection(html, "top-zero-searches");
     expect(widget).toContain("Top searches with no results");
     expect(widget).toContain("valorant");
+    expect(widget).toMatch(/<td\b[^>]*>valorant<\/td>/);
+    expect(widget).toMatch(/recorded/i);
+    expect(widget).toMatch(/planning hints/i);
+    expect(widget).toMatch(/not proof of demand/i);
+    expect(widget).toMatch(/not all searches/i);
+    expect(widget).toMatch(/no searcher identity/i);
     expect(widget).not.toContain("search-member");
-    expect(widget).not.toContain("searcher");
+    expect(widget).not.toContain("fixture-searcher-private-name");
+    expect(widget).not.toContain("100000000000000111");
+    expect(widget).not.toContain("100000000000000112");
   });
 });
