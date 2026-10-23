@@ -121,8 +121,8 @@
     },
     "basic-ftp": "6.2.1",
     "sharp": "0.35.5",
-    "puppeteer-core": {
-      "proxy-agent": "6.5.0"
+    "lighthouse": {
+      "puppeteer-core": "25.16.0"
     }
   },
   "engines": {
