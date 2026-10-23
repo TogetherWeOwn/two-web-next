@@ -28,7 +28,7 @@ import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ASSERT_FAILURE_MARKER,
   hasAssertFailure,
@@ -62,7 +62,12 @@ function runLhci(env) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [require.resolve("@lhci/cli/src/cli.js"), "autorun", `--config=${CONFIG}`],
+      [
+        require.resolve("@lhci/cli/src/cli.js"),
+        "autorun",
+        `--config=${CONFIG}`,
+        `--collect.settings.configPath=${fileURLToPath(new URL("./lighthouse-diagnostics.config.mjs", import.meta.url))}`,
+      ],
       { env, stdio: ["ignore", "pipe", "pipe"] },
     );
     let text = "";
@@ -212,6 +217,35 @@ async function archiveMarginalAttempt(dir, { origin, eventPath, found, exitCode,
   }
 }
 
+// Every finished attempt, including short/failed collects, is immutable before
+// either retry cleanup or the later desktop collect can delete top-level LHRs.
+// Archives are never read by sample accounting, assertions or retry selection.
+async function archiveMobileAttempt(dir, { n, exitCode }) {
+  const parent = join(dir, "mobile-attempts");
+  await mkdir(parent, { recursive: true });
+  const attemptDir = join(parent, `attempt-${n}`);
+  await mkdir(attemptDir);
+  const names = (await readdir(dir))
+    .filter((name) => /^lhr-\d+\.json$/.test(name) || name === "assertion-results.json")
+    .sort();
+  for (const name of names) await copyFile(join(dir, name), join(attemptDir, name));
+  await writeFile(
+    join(attemptDir, "manifest.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        profile: "mobile",
+        attempt: n,
+        exitCode,
+        files: names,
+        assertions: names.includes("assertion-results.json") ? "assertion-results.json" : "unknown",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 export async function main(
   argv,
   {
@@ -324,6 +358,7 @@ export async function main(
         flag: "a",
       },
     );
+    await archiveMobileAttempt(dir, { n, exitCode });
     const lhrObjects = loadCollectedLhrs(dir);
     const matrix = sampleMatrix(lhrObjects, collect);
     const assertions = loadAssertions(dir);

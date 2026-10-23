@@ -1,4 +1,23 @@
 /** Server-side event date formatting shared by page models and renderers. */
+
+/** Detail wall time shared by HTML, Kit and Markdown; ISO on a bad zone. */
+export function formatEventWhen(instant: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: timezone,
+      timeZoneName: "longOffset",
+    }).format(instant);
+  } catch {
+    return instant.toISOString();
+  }
+}
+
 function calendarDate(year: number, monthIndex: number, day: number): Date {
   const date = new Date(0);
   date.setUTCFullYear(year, monthIndex, day);
