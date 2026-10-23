@@ -123,7 +123,6 @@ describe("bounded RUM HTTP 429 recovery", () => {
     ["fractional seconds", "1.5", 300_000],
     ["numeric fragment", "7seconds", 300_000],
     ["exponent", "1e2", 300_000],
-    ["non-HTTP numeric date", "2026", 300_000],
     ["non-HTTP ISO date", "2026-10-23T12:00:07Z", 300_000],
   ] as const)(
     "waits exactly the safe delay for %s before evaluating the retry",
@@ -151,7 +150,7 @@ describe("bounded RUM HTTP 429 recovery", () => {
     },
   );
 
-  it.each(["301", "9007199254740993", "9".repeat(400), "Fri, 23 Oct 2026 12:05:01 GMT"])(
+  it.each(["301", "2026", "9007199254740993", "9".repeat(400), "Fri, 23 Oct 2026 12:05:01 GMT"])(
     "refuses an excessive/overflow delay without clamping or retrying: %s",
     async (header) => {
       const fetchImpl = vi.fn(async () => limited(header));
