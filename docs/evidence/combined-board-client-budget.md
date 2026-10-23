@@ -6,10 +6,13 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current proposal after the third base-conflict reconciliation:** raw client JS
-248832 B (+1024 B vs current main) and gzip client JS 100096 B (+256 B vs
+**Current proposal after the fourth base-conflict reconciliation:** raw client JS
+250368 B (+512 B vs current main) and gzip client JS 100864 B (+256 B vs
 current main). Earlier proposals below are historical. See the final section
-for the new repeated measurements and unchanged guards.
+for repeated measurements and unchanged guards. The client group fits these
+caps, but the integrated feature now independently breaches server gzip and
+file-count caps. Those caps remain unchanged here; this client-only prerequisite
+is no longer sufficient by itself to make the integrated checker green.
 
 ## Inputs and method
 
@@ -295,3 +298,96 @@ passes its checker. Full `npm run check`, browser parity, startup latency
 and staging are not run or claimed; exact-head CI and independent review
 remain required. Rollback restores main's 247808 B raw and 99840 B gzip
 caps. The source feature ref remains untouched.
+
+## Fourth base-conflict reconciliation: client-only scope, server hold
+
+On 2026-10-23 GitHub reported a conflict against main `db0d82bb6`
+([#1460](https://github.com/TogetherWeOwn/two-web-next/pull/1460)). Only
+`ci/kit-perf-budget.json` conflicted. Main adds the board-filter error boundary
+and raises its client caps to 249856/100608 B and server file cap to 124.
+The resolution retains main's full decision history and all four unique
+prerequisite records, once each. Incoming source and acceptance tests remain
+byte-identical to main. The PR diff remains budget/evidence only.
+
+Reproduce with the same five-path frozen overlay described above, substituting
+`git archive db0d82bb6`. The overlay applies cleanly: main's new `+error.svelte`
+is not one of the overlaid paths. Node `v24.22.1`, fresh external locked
+root/web dependencies and both lockfile SHA-256 values remain unchanged.
+Three builds per tree give:
+
+| Group | Main 1 | Main 2 | Main 3 | Combined 1 | Combined 2 | Combined 3 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Client JS raw/gzip | 249333/100464 | 249333/100464 | 249333/100464 | 250098/100715 | 250098/100715 | 250098/100715 |
+| Client JS files | 53 | 53 | 53 | 53 | 53 | 53 |
+| Server JS raw/gzip | 1113669/327606 | 1113667/327605 | 1113669/327605 | 1115183/328097 | 1115183/328100 | 1115185/328097 |
+| Server JS files | 124 | 124 | 124 | 125 | 125 | 125 |
+| Worker raw/gzip | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 |
+| Client CSS raw/gzip | 2737/983 | 2737/983 | 2737/983 | 2737/983 | 2737/983 | 2737/983 |
+| Client CSS files | 2 | 2 | 2 | 2 | 2 | 2 |
+
+The second and third builds have identical client/CSS/worker path, byte and
+hash maps; the first client outputs also match those maps. Server variation
+is confined to the known `chunks/instance.js` and `chunks/internal.js`
+build-ID wobble. The TSV appends **second-build**, not first-build, rows as
+`boundary-main` (180 rows) and `boundary-combined` (181 rows). Across trees,
+51 of 53 client path/hash pairs match. The board node is now node 27 and
+still grows 3600/1722 → 4365/1972 B (**+765/+250 B**). The app entry has
+identical raw size 5480 B, but hash relinking changes its gzip 1514 → 1515 B.
+Thus the total client delta is **+765/+251 B**, not the earlier +765/+250 B.
+Both clients still have zero literal `drizzle-orm` references.
+
+### Client proposal and same-output controls
+
+The combined client breaches main's 249856/100608 B caps by **242 raw / 107
+gzip B**. The new proposal **250368 raw / 100864 gzip B** is the first fitting
+512/256 B boundary, **+512/+256 B versus main**, with **270/149 B margins**.
+It supersedes the previous 248832/100096 B proposal, rather than adding
+allowances together. Every non-client-byte ceiling stays exactly main's.
+
+On identical third-build combined output, the following controls run twice
+without rebuilding. The overall exit remains **1 in every row** because the
+server independently fails; only the client diagnostic changes:
+
+| Client raw/gzip caps | Client result | Overall checker exit |
+| --- | --- | --- |
+| 249856/100608 | raw and gzip breach | 1 |
+| 250368/100608 | gzip breach only | 1 |
+| 249856/100864 | raw breach only | 1 |
+| 250368/100864 | client group passes | 1 (server only) |
+
+This is client red/green proof, **not an all-group combined green claim**.
+The actual budget-only resolved worktree builds and passes all groups under
+the proposed budget; it contains main's source, not the frozen feature overlay.
+
+### Newly exposed server prerequisite (not authorized here)
+
+The integrated feature now has **125 server files against 124** and gzip
+**328097–328100 B against 327680 B**: **417–420 B over**. Its raw size still
+fits 1203200 B. Main itself passes, so this is not a main-red incident.
+The new `chunks/captions.js` contributes 349/283 B. The board SSR entry adds
+635/~138 B, shared Hono `chunks/src.js` adds 577/~115 B, and
+`chunks/members.js` shrinks 45/39 B, plus small build-ID/manifest variations.
+No duplicated library explains this; the integration consumes main's remaining
+74–75 B of server gzip headroom and the final server file slot.
+
+This PR's scope is the dedicated client-byte decision. It does **not** raise
+server gzip, server file count or any other fitting cap to hide that separate
+breach. The source feature must resolve the server cost through a verified
+reduction or a separately justified, independently reviewed prerequisite,
+then consume both changes normally and pass its own exact-head gates. Merging
+this client-only prerequisite does not authorize merging the feature.
+
+### Verification and limitations
+
+Unchanged frozen feature acceptance passes **20/20** in the combined archive;
+incoming board-filter recovery acceptance passes **29/29** in the resolved
+worktree. An initial feature-test command mistakenly ran in the budget-only
+worktree and exited 1 with `No test files found`; the corrected command ran
+in the overlay and passed. No test file is added or edited by this PR.
+Checker selftests **6/6**, checker tests **13/13**, parity-gate unit tests
+**67/67** and config selftests **34/34** pass. The additional local gates and
+fresh-context review are recorded in the PR. Full `npm run check`, browser
+parity, startup latency and staging are not rerun or claimed. Prior-head hosted
+CI was green, but does not approve this new head; exact-head CI and independent
+review remain required. Rollback restores main's client caps **249856/100608 B**.
+The source feature ref remains untouched.
