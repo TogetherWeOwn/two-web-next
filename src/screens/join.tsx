@@ -152,7 +152,7 @@ export const Join: FC<{
           <h2 id="join-expectations-heading">What happens after you connect</h2>
           <ol>
             <li data-testid="join-expectation-connect">
-              Connect with Discord. <a href="/join/discord">Join with Discord</a>
+              Connect with Discord. <a href={oneClickHref}>Join with Discord</a>
             </li>
             <li data-testid="join-expectation-recognized">
               Return signed in, with a welcome banner. <a href="/faq">Questions? Read the FAQ</a>
