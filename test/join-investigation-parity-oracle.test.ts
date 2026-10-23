@@ -1,5 +1,6 @@
 // Exercise the exported preview oracle against actual Hono route/Kit load+SSR
 // output. No handwritten populated fixture can hide stale link serialization.
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   compileInvestigationKit,
@@ -19,11 +20,10 @@ let assertJoinAttemptsContract: (input: {
 }) => string[];
 beforeAll(async () => {
   kit = await compileInvestigationKit();
-  // Dynamic URL import keeps this JS CLI's public API executable without adding
-  // a production declaration/shim or suppressing the TypeScript checker.
-  ({ assertJoinAttemptsContract } = await import(
-    new URL("../ci/kit-parity-gates.mjs", import.meta.url).href
-  ));
+  // This source-file URL form keeps the real JS export in the timeout ledger's
+  // static import walk without a declaration/shim or a TypeScript suppression.
+  const oraclePath = fileURLToPath(new URL("../ci/kit-parity-gates.mjs", import.meta.url).href);
+  ({ assertJoinAttemptsContract } = await import(pathToFileURL(oraclePath).href));
 });
 afterAll(() => kit?.dispose());
 
