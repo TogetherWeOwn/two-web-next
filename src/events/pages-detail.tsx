@@ -182,7 +182,14 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Closed events never invite: past detail shows the final
+                  // going count with no spots-left/full line, matching the
+                  // schedule-card precedent (past and cancelled cards stay
+                  // unmarked). The binder patches the spots node in place and
+                  // never invents markup, so refresh on a closed event keeps
+                  // this rendering with no JS change. Drafts and published
+                  // rows keep the invitation line exactly as before.
+                  showSpotsLeft: e.status !== "past" && e.status !== "cancelled",
                   announcement: null,
                 }),
               }}
