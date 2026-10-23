@@ -13,7 +13,7 @@ import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 import { assertNoViolations, auditCases, redactAuditLog, AUDIT_VIEWPORTS, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
-import { assertAuditContent } from "./a11y-content.mjs";
+import { assertAuditContent, renderDeferredFaqSections } from "./a11y-content.mjs";
 import { assertHomeInteractions, assertProfileInteractions } from "./a11y-interactions.mjs";
 
 const output = resolve("artifacts/a11y");
@@ -136,6 +136,7 @@ try {
         assert.deepEqual(resourceErrors, [], "Unexpected script/stylesheet failures");
         result.contentAssertions = await assertAuditContent(page, scenario);
         result.interactionAssertions = [...await assertHomeInteractions(page, scenario), ...await assertProfileInteractions(page, scenario)];
+        if (scenario.route === "/faq") result.renderedSections = await renderDeferredFaqSections(page);
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         result.violations = results.violations;
         result.incomplete = results.incomplete;
