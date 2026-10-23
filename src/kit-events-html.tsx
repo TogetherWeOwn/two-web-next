@@ -38,6 +38,8 @@ export async function renderEventsHtml(
       emptyState={data.emptyState}
       robots={data.robots}
       discordFailed={data.discordFailed}
+      games={data.games}
+      gameFilter={data.gameFilter}
       member={data.member}
       inviteUrl={data.inviteUrl}
       appUrl={data.appUrl}

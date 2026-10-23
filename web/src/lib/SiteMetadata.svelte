@@ -1,4 +1,6 @@
 <script lang="ts">
+import { shareImageUrl } from "../../../src/seo";
+
 const SITE_NAME = "Together We Own";
 
 let {
@@ -32,9 +34,6 @@ let {
 
 const fullTitle = $derived(exactTitle ?? `${title} — ${SITE_NAME}`);
 const share = $derived(shareTitle ?? fullTitle);
-const shareDescription = $derived(
-  description || "Together We Own: a close-knit adult gaming community, founded 1998.",
-);
 const themeStylesheet = $derived(
   theme === "schedule"
     ? "/schedule-theme.css"
@@ -46,30 +45,34 @@ const themeStylesheet = $derived(
 );
 // Content leaves inline the exact bytes the Hono shell inlines
 // (src/page-shell.tsx): styles.css + theme-tokens.css + theme.css in one
-// <style> block, allowlisted by hash in the leaf CSP (src/headers.ts). The
+// CSS block, allowlisted by hash in the leaf CSP (src/headers.ts). The
 // external links cost ~150 ms of render-blocking time on mobile, which the
 // 2000 ms LCP budget on these pages cannot spare.
-const leafStyleBlock = $derived(leafCss ? `<style>${leafCss}</style>` : "");
 </script>
 
 <svelte:head>
   {#if robots}<meta name="robots" content={robots} />{/if}
   <title>{fullTitle}</title>
-  <meta name="description" content={shareDescription} />
+  <meta
+    name="description"
+    content={description || "Together We Own: a close-knit adult gaming community, founded 1998."}
+  />
   {#if canonical}
     <link rel="canonical" href={canonical} />
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:site_name" content="Together We Own" />
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={share} />
     {#if description}<meta property="og:description" content={description} />{/if}
+    <meta property="og:image" content={shareImageUrl(canonical)} />
+    <meta property="og:image:alt" content="Together We Own community logo" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={share} />
     {#if description}<meta name="twitter:description" content={description} />{/if}
   {/if}
-  <link rel="alternate" type="application/rss+xml" title="{SITE_NAME} Events" href="/events.rss" />
+  <link rel="alternate" type="application/rss+xml" title="Together We Own Events" href="/events.rss" />
   {#if theme === "content"}
-    {@html leafStyleBlock}
+    {@html leafCss ? `<style>${leafCss}</style>` : ""}
   {:else}
     <link rel="stylesheet" href="/styles.css" />
     <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
