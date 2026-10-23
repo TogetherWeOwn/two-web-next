@@ -302,6 +302,46 @@ assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
 The `watch-summary.md` medians table is followed by a per-sample table with
 every run's values for every route, including passes.
 
+Every finished mobile attempt (successful, failed or short) also snapshots all
+per-sample `lhr-*.json` files and `assertion-results.json`, when present, into
+`.lighthouseci/mobile-attempts/attempt-N/` before any retry or desktop cleanup.
+Its `manifest.json` schema version 1 records the mobile profile, attempt number,
+original process exit, file inventory and assertion filename (or `unknown`).
+Malformed files are preserved as evidence, never repaired or counted as valid.
+The existing summaries and marginal-retry archive remain unchanged. Desktop
+accounting reads only its fresh top-level LHRs, never these mobile archives.
+
+For deployed mobile collection, an informative, unscored `main-document-timing`
+audit reads the same already-collected main resource as `server-response-time`.
+Each archived LHR's `audits["main-document-timing"].details` contains schema
+version 1, UTC request timestamp, validated `requestId` / `cfRay`, protocol,
+`edgeColo` from the response ray suffix, `servingRevision`, CDP `timingMs`
+(DNS/connect/TLS/send/receive-header offsets), and `serverWaitMs`
+(`receiveHeadersStart - sendEnd`, matching the native audit). Missing or invalid
+fields are `unknown`. The served revision is currently unknown: a checkout SHA
+is not evidence of the revision that served the response. Existing `fetchTime`
+and requested URL identify each LHR; the new diagnostic fields contain no URL,
+query values, arbitrary headers, credentials, response bodies or raw CDP log.
+No additional navigation or probe is made. The audit has no category weight,
+assertion, or role in sample quotas, budget values or retry decisions.
+
+To investigate, use **all three mobile samples for a route**, not the
+performance-selected upload in `reports/`. Join validated request IDs and
+timestamps to existing `http.request` telemetry only when already accessible;
+that telemetry's `duration_ms`, `colo` and release identify Worker execution.
+Browser server wait includes network/edge time and is **not** Worker duration.
+No accessible matching telemetry means unknown, not evidence of network noise.
+Inspect the next naturally executed staging artifact after merge; do not dispatch
+a workflow, deploy, or add telemetry authority to obtain it. Preservation is not
+a latency repair: the 600ms server-response median gate stays unchanged and red
+for a 754.261ms median. Rollback removes only the archive call, informative audit
+and its config argument, never a budget or failure check.
+
+Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile
+then desktop, separate attempts, three samples per planned route, corrupted and
+missing sample evidence, the field allowlist, unchanged resolved Lighthouse
+configuration/scoring, and the real LHCI median assertion.
+
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not

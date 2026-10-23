@@ -224,7 +224,7 @@ describe("pre-service ingress refusals carry request_id: new behavior", () => {
     expect(res.status).toBe(404);
     expect(body.request_id).toBe(RAY);
     expect(body.request_id).toBe(res.headers.get("x-request-id"));
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
   });
 
   it("the not-configured 503 body request_id matches the x-request-id header", async () => {
@@ -233,7 +233,7 @@ describe("pre-service ingress refusals carry request_id: new behavior", () => {
     expect(res.status).toBe(503);
     expect(body.request_id).toBe(RAY);
     expect(body.request_id).toBe(res.headers.get("x-request-id"));
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
   });
 
   it("the admission-outage 503 body request_id matches the header, leaking nothing", async () => {
@@ -243,7 +243,7 @@ describe("pre-service ingress refusals carry request_id: new behavior", () => {
     expect(res.status).toBe(503);
     expect(body.request_id).toBe(RAY);
     expect(body.request_id).toBe(res.headers.get("x-request-id"));
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain(CRED);
     expect(serialized).not.toContain("ECONNREFUSED");
@@ -265,7 +265,7 @@ describe("pre-service ingress refusals carry request_id: new behavior", () => {
     expect(res.status).toBe(503);
     expect(body.request_id).toBe(RAY);
     expect(body.request_id).toBe(res.headers.get("x-request-id"));
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain(CRED);
     expect(serialized).not.toContain("ECONNREFUSED");

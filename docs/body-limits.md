@@ -67,7 +67,7 @@ before either. Source-read failures return a static 400; downstream
 route and store exceptions still reach their existing handlers.
 
 `POST /mcp` is likewise cap-first: `requestBodyLimit("mcp")` runs before
-`admitted()` in [`src/mcp/routes.ts`](../src/mcp/routes.ts), so an over-cap
+`mcpRefused()` in [`src/mcp/routes.ts`](../src/mcp/routes.ts), so an over-cap
 body returns 413 with zero shared `events-read` budget spend even when the
 bucket is exhausted. Bodies at or under the cap still run the shared
 public-read admission before any body parse or database read, retaining the

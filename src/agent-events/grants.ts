@@ -1,6 +1,7 @@
 import { sha256Hex } from "../bot/signer";
 import type { Answer, Grant, Tx } from "./types";
 import { audit } from "./audit";
+import { ingressDenial } from "./envelope";
 
 export async function findGrant(sql: Tx, credential: string): Promise<Grant | null> {
   const [row] = await sql<
@@ -33,12 +34,12 @@ export async function checkGrant(
   await audit(tx, current ? grant : null, op, eventKey, key, dig, requestId, "denied", reason);
   return {
     status: 403,
-    body: {
+    body: ingressDenial(
       reason,
-      message: expired
+      expired
         ? "The grant has expired. Expiry rejects ingress and dispatch alike."
         : "The grant has been disabled by its provisioning owner.",
-      request_id: requestId,
-    },
+      requestId,
+    ),
   };
 }

@@ -7,10 +7,12 @@ import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
 import { throttleGuard } from "../throttle";
 import {
+  PUBLIC_DATA_ERROR_NEXT,
   PUBLIC_EVENT_STATUS,
   type PublicEventDto,
   type PublicEventId,
 } from "../public-data/contracts";
+import { clampOutageRetryAfter, OUTAGE_RETRY_AFTER_SECONDS, varyAccept } from "../errors";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -41,7 +43,68 @@ export async function publicReadGuard(c: Ctx): Promise<Response | null> {
   return limited;
 }
 
-export const eventsUnavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
+/**
+ * True only when the caller explicitly lists application/json with q>0 (same
+ * quality grammar as jsonSession below): absent, wildcard, feed-native and
+ * q=0-excluded callers stay on the plaintext feed contract.
+ */
+function feedJsonRequested(c: Ctx): boolean {
+  const accept = c.req.header("accept");
+  if (!accept) return false;
+  return accept
+    .toLowerCase()
+    .split(",")
+    .some((range) => {
+      const [type, ...parameters] = range.split(";").map((part) => part.trim());
+      if (type !== "application/json") return false;
+      const weights = parameters.filter((part) => /^q\s*=/.test(part));
+      const quality = weights[0]?.replace(/^q\s*=\s*/, "") ?? "1";
+      return (
+        weights.length <= 1 &&
+        /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) &&
+        Number(quality) > 0
+      );
+    });
+}
+
+/**
+ * Feed 503s stay plaintext for feed-native callers but answer the structured
+ * error envelope for explicit `Accept: application/json` callers — no-store
+ * either way, with Vary: Accept merged since the representation negotiates.
+ * Throttled feeds (429) keep their plaintext refusal on every Accept.
+ */
+export function unavailableFeed(c: Ctx, message: string, retryAfter?: number): Response {
+  varyAccept(c);
+  if (retryAfter !== undefined) c.header("Retry-After", String(retryAfter));
+  if (feedJsonRequested(c)) {
+    return c.json(
+      {
+        error: {
+          code: "unavailable",
+          message,
+          request_id: c.get("requestId"),
+          next: PUBLIC_DATA_ERROR_NEXT.unavailable,
+        },
+      },
+      503,
+      { "cache-control": "no-store" },
+    );
+  }
+  return c.text(message, 503, { "cache-control": "no-store" });
+}
+
+export const eventsUnavailable = (c: Ctx, retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS) =>
+  unavailableFeed(c, "Events temporarily unavailable", clampOutageRetryAfter(retryAfter));
+
+/**
+ * Inline no-database refusal for the JSON-only event legs: the exact legacy
+ * `{error: "db_unavailable"}` bytes plus the outage Retry-After header.
+ */
+export function dbUnavailableJson(c: Pick<Ctx, "json">): Response {
+  return c.json({ error: "db_unavailable" }, 503, {
+    "Retry-After": String(OUTAGE_RETRY_AFTER_SECONDS),
+  });
+}
 
 export function eventJson(e: PublicEvent) {
   // Legacy EventResource order: event_key first, synced_to_discord
