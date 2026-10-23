@@ -189,15 +189,68 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function isTransientExecutionFailure(audit) {
-  // npm produced no verdict: the attempt was killed by our timeout (or
-  // externally), crashed, or exited outside npm's 0/1 audit contract. Other
-  // spawn errors (ENOENT, EACCES) are deterministic environment bugs:
-  // retrying cannot help, so fail fast.
-  if (audit.error !== undefined) {
-    return audit.error.code === "ETIMEDOUT" || audit.error.killed === true;
+// Only these GitHub events tolerate an exhausted registry outage as a warning.
+// push (main), schedule, workflow_dispatch and local/unknown runs fail closed.
+const outageTolerantEvents = new Set(["pull_request", "merge_group"]);
+
+export function isOutageTolerantEvent(eventName = process.env.GITHUB_EVENT_NAME ?? "") {
+  return outageTolerantEvents.has(eventName);
+}
+
+export class RegistryTransportExhausted extends Error {
+  constructor(label, kind, attempts) {
+    super(
+      `Registry transport failure for "${label}" after ${attempts} attempts (${kind}); audit unavailable`,
+    );
+    this.name = "RegistryTransportExhausted";
+    this.label = label;
+    this.kind = kind;
+    this.attempts = attempts;
   }
-  return ![0, 1].includes(audit.status);
+}
+
+// Positive transport identification only. The bulk advisory path proves the
+// failure happened at the registry endpoint npm audits against (not some other
+// host), and the allowlisted codes prove a transient network fault rather than
+// a permanent verdict (401/403), a malformed body, or an unrelated crash.
+// Never match raw stderr, and never treat a bare non-0/1 exit as network.
+const bulkAdvisoriesPath = "/-/npm/v1/security/advisories/bulk";
+const transientNetworkCode = new RegExp(
+  String.raw`\b(ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNABORTED|ENETUNREACH|EHOSTUNREACH|ENETRESET|ENETDOWN|EHOSTDOWN)\b`,
+);
+
+function classifyRegistryTransport({ boundary, stdout }) {
+  // The preload must have observed at least one bulk attempt that produced no
+  // valid response. A missing boundary (no preload), zero observed responses
+  // (unobserved transport), or a valid observation contradicting npm's error
+  // all stay blocking.
+  if (!isObject(boundary) || boundary.version !== 1 || boundary.valid === true) return null;
+  if (!Number.isSafeInteger(boundary.responses) || boundary.responses < 1) return null;
+  if (boundary.pending !== 0) return null;
+  let report;
+  try {
+    report = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!isObject(report) || !isObject(report.error)) return null;
+  const hitsBulk = (value) => typeof value === "string" && value.includes(bulkAdvisoriesPath);
+  if (
+    Number.isSafeInteger(report.statusCode) &&
+    report.statusCode >= 500 &&
+    report.statusCode <= 599 &&
+    (hitsBulk(report.uri) || hitsBulk(report.message))
+  ) {
+    return { kind: "http-5xx" };
+  }
+  if (
+    typeof report.message === "string" &&
+    report.message.includes(bulkAdvisoriesPath) &&
+    transientNetworkCode.test(report.message)
+  ) {
+    return { kind: "network" };
+  }
+  return null;
 }
 
 export function auditOneLockfile({
@@ -216,6 +269,7 @@ export function auditOneLockfile({
     throw new Error(`Missing lockfile for "${label}" at ${lockfilePath}`);
   }
   const attempts = retryDelaysMs.length + 1;
+  let exhaustedTransport = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     // No install scripts, node_modules or application/database credentials needed.
     // npm's advisory cache can retain old severity even after an online response.
@@ -223,46 +277,61 @@ export function auditOneLockfile({
     // poisoned or partial cache can never leak into a retry.
     const cache = join(cacheParent, label === "." ? "root" : label, `attempt-${attempt}`);
     mkdirSync(cache, { recursive: true });
-    try {
-      const audit = spawn(
-        "npm",
-        [
-          "audit",
-          "--offline=false",
-          `--cache=${cache}`,
-          "--package-lock-only",
-          "--json",
-          "--include=prod",
-          "--include=dev",
-          "--include=optional",
-          "--include=peer",
-        ],
-        {
-          cwd: dir,
-          encoding: "utf8",
-          timeout: timeoutMs,
-          maxBuffer: 16 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            DEPS_AUDIT_REGISTRY_GUARD: "1",
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(guard)}`,
-          },
-        },
+    const retryLog = (detail) =>
+      console.error(
+        `Dependency audit for "${label}": attempt ${attempt} of ${attempts} ${detail}; retrying in ${retryDelaysMs[attempt - 1]}ms`,
       );
-      if (isTransientExecutionFailure(audit)) {
-        if (attempt === attempts) break;
-        console.error(
-          `Dependency audit for "${label}": attempt ${attempt} of ${attempts} did not complete; retrying in ${retryDelaysMs[attempt - 1]}ms`,
-        );
+    const audit = spawn(
+      "npm",
+      [
+        "audit",
+        "--offline=false",
+        `--cache=${cache}`,
+        "--package-lock-only",
+        "--json",
+        "--include=prod",
+        "--include=dev",
+        "--include=optional",
+        "--include=peer",
+      ],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        timeout: timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          DEPS_AUDIT_REGISTRY_GUARD: "1",
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(guard)}`,
+        },
+      },
+    );
+    // npm produced no verdict. Timeout kills are registry transport: the same
+    // registry answers other attempts in seconds. Other spawn errors (ENOENT,
+    // EACCES) are deterministic environment bugs, so fail fast.
+    if (audit.error !== undefined) {
+      if (audit.error.code === "ETIMEDOUT" || audit.error.killed === true) {
+        if (attempt === attempts) {
+          exhaustedTransport = { kind: "timeout" };
+          break;
+        }
+        retryLog("did not complete");
         sleep(retryDelaysMs[attempt - 1]);
         continue;
       }
-      // Only deterministic spawn errors (npm missing, not executable) reach
-      // here: timeouts and bad statuses retry above, completed runs parse below.
-      if (audit.error) {
-        throw new Error(`npm audit did not complete successfully for "${label}"`);
-      }
+      throw new Error(`npm audit did not complete successfully for "${label}"`);
+    }
+    // Crashed or signal-killed runs (OOM, runner kill) retry bounded like
+    // before, but a bare non-0/1 exit is never transport: exhaustion stays
+    // blocking.
+    if (![0, 1].includes(audit.status)) {
+      if (attempt === attempts) break;
+      retryLog("did not complete");
+      sleep(retryDelaysMs[attempt - 1]);
+      continue;
+    }
+    try {
       // fd 3 contains only validation state, never registry data or credentials.
       const boundary = JSON.parse(audit.output[3] || "null");
       if (
@@ -273,6 +342,16 @@ export function auditOneLockfile({
         boundary.responses < 1 ||
         boundary.pending !== 0
       ) {
+        const transport = classifyRegistryTransport({ boundary, stdout: audit.stdout });
+        if (transport !== null) {
+          if (attempt === attempts) {
+            exhaustedTransport = transport;
+            break;
+          }
+          retryLog(`hit registry transport failure (${transport.kind})`);
+          sleep(retryDelaysMs[attempt - 1]);
+          continue;
+        }
         throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
       }
       const report = JSON.parse(audit.stdout);
@@ -281,6 +360,9 @@ export function auditOneLockfile({
       if (error instanceof SyntaxError) throw new Error(`Invalid JSON for "${label}"`);
       throw error;
     }
+  }
+  if (exhaustedTransport !== null) {
+    throw new RegistryTransportExhausted(label, exhaustedTransport.kind, attempts);
   }
   throw new Error(`npm audit did not complete successfully for "${label}"`);
 }
@@ -304,13 +386,59 @@ export function runAudit() {
       { label: "web", dir: join(root, "web") },
     ];
     const results = {};
+    const outages = [];
     for (const { label, dir } of lockfiles) {
-      results[label] = auditOneLockfile({ label, dir, guard, allowlist, cacheParent });
+      try {
+        results[label] = auditOneLockfile({ label, dir, guard, allowlist, cacheParent });
+      } catch (error) {
+        // An outage in one lockfile must not hide an advisory in the other:
+        // record it as unavailable (never clean) and keep auditing. Permanent
+        // failures still throw immediately and fail closed on every event.
+        if (error instanceof RegistryTransportExhausted) {
+          results[label] = {
+            unavailable: true,
+            reason: "registry-transport",
+            kind: error.kind,
+            attempts: error.attempts,
+          };
+          outages.push({ label, kind: error.kind, attempts: error.attempts });
+          continue;
+        }
+        throw error;
+      }
     }
     // Do not print raw registry responses or stderr; only policy findings.
-    // One result per lockfile, keyed by the lockfile label.
+    // One result per lockfile, keyed by the lockfile label. stdout stays pure
+    // JSON; annotations go to stderr so JSON consumers never see them.
     console.log(JSON.stringify(results, null, 2));
-    if (Object.values(results).some((result) => result.blocked.length > 0)) process.exitCode = 1;
+    const warnOutage = ({ label, kind, attempts }) =>
+      console.error(
+        `::warning::Dependency audit unavailable for "${label}" after ${attempts} attempts (${kind}); ` +
+          "audit marked unavailable, not clean. Registry outages warn on pull_request/merge_group and fail closed elsewhere.",
+      );
+    if (
+      Object.values(results).some(
+        (result) => Array.isArray(result.blocked) && result.blocked.length > 0,
+      )
+    ) {
+      for (const outage of outages) warnOutage(outage);
+      process.exitCode = 1;
+      return;
+    }
+    if (outages.length > 0) {
+      const event = process.env.GITHUB_EVENT_NAME ?? "";
+      if (isOutageTolerantEvent(event)) {
+        for (const outage of outages) warnOutage(outage);
+        return;
+      }
+      for (const outage of outages) {
+        console.error(
+          `Dependency audit unavailable for "${outage.label}" after ${outage.attempts} attempts (${outage.kind}); ` +
+            `failing closed on event "${event || "local"}".`,
+        );
+      }
+      process.exitCode = 1;
+    }
   } finally {
     rmSync(cacheParent, { recursive: true, force: true });
   }

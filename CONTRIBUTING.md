@@ -175,8 +175,8 @@ dependencies. The audit reads every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and
 blocks high, critical or unknown severity. It prints one result per lockfile
 (`.` and `web`) and fails when either has a non-excepted finding. A missing
-`web/package-lock.json` or an unreachable registry for either lockfile fails
-closed. It forces online auditing even when npm's environment or `.npmrc`
+lockfile for either root fails closed on every event. It forces online
+auditing even when npm's environment or `.npmrc`
 enables offline mode, using a fresh per-lockfile cache rather than the restored
 installation cache (which can retain stale advisory severity). The owned audit
 caches are removed on success or failure. A child-only Node preload also validates
@@ -192,6 +192,21 @@ Cyclic `via` references are traversed once per reachable package, retaining ever
 advisory ID and blocking severity. Invalid JSON, malformed/inconsistent severity
 counters, missing references, registry/process failures and invalid/expired
 exceptions also fail closed.
+Each lockfile gets 3 attempts with 5s/15s backoff and a fresh owned cache per
+attempt. When every attempt fails with a positively identified registry
+transport fault, the gate records that lockfile as unavailable, never clean:
+a timeout kill, a transient network code (ECONNREFUSED, ECONNRESET, EPIPE,
+ETIMEDOUT, EAI_AGAIN, ENOTFOUND, ECONNABORTED, ENETUNREACH, EHOSTUNREACH,
+ENETRESET, ENETDOWN, EHOSTDOWN) at the bulk advisory endpoint, or an HTTP 5xx
+from that endpoint, each confirmed by the preload's observation of the bulk
+request. The gate still audits the other lockfile, so an advisory there keeps
+blocking. On `pull_request` and `merge_group` an outage with no blocking
+finding annotates a bounded, redacted `::warning::` (lockfile, kind, attempts;
+no URLs, bodies, or tokens) and exits 0. On `push` (main), `schedule`,
+`workflow_dispatch`, and local runs the same outage fails closed with exit 1.
+Crashes, signal kills, HTTP 4xx (including 401/403), malformed bodies,
+unobserved transport, and a missing npm or preload always fail closed on every
+event; completed permanent failures never retry.
 Info/low/moderate findings do not block. Dependabot owns dependency upgrades;
 the gate never runs `npm audit fix`.
 
