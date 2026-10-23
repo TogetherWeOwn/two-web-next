@@ -50,13 +50,15 @@ export function partialEvent(id = 1): PublicEvent {
 
 export function partialModel(overrides: Partial<CalendarPageModel> = {}): CalendarPageModel {
   return {
-    state: { view: "list", month: "2099-05", q: "", past: true, page: 2 },
+    state: { view: "list", month: "2099-05", q: "", game: "", past: true, page: 2 },
     upcoming: [partialEvent()],
     past: [],
     zone: "UTC",
     totalPages: 3,
     emptyState: null,
     discordFailed: true,
+    games: [],
+    gameFilter: null,
     ...overrides,
   };
 }

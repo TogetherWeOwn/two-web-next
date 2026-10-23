@@ -42,7 +42,7 @@ describe("calendar subscription affordance SSR", () => {
     for (const view of ["list", "calendar"] as const) {
       it(`renders native subscribe and HTTPS download links for ${view} at ${appUrl}`, async () => {
         const html = await EventsCalendarPage({
-          state: { view, month: "2026-10", q: "", past: false, page: 1 },
+          state: { view, month: "2026-10", q: "", game: "", past: false, page: 1 },
           upcoming: [event],
           past: [],
           zone: "UTC",
@@ -50,6 +50,8 @@ describe("calendar subscription affordance SSR", () => {
           totalPages: 1,
           emptyState: null,
           discordFailed: false,
+          games: [],
+          gameFilter: null,
           member: false,
           inviteUrl: "https://discord.gg/example",
           appUrl,
