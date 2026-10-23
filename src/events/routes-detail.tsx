@@ -56,6 +56,8 @@ export function registerDetailRoutes(
   readFragmentSession: SessionReader,
 ): void {
   app.get("/events/:key", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const key = c.req.param("key");
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.

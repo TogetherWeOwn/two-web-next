@@ -47,6 +47,7 @@ import {
   throttle,
   throttleGuard,
 } from "../throttle";
+import { publicReadGuard } from "../events/routes-shared";
 import {
   consumeExpiredWrite,
   flashExpiredWrite,
@@ -85,8 +86,20 @@ export type AuthHooks = {
 };
 
 export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
-  app.get("/auth/status", (c) => authStatus(c, () => hooks.storeFor(c)));
-  app.get("/auth/recover", recoveryLanding);
+  // Session-adjacent reads share the one public-read budget with every other
+  // read: the guard runs before any session, cookie or store work, in the same
+  // in-handler form as the event pages. Admitted responses are unchanged; a
+  // limiter outage degrades to allow inside the guard.
+  app.get("/auth/status", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    return authStatus(c, () => hooks.storeFor(c));
+  });
+  app.get("/auth/recover", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    return recoveryLanding(c);
+  });
 
   // Legacy login links: retain only the existing guarded-next value, never OAuth input.
   app.get("/auth/discord/redirect", (c) => {
