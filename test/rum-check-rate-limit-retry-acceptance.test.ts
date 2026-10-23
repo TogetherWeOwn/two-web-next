@@ -503,3 +503,77 @@ describe("real CLI entry point with fixture-only fetch and accelerated cooldown"
     if (outcome === "over-budget") expect(child.stdout).toContain("**over**");
   });
 });
+
+describe("obsolete HTTP-date Retry-After admission", () => {
+  // Treating a valid obsolete date as malformed can retry before the provider's
+  // requested delay; permissive date normalization can admit impossible dates.
+  it.each([
+    ["RFC850", "Friday, 23-Oct-26 12:00:07 GMT"],
+    ["asctime", "Fri Oct 23 12:00:07 2026"],
+  ])("honors a valid %s date at exactly seven seconds", async (_form, header) => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async () => limited(header))
+      .mockImplementation(async () => response(healthy()));
+    const run = start(fetchImpl);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run.state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(6_999);
+    expect(fetchImpl, "never retry before the advertised HTTP-date").toHaveBeenCalledTimes(1);
+    expect(run.state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resultOf(run)).toMatchObject({ code: 0, kind: "pass" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["RFC850", "Friday, 23-Oct-26 12:05:01 GMT"],
+    ["asctime", "Fri Oct 23 12:05:01 2026"],
+  ])("refuses a valid %s date above five minutes without retrying early", async (_form, header) => {
+    const fetchImpl = vi.fn(async () => limited(header));
+    const run = start(fetchImpl);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(resultOf(run)).toMatchObject({ code: 1, kind: "query-failed" });
+    expect(resultOf(run).summary).toContain("HTTP 429");
+    expect(resultOf(run).summary).toContain("Budgets not evaluated.");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["RFC850 impossible calendar date", "Wednesday, 31-Feb-27 12:00:07 GMT"],
+    ["asctime impossible calendar date", "Wed Feb 31 12:00:07 2027"],
+    ["RFC850 out-of-range hour", "Friday, 23-Oct-26 25:00:07 GMT"],
+    ["asctime out-of-range hour", "Fri Oct 23 25:00:07 2026"],
+    ["RFC850 invalid month", "Friday, 23-Not-26 12:00:07 GMT"],
+    ["asctime invalid month", "Fri Not 23 12:00:07 2026"],
+    ["RFC850 trailing text", "Friday, 23-Oct-26 12:00:07 GMT provider-header-marker"],
+    ["asctime trailing text", "Fri Oct 23 12:00:07 2026 provider-header-marker"],
+  ])("uses the safe fallback for %s", async (_label, header) => {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async () => limited(header))
+      .mockImplementation(async () => response(healthy()));
+    const run = start(fetchImpl);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run.state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(fetchImpl, "invalid dates must wait the entire default cooldown").toHaveBeenCalledTimes(
+      1,
+    );
+    expect(run.state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resultOf(run)).toMatchObject({ code: 0, kind: "pass" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
