@@ -33,7 +33,8 @@ KIT_ADMIN_CONTRAST_EVIDENCE_DIR=artifacts/kit-admin-contrast \
 ```
 
 Each capture is full-page at a viewport of **1280×800** or **390×844**. Both the
-author and an independent visual checker opened all 16 images. The local font
+author and an independent visual checker opened all 16 form images; the author
+opened the 4 dashboard images added with the review fix. The local font
 fallback is serif; these are fixture evidence, not pinned-runner golden images.
 
 ## Before / after
@@ -48,26 +49,37 @@ fallback is serif; these are fixture evidence, not pinned-runner golden images.
 | Featured new | 390 | [before](before/featured-new-390.png) | [after](after/featured-new-390.png) |
 | Featured edit | 1280 | [before](before/featured-edit-1280.png) | [after](after/featured-edit-1280.png) |
 | Featured edit | 390 | [before](before/featured-edit-390.png) | [after](after/featured-edit-390.png) |
+| Dashboard | 1280 | [before](before/dashboard-1280.png) | [after](after/dashboard-1280.png) |
+| Dashboard | 390 | [before](before/dashboard-390.png) | [after](after/dashboard-390.png) |
 
 ## Results and critique
 
-- **Red before:** eight Kit cases failed axe color-contrast on pristine main.
+- **Red before:** ten Kit cases failed axe color-contrast on pristine main.
   Help/footer measured 3.01:1 and recurrence labels/legend 1.07:1 (axe reports;
-  required 4.5:1). The Hono control passed.
-- **Green after:** nine cases passed, zero failed/skipped; targeted axe checks
-  reported zero violations and zero incompletes at both widths. Computed-color
-  ratios are at least 8.07:1 after the correction.
+  required 4.5:1), including the dashboard footer at 3.01:1. The Hono control
+  passed and the dashboard card descriptions passed dark-on-light.
+- **Green after:** eleven cases passed, zero failed/skipped; targeted axe checks
+  reported zero violations and zero incompletes at both widths. Corrected
+  help/footer and recurrence ink measures at least 8.07:1; the preserved card
+  descriptions remain 5.89:1 dark-on-light.
+- **Review fix:** a shell-wide `--muted` override regressed the four dashboard
+  card descriptions to 1.81:1 (axe; reproduced in-fixture before the fix). The
+  light ink is now set directly on help text and the footer, so the cards keep
+  their dark ink. Both dashboard widths are covered in CI.
 - **Preserved Hono:** separate event/featured fixtures retain light canvas, dark
   ink, muted help/footer and light recurrence surface. Shared styles are unchanged.
 - **Visual:** help/footer are legible and the repeat group is coherent on the dark
   canvas. Field geometry, actions and mobile wrapping remain unchanged. No new
   clipping or layout regression found by either visual checker.
 - **Existing concern, not claimed fixed:** the brand remains dark-on-dark in both
-  sets. This targeted test is not a whole-page accessibility approval.
+  sets, and the dashboard card heading links measure 2.35:1 (UA dark-scheme
+  link color `#9e9eff` with no author rule on the light cards; identical on
+  pristine main). This targeted test is not a whole-page accessibility
+  approval.
 - **Unchanged Kit ceilings:** worker 2551 raw / 1219 gzip bytes; server 118 files,
   1124117 raw / 327973 gzip; client JS 53 files, 243942 raw / 98755 gzip; CSS 2 files,
   2892 raw / **1024 gzip** bytes. All fit the existing limits; CSS has no gzip slack.
 - **Coverage distinction:** Hono accessibility/Lighthouse and public visual specs
   do not exercise these Kit admin leaves. The new built-runtime check runs after
-  the Kit adapter build in CI and verifies nine executed cases with a TAP guard.
+  the Kit adapter build in CI and verifies eleven executed cases with a TAP guard.
   No masks, budgets or committed golden baselines change.

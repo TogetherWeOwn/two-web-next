@@ -247,7 +247,7 @@ to execute the same Chromium proof.
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
-| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and four admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
+| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or

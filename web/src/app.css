@@ -94,12 +94,15 @@ html body {
 }
 
 /* Hono keeps its light admin palette. Kit's shared admin chrome adapts only
- * help/footer ink and the repeat surface to the root layout's dark canvas. */
-.kit-admin {
-  --muted: var(--color-lobby-muted);
-}
+ * help/footer ink and the repeat surface to the root layout's dark canvas.
+ * The light ink is set directly on those elements: overriding --muted on the
+ * shell would also recolor the dashboard's light resource cards
+ * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
 .kit-admin :is(.field .hint, .hint) {
-  color: var(--muted);
+  color: var(--color-lobby-muted);
+}
+.kit-admin footer {
+  color: var(--color-lobby-muted);
 }
 .kit-admin fieldset {
   background: var(--color-lobby-raised);

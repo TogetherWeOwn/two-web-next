@@ -50,6 +50,19 @@ before(async () => {
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
+    // Degraded-widget dashboard: no database, both analytics sections omitted.
+    // The actor comes from the page data because the fixture stubs the layout
+    // guard; the resource cards and footer are the real AdminShell output.
+    {
+      name: "dashboard",
+      path: "/admin",
+      data: {
+        actor: { username: "Moderator" },
+        funnel: undefined,
+        zeroSearches: undefined,
+        retentionDays: 30,
+      },
+    },
   ];
   const entry = join(scratch, "server.mjs");
   await build({
@@ -112,9 +125,10 @@ after(async () => {
 });
 
 for (const width of [1280, 390]) {
-  for (const name of ["event-new", "event-edit", "featured-new", "featured-edit"]) {
+  for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
     test(`Kit admin contrast: ${name} at ${width}`, async () => {
       const f = fixtures.find((fixture) => fixture.name === name);
+      const isDashboard = name === "dashboard";
       const context = await browser.newContext({
         viewport: { width, height: width === 390 ? 844 : 800 },
       });
@@ -149,27 +163,50 @@ for (const width of [1280, 390]) {
         const page = await context.newPage();
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(origin + f.path);
-        await page.locator("[data-event-editor]").first().waitFor();
-        assert.equal(
-          (await page.locator(".hint").count()) > 0,
-          true,
-          "help text is actually present",
-        );
+        if (isDashboard) {
+          await page.locator('[data-testid="admin-actor"]').first().waitFor();
+        } else {
+          await page.locator("[data-event-editor]").first().waitFor();
+        }
+        if (isDashboard) {
+          assert.equal(
+            await page.locator(".card p").count(),
+            4,
+            "four resource-card descriptions are actually present",
+          );
+        } else {
+          assert.equal(
+            (await page.locator(".hint").count()) > 0,
+            true,
+            "help text is actually present",
+          );
+        }
         if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
-        const result = await new AxeBuilder({ page })
-          .include(".hint")
-          .include("footer")
-          .include("fieldset")
-          .withRules(["color-contrast"])
-          .analyze();
+        const axe = new AxeBuilder({ page });
+        if (isDashboard) {
+          // Card descriptions and footer only: the card heading links carry
+          // the UA dark-scheme link color with no author rule, which fails on
+          // the light cards on pristine main too. That pre-existing defect is
+          // recorded in docs/evidence/kit-admin-contrast/README.md, not
+          // guarded here; this suite owns the surfaces the slice restyles.
+          axe.include(".card p").include("footer");
+        } else {
+          axe.include(".hint").include("footer").include("fieldset");
+        }
+        const result = await axe.withRules(["color-contrast"]).analyze();
         const measured = await page
-          .locator(".hint, footer, fieldset label, fieldset legend")
-          .evaluateAll((elements) =>
-            elements.map((el) => ({
-              text: el.textContent.trim(),
-              color: getComputedStyle(el).color,
-              background: getComputedStyle(el.closest("fieldset") ?? document.body).backgroundColor,
-            })),
+          .locator(
+            isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+          )
+          .evaluateAll(
+            (elements, cardContainer) =>
+              elements.map((el) => ({
+                text: el.textContent.trim(),
+                color: getComputedStyle(el).color,
+                background: getComputedStyle(el.closest(cardContainer) ?? document.body)
+                  .backgroundColor,
+              })),
+            isDashboard ? ".card" : "fieldset",
           );
         if (evidence) {
           await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
