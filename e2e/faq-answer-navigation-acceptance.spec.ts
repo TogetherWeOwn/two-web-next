@@ -15,6 +15,7 @@ import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import { serializeSigned } from "hono/utils/cookie";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { renderDeferredFaqSections } from "../ci/a11y-content.mjs";
 import type { Env } from "../src/env";
 import { FAQS, faqPageData } from "../src/faq-content";
 import app from "../test/app";
@@ -154,10 +155,12 @@ async function html(twin: "Hono" | "Kit") {
   return response.text();
 }
 
-async function fixture(twin: "Hono" | "Kit", width = 1280, hash = "") {
+async function fixture(twin: "Hono" | "Kit", width = 1280, hash = "", audit = false) {
   await context?.close();
   context = await browser.newContext({
-    javaScriptEnabled: false,
+    // Only the audit helper needs animation frames, as in the real axe runner.
+    // Navigation acceptance stays no-JS, including the pointer outline cases.
+    javaScriptEnabled: audit,
     serviceWorkers: "block",
     viewport: { width, height: width === 390 ? 844 : 800 },
   });
@@ -228,6 +231,25 @@ async function tabTo(page: Page, target: Locator) {
     if (await target.evaluate((node) => node === node.ownerDocument.activeElement)) break;
   }
   await expect(target).toBeFocused();
+}
+
+async function expectPointerTargetOutline(target: Locator, untargeted: Locator) {
+  await expect(target).toBeInViewport();
+  expect(await target.evaluate((node) => node.matches(":target"))).toBe(true);
+  expect(await target.evaluate((node) => node.matches(":focus-visible"))).toBe(false);
+  await expect(target, "pointer hash destination has a visible outline").toHaveCSS(
+    "outline-style",
+    "solid",
+  );
+  await expect(target).toHaveCSS("outline-width", "3px");
+  const color = await target.evaluate((node) => getComputedStyle(node).outlineColor);
+  expect(color).not.toBe("transparent");
+  expect(color).not.toBe("rgba(0, 0, 0, 0)");
+  expect(await untargeted.evaluate((node) => node.matches(":target, :focus-visible"))).toBe(false);
+  await expect(untargeted, "untargeted destination is not highlighted").toHaveCSS(
+    "outline-style",
+    "none",
+  );
 }
 
 for (const twin of ["Hono", "Kit"] as const) {
@@ -357,6 +379,30 @@ for (const twin of ["Hono", "Kit"] as const) {
     });
 
     for (const width of [1280, 390]) {
+      for (const destination of ["topic", "answer"] as const) {
+        test(`${width}px no-JS pointer ${destination} jump visibly outlines only the hash destination`, async () => {
+          const page = await fixture(twin, width);
+          const rows = await answers(page);
+          const answer = rows[rows.length - 1]!;
+          const topicTarget = page.locator('[id="faq-ranks"]');
+          const answerTarget = page.locator(`[id="${answer.id}"]`);
+          await topicNav(page).locator('a[href="#faq-ranks"]').click();
+          if (destination === "answer") {
+            await page
+              .locator(`[data-testid="faq-list"] a[href=${JSON.stringify(answer.href)}]`)
+              .click();
+          }
+          await expect(page).toHaveURL(
+            `${origin}/faq#${destination === "topic" ? "faq-ranks" : answer.id}`,
+          );
+          await expectPointerTargetOutline(
+            destination === "topic" ? topicTarget : answerTarget,
+            destination === "topic" ? answerTarget : topicTarget,
+          );
+          expect(await page.locator("script").count()).toBe(0);
+        });
+      }
+
       test(`RED: ${width}px no-JS keyboard topic jump, answer share and fresh deep link`, async () => {
         const lastAnswer = original.at(-1)!.items[0]![1];
         FAQS.splice(
@@ -401,6 +447,29 @@ for (const twin of ["Hono", "Kit"] as const) {
     }
   });
 }
+
+// Collected in browser-smoke, where Chromium is installed. The node-only audit
+// unit-test lane has no browser prerequisite; exercise the real helper here.
+test.describe("FAQ audit preparation regression controls", () => {
+  test("empty FAQ rejects with the named real audit guard", async () => {
+    const page = await fixture("Hono", 1280, "", true);
+    await page.getByTestId("faq-list").evaluate((node) => node.replaceChildren());
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Frequently asked questions");
+    expect(await page.locator('[data-testid="faq-list"] > section').count()).toBe(0);
+    await expect(renderDeferredFaqSections(page)).rejects.toThrow(
+      "FAQ audit must render its answer sections",
+    );
+  });
+
+  test("populated FAQ prepares all eight real sections and restores scroll position", async () => {
+    const page = await fixture("Hono", 390, "", true);
+    await page.evaluate(() => window.scrollTo(0, 120));
+    const position = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+    expect(await renderDeferredFaqSections(page)).toBe(8);
+    expect(await page.locator('[data-testid="faq-list"] h3').count()).toBe(18);
+    expect(await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))).toEqual(position);
+  });
+});
 
 test.describe("FAQ public-read and alternate regression controls", () => {
   test("RED: copied answer fragments resolve to the same question in both renderers", async () => {
