@@ -343,15 +343,54 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
-export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
-  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+/** Badge word shared by cancelled list cards and month-grid entries. */
+export const GRID_CANCELLED_COPY = "Cancelled";
+
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3),
+ * then the day. Long titles keep the truncated visible form first so axe
+ * label-content-name-mismatch passes, then the full title; short titles are
+ * not duplicated. Cancelled entries lead with the same visible words plus
+ * the badge, retaining the full title and day. */
+export function gridAccessibleName(
+  title: string,
+  startsAt: Date,
+  zone: string,
+  cancelled = false,
+): string {
+  const truncated = gridTitle(title);
+  const time = wallTimeHm(startsAt, zone);
+  const day = cardDayLabel(startsAt, zone);
+  if (cancelled) {
+    // The badge follows the truncated title, so keep that exact visible prefix
+    // before restoring the full title for same-prefix event disambiguation.
+    const fullTitle = truncated === title ? "" : `, ${title}`;
+    return `${time} ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
+  }
+  return truncated === title ? `${time} ${title}, ${day}` : `${time} ${truncated} ${title}, ${day}`;
 }
 
 /** Continuation link name starts with the visible "Continues title" (WCAG
- * 2.5.3), then the displayed day — never the original start. */
-export function gridContinuationAccessibleName(title: string, dayIso: string): string {
-  return `Continues ${title}, ${calendarDayLongLabel(dayIso)}`;
+ * 2.5.3), then the displayed day — never the original start. Long titles keep
+ * the truncated visible form first so axe label-content-name-mismatch passes,
+ * then the full title; short titles are not duplicated. Cancelled entries
+ * add the badge after the visible words. */
+export function gridContinuationAccessibleName(
+  title: string,
+  dayIso: string,
+  cancelled = false,
+): string {
+  const truncated = gridTitle(title);
+  const day = calendarDayLongLabel(dayIso);
+  if (cancelled) {
+    // Same visible-prefix rule as gridAccessibleName: the badge follows the
+    // truncated title, so keep that exact prefix before restoring the full
+    // title for same-prefix event disambiguation.
+    const fullTitle = truncated === title ? "" : `, ${title}`;
+    return `Continues ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
+  }
+  return truncated === title
+    ? `Continues ${title}, ${day}`
+    : `Continues ${truncated} ${title}, ${day}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

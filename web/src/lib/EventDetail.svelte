@@ -133,8 +133,8 @@ const lineup = $derived(
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
       </dd>
       <dd class="event-device-timezone" data-event-device-timezone>
-        <button type="button" hidden>Show in my device timezone</button>
-        <p role="status" aria-live="polite"></p>
+        <button type="button" hidden data-testid="event-device-timezone-starts-button">Show in my device timezone</button>
+        <p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>
       </dd>
     </div>
     <div>
@@ -142,12 +142,23 @@ const lineup = $derived(
       <dd>
         <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
+      <dd class="event-device-timezone" data-event-device-timezone>
+        <button type="button" hidden data-testid="event-device-timezone-ends-button">Show in my device timezone</button>
+        <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
+      </dd>
     </div>
     {#if model.location}
       <div>
         <dt>Where</dt>
         <dd>
           <p data-testid="event-venue">{model.location}</p>
+          {#if model.directionsUrl}
+            <p>
+              <a href={model.directionsUrl} data-testid="event-directions" rel="noopener">
+                Get directions
+              </a>
+            </p>
+          {/if}
         </dd>
       </div>
     {/if}
@@ -257,11 +268,7 @@ const lineup = $derived(
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
     <section aria-labelledby="event-attendees-heading" data-testid="event-attendees" data-island="attendees-live">
-      {#if model.attendeesPaging.prevHref || model.attendeesPaging.nextHref}
-        <h2 id="event-attendees-heading">Who's going</h2>
-      {:else}
-        <h2 id="event-attendees-heading">Who's going ({model.attendees.length})</h2>
-      {/if}
+      <h2 id="event-attendees-heading">Who's going{model.attendeesPaging.prevHref || model.attendeesPaging.nextHref ? "" : ` (${model.attendees.length})`}</h2>
       {#if model.attendees.length > 0}
         <ul class="event-attendee-grid">
           {#each model.attendees as attendee (attendee.id)}

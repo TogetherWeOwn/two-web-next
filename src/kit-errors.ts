@@ -13,8 +13,13 @@
 // 400 is the one status without a RecoveryShell counterpart: its Hono twin is
 // the member-shell board-filter page (src/leaderboards/pages.tsx), so the
 // title and lead below are Kit's own client-error copy, never outage copy.
+// 422 is the other: its Hono twin is the overlong-search notice page
+// (EventsSearchTooLongPage in src/events/pages-calendar-screen.tsx), so the
+// title and lead below match that notice exactly, never outage copy.
 
-export type KitErrorStatus = 400 | 404 | 403 | 410 | 429 | 500 | 503;
+import { EVENTS_SEARCH_TOO_LONG_COPY } from "./islands/contracts";
+
+export type KitErrorStatus = 400 | 404 | 403 | 410 | 422 | 429 | 500 | 503;
 
 export interface KitErrorCopy {
   code: string;
@@ -43,6 +48,11 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
     title: "This page is gone",
     lead: "The page was removed. The lobby is still open — come in and say hello.",
   },
+  422: {
+    code: "422",
+    title: "Events",
+    lead: EVENTS_SEARCH_TOO_LONG_COPY,
+  },
   429: {
     code: "429",
     title: "Slow down a little",
@@ -56,7 +66,7 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   503: {
     code: "503",
     title: "We will be right back",
-    lead: "The site is down for a minute of maintenance. The Discord server never closes.",
+    lead: "The site is temporarily unavailable. You can use the Discord invite or return to the homepage.",
   },
 };
 

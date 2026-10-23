@@ -297,7 +297,7 @@ export const PayloadTooLargePage: FC<{
 );
 
 // 503 (ports errors/503). The CTA — and the header nav — point at the Discord
-// invite URL directly, never /auth/discord: during maintenance /auth may itself
+// invite URL directly, never /auth/discord: during an outage /auth may itself
 // be down, so nothing on this page sends the member there.
 export const MaintenancePage: FC<{ inviteUrl: string; supportReference?: string }> = ({
   inviteUrl,
@@ -309,15 +309,14 @@ export const MaintenancePage: FC<{ inviteUrl: string; supportReference?: string 
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
     <p class="lead">
-      The site is down for a minute of maintenance. The Discord server never closes — come in
-      through the invite and we will see you there.
+      The site is temporarily unavailable. You can use the Discord invite or return to the homepage.
     </p>
     <p class="recovery-actions">
       <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
         Use the Discord invite instead
       </a>{" "}
       <a href="/" data-testid="error-retry">
-        Try again
+        Back to the homepage
       </a>
     </p>
     <SupportReference reference={supportReference} />

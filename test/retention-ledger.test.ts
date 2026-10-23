@@ -1700,3 +1700,99 @@ describe("retention ledger L8b core member tables", () => {
     expect(deletedSection).not.toContain("web_oauth_journeys");
   });
 });
+
+describe("retention ledger provisional profile rows", () => {
+  // Staged deletion promises for tables not yet landed. Each pin names the
+  // exact promise phrases, so silently weakening a Provisional row (or
+  // dropping its Provisional mark early) fails here instead of going green.
+  // The schema/moderation changes replace these with mechanism pins when
+  // their tables land.
+  it("stages linked_accounts deletion promises as Provisional until the schema change merges", () => {
+    const doc = read("docs/retention-ledger.md");
+    const rows = doc.split("\n").filter((line) => /^\| `linked_accounts`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated linked_accounts row").toHaveLength(1);
+    const row = rows[0]!;
+    for (const claim of [
+      "`linked_accounts` (Provisional",
+      "lands with the profiles schema change",
+      "No age window",
+      "until the member unlinks or member erasure",
+      "Unlink deletes the member's rows immediately",
+      "erasure deletes them in the same transaction",
+      "Neither path exists yet",
+      "stays Provisional until that change merges",
+      "member-erasure.md#what-is-deleted",
+    ]) {
+      expect(row, `linked_accounts row must pin: ${claim}`).toContain(claim);
+    }
+    // The row must render inside the GFM table: no blank line may sit between
+    // table rows, or the row drops out as a literal pipe paragraph.
+    const lines = doc.split("\n");
+    const idx = lines.findIndex((line) => /^\| `linked_accounts`(?:\s|\|)/.test(line));
+    expect(idx).toBeGreaterThan(0);
+    expect(lines[idx - 1]!.trim()).not.toBe("");
+    expect(lines[idx - 1]!.startsWith("| ")).toBe(true);
+  });
+
+  it("stages profile_reports retention and erasure as Provisional until the moderation change merges", () => {
+    const doc = read("docs/retention-ledger.md");
+    const rows = doc.split("\n").filter((line) => /^\| `profile_reports`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated profile_reports row").toHaveLength(1);
+    const row = rows[0]!;
+    for (const claim of [
+      "`profile_reports` (Provisional",
+      "lands with the moderation change",
+      "90 days",
+      "Age-only delete of rows older than 90 days",
+      "erasure deletes reports about the member and reports they filed",
+      "Neither path exists yet",
+      "stays Provisional until that change merges",
+      "Field hides are written to `activity_log`",
+      "indefinite, never edited per subject",
+      "member-erasure.md#what-is-deleted",
+    ]) {
+      expect(row, `profile_reports row must pin: ${claim}`).toContain(claim);
+    }
+    const lines = doc.split("\n");
+    const idx = lines.findIndex((line) => /^\| `profile_reports`(?:\s|\|)/.test(line));
+    expect(idx).toBeGreaterThan(0);
+    expect(lines[idx - 1]!.trim()).not.toBe("");
+    expect(lines[idx - 1]!.startsWith("| ")).toBe(true);
+  });
+
+  it("stages the erasure runbook's Provisional profile rows with unlink/erasure wording", () => {
+    const docs = read("docs/member-erasure.md");
+    const start = docs.indexOf("### Provisional: profile rows (not yet enforced)");
+    expect(start, "erasure runbook needs its Provisional profile section").toBeGreaterThanOrEqual(
+      0,
+    );
+    const end = docs.indexOf("## Concurrent rotations");
+    expect(end, "Provisional section must sit before Concurrent rotations").toBeGreaterThan(start);
+    // Whitespace-collapsed: the doc wraps at ~80 columns, so a wrapped
+    // phrase must still pin (same flat() convention as the deletion tests).
+    const section = docs.slice(start, end).replace(/\s+/g, " ");
+    for (const claim of [
+      "### Provisional: profile rows (not yet enforced)",
+      "`linked_accounts`",
+      "Unlink deletes the member's rows immediately; erasure deletes them in the same transaction.",
+      "Banner image object (R2)",
+      "Deleted with erasure.",
+      "`profile_reports` (planned)",
+      "90-day rows; erasure deletes reports about the member and reports they filed.",
+      "Field hides are written to `activity_log`",
+      "retained indefinitely, never edited per subject",
+    ]) {
+      expect(section, `erasure Provisional section must pin: ${claim}`).toContain(claim);
+    }
+  });
+
+  it("marks the ledger's profile rows Provisional in the header and scope", () => {
+    const doc = read("docs/retention-ledger.md");
+    expect(doc).toContain(
+      "rows marked Provisional, which publish the decided retention for profile tables not yet landed; each turns landed when its change merges",
+    );
+    expect(doc).toContain(
+      "(`linked_accounts`, `profile_reports`) are published as Provisional rows above; they turn landed when each change merges",
+    );
+  });
+});
