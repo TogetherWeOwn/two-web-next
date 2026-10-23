@@ -220,7 +220,12 @@ function expectHead(
     expect(html.match(/<meta name="robots"[^>]*>/g)).toEqual([
       `<meta name="robots" content="${robots}"/>`,
     ]);
-  expect(html).not.toContain("og:image");
+  expect(html, "og:image").toContain(
+    `property="og:image" content="${new URL("/icons/icon-512.png", canonical).href}"`,
+  );
+  expect(html, "og:image:alt").toContain(
+    'property="og:image:alt" content="Together We Own community logo"',
+  );
 }
 
 beforeEach(() => {
