@@ -308,9 +308,7 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
-        {#if !model.isDraft && !model.isPast}
-          {" · "}
-          <button
+        {#if !model.isDraft && !model.isPast}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
             type="button"
             hidden
             data-native-share

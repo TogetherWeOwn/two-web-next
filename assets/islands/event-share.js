@@ -9,11 +9,13 @@
   if (window.isSecureContext === false) return;
   if (typeof navigator.share !== "function") return;
   const status = document.querySelector("[data-native-share-status]");
+  const separator = document.querySelector("[data-native-share-sep]");
   const title = button.getAttribute("data-share-title") ?? "";
   const url = button.getAttribute("data-share-url") ?? "";
   // Only one native sheet at a time: ignore repeat activations while pending.
   let pending = false;
   button.hidden = false;
+  if (separator) separator.hidden = false;
 
   function settle(message) {
     pending = false;
@@ -28,14 +30,14 @@
     try {
       sheet = navigator.share({ title, url });
     } catch {
-      settle("Sharing didn't complete — Copy link still works.");
+      settle("Sharing didn't complete — Copy link is still available.");
       return;
     }
     Promise.resolve(sheet).then(
       () => settle(null),
       (error) => {
         if (error && error.name === "AbortError") settle(null);
-        else settle("Sharing didn't complete — Copy link still works.");
+        else settle("Sharing didn't complete — Copy link is still available.");
       },
     );
   });

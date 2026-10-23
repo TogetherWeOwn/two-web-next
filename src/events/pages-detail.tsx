@@ -282,7 +282,9 @@ export const EventPage: FC<{
             </a>
             {e.status === "published" ? (
               <>
-                {" · "}
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
                 <button
                   type="button"
                   hidden
