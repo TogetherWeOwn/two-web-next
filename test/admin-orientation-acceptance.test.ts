@@ -253,6 +253,59 @@ describe("AO-01: current location is truthful in both real shells", () => {
   }
 });
 
+// Walk original markup only: hydration comments end at the first -->.
+// Keep all other bytes (including malformed comments and element tags), so
+// exact-name assertions still reject them. Never parse the joined label as HTML.
+function breadcrumbLabel(markup: string): string {
+  let index = 0;
+  let label = "";
+  while (index < markup.length) {
+    if (markup.startsWith("<!--", index)) {
+      const end = markup.indexOf("-->", index + 4);
+      if (end !== -1) {
+        index = end + 3;
+        continue;
+      }
+    }
+    const next = markup.indexOf("<", index + 1);
+    const end = next === -1 ? markup.length : next;
+    label += markup.slice(index, end);
+    index = end;
+  }
+  return label.trim();
+}
+
+describe("AO-04/AO-06 CONTROL: breadcrumb labels ignore only original comment tokens", () => {
+  it.each([
+    ["Dashboard", "Dashboard"],
+    ["  <!--[-->Dashboard<!--]-->  ", "Dashboard"],
+    ["<!---->Events<!---->", "Events"],
+    ["<!--svelte-->Fea<!---->tured<!--/svelte-->", "Featured"],
+    ["<!-- outer <!-- nested-looking -->Dashboard", "Dashboard"],
+    ["Dashboard<!-- outer <!-- inner -->wrong-->", "Dashboardwrong-->"],
+    ["Dashboard<!--unterminated", "Dashboard<!--unterminated"],
+    ["<!<!--comment-->--><!--tail-->", "<!-->"],
+    ["<!<!--comment-->--Dashboard-->", "<!--Dashboard-->"],
+    ["<span>Dashboard</span>", "<span>Dashboard</span>"],
+  ])("extracts %j as literal label text %j", (markup, expected) => {
+    expect(breadcrumbLabel(markup)).toBe(expected);
+  });
+
+  it.each([
+    "Dashboard<!-- outer <!-- inner -->wrong-->",
+    "Dashboard<!--unterminated",
+    "<!<!--comment-->--><!--tail-->Dashboard",
+    "Dashboard<!<!--comment-->--wrong-->",
+    "<span>Dashboard</span>",
+    "Events",
+  ])("rejects misleading Dashboard label %j in the real breadcrumb assertion", (label) => {
+    const html = `<main><nav aria-label="Breadcrumb"><a href="/admin">${label}</a><a href="/admin/events">Events</a></nav><input></main>`;
+    expect(() => expectUpperBreadcrumb(html, "event")).toThrow(
+      "both fixed native breadcrumb destinations and exact visible names",
+    );
+  });
+});
+
 // Removing, retargeting or mislabelling either upper anchor must fail, even
 // when the header and bottom Cancel still offer the same destination. These
 // native text links must expose their visible labels as their accessible names.
@@ -274,7 +327,7 @@ function expectUpperBreadcrumb(html: string, kind: FormFixture["kind"]) {
   expect(
     anchors.map((anchor) => ({
       href: /\bhref="([^"]*)"/.exec(anchor[1]!)?.[1],
-      label: anchor[2]!.replace(/<!--[\s\S]*?-->/g, "").trim(),
+      label: breadcrumbLabel(anchor[2]!),
     })),
     "both fixed native breadcrumb destinations and exact visible names",
   ).toEqual(expected);
