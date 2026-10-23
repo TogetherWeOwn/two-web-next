@@ -11,10 +11,16 @@ import {
   jsonSession,
   type App,
   type SessionReader,
+  publicReadGuard,
 } from "./routes-shared";
 
 export function registerJsonRoutes(app: App, readFragmentSession: SessionReader): void {
   app.get("/events.json", async (c) => {
+    // Same shared budget as the sibling pages and feeds, before session and
+    // event-store reads. Admitted guests keep the 401; exhausted callers get
+    // the shared 429 with no session or DB work.
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const session = await jsonSession(c, readFragmentSession);
     if (session instanceof Response) return session;
     const db = await dbFor(c);

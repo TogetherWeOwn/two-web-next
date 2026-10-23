@@ -86,6 +86,7 @@ function probeApp(throttleStore: () => Promise<Sql | null>) {
   return (init?: RequestInit) =>
     app.request("/probe", { headers: { "cf-connecting-ip": IP }, ...init }, {
       THROTTLE_STORE: throttleStore,
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
     } as unknown as EnvWithThrottle);
 }
 
