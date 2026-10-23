@@ -26,6 +26,23 @@ const step = (name: string): string => {
 };
 
 describe("gitleaks fixture policy", () => {
+  it("keeps the public Hono event-id exception limited to the exact rule, path and two secrets", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Two synthetic Discord event ids in the fixture-only public Hono payload"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Two synthetic Discord event ids in the fixture-only public Hono payload acceptance suite, not clients or credentials"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/hono-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']`,
+    ]);
+  });
+
   it("keeps the session-renewal exception limited to the exact rule, path and three secrets", () => {
     // Pin the whole table: extra fields, OR (including its implicit default),
     // unanchored patterns or additional alternatives must require a test change.
