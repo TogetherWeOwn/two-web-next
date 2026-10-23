@@ -56,3 +56,24 @@ and axe violations. No visual baseline or existing byte budget changed.
 These local images do not prove staging deployment, runtime application or
 production availability. The ordinary Hono accessibility, Lighthouse and
 pinned CI visual gates remain required independently.
+
+## Compact incident copy
+
+Captured and opened all eight images on 2026-10-23 after shortening repeated
+incident guidance to fit the unchanged Kit server budget. The real local
+Worker and existing accessibility fixtures supply these states; no external
+requests, live records or credentials are used. The earlier `scoped-css/`
+images above are the before view. Styles, admission, response validation and
+escaping are unchanged. The full precedence explanation remains in the
+[operator guide](../../operator-overrides.md).
+
+| State | Desktop, 1280 × 800 | Mobile, 390 × 844 |
+| --- | --- | --- |
+| Populated record, 200 | [Record desktop](compact-copy/populated-desktop.png) | [Record mobile](compact-copy/populated-mobile.png) |
+| Empty override map, 200 | [Empty desktop](compact-copy/empty-desktop.png) | [Empty mobile](compact-copy/empty-mobile.png) |
+| Upstream failure, 503 | [Unavailable desktop](compact-copy/unavailable-desktop.png) | [Unavailable mobile](compact-copy/unavailable-mobile.png) |
+| Missing bearer, 401 | [Refused desktop](compact-copy/refused-desktop.png) | [Refused mobile](compact-copy/refused-mobile.png) |
+
+The [capture report](compact-copy/report.json) records zero axe violations
+in all eight views and successful isolated-fixture cleanup. The screenshots
+are supplemental evidence, not regenerated visual-regression baselines.

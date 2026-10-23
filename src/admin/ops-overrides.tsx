@@ -75,9 +75,7 @@ async function readRecord(env: Env): Promise<OpsRecord | null> {
 }
 
 function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: string }) {
-  const keys = record
-    ? [...new Set([...Object.keys(record.overrides), ...Object.keys(record.baseline)])].sort()
-    : [];
+  const keys = record ? Object.keys({ ...record.baseline, ...record.overrides }).sort() : [];
   return (
     <Shell
       title="Operator overrides"
@@ -85,9 +83,8 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
       stylesheet="/operator-overrides-theme.css"
     >
       <section class="ops-overrides">
-        <p class="strap">Incident visibility · read-only</p>
+        <p class="strap">Read-only · PUT API-only and security-gated</p>
         <h1>Operator overrides</h1>
-        <p>No changes can be made here. PUT remains API-only and subject to its security gate.</p>
         {record ? (
           <>
             <dl class="facts">
@@ -100,17 +97,17 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
                 <dd>{record.enforcement}</dd>
               </div>
               <div>
-                <dt>Snapshot read at (UTC)</dt>
+                <dt>Snapshot (UTC)</dt>
                 <dd>
                   <time datetime={observedAt}>{observedAt}</time>
                 </dd>
               </div>
             </dl>
-            <p>This is a snapshot, not confirmation that the runtime has applied the record.</p>
+            <p>This snapshot does not confirm runtime application.</p>
             {Object.keys(record.overrides).length === 0 ? <p>No overrides are set.</p> : null}
             {keys.length ? (
               <table class="admin-table">
-                <caption>Operator record: override and boot baseline values</caption>
+                <caption>Operator record</caption>
                 <thead>
                   <tr>
                     <th scope="col">Setting</th>
@@ -141,24 +138,13 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
         ) : (
           <div class="notice" role="status">
             <h2>Operator record unavailable</h2>
-            <p>
-              The bot record could not be verified. No cached values are shown. Check bot
-              availability and reload with your bearer header.
-            </p>
+            <p>No cached record. Check bot availability; reload with your bearer header.</p>
           </div>
         )}
         <h2>Freshness and staleness</h2>
+        <p>No auto-refresh; open tabs can be arbitrarily stale. Reload with your bearer header.</p>
         <p>
-          This page does not auto-refresh. Reload with your bearer header for a new snapshot; an
-          open tab can become arbitrarily stale.
-        </p>
-        <p>
-          The runtime polls every 15 seconds and retains a last-good record for at most 300 seconds.
-          During an outage, application of a newer record is not guaranteed.
-        </p>
-        <p>
-          Overrides take precedence over guild settings while active. Clearing an override falls
-          back to guild settings, then boot defaults.
+          Runtime polls every 15 seconds. Last-good limit: 300 seconds; outages can delay updates.
         </p>
       </section>
     </Shell>
@@ -196,8 +182,7 @@ export async function opsOverridesHandler(c: Context<Vars>): Promise<Response> {
       <Shell title="Operator access required" audience="control-token holders only">
         <section>
           <h1>Operator access required</h1>
-          <p>Supply the authorized control bearer header to view this read-only panel.</p>
-          <p>A Discord session does not grant operator access. Never put a token in the URL.</p>
+          <p>Control bearer required, not a Discord session. Never put tokens in URLs.</p>
         </section>
       </Shell>,
       401,
