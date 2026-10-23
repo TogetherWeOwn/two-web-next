@@ -189,13 +189,11 @@ for (const name of names) {
       await expect(feedback(page)).toBeHidden();
       const save = await start(page, f, h.posts);
       await expect(save).toBeFocused();
-      await expect(await polite(page)).toContainText(
-        /saving|sending|submitting|pending|in progress/i,
-      );
+      await expect(await polite(page)).toHaveText("Saving… Please wait.");
       await expect(page.locator("[data-event-editor]")).toHaveAttribute("aria-busy", "true");
       await page.keyboard.press("Enter");
       expect(await page.evaluate("window.saveSubmitCancellations")).toEqual([false, true]);
-      await expect(await polite(page)).toContainText(/already|still|pending|in progress/i);
+      await expect(await polite(page)).toHaveText("Already saving. Please wait.");
       await expect(save).toBeFocused();
       expect(h.posts).toHaveLength(1);
       expect(h.unexpected).toEqual([]);
@@ -206,42 +204,64 @@ for (const name of names) {
     }
   });
 
-  test(`${name}: repeat at 9 seconds cannot extend the exact 10-second uncertainty bound or resend`, async ({
-    browser,
-  }) => {
-    const f = fixtures.find((row) => row.name === name)!;
-    const context = await browser.newContext();
-    const h = await mount(context, f);
-    try {
-      const page = await frozenPage(context, f);
-      const save = await start(page, f, h.posts);
-      await page.clock.runFor(9_000);
-      await page.keyboard.press("Enter");
-      expect(await page.evaluate("window.saveSubmitCancellations")).toEqual([false, true]);
-      await page.clock.runFor(999);
-      await expect(page.locator("[data-event-editor]")).toHaveAttribute("aria-busy", "true");
-      await page.clock.runFor(1);
-      const status = await polite(page);
-      await expect(status).toContainText(
-        /not (?:yet )?confirmed|isn.t confirmed|unconfirmed|cannot confirm|could not confirm|can.t confirm|unable to confirm|may have (?:been )?saved/i,
-      );
-      await expect(status).toContainText(/check|review|open/i);
-      await expect(status).toContainText(/record|event|featured|saved/i);
-      await expect(status).toContainText(/before.*(?:resubmi|sav(?:e|ing)|try|retry)/i);
-      expect(await page.locator("[data-event-editor]").getAttribute("aria-busy")).not.toBe("true");
-      await expect(save).toBeFocused();
-      await expect(page.locator('[name="title"]')).toHaveValue(draftTitle);
-      expect(await dirtyGuard(page)).toBe(true);
-      await page.clock.runFor(60_000);
-      expect(h.posts).toHaveLength(1);
-      expect(h.unexpected).toEqual([]);
-      expect(
-        await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length })),
-      ).toEqual({ local: 0, session: 0 });
-    } finally {
-      await context.close();
-    }
-  });
+  for (const repeat of [false, true]) {
+    test(`${name}: ${repeat ? "repeat at 9 seconds" : "pending save"} cannot extend the exact 10-second uncertainty bound or resend`, async ({
+      browser,
+    }) => {
+      const f = fixtures.find((row) => row.name === name)!;
+      const context = await browser.newContext();
+      const h = await mount(context, f);
+      try {
+        const page = await frozenPage(context, f);
+        const save = await start(page, f, h.posts);
+        const status = await polite(page);
+        await expect(status).toHaveText("Saving… Please wait.");
+        await page.clock.runFor(9_000);
+        await expect(status).toHaveText("Saving… Please wait.");
+        if (repeat) {
+          await page.keyboard.press("Enter");
+          expect(await page.evaluate("window.saveSubmitCancellations")).toEqual([false, true]);
+          await expect(status).toHaveText("Already saving. Please wait.");
+        }
+        await page.clock.runFor(999);
+        await expect(await polite(page)).toHaveText(
+          repeat ? "Already saving. Please wait." : "Saving… Please wait.",
+        );
+        await expect(status).not.toContainText(
+          /not confirmed|check the saved record|resubmitting/i,
+        );
+        await expect(page.locator("[data-event-editor]")).toHaveAttribute("aria-busy", "true");
+        await page.clock.runFor(1);
+        await polite(page);
+        await expect(status).toHaveText(
+          "Saving is not confirmed. Check the saved record before resubmitting.",
+        );
+        await expect(status).toContainText(
+          /not (?:yet )?confirmed|isn.t confirmed|unconfirmed|cannot confirm|could not confirm|can.t confirm|unable to confirm|may have (?:been )?saved/i,
+        );
+        await expect(status).toContainText(/check|review|open/i);
+        await expect(status).toContainText(/record|event|featured|saved/i);
+        await expect(status).toContainText(/before.*(?:resubmi|sav(?:e|ing)|try|retry)/i);
+        expect(await page.locator("[data-event-editor]").getAttribute("aria-busy")).not.toBe(
+          "true",
+        );
+        await expect(save).toBeFocused();
+        await expect(page.locator('[name="title"]')).toHaveValue(draftTitle);
+        expect(await dirtyGuard(page)).toBe(true);
+        await page.clock.runFor(60_000);
+        expect(h.posts).toHaveLength(1);
+        expect(h.unexpected).toEqual([]);
+        expect(
+          await page.evaluate(() => ({
+            local: localStorage.length,
+            session: sessionStorage.length,
+          })),
+        ).toEqual({ local: 0, session: 0 });
+      } finally {
+        await context.close();
+      }
+    });
+  }
 
   test(`${name}: pageshow clears pending and uncertain feedback but keeps newer dirty input`, async ({
     browser,
