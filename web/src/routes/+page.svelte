@@ -43,7 +43,7 @@ const ranks = $derived(counts.ranks.length ? counts.ranks : FALLBACK_RANKS);
 const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
-// noticeText above): without it the groups collapse to the helper's input.
+// noticeText above): without it the groups widen to the helper's input.
 const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
 </script>
 
