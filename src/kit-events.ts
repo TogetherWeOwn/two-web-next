@@ -57,6 +57,7 @@ const CACHEABLE_MARKER = "x-two-events-cacheable";
 function calendarInputOf(url: URL): CalendarPageInput {
   return resolveCalendarInput({
     q: url.searchParams.get("q"),
+    game: url.searchParams.get("game"),
     view: url.searchParams.get("view"),
     past: url.searchParams.get("past"),
     page: url.searchParams.get("page"),

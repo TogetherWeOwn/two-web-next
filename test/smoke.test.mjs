@@ -1026,6 +1026,8 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
   );
   const upcoming = EventsCalendarPage({
     state: { view: "list", month: "2026-10", q: "", past: false },
+    games: [],
+    gameFilter: null,
     upcoming: [],
     past: [],
     zone: "UTC",
