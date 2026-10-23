@@ -44,10 +44,6 @@ dl.facts > div { display: block; }
 /* Admin forms and tables share the external stylesheet with the page shells. */
 .admin-table { width: 100%; border-collapse: collapse; }
 .admin-table :is(th, td) { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-.ops-overrides { overflow-wrap: anywhere; }
-.ops-overrides table { table-layout: fixed; }
-.ops-overrides th:first-child { width: 44%; }
-.ops-overrides th, .ops-overrides td { padding: .5rem; vertical-align: top; }
 .field { margin: 1rem 0; }
 .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
 .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }

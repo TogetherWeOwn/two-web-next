@@ -52,6 +52,12 @@ POST, PUT, PATCH, DELETE and OPTIONS refuse locally before upstream
 contact; the shared action-body cap can refuse an oversized attempt
 first. The outer application same-origin/host guards still apply.
 
+The panel loads its four wrapping/table rules from the route-only
+`/operator-overrides-theme.css`. These rules stay out of the shared
+inlined public-page stylesheet and its homepage byte budget. The Tail
+alert inventory includes the exact `/admin/ops-overrides` route template;
+record values and request credentials are never alert fields.
+
 ## Verification and rollback
 
 The Test Author's `test/dashboard-operator-override-panel-acceptance.test.ts`

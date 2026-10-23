@@ -33,6 +33,26 @@ bundle. Re-run the acceptance contract with:
 npx vitest run test/dashboard-operator-override-panel-acceptance.test.ts
 ```
 
+## Route-only stylesheet follow-up
+
+Captured and opened all eight state/viewport images again on 2026-10-23 after moving the
+same four panel rules into `/operator-overrides-theme.css`, outside the
+public-page inlined bundle. The optional admin-shell stylesheet link does
+not change other screens. These captures also consume the current main
+admin shell/styles after conflict resolution.
+
+| State | Desktop, 1280 × 800 | Mobile, 390 × 844 |
+| --- | --- | --- |
+| Populated record, 200 | [Record desktop](scoped-css/populated-desktop.png) | [Record mobile](scoped-css/populated-mobile.png) |
+| Empty override map, 200 | [Empty desktop](scoped-css/empty-desktop.png) | [Empty mobile](scoped-css/empty-mobile.png) |
+| Upstream failure, 503 | [Unavailable desktop](scoped-css/unavailable-desktop.png) | [Unavailable mobile](scoped-css/unavailable-mobile.png) |
+| Missing bearer, 401 | [Refused desktop](scoped-css/refused-desktop.png) | [Refused mobile](scoped-css/refused-mobile.png) |
+
+[The follow-up report](scoped-css/report.json) proves the additional
+stylesheet loaded, wrapping is `anywhere`, populated tables use `fixed`
+layout and 8px cell padding, and all eight captures have zero overflow
+and axe violations. No visual baseline or existing byte budget changed.
+
 These local images do not prove staging deployment, runtime application or
 production availability. The ordinary Hono accessibility, Lighthouse and
 pinned CI visual gates remain required independently.

@@ -79,7 +79,11 @@ function Panel({ record, observedAt }: { record: OpsRecord | null; observedAt: s
     ? [...new Set([...Object.keys(record.overrides), ...Object.keys(record.baseline)])].sort()
     : [];
   return (
-    <Shell title="Operator overrides" audience="control-token holders only">
+    <Shell
+      title="Operator overrides"
+      audience="control-token holders only"
+      stylesheet="/operator-overrides-theme.css"
+    >
       <section class="ops-overrides">
         <p class="strap">Incident visibility · read-only</p>
         <h1>Operator overrides</h1>
