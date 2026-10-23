@@ -211,7 +211,11 @@ function browser(entry = "/events?game=Go&q=old") {
       return LIVE_IDS.includes(id ?? "") ? { textContent: `response ${index} ${id}` } : null;
     };
     const next = {
-      dataset: { view: "list", month: "2099-07", past: "" },
+      dataset: {
+        view: url.searchParams.get("view") ?? "list",
+        month: url.searchParams.get("month") ?? "2099-07",
+        past: "",
+      },
       querySelector: fields,
       querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? sourceZones : []),
     };
@@ -232,9 +236,25 @@ function browser(entry = "/events?game=Go&q=old") {
     zones,
     live,
     canonical,
+    og,
     location,
     history,
     requests,
+    navigate(path: string) {
+      const url = new NodeURL(path, ORIGIN);
+      const link = { href: url.href, hash: url.hash, target: "", hasAttribute: () => false };
+      let prevented = false;
+      const event = {
+        defaultPrevented: false,
+        button: 0,
+        target: { closest: () => link },
+        preventDefault() {
+          prevented = true;
+        },
+      };
+      for (const listener of root.listeners.get("click") ?? []) listener(event);
+      return prevented;
+    },
     backOrForward(path: string) {
       location.href = new NodeURL(path, ORIGIN).href;
       popstate();
@@ -259,7 +279,15 @@ function browser(entry = "/events?game=Go&q=old") {
     async delayBody(index: number, selected: string, query = "") {
       const html = responsePage(index, selected, query);
       const body = deferred<string>();
-      requests[index]!.response.resolve({ ok: true, text: () => body.promise });
+      const reading = deferred<void>();
+      requests[index]!.response.resolve({
+        ok: true,
+        text() {
+          reading.resolve(undefined);
+          return body.promise;
+        },
+      });
+      await reading.promise;
       await settle();
       return async () => {
         body.resolve(html);
@@ -393,4 +421,111 @@ describe("calendar game control history and independent intent", () => {
     expect(b.zones.every((zone) => zone.swaps === 0)).toBe(true);
     expect(b.history).toEqual([]);
   });
+});
+
+// An unsent game change revokes ordinary searches, not history/navigation reads.
+// The transport deliberately ignores abort so a late response must also be fenced
+// before it can commit zones, announcements, metadata, or browser history.
+describe("ordinary calendar searches revoked by game intent", () => {
+  const cases = ["submit", "debounce"].flatMap((start) =>
+    ["request", "body"].flatMap((pending) =>
+      [false, true].map((awayAndBack) => ({ start, pending, awayAndBack })),
+    ),
+  );
+
+  it.each(cases)(
+    "$start with $pending pending ignores the old game response (away-and-back=$awayAndBack)",
+    async ({ start, pending, awayAndBack }) => {
+      const b = browser("/events?game=Chess&q=old");
+      const lastGood = {
+        zones: b.zones.map((zone) => [...zone.childNodes]),
+        live: b.live.map((node) => node.textContent),
+        canonical: b.canonical.href,
+        og: b.og.content,
+        location: b.location.href,
+      };
+      b.type("raid");
+      if (start === "submit") b.submit();
+      else vi.advanceTimersByTime(300);
+      expect(b.requests).toHaveLength(1);
+      const old = new NodeURL(b.requests[0]!.url, ORIGIN);
+      expect(old.searchParams.get("game")).toBe("Chess");
+      expect(old.searchParams.get("q")).toBe("raid");
+      expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+      expect(b.zones.every((zone) => zone.swaps === 0)).toBe(true);
+      const finishOld =
+        pending === "body"
+          ? await b.delayBody(0, "Chess", "raid")
+          : () => b.respond(0, "Chess", "raid");
+
+      b.choose("Go");
+      if (awayAndBack) b.choose("Chess");
+      const latest = awayAndBack ? "Chess" : "Go";
+      // Soft assertions let the deliberately late transport settle and prove the
+      // commit fence and next explicit submit even when cancellation is missing.
+      expect.soft(b.requests[0]!.init.signal!.aborted).toBe(true);
+      vi.advanceTimersByTime(300);
+      expect(b.requests).toHaveLength(1);
+      await finishOld();
+      expect.soft(b.zones.map((zone) => zone.childNodes)).toEqual(lastGood.zones);
+      expect.soft(b.zones.every((zone) => zone.swaps === 0)).toBe(true);
+      expect.soft(b.live.map((node) => node.textContent)).toEqual(lastGood.live);
+      expect.soft(b.canonical.href).toBe(lastGood.canonical);
+      expect.soft(b.og.content).toBe(lastGood.og);
+      expect.soft(b.location.href).toBe(lastGood.location);
+      expect.soft(b.history).toEqual([]);
+      expect.soft(b.game.value).toBe(latest);
+      expect.soft(b.input.value).toBe("raid");
+
+      b.submit();
+      expect(b.requests).toHaveLength(2);
+      const submitted = new NodeURL(b.requests[1]!.url, ORIGIN);
+      expect(submitted.searchParams.get("game")).toBe(latest);
+      expect(submitted.searchParams.get("q")).toBe("raid");
+      expect(b.requests[1]!.init.signal!.aborted).toBe(false);
+      await b.respond(1, latest, "raid");
+      expect.soft(b.zones.every((zone) => zone.swaps === 1)).toBe(true);
+      expect(b.zones.map((zone) => zone.childNodes)).toEqual(b.zones.map(() => ["response 1"]));
+      expect(b.live[1]!.textContent).toBe("response 1 events-search-status");
+      expect(b.game.value).toBe(latest);
+      expect(b.input.value).toBe("raid");
+      expect(b.canonical.href).toBe(submitted.href);
+      expect(b.og.content).toBe(submitted.href);
+      expect(b.location.href).toBe(submitted.href);
+      expect(b.history).toEqual([b.requests[1]!.url]);
+    },
+  );
+
+  it.each(
+    ["history", "navigation"].flatMap((load) =>
+      ["request", "body"].map((pending) => ({ load, pending })),
+    ),
+  )(
+    "CONTROL: $load with $pending pending stays alive after an unsent game choice",
+    async ({ load, pending }) => {
+      const b = browser("/events?game=Chess&q=old");
+      const path = "/events?view=calendar&month=2099-08&game=Go&q=server";
+      if (load === "history") b.backOrForward(path);
+      else expect(b.navigate(path)).toBe(true);
+      expect(b.requests).toHaveLength(1);
+      const finish =
+        pending === "body"
+          ? await b.delayBody(0, "Go", "server")
+          : () => b.respond(0, "Go", "server");
+      b.choose("Dungeons & Dragons");
+      expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+      await finish();
+      expect(b.zones.every((zone) => zone.swaps === 1)).toBe(true);
+      expect(b.zones[3]!.childNodes).toEqual(["response 0"]);
+      expect(b.live[1]!.textContent).toBe("response 0 events-search-status");
+      expect(b.input.value).toBe("server");
+      expect(b.game.value).toBe("Dungeons & Dragons");
+      expect(b.canonical.href).toBe(ORIGIN + path);
+      expect(b.og.content).toBe(ORIGIN + path);
+      expect(b.location.href).toBe(ORIGIN + path);
+      expect(b.history).toEqual(load === "history" ? [] : [path]);
+      vi.advanceTimersByTime(300);
+      expect(b.requests).toHaveLength(1);
+    },
+  );
 });

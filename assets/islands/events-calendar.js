@@ -427,11 +427,9 @@
   // reschedules that same timer, so it cannot double-submit).
   var composing = false;
 
-  function scheduleSearch() {
-    inputRevision += 1;
-    cancelDebounce();
-    // Typing supersedes a search immediately, not just when the next fetch starts.
-    // Explicit navigation may still commit while newer text remains in the box.
+  // Text or game intent revokes an ordinary search before its response commits.
+  // Explicit navigation stays alive, preserving each field's independent edits.
+  function cancelSearch() {
     if (active && activeIsSearch) {
       active.abort();
       active = null;
@@ -439,6 +437,12 @@
       // Revoked owners cannot release loading inherited from navigation in finally.
       setLoading(false);
     }
+  }
+
+  function scheduleSearch() {
+    inputRevision += 1;
+    cancelDebounce();
+    cancelSearch();
     if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
@@ -464,6 +468,7 @@
   if (gameField)
     gameField.addEventListener("change", function () {
       gameRevision += 1;
+      cancelSearch();
     });
 
   form.addEventListener("submit", function (event) {

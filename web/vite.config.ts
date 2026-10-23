@@ -28,15 +28,14 @@ export default defineConfig({
             // diagnostics depend on constructor names. Keep licenses and maps.
             minify: { compress: false, mangle: false, codegen: true },
             comments: { annotation: false, jsdoc: false, legal: true },
-            // Hono and Kit share these route families. Keep their modules
-            // together on the server instead of compressing each helper chunk
-            // separately. This does not change client chunking.
+            // Hono and Kit share these route families and their dependencies.
+            // One server group avoids duplicate cross-chunk exports and gzip
+            // dictionaries. This does not change client chunking.
             codeSplitting: {
               groups: [
-                { name: "admin", test: /\/src\/admin\// },
                 {
-                  name: "events",
-                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
+                  name: "routes",
+                  test: /\/src\/(?:(?:admin|events)\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
                 },
               ],
             },
