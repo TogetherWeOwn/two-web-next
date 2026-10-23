@@ -131,6 +131,161 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
       { ...env, ADMIN_DB: fixture.db } as Env,
     );
 
+  const seedSeries = async () => {
+    const parent = await seed({
+      status: "draft",
+      startsAt: new Date("2099-06-04T18:00:00.000Z"),
+      endsAt: new Date("2099-06-04T20:00:00.000Z"),
+      recurrenceFrequency: "weekly",
+      recurrenceCount: 3,
+      recurrenceIndex: 1,
+    });
+    const future = await seed({
+      status: "draft",
+      startsAt: new Date("2099-06-11T18:00:17.125Z"),
+      endsAt: new Date("2099-06-11T20:00:43.875Z"),
+      parentEventId: parent.id,
+      recurrenceIndex: 2,
+    });
+    const past = await seed({
+      status: "draft",
+      startsAt: new Date("2000-06-11T18:00:00.000Z"),
+      endsAt: new Date("2000-06-11T20:00:00.000Z"),
+      parentEventId: parent.id,
+      recurrenceIndex: 3,
+    });
+    return { parent, future, past };
+  };
+
+  for (const peerMoves of [false, true]) {
+    it.each([
+      { column: "starts_at", instant: "infinity" },
+      { column: "ends_at", instant: "infinity" },
+      { column: "starts_at", instant: "-infinity" },
+      { column: "ends_at", instant: "-infinity" },
+    ])(
+      `repairs series $instant $column, preserving that child instant (peer moves: ${peerMoves})`,
+      async ({ column, instant }) => {
+        const { parent, future, past } = await seedSeries();
+        await fixture.client`update events set ${fixture.client(column)} = ${instant}::timestamptz where id = ${parent.id}`;
+        expect((await request("HTML", parent.eventKey)).status).toBe(422);
+        const invalidField = column === "starts_at" ? "startsAt" : "endsAt";
+        const peerField = column === "starts_at" ? "endsAt" : "startsAt";
+        const res = await save(
+          parent.eventKey,
+          peerMoves
+            ? column === "starts_at"
+              ? { ends_at: "2099-06-04 22:00" }
+              : { starts_at: "2099-06-04 20:00" }
+            : {},
+        );
+        expect(res.status).toBe(303);
+        const rows = await fixture.db.select().from(events);
+        expect(rows).toHaveLength(3);
+        const repaired = rows.find((row) => row.id === parent.id)!;
+        expect(repaired).toMatchObject({
+          ...parent,
+          startsAt: new Date(
+            column === "ends_at" && peerMoves
+              ? "2099-06-04T19:00:00.000Z"
+              : "2099-06-04T18:00:00.000Z",
+          ),
+          endsAt: new Date(
+            column === "starts_at" && peerMoves
+              ? "2099-06-04T21:00:00.000Z"
+              : "2099-06-04T20:00:00.000Z",
+          ),
+          updatedAt: expect.any(Date),
+          icsSequence: expect.any(BigInt),
+          syncRevision: parent.syncRevision + 2,
+        });
+        expect(repaired.icsSequence).toBeGreaterThanOrEqual(parent.icsSequence + 2n);
+        const moved = rows.find((row) => row.id === future.id)!;
+        expect(moved).toEqual({
+          ...future,
+          [peerField]: new Date(future[peerField].getTime() + (peerMoves ? 3600_000 : 0)),
+          updatedAt: peerMoves ? expect.any(Date) : future.updatedAt,
+          icsSequence: peerMoves ? expect.any(BigInt) : future.icsSequence,
+          syncRevision: future.syncRevision + (peerMoves ? 1 : 0),
+        });
+        if (peerMoves) expect(moved.icsSequence).toBeGreaterThan(future.icsSequence);
+        expect(rows.find((row) => row.id === past.id)).toEqual(past);
+        const audits = await fixture.db.select().from(activityLog);
+        expect(audits).toHaveLength(peerMoves ? 2 : 1);
+        expect(audits.find((row) => row.subjectId === parent.eventKey)).toMatchObject({
+          causerId: moderator.id,
+          properties: {
+            [invalidField]: { before: null, after: repaired[invalidField].toISOString() },
+          },
+        });
+        if (peerMoves) {
+          const childAudit = audits.find((row) => row.subjectId === future.eventKey)!;
+          expect(childAudit).toMatchObject({
+            causerId: moderator.id,
+            properties: {
+              [peerField]: {
+                before: future[peerField].toISOString(),
+                after: moved[peerField].toISOString(),
+              },
+            },
+          });
+          expect(childAudit.properties).not.toHaveProperty(invalidField);
+        }
+        expect(await fixture.client`select * from queue_jobs`).toEqual([]);
+      },
+    );
+  }
+
+  it("repairs both nonfinite series parent timestamps without rewriting children", async () => {
+    const { parent, future, past } = await seedSeries();
+    await fixture.client`update events set starts_at = '-infinity'::timestamptz, ends_at = 'infinity'::timestamptz where id = ${parent.id}`;
+    expect((await request("HTML", parent.eventKey)).status).toBe(422);
+    expect((await save(parent.eventKey)).status).toBe(303);
+    const rows = await fixture.db.select().from(events);
+    expect(rows).toHaveLength(3);
+    expect(rows.find((row) => row.id === parent.id)).toMatchObject({
+      startsAt: new Date("2099-06-04T18:00:00.000Z"),
+      endsAt: new Date("2099-06-04T20:00:00.000Z"),
+    });
+    expect(rows.find((row) => row.id === future.id)).toEqual(future);
+    expect(rows.find((row) => row.id === past.id)).toEqual(past);
+    const audits = await fixture.db.select().from(activityLog);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      subjectId: parent.eventKey,
+      causerId: moderator.id,
+      properties: {
+        startsAt: { before: null, after: "2099-06-04T18:00:00.000Z" },
+        endsAt: { before: null, after: "2099-06-04T20:00:00.000Z" },
+      },
+    });
+    expect(await fixture.client`select * from queue_jobs`).toEqual([]);
+  });
+
+  it.each(["starts_at", "ends_at"])(
+    "refuses series %s repair atomically when the finite peer would invert a child",
+    async (column) => {
+      const { parent, future } = await seedSeries();
+      await fixture.client`update events set ${fixture.client(column)} = 'infinity'::timestamptz where id = ${parent.id}`;
+      await fixture.client`update events set starts_at = '2099-06-11T18:00:00Z', ends_at = '2099-06-11T18:30:00Z' where id = ${future.id}`;
+      expect((await request("HTML", parent.eventKey)).status).toBe(422);
+      const before = await fixture.client`select to_jsonb(events) as row from events order by id`;
+      const res = await save(
+        parent.eventKey,
+        column === "starts_at"
+          ? { ends_at: "2099-06-04 19:30" }
+          : { starts_at: "2099-06-04 20:00" },
+      );
+      expect(res.status).toBe(422);
+      expect(await res.text()).toContain("The end is after the start.");
+      expect(await fixture.client`select to_jsonb(events) as row from events order by id`).toEqual(
+        before,
+      );
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      expect(await fixture.client`select * from queue_jobs`).toEqual([]);
+    },
+  );
+
   it.each([
     { column: "starts_at", instant: "infinity" },
     { column: "ends_at", instant: "infinity" },

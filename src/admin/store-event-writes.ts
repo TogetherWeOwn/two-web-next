@@ -484,8 +484,14 @@ async function shiftFutureChildren(
   oldStartsAt: Date,
   oldEndsAt: Date,
 ): Promise<NonNullable<WriteBack>[]> {
-  const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
-  const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
+  // Repairing a nonfinite parent time supplies no old instant to shift from.
+  // Preserve that child column, while still applying any finite peer delta.
+  const startDelta = Number.isFinite(oldStartsAt.getTime())
+    ? parent.startsAt.getTime() - oldStartsAt.getTime()
+    : 0;
+  const endDelta = Number.isFinite(oldEndsAt.getTime())
+    ? parent.endsAt.getTime() - oldEndsAt.getTime()
+    : 0;
   if (startDelta === 0 && endDelta === 0) return [];
   const lockedChildren = await tx
     .select()
