@@ -49,6 +49,12 @@ The event-theme compactness regression initially rejected 6277 characters agains
 
 Hono's `npm run a11y`, `npm run lighthouse` and `npm run lighthouse:quality` do **not** exercise Kit routes. Kit's evidence is its real SSR fixture screenshots, browser acceptance and build/budget checks, not an inference from Hono's scores. Full-check and remote CI outcomes are recorded in the pull request. The pinned CI visual comparison refuses local execution; any intentional baseline updates must come from reviewed CI failure artifacts, not these documentation images.
 
+## Intentional CI visual baselines
+
+The ready-head `browser-smoke` run [40008958751](https://github.com/TogetherWeOwn/two-web-next/actions/runs/40008958751) at `42351f14e` reported **3 failed tests and 14 passed**. The failures contain four image comparisons: `event-desktop`, `event-mobile`, `event-paused-desktop` and `event-paused-mobile`. Each adds the destination-time row to the existing global navigation link, increasing full-page height by 15–16 pixels and shifting the content below it. The existing `time` mask covers that row; its configuration is unchanged.
+
+All four expected, actual and diff images were opened and reviewed. Only those four baselines were accepted from the run's `e2e-failure-40008958751-1` artifact with `node ci/visual-accept.mjs <artifact-dir>`. Their bytes match the reviewed CI actuals. No other baseline, visual threshold, mask, fixture, acceptance assertion or product source was changed for this correction. The acceptance tool's selftests pass **40/40**. The new head still requires its own pinned CI comparison; accepting the images is not a claim that the new run passed.
+
 ## Undo
 
 Revert the single behavior PR if a regression appears. There are no data changes or migrations. A merge alone is not evidence of deployment.
