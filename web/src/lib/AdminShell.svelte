@@ -1,3 +1,9 @@
+<script lang="ts" module>
+// Twin of SearchDroppedNotice (src/admin/pages/shell.tsx): the one place the
+// Kit admin lists announce a dropped overlong free-text filter.
+export { searchNotice };
+</script>
+
 <script lang="ts">
 import type { Snippet } from "svelte";
 
@@ -11,6 +17,12 @@ import type { Snippet } from "svelte";
 //
 let { title, children }: { title: string; children: Snippet } = $props();
 </script>
+
+{#snippet searchNotice(query: { searchDropped?: true })}
+  {#if query.searchDropped}
+    <p role="status" class="hint" data-testid="search-dropped">Search terms are limited to 128 characters. Showing all rows.</p>
+  {/if}
+{/snippet}
 
 <svelte:head>
   <title>{title} — TWO admin</title>

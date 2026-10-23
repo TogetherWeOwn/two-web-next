@@ -11,10 +11,21 @@ export {
   featuredEmptyText,
 } from "./featured-list-query";
 export type RosterSort = "status" | "answered";
-export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
-export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
+/** Set only when an overlong free-text filter was dropped, so pages can say so. */
+export type SearchDropped = { searchDropped?: true };
+export type RosterQuery = {
+  q: string;
+  sort: RosterSort;
+  order: SortOrder;
+  page: number;
+} & SearchDropped;
+export type JoinAttemptsQuery = { outcome: string; q: string; page: number } & SearchDropped;
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
-export type ActivityLogQuery = { subject: string; causer: string; page: number };
+export type ActivityLogQuery = {
+  subject: string;
+  causer: string;
+  page: number;
+} & SearchDropped;
 export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
@@ -30,6 +41,8 @@ const withoutNul = (raw: string | undefined): string =>
 // to absent like other invalid values, never truncated to a new search term.
 const FREE_TEXT_MAX_LENGTH = 128;
 const boundFreeText = (value: string): string => (value.length > FREE_TEXT_MAX_LENGTH ? "" : value);
+const dropped = (...normalized: string[]): SearchDropped =>
+  normalized.some((value) => value.length > FREE_TEXT_MAX_LENGTH) ? { searchDropped: true } : {};
 
 export function parseRosterQuery(params: ListParams): RosterQuery {
   const page = Number(params.roster_page);
@@ -39,11 +52,13 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
     /^[1-9]\d*$/.test(params.roster_page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
+  const q = withoutNul(params.roster_q).trim();
   return {
-    q: boundFreeText(withoutNul(params.roster_q).trim()),
+    q: boundFreeText(q),
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
+    ...dropped(q),
   };
 }
 
@@ -54,10 +69,12 @@ export function parseJoinAttemptsQuery(params: ListParams): JoinAttemptsQuery {
     /^[1-9]\d*$/.test(params.page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * JOIN_ATTEMPT_PAGE_SIZE);
+  const q = withoutNul(params.q).trim();
   return {
     outcome: withoutNul(params.outcome),
-    q: boundFreeText(withoutNul(params.q).trim()),
+    q: boundFreeText(q),
     page: validPage ? page : 1,
+    ...dropped(q),
   };
 }
 
@@ -68,10 +85,13 @@ export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
     /^[1-9]\d*$/.test(params.page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
+  const subject = withoutNul(params.subject).trim();
+  const causer = withoutNul(params.causer).trim();
   return {
-    subject: boundFreeText(withoutNul(params.subject).trim()),
-    causer: boundFreeText(withoutNul(params.causer).trim()),
+    subject: boundFreeText(subject),
+    causer: boundFreeText(causer),
     page: validPage ? page : 1,
+    ...dropped(subject, causer),
   };
 }
 

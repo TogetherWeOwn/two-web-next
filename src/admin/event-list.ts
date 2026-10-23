@@ -10,6 +10,8 @@ export type EventListQuery = {
   sort: EventSort;
   order: "asc" | "desc";
   page: number;
+  /** Set only when an overlong search was dropped, so the page can say so. */
+  searchDropped?: true;
 };
 export type EventListParams = Partial<Record<keyof EventListQuery, string>>;
 
@@ -27,9 +29,10 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
   const fill = params.fill;
   const sort = params.sort;
   const page = Number(params.page);
+  // PostgreSQL text cannot contain NUL; retain the rest as literal input.
+  const q = (params.q ?? "").replaceAll("\u0000", "").trim();
   return {
-    // PostgreSQL text cannot contain NUL; retain the rest as literal input.
-    q: boundEventFreeText((params.q ?? "").replaceAll("\u0000", "").trim()),
+    q: boundEventFreeText(q),
     status:
       status === "draft" || status === "published" || status === "cancelled" || status === "past"
         ? status
@@ -47,6 +50,7 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
       Number.isSafeInteger(page * EVENT_PAGE_SIZE)
         ? page
         : 1,
+    ...(q !== "" && boundEventFreeText(q) === "" ? { searchDropped: true as const } : {}),
   };
 }
 

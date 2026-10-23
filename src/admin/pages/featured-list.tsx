@@ -4,7 +4,7 @@ import type { FC } from "hono/jsx";
 import { FeaturedStatusBadge } from "../../featured-status";
 import type { FeaturedRow } from "../store";
 import { featuredEmptyText, featuredListUrl, type FeaturedListQuery } from "../table-list";
-import { Shell, TableSortHeader } from "./shell";
+import { SearchDroppedNotice, Shell, TableSortHeader } from "./shell";
 
 export const FeaturedPage: FC<{
   rows: FeaturedRow[];
@@ -47,6 +47,7 @@ export const FeaturedPage: FC<{
           </button>
         </div>
       </form>
+      <SearchDroppedNotice query={query} />
       <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div
         class="featured-table-scroll"

@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedPage (src/admin/pages/featured-list.tsx): the
@@ -45,6 +45,7 @@ let { data }: PageProps = $props();
       <button type="submit" class="btn">Filter</button>
     </div>
   </form>
+  {@render searchNotice(data.query)}
   <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: keyboard-scrollable
     region per the Hono contract (src/admin/pages/featured-list.tsx) — the

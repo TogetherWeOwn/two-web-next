@@ -9,6 +9,18 @@ import { SkipLink } from "../../pages";
 import type { EventRow } from "../store";
 import type { SortOrder } from "../table-list";
 
+/**
+ * Polite status line shown when an overlong free-text filter was dropped. The
+ * Kit admin pages inline the same markup (search-dropped testid and copy).
+ */
+const SEARCH_DROPPED_NOTICE = "Search terms are limited to 128 characters. Showing all rows.";
+export const SearchDroppedNotice: FC<{ query: { searchDropped?: true } }> = ({ query }) =>
+  query.searchDropped ? (
+    <p role="status" class="hint" data-testid="search-dropped">
+      {SEARCH_DROPPED_NOTICE}
+    </p>
+  ) : null;
+
 export const TableSortHeader: FC<{
   label: string;
   active: boolean;
@@ -77,7 +89,12 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
   return (
     <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
-      <button type="submit" class="link" data-testid={action}>
+      <button
+        type="submit"
+        class="link"
+        data-testid={action}
+        aria-label={`${row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"} for ${row.title}`}
+      >
         {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
       </button>
     </form>

@@ -189,17 +189,22 @@ describe("admin pause/cancel controls expose their names on native buttons", () 
         errors: {},
       }),
     );
-    expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-pause">');
+    expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-pause"');
     expect(html).toContain(">Pause RSVPs</button>");
-    expect(html).toContain('<button type="submit" class="link" data-testid="cancel-event">');
+    expect(html).toContain('<button type="submit" class="link" data-testid="cancel-event"');
     expect(html).toContain(">Cancel event</button>");
-    // Native buttons with visible-text names: no aria-label override and no
-    // focus removal on the controls themselves, so assistive tech announces
-    // the same name sighted members see and keyboard members can reach them.
-    // (The page shell keeps its own skip-link `tabindex="-1"` on `<main>`.)
-    for (const testid of ["rsvp-pause", "cancel-event"]) {
+    // Native buttons: the accessible name starts with the visible text and
+    // adds the event title (label-in-name), so a screen reader hears which
+    // event the action changes while voice control still matches the visible
+    // words. No focus removal on the controls themselves, so keyboard members
+    // can reach them. (The page shell keeps its own skip-link `tabindex="-1"`
+    // on `<main>`.)
+    for (const [testid, visible] of [
+      ["rsvp-pause", "Pause RSVPs"],
+      ["cancel-event", "Cancel event"],
+    ] as const) {
       const tag = new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "";
-      expect(tag, testid).not.toContain("aria-label");
+      expect(tag, testid).toContain(`aria-label="${visible} `);
       expect(tag, testid).not.toContain("tabindex");
     }
   });
@@ -213,7 +218,7 @@ describe("admin pause/cancel controls expose their names on native buttons", () 
         errors: {},
       }),
     );
-    expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-reopen">');
+    expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-reopen"');
     expect(html).toContain(">Reopen RSVPs</button>");
     expect(html).toContain(">Cancel event</button>");
     expect(html).not.toContain("Pause RSVPs");
