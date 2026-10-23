@@ -6,13 +6,15 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current proposal after the fourth base-conflict reconciliation:** raw client JS
-250368 B (+512 B vs current main) and gzip client JS 100864 B (+256 B vs
-current main). Earlier proposals below are historical. See the final section
-for repeated measurements and unchanged guards. The client group fits these
-caps, but the integrated feature now independently breaches server gzip and
-file-count caps. Those caps remain unchanged here; this client-only prerequisite
-is no longer sufficient by itself to make the integrated checker green.
+**Current decision after the fifth base-conflict reconciliation:** no additional
+client ceiling increase. Main `d6a65b4fa` includes the profile-client reduction
+from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673), and the
+refreshed frozen feature fits main's existing client caps **251904/101632 B**.
+Every numeric ceiling is now identical to that merged base; earlier proposals
+below are historical, not active allowances. See the final section for repeated
+measurements and unchanged guards. The exact union still breaches server gzip
+and file count; neither this client decision nor a nearby server-cap increase
+proves the complete feature is ready to merge.
 
 ## Inputs and method
 
@@ -391,3 +393,100 @@ parity, startup latency and staging are not rerun or claimed. Prior-head hosted
 CI was green, but does not approve this new head; exact-head CI and independent
 review remain required. Rollback restores main's client caps **249856/100608 B**.
 The source feature ref remains untouched.
+
+## Fifth base-conflict reconciliation: client increase withdrawn
+
+On 2026-10-23 GitHub confirmed the fourth reconciliation head was conflicting.
+The merged base is pinned to `d6a65b4fa904eb2ab95e6c5033e3c1a481d15319`.
+It includes hotzone recovery [#1505](https://github.com/TogetherWeOwn/two-web-next/pull/1505),
+the root-lockfile update [#1656](https://github.com/TogetherWeOwn/two-web-next/pull/1656),
+and the profile-client reduction [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673).
+Only `ci/kit-perf-budget.json` conflicts. Preserve main's complete history
+verbatim, then the five unique prerequisite records above and this decision.
+Incoming source, acceptance tests, lockfiles and baselines stay byte-identical
+to that base. The change versus that base remains these three evidence/history
+files, with **no numeric ceiling difference**.
+
+Reproduce with `git archive d6a65b4fa`, the same frozen five-path overlay
+`git diff 5f4f1c659 723957121b65 -- <five paths>`, and Node `v24.22.1`.
+Install root and web dependencies externally with `npm ci --include=dev`,
+then link them into both archives. The root lockfile is now SHA-256
+`c3be97958e6967ae053106f3639d140b83a585f49295fc11cdcbdf1a23232af9`;
+the web lockfile remains
+`d02c1ee10d14e72934aa30b9182187d8509facf3bfbe4fa5961d812abcf8c9fc`.
+Run `npm --prefix web run build && node ci/check-kit-perf.mjs` in each tree.
+No database, credential or remote service is used for these measurements.
+An initial archive-setup command used an absolute `git apply --directory`
+path and was refused; the prematurely attempted build then lacked dependency
+links. Applying from the archive directory and linking the installed dependencies
+resolved both setup errors before the successful measurements below.
+
+| Group | Main 1 | Main 2 | Combined 1 | Combined 2 | Base ceiling |
+| --- | --- | --- | --- | --- | --- |
+| Client JS raw/gzip | 244878/99249 | 244878/99249 | 245648/99511 | 245648/99511 | 251904/101632 |
+| Client JS files | 53 | 53 | 53 | 53 | 54 |
+| Server JS raw/gzip | 1118342/329330 | 1118342/329329 | 1119856/329842 | 1119856/329842 | 1203200/329472 |
+| Server JS files | 126 | 126 | 127 | 127 | 126 |
+| Worker raw/gzip | 2551/1219 | 2551/1219 | 2551/1219 | 2551/1219 | 3584/1536 |
+| Client CSS raw/gzip | 2737/983 | 2737/983 | 2737/983 | 2737/983 | 3072/1024 |
+| Client CSS files | 2 | 2 | 2 | 2 | 4 |
+| Overall checker exit | 0 | 0 | 1 | 1 | 0 required |
+
+Both builds per tree have identical client/CSS/worker path, byte and SHA-256
+maps. All **730 rows** from both builds are appended to the TSV, labelled
+`profile-trim-main-1`, `profile-trim-main-2`, `profile-trim-combined-1` and
+`profile-trim-combined-2`. Groups use the existing `client`, `css`, `server`
+and `worker` labels; paths are repository-relative emitted-output paths.
+Server rebuild hash variation remains confined to `chunks/instance.js` and
+`chunks/internal.js`; the 1 B total gzip wobble occurs only on main.
+
+Across trees, **51/53 client path/hash pairs match**. Board structural node
+28 changes **3595/1746 → 4365/2008 B (+770/+262 B)**. The app entry only
+hash-relinks at **5576/1515 B** on both sides. Thus the complete client delta
+is **+770/+262 B**, not the older delta from before main's profile optimization.
+Both clients contain zero literal `drizzle-orm` references. There is no new
+route or hydration in the frozen overlay.
+
+### No additional client allowance
+
+The refreshed feature fits main's existing client caps by **6256 raw / 2121
+gzip B**, with one unused client file slot. The old proposal is withdrawn:
+retain main's **251904/101632 B** client caps and **every other numeric
+ceiling exactly**. Do not add the historical +512/+256 B again or tighten
+main to the obsolete proposal. Existing measured optimization is sufficient;
+no speculative feature rewrite is necessary. On the same second-build output,
+the unmodified main budget passes the client group twice; the overall checker
+remains exit 1 on the independent server breach. No cap-swap green claim is
+needed or made when no client cap changes.
+
+### Exact-union server HOLD remains
+
+Main's larger server caps from #1505 do **not** cover this integration: it
+still has **127/126 files** and gzip **329842/329472 B (370 B over)** in both
+builds. Main passes with **142–143 B** gzip headroom. The new caption chunk
+adds **349/283 B**, board SSR adds **635/138 B**, shared Hono `chunks/src.js`
+adds **577/130 B**, and `chunks/members.js` shrinks **45/39 B**. Generated
+node 28 adds **0/1 B**; the instance chunk shrinks **2 raw B**. These sum to
+**+1514 raw / +513 gzip B** on the second-build comparison. Manifest/hash
+relinking changes hashes but not the other totals. No server cap changes here.
+
+The complete feature stays held until independently admitted server work
+satisfies the checker on its exact then-current union, followed by its own
+exact-head CI and independent review. Neither a client-only evidence merge
+nor admission-policy adjudication supplies server acceptance or release
+permission. The source feature ref was read only and remains untouched.
+
+### Focused verification and limits
+
+The unchanged frozen feature acceptance passes **20/20**. Incoming hotzone,
+profile, machine-doc-link and Kit-error suites pass **155 tests**, with **one
+existing live-DB test skipped** (no `DATABASE_URL` supplied); no test files are
+edited. Checker selftests **6/6**, checker tests **13/13**, parity-gate unit
+tests **67/67** and config selftests **34/34** pass. The actual resolved
+prerequisite-tree build and additional gates are recorded in the PR body.
+Full `npm run check`, browser parity, screenshots, startup latency and staging
+are not rerun or claimed. The prior head had green CI and independent review,
+but neither approves this new head. All current-head gates still apply.
+Rollback reverts only this evidence/history decision; **there is no numeric
+ceiling change to undo**. The measurements are pinned to the merged base;
+later main movement is not silently represented as a measured union.

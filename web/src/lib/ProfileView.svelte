@@ -1,7 +1,6 @@
 <script lang="ts">
 import {
   MEMBER_PROFILE_ISLAND,
-  MOUNT_ATTR,
   PROFILE_AVATAR_TESTID,
   PROFILE_CANCEL_TESTID,
   PROFILE_COPY,
@@ -323,7 +322,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
         class="profile-panel profile-editor"
         aria-labelledby="edit-heading"
         data-testid={PROFILE_EDIT_TESTID}
-        {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
+        data-island={MEMBER_PROFILE_ISLAND}
         data-member-id={member.id}
         data-saved-bio={saved.bio}
         data-saved-games-text={saved.games_text}
