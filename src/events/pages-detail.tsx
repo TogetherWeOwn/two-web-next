@@ -5,28 +5,20 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { attendeePageHref } from "./attendee-paths";
-import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import type {
+  EventAttendee,
+  EventLink,
+  EventNeighbors,
+  EventSeriesContext,
+  PublicEvent,
+  ViewerRsvp,
+} from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-const fmtWithOffset = (d: Date, tz: string): string => {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-      timeZoneName: "longOffset",
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-};
+import { formatEventWhen as fmtWithOffset } from "./date-format";
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -43,6 +35,8 @@ export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
   related: EventLink[];
+  /** Series run context; null (or omitted) for standalone events, which render exactly as today. */
+  series?: EventSeriesContext | null;
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
@@ -63,6 +57,7 @@ export const EventPage: FC<{
   e,
   neighbors,
   related,
+  series = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
   appUrl,
@@ -154,6 +149,11 @@ export const EventPage: FC<{
             <dt>Where</dt>
             <dd>
               <p data-testid="event-venue">{e.location}</p>
+              <p>
+                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                  Get directions
+                </a>
+              </p>
             </dd>
           </div>
         ) : null}
@@ -162,6 +162,14 @@ export const EventPage: FC<{
             <dt>Hosted by</dt>
             <dd>
               <p data-testid="event-organizer">{e.organizer_name}</p>
+            </dd>
+          </div>
+        ) : null}
+        {series && series.hosts.length > 0 ? (
+          <div>
+            <dt>Series hosts</dt>
+            <dd>
+              <p data-testid="event-series-hosts">{series.hosts.join(", ")}</p>
             </dd>
           </div>
         ) : null}
@@ -339,6 +347,24 @@ export const EventPage: FC<{
         dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
       <div class="event-discovery">
+        {series && (series.previous || series.next) ? (
+          <nav aria-label="Series events" data-testid="event-series-nav">
+            {series.previous ? (
+              <a
+                href={`/e/${series.previous.eventKey}`}
+                rel="prev"
+                data-testid="event-series-previous"
+              >
+                ← Previous in series: {series.previous.title}
+              </a>
+            ) : null}{" "}
+            {series.next ? (
+              <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
+                Next in series: {series.next.title} →
+              </a>
+            ) : null}
+          </nav>
+        ) : null}
         {neighbors.previous || neighbors.next ? (
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
             {neighbors.previous ? (

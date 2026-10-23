@@ -36,35 +36,55 @@ export const AdminDashboard: FC<{
           </h2>
           <p>Who changed what, when. Read-only; views that name a member are access-logged.</p>
         </li>
+        <li class="card">
+          <h2>
+            <a href="/admin/join-attempts">Join attempts</a>
+          </h2>
+          <p>Every join try, outcome and refusal. Read-only.</p>
+        </li>
       </ul>
       {funnel ? (
-        <section data-testid="join-funnel">
-          <h2>Join funnel, last {JOIN_RETENTION_DAYS} days</h2>
+        <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">
+          <h2 id="join-funnel-heading">Join funnel, last {JOIN_RETENTION_DAYS} days</h2>
           {Object.keys(funnel).length === 0 ? (
             <p data-testid="join-funnel-empty">No join attempts in the window.</p>
           ) : (
-            <table class="admin-table">
-              <thead>
-                <tr>
-                  <th>Outcome</th>
-                  <th>Attempts</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(funnel).map(([outcome, n]) => (
-                  <tr key={outcome}>
-                    <td>{outcome}</td>
-                    <td data-testid={`funnel-${outcome}`}>{n}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <p id="join-funnel-scroll-hint">
+                Scroll horizontally to see all columns on smaller screens.
+              </p>
+              <div
+                class="admin-table-scroll"
+                role="region"
+                aria-label="Join funnel"
+                aria-describedby="join-funnel-scroll-hint"
+                tabindex={0}
+                data-testid="join-funnel-table-scroll"
+              >
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Outcome</th>
+                      <th scope="col">Attempts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(funnel).map(([outcome, n]) => (
+                      <tr key={outcome}>
+                        <td>{outcome}</td>
+                        <td data-testid={`funnel-${outcome}`}>{n}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
       ) : null}
       {zeroSearches ? (
-        <section data-testid="top-zero-searches">
-          <h2>Top searches with no results</h2>
+        <section data-testid="top-zero-searches" aria-labelledby="zero-searches-heading">
+          <h2 id="zero-searches-heading">Top searches with no results</h2>
           <p>
             What guests looked for on /events and found nothing. A repeat miss is a game night
             nobody posted yet.
@@ -72,24 +92,38 @@ export const AdminDashboard: FC<{
           {zeroSearches.length === 0 ? (
             <p data-testid="top-zero-searches-empty">No missed searches.</p>
           ) : (
-            <table class="admin-table">
-              <thead>
-                <tr>
-                  <th>Search</th>
-                  <th>Misses</th>
-                  <th>Last searched</th>
-                </tr>
-              </thead>
-              <tbody>
-                {zeroSearches.map((r) => (
-                  <tr key={r.query}>
-                    <td>{r.query}</td>
-                    <td>{r.searches}</td>
-                    <td>{r.lastSearchedAt.toISOString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <p id="top-zero-searches-scroll-hint">
+                Scroll horizontally to see all columns on smaller screens.
+              </p>
+              <div
+                class="admin-table-scroll"
+                role="region"
+                aria-label="Top searches with no results"
+                aria-describedby="top-zero-searches-scroll-hint"
+                tabindex={0}
+                data-testid="top-zero-searches-table-scroll"
+              >
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Search</th>
+                      <th scope="col">Misses</th>
+                      <th scope="col">Last searched</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {zeroSearches.map((r) => (
+                      <tr key={r.query}>
+                        <td>{r.query}</td>
+                        <td>{r.searches}</td>
+                        <td>{r.lastSearchedAt.toISOString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
       ) : null}

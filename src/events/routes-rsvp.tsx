@@ -17,7 +17,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { resolveNativeRsvpPage, rsvpPageReturnPath } from "./reads";
 import { renderRsvpRefusal } from "./rsvp-refusal-hono";
 import { rsvpRefusalModelFor, rsvpRefusalOutcome } from "./rsvp-refusal";
-import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
+import { body, dbUnavailableJson, type App, type Ctx, type SessionReader } from "./routes-shared";
 
 // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
 // DELETE 204 on a real withdrawal and 404 when it deletes nothing, any other verb 405.
@@ -88,7 +88,7 @@ const putRsvp = async (
   // the same row. Invalid keys return null and keep their refusal path.
   const lookupKey = canonicalEventKey(key) ?? key;
   const db = await dbFor(c);
-  if (!db) return c.json({ error: "db_unavailable" }, 503);
+  if (!db) return dbUnavailableJson(c);
   // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
   // (member/event/RSVP-row locks and the throttle prune), as in Laravel: a refused
   // write does not spend an attempt. No pre-lock check here — a stale read could
@@ -119,7 +119,7 @@ const deleteRsvp = async (
   const who = await member(c, readFragmentSession);
   if (who instanceof Response) return who;
   const db = await dbFor(c);
-  if (!db) return c.json({ error: "db_unavailable" }, 503);
+  if (!db) return dbUnavailableJson(c);
   // Only the caller's own row is reachable: the delete is keyed on the session user.
   // The budget is charged inside withdrawRsvp, atomically with the delete.
   // Generic Ctx (no route path type) yields string|undefined: fail closed.

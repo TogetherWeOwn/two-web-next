@@ -22,7 +22,7 @@ button.link { background: none; border: 0; color: var(--brand); cursor: pointer;
 footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 2rem; }
 .facts { list-style: none; margin: 1.5rem 0; padding: 0; display: grid; gap: 1rem; }
 dl.facts > div { display: block; }
-.card { border: 1px solid #d8cfc0; background: #fffdf8; padding: 1rem 1.25rem; border-radius: .5rem; }
+.card, fieldset { border: 1px solid #d8cfc0; background: #fffdf8; padding: 1rem 1.25rem; border-radius: .5rem; }
 .card dt, .card h2, .card h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
 .card dd, .card p { margin: 0; color: var(--muted); }
 .counts { color: var(--muted); font-size: .95rem; }
@@ -43,7 +43,7 @@ dl.facts > div { display: block; }
 
 /* Admin forms and tables share the external stylesheet with the page shells. */
 .admin-table { width: 100%; border-collapse: collapse; }
-.admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
+.admin-table :is(th, td) { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
 .ops-overrides { overflow-wrap: anywhere; }
 .ops-overrides table { table-layout: fixed; }
 .ops-overrides th:first-child { width: 44%; }
@@ -51,7 +51,8 @@ dl.facts > div { display: block; }
 .field { margin: 1rem 0; }
 .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
 .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-.field .hint { color: #6b6257; font-size: .85rem; }
+.field .hint, .hint { color: #6b6257; font-size: .85rem; }
+legend { font-weight: 700; padding: 0 .5rem; }
 .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
 .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
 .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -59,8 +60,8 @@ dl.facts > div { display: block; }
 .featured-form { overflow-wrap: anywhere; }
 .featured-table-scroll, .admin-table-scroll { max-width: 100%; overflow-x: auto; }
 .featured-table { min-width: 64rem; }
-.featured-table th, .featured-table td { overflow-wrap: normal; word-break: normal; }
-.featured-table th, .featured-table time { white-space: nowrap; }
+.featured-table :is(th, td) { overflow-wrap: normal; word-break: normal; }
+.featured-table :is(th, time) { white-space: nowrap; }
 .featured-table th:first-child { min-width: 12rem; }
 .featured-window-bound { display: block; white-space: nowrap; }
 .featured-status { display: inline-block; padding: .1rem .5rem; border: 1px solid currentColor; border-radius: .25rem; font-size: .85rem; font-weight: 700; }
