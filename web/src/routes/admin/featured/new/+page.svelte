@@ -30,7 +30,10 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </div>
     <div class="field">
       <label for="f-url">Link (full http(s) URL, or empty)</label>
-      <input id="f-url" name="url" type="url" value="" />
+      <input id="f-url" name="url" type="url" value="" aria-describedby="f-url-hint" />
+      <p id="f-url-hint" class="hint">
+        No credentials, backslashes, whitespace or control characters.
+      </p>
     </div>
     <div class="field">
       <label for="f-image-url">Image URL</label>

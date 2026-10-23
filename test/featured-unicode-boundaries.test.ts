@@ -82,7 +82,7 @@ describe("featured Unicode boundaries", () => {
       parseFeaturedForm({
         title: " Game night ",
         body: " \n ",
-        url: " http://example.com ",
+        url: "http://example.com",
         image_url: " ",
         image_alt: " \t ",
         position: "2",
