@@ -288,6 +288,7 @@ jobs:
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+          node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "admin failed-read retry: native keyboard/no-JS recovery" 12
       - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
         run: |
           npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json

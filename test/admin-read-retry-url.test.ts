@@ -79,4 +79,24 @@ describe("admin read retry URL admission", () => {
       expect(adminReadRetryHref(url, "admin")).toBeNull();
     },
   );
+
+  it.each(["admin", "join-attempts"] as const)(
+    "rejects a boxed-string search on a native URL (%s)",
+    (boundary) => {
+      const pathname = boundary === "admin" ? "/admin/events" : "/admin/join-attempts";
+      const url = new URL(`${pathname}?page=2`, origin);
+      Object.defineProperty(url, "search", { value: new String("?page=2") });
+      expect(adminReadRetryHref(url, boundary)).toBeNull();
+    },
+  );
+
+  it.each(["admin", "join-attempts"] as const)(
+    "rejects a string-coercible pathname on a native URL (%s)",
+    (boundary) => {
+      const pathname = boundary === "admin" ? "/admin/events" : "/admin/join-attempts";
+      const url = new URL(`${pathname}?page=2`, origin);
+      Object.defineProperty(url, "pathname", { value: { toString: () => pathname } });
+      expect(adminReadRetryHref(url, boundary)).toBeNull();
+    },
+  );
 });

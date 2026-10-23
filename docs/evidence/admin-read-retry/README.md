@@ -57,11 +57,12 @@ Keyboard focus: [Admin](admin-503-390-focus.png),
 Independent tests were consumed unchanged. Before implementation, the combined
 SSR/browser acceptance had **28 missing-link failures, 95 passes and zero skips**.
 After implementation and final hardening, the following command passed
-**348 tests, zero failures and zero skips**:
+**356 tests, zero failures and zero skips**:
 
 ```sh
 KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run \
   test/admin-read-retry-url.test.ts \
+  test/admin-read-retry-malformed-native-render.test.ts \
   test/kit-admin-read-retry-acceptance.test.ts \
   test/kit-error-shell-render.test.ts \
   test/kit-admin-chrome-acceptance.test.ts \
@@ -79,8 +80,8 @@ The twelve no-JavaScript browser cases exercise both boundaries at both widths
 on 503/500/404. Tab and Enter produce exactly one additional same-origin GET,
 retain the query and send no request body. The 404 cases use the existing list
 exit instead. SSR cases cover list/detail URLs, hostile escaped queries,
-fragments, malformed/unavailable URL state, fixed exits, distinct titles and
-noindex. Neighboring suites cover the unchanged auth/cache/header/correlation
+fragments, malformed/unavailable URL state, non-string native URL properties,
+fixed exits, distinct titles and noindex. Neighboring suites cover the unchanged auth/cache/header/correlation
 contracts. Rendering imports no database/session helper and performs no fetch.
 
 `npm run lint`, `npm run typecheck`, `npm run check --prefix web`,
