@@ -34,6 +34,7 @@ export default defineConfig({
             codeSplitting: {
               groups: [
                 { name: "admin", test: /\/src\/admin\// },
+                { name: "profiles", test: /\/src\/profiles\// },
                 {
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
