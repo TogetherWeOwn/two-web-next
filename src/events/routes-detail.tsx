@@ -30,6 +30,7 @@ import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
 import {
+  dbUnavailableJson,
   eventJson,
   jsonResponse,
   jsonSession,
@@ -55,6 +56,8 @@ export function registerDetailRoutes(
   readFragmentSession: SessionReader,
 ): void {
   app.get("/events/:key", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const key = c.req.param("key");
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.
@@ -69,7 +72,7 @@ export function registerDetailRoutes(
     if (session instanceof Response) return session;
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    if (!db) return dbUnavailableJson(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.json({ error: "not_found" }, 404);
     if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
