@@ -296,6 +296,7 @@ exactly once.
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
+| `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
@@ -313,6 +314,7 @@ exactly once.
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
 | `src/member-erasure.ts` | profiles |

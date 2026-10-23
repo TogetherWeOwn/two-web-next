@@ -26,6 +26,23 @@ const step = (name: string): string => {
 };
 
 describe("gitleaks fixture policy", () => {
+  it("keeps the public Hono event-id exception limited to the exact rule, path and two secrets", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Two synthetic Discord event ids in the fixture-only public Hono payload"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Two synthetic Discord event ids in the fixture-only public Hono payload acceptance suite, not clients or credentials"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/hono-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']`,
+    ]);
+  });
+
   it("keeps the session-renewal exception limited to the exact rule, path and three secrets", () => {
     // Pin the whole table: extra fields, OR (including its implicit default),
     // unanchored patterns or additional alternatives must require a test change.
@@ -116,6 +133,25 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/bot-settings\.test\.ts$''']
 regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']`,
+    ]);
+  });
+
+  it("keeps the operator fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Synthetic operator bearer fixture in the local accessibility harness"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic operator bearer fixture in the local accessibility harness, including its committed history; never provisioned as a live credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^ci/a11y-cases\.mjs$''']
+regexes = ['''^a11y-operator-fixture-$''']`,
     ]);
   });
 });

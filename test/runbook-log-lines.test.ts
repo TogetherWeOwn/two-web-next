@@ -546,3 +546,106 @@ describe("queue ledger runbook row cites", () => {
     );
   });
 });
+
+describe("refused-write and invite-config warning docs", () => {
+  const HEADING = "## Refused-write and invite-config warnings";
+  const WARNS = [
+    "profile.write.malformed_body",
+    "profile.write.shed",
+    "event.write.malformed_body",
+    "event.write.shed",
+    "invite.config.unusable",
+    "invite.config.shed",
+  ];
+  const OLD_INVITE =
+    "services.discord.invite_url is unusable; serving the hardcoded fallback invite.";
+
+  /** The new runbook section, up to (not including) the next ## heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n## /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents every new warn and shed line with its carried fields", () => {
+    const section = warningSection();
+    for (const line of WARNS) expect(section).toContain(`\`${line}\``);
+    expect(section).toContain("`exception`");
+    expect(section).toContain("`content_type`");
+    expect(section).toContain("`request_id`");
+    expect(section).toContain("`dropped`");
+    expect(section).toContain("`InviteConfigError`");
+  });
+
+  it("states the bucket, the silence rules, and the class-only boundary", () => {
+    const section = warningSection();
+    // One per-isolate bucket per leg, CSP-sized.
+    expect(section).toContain("burst of 20");
+    expect(section).toContain("3 seconds");
+    expect(section).toContain("per isolate");
+    expect(section).toContain("createRateLimitedWarn");
+    // Only malformed bodies fire.
+    expect(section).toContain("415s");
+    expect(section).toContain("validation 422s");
+    expect(section).toContain("stay silent");
+    // Leak boundary: class-only, never request content.
+    expect(section).toContain("never body bytes");
+    expect(section).toContain("never the configured value");
+  });
+
+  it("links the invite page to the alert runbook and the triage rows", () => {
+    const section = warningSection();
+    expect(section).toContain("error.alert");
+    expect(section).toContain("InviteConfigError@/discord");
+    expect(section).toContain("five minutes");
+    expect(section).toContain("runbook-alerts.md#source-lines");
+    expect(section).toContain("http.request");
+    // The profile-save triage row points at the new section.
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    expect(docs).toContain(
+      "[Refused-write and invite-config warnings](#refused-write-and-invite-config-warnings)",
+    );
+  });
+
+  it("retires the per-call invite error line from source and docs", () => {
+    expect(readFileSync("src/invite.ts", "utf8")).not.toContain(OLD_INVITE);
+    expect(readFileSync(DOCS_PATH, "utf8")).not.toContain(OLD_INVITE);
+  });
+
+  it("sources emit the documented lines with scalar-only fields", () => {
+    const cases = [
+      {
+        file: "src/profiles/routes-writes.tsx",
+        warn: "profile.write.malformed_body",
+        shed: "profile.write.shed",
+      },
+      {
+        file: "src/events/routes-writes.ts",
+        warn: "event.write.malformed_body",
+        shed: "event.write.shed",
+      },
+      { file: "src/invite.ts", warn: "invite.config.unusable", shed: "invite.config.shed" },
+    ];
+    for (const { file, warn, shed } of cases) {
+      const source = readFileSync(file, "utf8");
+      expect(source).toContain(`"${warn}"`);
+      expect(source).toContain(`shedLine: "${shed}"`);
+      expect(source).toContain("exception");
+    }
+    // The write legs carry the refused content-type; the helper sheds counts only.
+    expect(readFileSync("src/profiles/routes-writes.tsx", "utf8")).toContain("content_type");
+    expect(readFileSync("src/events/routes-writes.ts", "utf8")).toContain("content_type");
+    const budget = readFileSync("src/log-budget.ts", "utf8");
+    expect(budget).toContain("console.warn");
+    expect(budget).toContain("{ dropped }");
+    // /discord pages a broken config once per window; serving is unchanged.
+    const leaves = readFileSync("src/static-leaves.tsx", "utf8");
+    expect(leaves).toContain("InviteConfigError");
+    expect(leaves).toContain("alertRequestError");
+    expect(leaves).toContain("inviteAlerts");
+    expect(leaves).toContain("c.redirect(destination, 302)");
+  });
+});
