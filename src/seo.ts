@@ -56,7 +56,6 @@ export const canonicalUrl = (appUrl: string, path: string): string =>
 // Kit heads (SiteMetadata.svelte, ProfileView.svelte) so both renderers emit
 // identical share image tags.
 export const SHARE_IMAGE_PATH = "/icons/icon-512.png";
-export const SHARE_IMAGE_ALT = "Together We Own community logo";
 
 // Absolute share-image URL from the page canonical's origin (og:image must be
 // absolute; deriving from the canonical keeps every environment self-
