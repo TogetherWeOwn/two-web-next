@@ -102,13 +102,17 @@ const lineup = $derived(
         rel={previous ? "prev" : "next"}
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
-        {previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}
+        <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
+        <time datetime={event.datetime}>{event.whenText}</time>
+        {#if event.location}
+          <span class="event-related-location">{event.location}</span>
+        {/if}
       </a>
     {/if}
   {/snippet}
   {#if neighbors && (neighbors.previous || neighbors.next)}
     <nav
-      class={series ? undefined : "event-pagination"}
+      class="event-pagination"
       aria-label={series ? "Series events" : "More events"}
       data-testid={series ? "event-series-nav" : "event-pagination"}
     >
