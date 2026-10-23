@@ -20,7 +20,7 @@ import {
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
-import { canonicalUrl } from "../../../../../src/seo";
+import { canonicalUrl, pastEventsTitle } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 // Markup contract of PastEventsPage (src/events/pages.tsx): the island
@@ -34,7 +34,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
 </script>
 
 <Shell
-  title="Past events"
+  title={pastEventsTitle(page, q)}
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"
   description="Look back at the community’s game nights and tournaments."

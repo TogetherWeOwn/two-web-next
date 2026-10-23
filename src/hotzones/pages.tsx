@@ -5,7 +5,7 @@
 // an estimate label until bot event-store calibration.
 import type { FC } from "hono/jsx";
 import { Layout, RecoveryShell, SiteFooter, SiteHeader } from "../pages";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, hotzoneSignalTitle, hotzonesTitle } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { HOTZONE_SIGNALS, WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
@@ -105,7 +105,7 @@ export const HotzonesIndexPage: FC<{
   const qs = season === "all" ? "" : `?season=${season}`;
   return (
     <Layout
-      title="Hot zones — Together We Own"
+      title={`${hotzonesTitle(season)} — Together We Own`}
       canonical={canonicalUrl(appUrl, `/hotzones${qs}`)}
       shareDescription="When the community is most active, by hour and weekday."
       robots="noindex, follow"
@@ -186,7 +186,7 @@ export const HotzoneSignalPage: FC<{
   const estimated = signal !== "joins";
   return (
     <Layout
-      title={`${signal} hot zone — Together We Own`}
+      title={`${hotzoneSignalTitle(signal, season)} — Together We Own`}
       canonical={canonicalUrl(appUrl, path)}
       shareDescription={`When ${signal} activity peaks, by hour and weekday.`}
       robots="noindex, follow"
