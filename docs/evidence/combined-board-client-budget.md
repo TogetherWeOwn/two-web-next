@@ -6,13 +6,13 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the sixth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `2540adb21`;
+**Current decision after the seventh base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `e5ca18422`;
 earlier proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 the client fits **251904/101632 B**, but that union breaches server gzip and file
-count. The sixth reconciliation verifies the actual prerequisite tree only,
+count. The seventh reconciliation verifies the actual prerequisite tree only,
 not a new feature union. Neither this client decision nor the prerequisite-tree
 build releases the source feature's server HOLD or proves it is ready to merge.
 
@@ -530,6 +530,57 @@ claim. No feature client/server hash rows are added for an unbuilt overlay.
 The startup configuration remains 60000 ms, not a latency measurement.
 Unchanged checker selftests **6/6**, checker tests **13/13**, parity-gate tests
 **67/67**, and config selftests **34/34** pass; lint and root/CI typecheck pass.
+Additional guards and the fresh local review are recorded in the PR body.
+Full `npm run check`, feature acceptance, browser/visual gates, startup latency
+and staging are not rerun in this reconciliation. No user-facing page differs
+from the merged base. Prior-head CI/review is not approval of the new head;
+all exact-head merge gates remain mandatory. Rollback reverts only the new
+history/evidence record, with no numeric ceiling change to undo.
+
+## Seventh base-conflict reconciliation: history-only merge
+
+On 2026-10-23 GitHub reported a live conflict on `85f548dc18e9` against a base
+that had advanced six commits past `2540adb21` (server co-compression, security
+fixtures, throttle telemetry, calendar reads, RSVP history preservation, and
+the check-gate skip). Merge pinned base
+`e5ca18422c2457a9938eaee1de38c9ccc4685868`, resolving only the decision-history
+conflict in `ci/kit-perf-budget.json`. Main's complete comment stays verbatim,
+followed by this prerequisite's unique record once; each side's tail is absent
+from the other, so no block is duplicated or dropped. All numeric ceilings
+equal this merged base. The client increase remains withdrawn.
+No source, test, lockfile, baseline, checker or CI wiring differs from it;
+the TSV remains the unchanged historical per-file evidence.
+
+This reconciliation intentionally does **not** rerun the frozen feature overlay
+or reinterpret the measurements above as measurements of newer main. The task
+is a history-only conflict repair, not new server implementation or integration
+admission. The source feature/server HOLD remains pending verification of its
+own exact then-current union and independent CI/review. In particular, the
+older one-file/370-gzip-byte breach is pinned to `d6a65b4fa`, not claimed as the
+current size. No source feature ref was modified or pushed.
+
+With Node `v24.22.1` and fresh external locked root/web
+`npm ci --include=dev` installs, the actual resolved prerequisite-tree command
+`npm --prefix web run build && node ci/check-kit-perf.mjs` passes:
+
+| Group | Actual prerequisite tree | Unchanged base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 243912/98767 B | 251904/101632 B |
+| Client JS files | 53 | 54 |
+| Server JS raw/gzip | 1124915/328346 B | 1203200/329472 B |
+| Server JS files | 118 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2737/983 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 | 0 required |
+
+This is one actual-tree build, not a repeated determinism or fresh integration
+claim. No feature client/server hash rows are added for an unbuilt overlay.
+The startup configuration remains 60000 ms, not a latency measurement.
+Unchanged checker selftests **6/6**, checker tests **13/13**, parity suites
+**60/60** plus parity citations **12/12**, config selftests **34/34**, bundle
+selftest **34/34**, and inventory **1135/1135** pass; lint, root/CI typecheck,
+Hono bundle budget, floor guard, asset drift and doc links pass.
 Additional guards and the fresh local review are recorded in the PR body.
 Full `npm run check`, feature acceptance, browser/visual gates, startup latency
 and staging are not rerun in this reconciliation. No user-facing page differs
