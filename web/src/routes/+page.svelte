@@ -187,7 +187,9 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
     <h2 id="home-events-heading">Game nights, when they land.</h2>
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
-        {#each groupedEvents as group (group.key)}
+        <!-- csr=false: omit this server-rendered list from the unused client asset.
+             Direct server compilation without Vite's env also renders it. -->
+        {#if import.meta.env?.SSR !== false}{#each groupedEvents as group (group.key)}
           <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
             <h3 class="strap">{group.label}</h3>
           </li>
@@ -221,7 +223,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
               </a>
             </li>
           {/each}
-        {/each}
+        {/each}{/if}
       </ul>
       <p>
         <a href="/events">See all events <span aria-hidden="true">→</span></a>
