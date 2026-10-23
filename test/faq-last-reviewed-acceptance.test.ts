@@ -96,6 +96,7 @@ const FIXTURES: Fixture[] = [
   { name: "non-leap-feb29", raw: "2026-02-29", iso: null, label: null, shouldWarn: true },
   { name: "century-non-leap", raw: "1900-02-29", iso: null, label: null, shouldWarn: true },
   { name: "month-short", raw: "2026-04-31", iso: null, label: null, shouldWarn: true },
+  { name: "day-zero", raw: "2026-09-00", iso: null, label: null, shouldWarn: true },
 ];
 
 const SECTION_IDS = [
@@ -146,13 +147,20 @@ const { compile } = webRequire("svelte/compiler") as {
   ) => { js: { code: string } };
 };
 
-// The real Kit page, SSR-compiled with the web workspace's own
-// svelte/compiler and bundled by esbuild (same shape as ci/kit-preview-e2e.mjs:
-// #lib/* resolves through the web alias, relative src/* through the worktree).
-async function buildKitFaqBundle(): Promise<{
-  renderPage: (data: FaqDataWithStamp) => string;
+type KitFaqData = FaqDataWithStamp & { lastReviewed: Stamp; leafCss: string };
+type KitFaqHarness = {
+  loadPage: (raw: string | undefined) => Promise<{
+    data: KitFaqData;
+    headers: Record<string, string>;
+  }>;
+  renderPage: (data: KitFaqData) => string;
   applicationModules: string[];
-}> {
+};
+
+// Bundle the real load and SSR page together. Only the Workers binding is
+// replaced: env/event proxies reject unexpected dependency or session reads.
+// #lib/* resolves through the web alias, relative src/* through the worktree.
+async function buildKitFaqBundle(): Promise<KitFaqHarness> {
   const worktree = fileURLToPath(new URL("../", import.meta.url));
   const scratch = mkdtempSync(join(tmpdir(), "kit-faq-review-"));
   try {
@@ -162,10 +170,24 @@ async function buildKitFaqBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/faq/+page.svelte"))};
-import { LEAF_CRITICAL_CSS } from ${JSON.stringify(join(worktree, "src/leaf-critical-css.ts"))};
+import { load } from ${JSON.stringify(join(worktree, "web/src/routes/faq/+page.server.ts"))};
+import { env } from "cloudflare:workers";
+export async function loadPage(raw) {
+  delete env.FAQ_LAST_REVIEWED;
+  if (raw !== undefined) env.FAQ_LAST_REVIEWED = raw;
+  const headers = {};
+  const data = await load(new Proxy({
+    setHeaders(value) { Object.assign(headers, value); }
+  }, {
+    get(target, key) {
+      if (key === "setHeaders") return target.setHeaders;
+      throw new Error("faq load must not read event." + String(key));
+    }
+  }));
+  return { data, headers };
+}
 export function renderPage(data) {
-  // Mirror the server load, which merges leafCss into the page data.
-  const { head, body } = render(Page, { props: { data: { ...data, leafCss: LEAF_CRITICAL_CSS } } });
+  const { head, body } = render(Page, { props: { data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -186,6 +208,19 @@ export function renderPage(data) {
         {
           name: "kit-faq-review-svelte-ssr",
           setup(plugin) {
+            plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+              path: "cloudflare:workers",
+              namespace: "faq-test-env",
+            }));
+            plugin.onLoad({ filter: /.*/, namespace: "faq-test-env" }, () => ({
+              contents: `export const env = new Proxy({ APP_URL: ${JSON.stringify(APP_URL)} }, {
+                get(target, key) {
+                  if (key === "APP_URL" || key === "FAQ_LAST_REVIEWED") return target[key];
+                  throw new Error("faq load must not read env." + String(key));
+                }
+              });`,
+              loader: "js",
+            }));
             plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
               const source = readFileSync(args.path, "utf8");
               const { js } = compile(source, {
@@ -199,13 +234,11 @@ export function renderPage(data) {
         },
       ],
     });
-    const { renderPage } = (await import(pathToFileURL(outfile).href)) as {
-      renderPage: (data: FaqDataWithStamp) => string;
-    };
+    const { loadPage, renderPage } = (await import(pathToFileURL(outfile).href)) as KitFaqHarness;
     const applicationModules = Object.keys(result.metafile.inputs).filter(
       (module) => !module.includes("node_modules/"),
     );
-    return { renderPage, applicationModules };
+    return { loadPage, renderPage, applicationModules };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -285,9 +318,9 @@ describe("faqPageData maps the review date to its stamp", () => {
     const data = faqData(fixture.raw);
     expect(data.appUrl).toBe(APP_URL);
     expect(data.faqs).toBe(FAQS);
-    expect(data.lastReviewed ?? null).toEqual(
-      fixture.iso === null ? null : { iso: fixture.iso, label: fixture.label },
-    );
+    expect
+      .soft(data.lastReviewed ?? null)
+      .toEqual(fixture.iso === null ? null : { iso: fixture.iso, label: fixture.label });
     if (fixture.shouldWarn) {
       expect(console.warn).toHaveBeenCalledExactlyOnceWith(WARNING);
     } else {
@@ -336,6 +369,7 @@ describe("DB-free faq route review stamp", () => {
     FIXTURES[4] as Fixture,
     FIXTURES[7] as Fixture,
     FIXTURES[2] as Fixture,
+    FIXTURES.find((fixture) => fixture.name === "day-zero") as Fixture,
   ])("stays 200 without dependencies for $name", async (fixture) => {
     const fetch = vi.fn(() => {
       throw new Error("faq must not fetch dependencies");
@@ -375,28 +409,55 @@ describe("DB-free faq route review stamp", () => {
 });
 
 describe("Kit /faq parity with Hono per review-date fixture", () => {
-  let renderPage: (data: FaqDataWithStamp) => string;
+  let loadPage: KitFaqHarness["loadPage"];
+  let renderPage: KitFaqHarness["renderPage"];
   let applicationModules: string[];
 
   beforeAll(async () => {
-    ({ renderPage, applicationModules } = await buildKitFaqBundle());
+    ({ loadPage, renderPage, applicationModules } = await buildKitFaqBundle());
   }, 60_000);
 
   it("bundles no database or session modules", () => {
+    expect(applicationModules).toContain("web/src/routes/faq/+page.server.ts");
+    expect(applicationModules).toContain("src/faq-content.ts");
+    expect(applicationModules).toContain("src/faq-last-reviewed.ts");
     const forbidden = applicationModules.filter((module) =>
       /(?:^|[\\/])(?:db|database|session)(?:[\\/.]|$)/i.test(module),
     );
     expect(forbidden).toEqual([]);
   });
 
+  it.each(FIXTURES)("loads the exact stamp without dependencies ($name)", async (fixture) => {
+    const fetch = vi.fn(() => {
+      throw new Error("faq load must not fetch dependencies");
+    });
+    vi.stubGlobal("fetch", fetch);
+    const { data, headers } = await loadPage(fixture.raw);
+    expect(data.appUrl).toBe(APP_URL);
+    expect(data.faqs).toEqual(FAQS);
+    expect
+      .soft(data.lastReviewed)
+      .toEqual(fixture.iso === null ? null : { iso: fixture.iso, label: fixture.label });
+    expect(headers).toEqual({ "cache-control": "public, max-age=3600" });
+    expect(postgres).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    if (fixture.shouldWarn) {
+      expect(console.warn).toHaveBeenCalledExactlyOnceWith(WARNING);
+    } else {
+      expect(console.warn).not.toHaveBeenCalled();
+    }
+  });
+
   it.each(FIXTURES)("renders the identical question list ($name)", async (fixture) => {
-    const kitHtml = renderPage(faqData(fixture.raw));
+    const { data } = await loadPage(fixture.raw);
+    const kitHtml = renderPage(data);
     const { html: honoHtml } = await honoFaq(fixture.raw);
     expect(faqListOf(kitHtml)).toBe(faqListOf(honoHtml));
   });
 
-  it.each(FIXTURES)("keeps the semantic and stamp contract ($name)", (fixture) => {
-    const html = renderPage(faqData(fixture.raw));
+  it.each(FIXTURES)("keeps the semantic and stamp contract ($name)", async (fixture) => {
+    const { data } = await loadPage(fixture.raw);
+    const html = renderPage(data);
     expect(html.match(/<main(?:\s|>)/g)).toHaveLength(1);
     expect(html).toContain('class="skip-link" href="#main"');
     expect(html).toContain('aria-label="Primary"');
@@ -422,10 +483,16 @@ describe("Kit /faq parity with Hono per review-date fixture", () => {
     } else {
       expectStamp(html, fixture.iso, fixture.label as string);
     }
+    if (fixture.shouldWarn) {
+      expect(console.warn).toHaveBeenCalledExactlyOnceWith(WARNING);
+    } else {
+      expect(console.warn).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps the markdown-alternate discovery both renderers share", async () => {
-    const kit = renderPage(faqData("2026-09-01"));
+    const { data } = await loadPage("2026-09-01");
+    const kit = renderPage(data);
     for (const token of ['rel="alternate"', 'type="text/markdown"', 'href="/faq.md"']) {
       expect(kit).toContain(token);
     }
@@ -435,8 +502,9 @@ describe("Kit /faq parity with Hono per review-date fixture", () => {
     }
   });
 
-  it("renders no scripts and no secret-shaped content (no-JS page)", () => {
-    const html = renderPage(faqData("2026-09-01"));
+  it("renders no scripts and no secret-shaped content (no-JS page)", async () => {
+    const { data } = await loadPage("2026-09-01");
+    const html = renderPage(data);
     expect(html).not.toContain("<script");
     expect(html).not.toMatch(/__Host-two_session\s*=/);
     expect(html).not.toMatch(/DISCORD_BOT_TOKEN/i);
