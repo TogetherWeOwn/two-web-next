@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { adminSaveStatus } from "../../../../../../src/admin/save-status";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -200,7 +201,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
-  <p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>
+  {@html adminSaveStatus}
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
     <div class="actions">
