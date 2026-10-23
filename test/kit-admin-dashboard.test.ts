@@ -212,6 +212,16 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     expect(read("web/src/lib/AdminShell.svelte")).toContain('href="/"');
   });
 
+  it("keeps the scroll-region focus outline visible on the dark canvas", () => {
+    // Without this rule the new tabindex regions fall back to the shared
+    // sheet's dark outline on the Kit dark root canvas — nearly invisible
+    // for the keyboard users the regions were added for. Deleting the style
+    // block must fail this test.
+    const page = read("web/src/routes/admin/+page.svelte");
+    expect(page).toContain(".admin-table-scroll:focus-visible");
+    expect(page).toContain("outline-color: currentColor");
+  });
+
   it("admin chrome is responsive, labelled, skippable and never indexed", () => {
     const shell = read("web/src/lib/AdminShell.svelte");
     for (const needle of [
