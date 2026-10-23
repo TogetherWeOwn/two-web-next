@@ -144,6 +144,7 @@ function fixture() {
   // insert seam recordBoardView uses.
   const whereResult = Object.assign(Promise.resolve([{ n: 0 }]), {
     groupBy: async () => [],
+    orderBy: () => ({ limit: async () => [] }),
   });
   const fakeTx = {
     execute: async () => [],
@@ -217,6 +218,7 @@ function kitFixture(signal: string | null, season: string) {
     total: 0,
     joinsTotal: 0,
     eventCount: 0,
+    gatherings: [],
     retentionNote: null,
     estimated: signal !== null && signal !== "joins",
     gridHtml,

@@ -7,6 +7,7 @@ import {
   loadJoinsGrid,
   priorGrid,
   type HeatGrid,
+  type HotzoneGathering,
   type HotzoneSignal,
 } from "./hotzones/aggregates";
 import { recordBoardView } from "./hotzones/board-log";
@@ -25,7 +26,14 @@ import { kitPublicReadGuard, type KitPublicReadGuard } from "./kit-past-events";
 // setHeaders call per path: SvelteKit throws `header_already_set` on a
 // double-set, so the binding must not set headers again on a throw.
 
-export type HotzonesGrid = { cells: HeatGrid; total: number; eventCount: number };
+export type HotzonesGrid = {
+  cells: HeatGrid;
+  total: number;
+  eventCount: number;
+  // Optional so aggregate doubles that predate the gatherings list keep
+  // typechecking; the loaders below normalize a missing list to [].
+  gatherings?: HotzoneGathering[];
+};
 export type LoadJoinsGrid = (db: Db | null, window: SeasonWindow) => Promise<HotzonesGrid>;
 export type RecordBoardView = (
   db: Db | null,
@@ -137,6 +145,7 @@ async function record(
 export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   season: string;
   joins: HotzonesGrid;
+  gatherings: HotzoneGathering[];
   voice: { cells: HeatGrid; total: number };
   games: { cells: HeatGrid; total: number };
   retentionNote: string | null;
@@ -155,6 +164,7 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   return {
     season: label,
     joins,
+    gatherings: joins.gatherings ?? [],
     voice: priorGrid("voice"),
     games: priorGrid("games"),
     retentionNote: joinsRetentionNote(window),
@@ -170,6 +180,7 @@ export async function loadHotzoneSignalData(
   cells: HeatGrid;
   total: number;
   eventCount: number;
+  gatherings: HotzoneGathering[];
   retentionNote: string | null;
   estimated: boolean;
   appUrl: string;
@@ -196,6 +207,7 @@ export async function loadHotzoneSignalData(
       cells: joins.cells,
       total: joins.total,
       eventCount: joins.eventCount,
+      gatherings: joins.gatherings ?? [],
       retentionNote: joinsRetentionNote(window),
       estimated: false,
       appUrl: args.env.APP_URL,
@@ -209,12 +221,15 @@ export async function loadHotzoneSignalData(
     resultCount: prior.total,
   });
   args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
+  // Voice/games carry no list: they render no count, so there is nothing for
+  // a list to agree with.
   return {
     signal,
     season: label,
     cells: prior.cells,
     total: prior.total,
     eventCount: 0,
+    gatherings: [],
     retentionNote: null,
     estimated: true,
     appUrl: args.env.APP_URL,

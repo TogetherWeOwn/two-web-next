@@ -52,6 +52,7 @@ async function renderIndex(c: Ctx) {
       joins={joins.cells}
       joinsTotal={joins.total}
       eventCount={joins.eventCount}
+      gatherings={joins.gatherings}
       voice={voice.cells}
       games={games.cells}
       retentionNote={joinsRetentionNote(window)}
@@ -95,6 +96,7 @@ async function renderSignal(c: Ctx) {
         cells={joins.cells}
         total={joins.total}
         eventCount={joins.eventCount}
+        gatherings={joins.gatherings}
         retentionNote={joinsRetentionNote(window)}
       />,
     );

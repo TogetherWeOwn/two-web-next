@@ -14,7 +14,7 @@
 //   event-store calibration.
 //
 // All grids are aggregates only: 7 weekdays x 24 hours of counts.
-import { and, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { events } from "../db/admin-schema";
 import { joinAttempts, profiles } from "../db/schema";
 import type { Db } from "../db/index";
@@ -52,6 +52,16 @@ export const JOIN_SUCCESS_OUTCOMES = ["added", "already_member"] as const;
 // Statement timeout for the public aggregate reads (fail fast, never hold the response).
 export const JOINS_GRID_STATEMENT_TIMEOUT_MS = 2000;
 
+// Pinned bound for the gatherings listed behind the hotzone count: at most
+// this many items render, soonest first, with "showing N of M" copy when the
+// full count exceeds it. The acceptance suite pins the value.
+export const HOTZONE_GATHERINGS_LIMIT = 5;
+
+// One listed gathering: the public event identity (key, title, start) behind
+// the "{eventCount} scheduled gatherings" count. Same published-only,
+// in-window filter as the count, so the two never disagree.
+export type HotzoneGathering = { eventKey: string; title: string; startsAt: Date };
+
 // Joins 7x24 cells from real web data in the season window.
 // SQL-side aggregation only: one grouped count (at most 168 rows) plus one
 // event count, never per-user rows. Only `added`/`already_member` outcomes
@@ -60,14 +70,16 @@ export const JOINS_GRID_STATEMENT_TIMEOUT_MS = 2000;
 // whose `discord_id` maps to `leaderboard_opt_out = true`, while null
 // discord_ids and absent profile rows still count. Join attempts are
 // pruned after JOIN_ATTEMPT_RETENTION_DAYS, so windows older than retention
-// read 0 by design (see joinsRetentionNote).
+// read 0 by design (see joinsRetentionNote). The bounded gatherings list
+// rides along in the same transaction: one extra read, the same
+// published-only in-window filter as the count, soonest first.
 // `db = null` (DB-free render) yields an empty grid, never a 500.
 export async function loadJoinsGrid(
   db: Db | null,
   window: SeasonWindow,
-): Promise<{ cells: HeatGrid; total: number; eventCount: number }> {
+): Promise<{ cells: HeatGrid; total: number; eventCount: number; gatherings: HotzoneGathering[] }> {
   const cells = emptyGrid();
-  if (!db) return { cells, total: 0, eventCount: 0 };
+  if (!db) return { cells, total: 0, eventCount: 0, gatherings: [] };
   // Year-0 bounds cannot bind (Postgres has no year 0): clamp them to the
   // empty range at 0001-01-01, leaving every other bound untouched.
   const inWindow =
@@ -83,37 +95,53 @@ export async function loadJoinsGrid(
   // serializes Date bounds (raw sql`` interpolation does not).
   const dow = sql`extract(dow from ${joinAttempts.createdAt} at time zone 'UTC')::int`;
   const hr = sql`extract(hour from ${joinAttempts.createdAt} at time zone 'UTC')::int`;
-  const { buckets, eventCount } = await db.transaction(async (tx) => {
-    // SET LOCAL takes a literal, not a bind param; the value is the numeric
-    // constant above, so there is no injection surface.
-    await tx.execute(
-      sql.raw(`SET LOCAL statement_timeout = '${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms'`),
+  // The count and the list share this one predicate so they always agree:
+  // published rows whose start falls in the season window.
+  const publishedInWindow = () =>
+    and(
+      eq(events.status, "published"),
+      inWindow ? gte(events.startsAt, inWindow.start) : undefined,
+      inWindow ? lt(events.startsAt, inWindow.end) : undefined,
     );
-    const buckets = await tx
-      .select({ dow, hr, n: sql`count(*)::int` })
-      .from(joinAttempts)
-      .leftJoin(profiles, eq(profiles.userId, joinAttempts.discordId))
-      .where(
-        and(
-          inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
-          or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
-          inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
-          inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
-        ),
-      )
-      .groupBy(dow, hr);
-    const counted = await tx
-      .select({ n: sql`count(*)::int` })
-      .from(events)
-      .where(
-        and(
-          eq(events.status, "published"),
-          inWindow ? gte(events.startsAt, inWindow.start) : undefined,
-          inWindow ? lt(events.startsAt, inWindow.end) : undefined,
-        ),
+  // Count and list must see one snapshot even if a gathering is published
+  // or cancelled between their reads; READ COMMITTED snapshots per statement.
+  const { buckets, eventCount, gatherings } = await db.transaction(
+    async (tx) => {
+      // SET LOCAL takes a literal, not a bind param; the value is the numeric
+      // constant above, so there is no injection surface.
+      await tx.execute(
+        sql.raw(`SET LOCAL statement_timeout = '${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms'`),
       );
-    return { buckets, eventCount: Number(counted[0]?.n ?? 0) };
-  });
+      const buckets = await tx
+        .select({ dow, hr, n: sql`count(*)::int` })
+        .from(joinAttempts)
+        .leftJoin(profiles, eq(profiles.userId, joinAttempts.discordId))
+        .where(
+          and(
+            inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
+            or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
+            inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
+            inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
+          ),
+        )
+        .groupBy(dow, hr);
+      const counted = await tx
+        .select({ n: sql`count(*)::int` })
+        .from(events)
+        .where(publishedInWindow());
+      // The bounded list behind the count: the same filter, soonest first
+      // (ties by key), capped at HOTZONE_GATHERINGS_LIMIT. One extra read, no
+      // per-row queries; the events_status_starts_at_idx index answers it.
+      const gatherings = await tx
+        .select({ eventKey: events.eventKey, title: events.title, startsAt: events.startsAt })
+        .from(events)
+        .where(publishedInWindow())
+        .orderBy(asc(events.startsAt), asc(events.eventKey))
+        .limit(HOTZONE_GATHERINGS_LIMIT);
+      return { buckets, eventCount: Number(counted[0]?.n ?? 0), gatherings };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
   for (const row of buckets) {
     const dow = Number(row.dow);
     const hr = Number(row.hr);
@@ -123,7 +151,7 @@ export async function loadJoinsGrid(
     if (!Number.isFinite(n) || n <= 0) continue;
     cells[dow]![hr]! += n;
   }
-  return { cells, total: gridTotal(cells), eventCount };
+  return { cells, total: gridTotal(cells), eventCount, gatherings };
 }
 
 // Human retention note for the joins grid. Join attempts delete after

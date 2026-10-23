@@ -6,7 +6,7 @@
 import type { FC } from "hono/jsx";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
-import type { HeatGrid } from "./aggregates";
+import type { HeatGrid, HotzoneGathering } from "./aggregates";
 import { WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
 import { utcPeriodShortcuts } from "./season";
@@ -90,16 +90,57 @@ const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }
 export const renderPeriodPicker = (action: string, season: string) =>
   (<PeriodPicker action={action} season={season} />).toString();
 
+// The gatherings behind the "{eventCount} scheduled gatherings" count: title,
+// when and /e/:key link per item, soonest first, capped at
+// HOTZONE_GATHERINGS_LIMIT with "showing N of M" copy when the full count
+// exceeds the rendered list. Renders nothing at zero, so the count line stands
+// alone as before. The Kit shells mirror this markup, copy and testids.
+const Gatherings: FC<{ gatherings: HotzoneGathering[]; total: number }> = ({
+  gatherings,
+  total,
+}) => {
+  if (gatherings.length === 0) return null;
+  return (
+    <section data-testid="hotzone-gatherings" aria-labelledby="hotzone-gatherings-heading">
+      <h2 id="hotzone-gatherings-heading">Scheduled gatherings</h2>
+      {total > gatherings.length ? (
+        <p>{`showing ${gatherings.length} of ${total} scheduled gatherings`}</p>
+      ) : null}
+      <ul>
+        {gatherings.map((g) => (
+          <li key={g.eventKey}>
+            <a data-testid="hotzone-gathering-link" href={`/e/${g.eventKey}`}>
+              {g.title}
+            </a>{" "}
+            <time datetime={g.startsAt.toISOString()}>{g.startsAt.toISOString()}</time>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+};
+
 export const HotzonesIndexPage: FC<{
   appUrl: string;
   season: string;
   joins: HeatGrid;
   joinsTotal: number;
   eventCount: number;
+  gatherings?: HotzoneGathering[];
   voice: HeatGrid;
   games: HeatGrid;
   retentionNote?: string | null;
-}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games, retentionNote }) => {
+}> = ({
+  appUrl,
+  season,
+  joins,
+  joinsTotal,
+  eventCount,
+  gatherings,
+  voice,
+  games,
+  retentionNote,
+}) => {
   // Every signal link keeps the selected season; absent/all stays canonical
   // with no query, matching the canonical URL and login return-to.
   const qs = season === "all" ? "" : `?season=${season}`;
@@ -148,6 +189,7 @@ export const HotzonesIndexPage: FC<{
           </h2>
           <Grid cells={joins} caption={`Join activity for season ${season}`} />
         </section>
+        <Gatherings gatherings={gatherings ?? []} total={eventCount} />
         <section aria-labelledby="hotzones-voice-heading">
           <h2 id="hotzones-voice-heading">
             <a href={`/hotzones/voice${qs}`}>Voice</a>
@@ -179,8 +221,9 @@ export const HotzoneSignalPage: FC<{
   cells: HeatGrid;
   total: number;
   eventCount?: number;
+  gatherings?: HotzoneGathering[];
   retentionNote?: string | null;
-}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote }) => {
+}> = ({ appUrl, signal, season, cells, total, eventCount, gatherings, retentionNote }) => {
   const qs = season === "all" ? "" : `?season=${season}`;
   const path = `/hotzones/${signal}${qs}`;
   const estimated = signal !== "joins";
@@ -231,6 +274,9 @@ export const HotzoneSignalPage: FC<{
               : `Join activity for season ${season}`
           }
         />
+        {!estimated && eventCount !== undefined ? (
+          <Gatherings gatherings={gatherings ?? []} total={eventCount} />
+        ) : null}
       </main>
       <SiteFooter />
     </Layout>

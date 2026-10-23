@@ -12,6 +12,7 @@ const {
   gridHtml,
   total,
   eventCount,
+  gatherings,
   retentionNote,
   estimated,
   appUrl,
@@ -49,4 +50,17 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   {@html periodPickerHtml}
   <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}">joins</a> · <a href="/hotzones/voice{qs}">voice</a> · <a href="/hotzones/games{qs}">games</a></p>
   {@html gridHtml}
+  {#if !estimated && gatherings.length > 0}
+    <section data-testid="hotzone-gatherings" aria-labelledby="hotzone-gatherings-heading">
+      <h2 id="hotzone-gatherings-heading">Scheduled gatherings</h2>
+      {#if eventCount > gatherings.length}
+        <p>showing {gatherings.length} of {eventCount} scheduled gatherings</p>
+      {/if}
+      <ul>
+        {#each gatherings as gathering (gathering.eventKey)}
+          <li><a data-testid="hotzone-gathering-link" href="/e/{gathering.eventKey}">{gathering.title}</a> <time datetime={new Date(gathering.startsAt).toISOString()}>{new Date(gathering.startsAt).toISOString()}</time></li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
 </Shell>

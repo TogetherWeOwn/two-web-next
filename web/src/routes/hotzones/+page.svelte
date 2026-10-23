@@ -12,6 +12,7 @@ const {
   joinsHtml,
   joinsTotal,
   eventCount,
+  gatherings,
   voiceHtml,
   gamesHtml,
   retentionNote,
@@ -53,6 +54,19 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
     <h2 id="hotzones-joins-heading"><a href="/hotzones/joins{qs}">Joins</a></h2>
     {@html joinsHtml}
   </section>
+  {#if gatherings.length > 0}
+    <section data-testid="hotzone-gatherings" aria-labelledby="hotzone-gatherings-heading">
+      <h2 id="hotzone-gatherings-heading">Scheduled gatherings</h2>
+      {#if eventCount > gatherings.length}
+        <p>showing {gatherings.length} of {eventCount} scheduled gatherings</p>
+      {/if}
+      <ul>
+        {#each gatherings as gathering (gathering.eventKey)}
+          <li><a data-testid="hotzone-gathering-link" href="/e/{gathering.eventKey}">{gathering.title}</a> <time datetime={new Date(gathering.startsAt).toISOString()}>{new Date(gathering.startsAt).toISOString()}</time></li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
   <section aria-labelledby="hotzones-voice-heading">
     <h2 id="hotzones-voice-heading"><a href="/hotzones/voice{qs}">Voice</a></h2>
     <p>Season-independent seeded estimates of voice activity (estimates until calibration).</p>

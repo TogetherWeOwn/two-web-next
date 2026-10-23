@@ -112,11 +112,13 @@ describe("loadJoinsGrid bounds its reads with a statement timeout", () => {
     const executed: unknown[] = [];
     const buckets: unknown[] = [];
     const counted = [{ n: 0 }];
-    // Minimal fake transaction: where() is awaitable for the event count
-    // and carries groupBy() for the bucketed joins count. leftJoin mirrors
+    // Minimal fake transaction: where() is awaitable for the event count,
+    // carries groupBy() for the bucketed joins count, and carries
+    // orderBy().limit() for the bounded gatherings list. leftJoin mirrors
     // the opt-out exclusion (join_attempts.discord_id -> profiles.user_id).
     const whereResult = Object.assign(Promise.resolve(counted), {
       groupBy: async () => buckets,
+      orderBy: () => ({ limit: async () => [] }),
     });
     const fakeTx = {
       execute: async (query: unknown) => {
