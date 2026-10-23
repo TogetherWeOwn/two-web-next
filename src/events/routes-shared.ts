@@ -12,7 +12,7 @@ import {
   type PublicEventDto,
   type PublicEventId,
 } from "../public-data/contracts";
-import { varyAccept } from "../errors";
+import { clampOutageRetryAfter, OUTAGE_RETRY_AFTER_SECONDS, varyAccept } from "../errors";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -73,8 +73,9 @@ function feedJsonRequested(c: Ctx): boolean {
  * either way, with Vary: Accept merged since the representation negotiates.
  * Throttled feeds (429) keep their plaintext refusal on every Accept.
  */
-export function unavailableFeed(c: Ctx, message: string): Response {
+export function unavailableFeed(c: Ctx, message: string, retryAfter?: number): Response {
   varyAccept(c);
+  if (retryAfter !== undefined) c.header("Retry-After", String(retryAfter));
   if (feedJsonRequested(c)) {
     return c.json(
       {
@@ -92,7 +93,18 @@ export function unavailableFeed(c: Ctx, message: string): Response {
   return c.text(message, 503, { "cache-control": "no-store" });
 }
 
-export const eventsUnavailable = (c: Ctx) => unavailableFeed(c, "Events temporarily unavailable");
+export const eventsUnavailable = (c: Ctx, retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS) =>
+  unavailableFeed(c, "Events temporarily unavailable", clampOutageRetryAfter(retryAfter));
+
+/**
+ * Inline no-database refusal for the JSON-only event legs: the exact legacy
+ * `{error: "db_unavailable"}` bytes plus the outage Retry-After header.
+ */
+export function dbUnavailableJson(c: Pick<Ctx, "json">): Response {
+  return c.json({ error: "db_unavailable" }, 503, {
+    "Retry-After": String(OUTAGE_RETRY_AFTER_SECONDS),
+  });
+}
 
 export function eventJson(e: PublicEvent) {
   // Legacy EventResource order: event_key first, synced_to_discord
