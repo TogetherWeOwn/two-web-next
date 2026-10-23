@@ -23,10 +23,18 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
         <section aria-labelledby={group.sectionId} key={group.sectionId}>
           <h2 id={group.sectionId}>{group.section}</h2>
           <div>
-            {group.items.map(([q, a]) => (
+            {group.items.map(([q, a, link]) => (
               <div class="card" key={q}>
                 <h3>{q}</h3>
-                <p>{a}</p>
+                <p>
+                  {a}
+                  {link ? (
+                    <>
+                      {" "}
+                      <a href={link.href}>{link.label}</a>
+                    </>
+                  ) : null}
+                </p>
               </div>
             ))}
           </div>

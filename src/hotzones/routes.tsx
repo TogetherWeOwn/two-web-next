@@ -6,16 +6,25 @@
 // any aggregation (also on signal views). Same aggregate reads the Kit load
 // functions call, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
-import { BadRequestPage } from "../error-pages";
 import { publicReadGuard, type App, type Ctx } from "../events/routes-shared";
-import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
+import {
+  HotzoneBadSeasonPage,
+  HotzoneSignalNotFoundPage,
+  HotzoneSignalPage,
+  HotzonesIndexPage,
+} from "./pages";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
 import { parseSeasonParam, seasonLabel } from "./season";
 
 const badSeason = (c: Ctx) => {
   c.header("cache-control", "no-store, private");
-  return c.html(<BadRequestPage />, 400);
+  return c.html(<HotzoneBadSeasonPage />, 400);
+};
+
+const unknownSignal = (c: Ctx) => {
+  c.header("cache-control", "no-store, private");
+  return c.html(<HotzoneSignalNotFoundPage />, 404);
 };
 
 async function renderIndex(c: Ctx) {
@@ -65,7 +74,7 @@ async function renderSignal(c: Ctx) {
   const window = parseSeasonParam(raw ?? null);
   if (!window) return badSeason(c);
   const signal = c.req.param("signal") ?? "";
-  if (!isHotzoneSignal(signal)) return c.notFound();
+  if (!isHotzoneSignal(signal)) return unknownSignal(c);
   const limited = await publicReadGuard(c);
   if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;

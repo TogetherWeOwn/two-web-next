@@ -4,10 +4,10 @@
 // timestamps, no discord_id/created_at strings. Voice/games grids always carry
 // an estimate label until bot event-store calibration.
 import type { FC } from "hono/jsx";
-import { Layout, SiteFooter, SiteHeader } from "../pages";
+import { Layout, RecoveryShell, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
-import { peakCell, WEEKDAY_NAMES } from "./aggregates";
+import { HOTZONE_SIGNALS, peakCell, WEEKDAY_NAMES } from "./aggregates";
 import type { HotzonePeak, HotzoneSignal } from "./aggregates";
 import { utcPeriodShortcuts } from "./season";
 
@@ -304,3 +304,73 @@ export const HotzoneSignalPage: FC<{
     </Layout>
   );
 };
+
+const capitalize = (signal: HotzoneSignal) => signal.charAt(0).toUpperCase() + signal.slice(1);
+
+// In-context hotzone recovery, shared by the bad-season 400 and the
+// unknown-signal 404: the index plus every signal, each pinned by test id.
+// The signal list is the shared HOTZONE_SIGNALS vocabulary, never a fork.
+const HotzoneRecoveryNav: FC = () => (
+  <nav aria-label="Hot zone signals">
+    <ul>
+      {HOTZONE_SIGNALS.map((signal) => (
+        <li>
+          <a href={`/hotzones/${signal}`} data-testid={`error-hotzone-${signal}`}>
+            {capitalize(signal)} heatmap
+          </a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+);
+
+const HotzoneRecoveryActions: FC = () => (
+  <p class="recovery-actions">
+    <a class="btn" href="/hotzones" data-testid="error-hotzones">
+      Browse all hot zones
+    </a>{" "}
+    <a href="/" data-testid="error-home">
+      Back to the homepage
+    </a>
+  </p>
+);
+
+// Bad-season 400 with a hotzone way forward. Keeps the branded shell and the
+// twin-agreed 400 title (the bad-season acceptance pins the heading
+// byte-equal to kitErrorCopy(400)); the lead names the season grammar and the
+// recovery nav links the index plus all three signals. Served before any
+// throttle spend, DB open or board-view insert.
+export const HotzoneBadSeasonPage: FC = () => (
+  <RecoveryShell
+    code="400"
+    title="Check your request"
+    headingId="error-heading"
+    robots="noindex, nofollow"
+  >
+    <p class="lead">
+      That season did not match. Use all for every season, a year like 2026, a month like 2026-09,
+      or a quarter like 2026-Q3.
+    </p>
+    <HotzoneRecoveryActions />
+    <HotzoneRecoveryNav />
+  </RecoveryShell>
+);
+
+// Unknown-signal 404 with a hotzone way forward. Names joins, voice and games
+// with links plus the index link; the season grammar is still checked first,
+// so a bad season on an unknown signal answers 400, never here.
+export const HotzoneSignalNotFoundPage: FC = () => (
+  <RecoveryShell
+    code="404"
+    title="We cannot find that page"
+    headingId="error-heading"
+    robots="noindex, nofollow"
+  >
+    <p class="lead">
+      Unknown hot zone signal. The signals are joins, voice and games — pick one below, or browse
+      every hot zone.
+    </p>
+    <HotzoneRecoveryActions />
+    <HotzoneRecoveryNav />
+  </RecoveryShell>
+);

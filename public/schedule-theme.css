@@ -1,4 +1,4 @@
-/* Community schedule (/events, /events/past): layout over the base tokens in theme.css. */
+/* Schedule/board layout. */
 .events-page .schedule-heading { border-left: 4px solid var(--brand); padding-left: 1.5rem; margin-bottom: 2.5rem; }
 .events-page h1 { font-size: clamp(3rem, 7vw, 5rem); margin: .5rem 0 1rem; }
 .events-page .strap { color: var(--brand); margin: 0; }
@@ -6,6 +6,7 @@
 .events-page [data-cal-zone=head] p { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 0; }
 .events-page a:not(.btn) { min-height: 44px; display: inline-flex; align-items: center; }
 .events-page .schedule-views { display: flex; border: 1px solid var(--line); }
+.events-page .schedule-views.board-periods { flex-wrap: wrap; width: fit-content; }
 .events-page .schedule-views a { padding: .4rem 1.25rem; text-decoration: none; color: var(--ink); }
 .events-page .schedule-views a[aria-current] { background: var(--brand); color: var(--paper); }
 .events-page form[role=search] { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1.5rem 0 2rem; }
@@ -20,6 +21,8 @@
 .events-page .schedule-actions { display: grid; justify-items: end; gap: .5rem; max-width: 14rem; }
 .events-page .schedule-attendance { color: var(--muted); font-variant-numeric: tabular-nums; }
 .events-page .schedule-badge { display: inline-block; border: 1px solid var(--line); padding: .1rem .5rem; margin-top: .5rem; }
+.events-page [data-cal-jump][data-cancelled] { flex-direction: column; align-items: flex-start; }
+.events-page [data-cal-jump] .schedule-badge { margin: .25rem 0 0; }
 .events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *) { background: var(--surface); border-left: 4px solid var(--brand); padding: 1.5rem; }
 .events-page .schedule-month-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .events-page .schedule-month-nav a { padding: .5rem 1rem; border: 1px solid var(--line); }

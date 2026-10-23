@@ -241,6 +241,12 @@ jobs:
         run: |
           npx vitest run test/member-profile-native-422-baseline.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/member-profile-native-422-baseline.json
           node ci/a11y-require-executed.mjs artifacts/a11y/member-profile-native-422-baseline.json "native 422 baseline in a real browser" 4
+      - name: Profile composition feedback regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
@@ -328,9 +334,11 @@ jobs:
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
-    # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
-    # seeded property suite retains its hard 10s limit.
-    timeout-minutes: 40
+    # runners, so 20m cancelled green runs (TOG-12177). The full suite now
+    # runs 29-38m on main; 40m left no headroom for runner noise, so the
+    # ceiling moves to 60m (worst observed 37m51s keeps a ~37% margin).
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
+    timeout-minutes: 60
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -476,7 +484,8 @@ jobs:
       # config) because every test/** file runs inside the blocking coverage
       # step above.
       - name: Tier-0 check (validators + authz + EXPLAIN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        # Do not invoke installed tools after an audit/install failure skipped npm ci.
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -530,6 +539,22 @@ jobs:
       - name: Kit adapter build
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run build --prefix web
+      - name: Kit admin contrast (built runtime, intercepted fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_ADMIN_CONTRAST_EVIDENCE_DIR: artifacts/kit-admin-contrast
+        run: |
+          mkdir -p artifacts/kit-admin-contrast
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
+      - name: Kit admin contrast evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-admin-contrast
+          path: artifacts/kit-admin-contrast/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs
@@ -566,10 +591,11 @@ jobs:
           CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
-      # report fails the step (fail closed). Docs-only and draft PRs skip via
-      # the scope guard in `if:`, never a file-presence check.
+      # report after successful coverage fails the step (fail closed). Earlier
+      # failures keep their own verdict without a secondary missing-input error.
+      # Docs-only and draft PRs skip via scope, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
       # literals. The planted-finding selftest and strict scan both fail closed.
@@ -705,7 +731,9 @@ jobs:
         run: node --test ci/check-production-triggers.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lighthouse:origin:selftest
+        run: |
+          npm run lighthouse:origin:selftest
+          npm run lighthouse:evidence:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --outdir dist
@@ -750,10 +778,11 @@ jobs:
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    # Same lint + typecheck + test suite as `check` on the slower engines
-    # floor; 30m killed green runs once the suite passed ~29m, so this leg
-    # carries the same 40m budget.
-    timeout-minutes: 40
+    # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
+    # green runs on runner noise (worst observed pass 29m32s, 28s of
+    # margin). 45m keeps a ~34% margin; the progress sidecar samples the
+    # first 43m (MAX_SAMPLES in ci/node22-progress.mjs tracks this ceiling).
+    timeout-minutes: 45
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.

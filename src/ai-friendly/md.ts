@@ -5,7 +5,7 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
-import { isValidZone } from "../events/date-format";
+import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
@@ -128,7 +128,10 @@ export function mdFaq(appUrl: string): string {
   ];
   for (const group of FAQS) {
     out.push(`## ${mdText(group.section)}`, "");
-    for (const [q, a] of group.items) out.push(`### ${mdText(q)}`, "", mdText(a), "");
+    for (const [q, a, link] of group.items) {
+      const answer = mdText(a) + (link ? ` [${mdInlineText(link.label)}](${link.href})` : "");
+      out.push(`### ${mdText(q)}`, "", answer, "");
+    }
   }
   out.push(leafFooter(appUrl), "");
   return out.join("\n");
@@ -193,24 +196,6 @@ function mdEventWhen(e: MdEvent): string {
   return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
 }
 
-/** Detail instant: mirror the HTML Starts/Ends cells (full date + endpoint offset, ISO on a bad zone). */
-function mdDetailInstant(d: Date, tz: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-      timeZoneName: "longOffset",
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-}
-
 const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
 
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
@@ -244,7 +229,7 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
     for (const e of rows) out.push(...mdEventBlock(appUrl, e));
   }
   out.push(
-    `Per-event Markdown: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page.`,
+    `Per-event Markdown template: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page (replace :key with the event key).`,
     "",
   );
   return out.join("\n");
@@ -335,7 +320,7 @@ export function llmsTxt(appUrl: string): string {
     "## Events",
     "",
     `- [Upcoming events](${canonicalUrl(appUrl, "/events")}): published events only. Machine list: ${canonicalUrl(appUrl, "/events.md")}`,
-    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
+    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} (template: replace :key with an event key) with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
     "",
     "## Machine access",
     "",
@@ -347,7 +332,8 @@ export function llmsTxt(appUrl: string): string {
     "",
     "- There is no public listing of members: profiles are members-only and never appear here.",
     "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser.",
-    "- Event times below render in each event's own timezone next to the UTC instant on the page.",
+    "- Poll these documents cheaply: send If-None-Match with the ETag you last saw and an unchanged document answers 304 with no body.",
+    "- Event pages show Starts and Ends in the event timezone with the UTC offset; invalid stored timezones fall back to ISO UTC.",
     "",
   );
   return out.join("\n");
