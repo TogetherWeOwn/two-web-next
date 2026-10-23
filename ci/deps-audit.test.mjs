@@ -436,6 +436,10 @@ async function withRegistry(run) {
     };
     delete env.npm_config_offline;
     delete env.NPM_CONFIG_OFFLINE;
+    // Hermetic event default: a CI runner's GITHUB_EVENT_NAME must not flip
+    // bare gate() calls onto the outage-tolerant path. Explicit per-call
+    // overrides still apply (execute spreads them after this base env).
+    delete env.GITHUB_EVENT_NAME;
     const execute = async (command, args, overrides = {}) => {
       const child = spawn(command, args, {
         cwd: dir,
@@ -599,8 +603,9 @@ test("real npm missing advisory severity cannot inherit an exact high exception"
 
 test("real npm validates chunked/compressed registry data and rejects unchecked responses", {
   // The 503 case now exhausts 3 gate attempts per lockfile (5s+15s backoff each)
-  // before failing closed on the unset (local) event; truncated may too if npm
-  // reports it as a transport error.
+  // before failing closed; withRegistry explicitly unsets GITHUB_EVENT_NAME so
+  // bare gate() calls never inherit a CI runner's outage-tolerant event.
+  // Truncated may also exhaust if npm reports it as a transport error.
   timeout: 240_000,
 }, async () => {
   await withRegistry(async ({ advisory, gate }) => {
