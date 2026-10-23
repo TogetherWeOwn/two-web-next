@@ -135,6 +135,14 @@ paths = ['''^test/event-gone-alternatives-acceptance\.test\.ts$''']
 regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FA9$''']
 
 [[allowlists]]
+description = "Deterministic RFC example-UUID idempotency fixture in the bot settings tests, asserted literally in expected headers and bodies, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/bot-settings\.test\.ts$''']
+regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']
+
+[[allowlists]]
 description = "Two synthetic offline PUBLIC Discord event fixtures in the Kit public-payload contract tests, not credentials or member identities"
 targetRules = ["discord-client-id"]
 condition = "AND"

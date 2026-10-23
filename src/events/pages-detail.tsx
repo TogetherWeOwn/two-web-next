@@ -5,7 +5,7 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl, isWireInstant } from "./feeds";
+import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { attendeePageHref } from "./attendee-paths";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
@@ -154,6 +154,11 @@ export const EventPage: FC<{
             <dt>Where</dt>
             <dd>
               <p data-testid="event-venue">{e.location}</p>
+              <p>
+                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                  Get directions
+                </a>
+              </p>
             </dd>
           </div>
         ) : null}
