@@ -190,6 +190,18 @@ export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try
  * the owned fetch, restores the last good zones and releases loading. */
 export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
+/* Failed-read recovery: a failed search/month/view read keeps the last good
+ * zones and names the missed destination beside them, with an explicit retry
+ * of the last failed GET intent and a safe return. The host renders hidden
+ * and inert outside the swapped zones; the binder shows it only on failure. */
+export const EVENTS_READ_RETRY_TESTID = "events-read-retry";
+export const EVENTS_READ_CLEAR_TESTID = "events-read-clear";
+export const EVENTS_READ_STATUS_TESTID = "events-read-status";
+export const EVENTS_READ_RETRY_COPY = "Try again";
+export const EVENTS_READ_CLEAR_COPY = "Dismiss";
+/** A 429 Retry-After is honored up to 60 seconds; anything larger caps here. */
+export const EVENTS_READ_RETRY_AFTER_CAP_MS = 60_000;
+
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
  * "no events". */
