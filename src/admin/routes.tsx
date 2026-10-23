@@ -256,13 +256,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/", async (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard" });
     // Funnel counts are outcomes only (no member data): no access-log subjects.
-    // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
+    // No DB (bare-guard tests / unconfigured): diagnostics are unavailable, not zero.
     const db = await dbFor(c);
     // Match dbFor's precedence: an injected ADMIN_DB overrides either URL.
     const identity = (c.env as EnvWithAdminDb).ADMIN_DB || databaseUrl(c.env) || db;
     // Start both optional analytics reads together with the same budget, rather
     // than stacking their deadlines; they still share one pooled connection, so
-    // the budget covers both transactions. Failed/blocked widgets are omitted;
+    // the budget covers both transactions. Failed/blocked widgets show unavailable;
     // authorization and the guard's critical access-log write stay fail-closed.
     let funnel: Awaited<ReturnType<typeof dashboardJoinFunnel>>;
     let zeroSearches: Awaited<ReturnType<typeof topZeroResultSearches>>;

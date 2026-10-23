@@ -118,7 +118,8 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
 </AdminShell>
 
 <style>
-  .admin-table-scroll:focus-visible {
+  .admin-table-scroll:focus-visible,
+  .admin-table a:focus-visible {
     outline-color: currentColor;
   }
 </style>
