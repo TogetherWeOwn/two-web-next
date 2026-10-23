@@ -11,22 +11,7 @@ import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp 
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-const fmtWithOffset = (d: Date, tz: string): string => {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-      timeZoneName: "longOffset",
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-};
+import { formatEventWhen as fmtWithOffset } from "./date-format";
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or

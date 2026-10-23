@@ -35,7 +35,7 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { isValidZone } from "./date-format";
+import { formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
@@ -267,23 +267,8 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   };
 }
 
-/** Hero wall time: the served page's long-offset format, ISO on a bad zone. */
-export function formatEventWhen(startsAt: Date, timezone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: timezone,
-      timeZoneName: "longOffset",
-    }).format(startsAt);
-  } catch {
-    return startsAt.toISOString();
-  }
-}
+// Preserve the read-model export used by existing Kit callers.
+export { formatEventWhen } from "./date-format";
 
 function toLink(link: EventLink): KitEventDetailLink {
   // Discovery instants use the served long-offset detail format (the hero
