@@ -27,11 +27,24 @@ export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: stri
         Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>
       </p>
     ) : null}
+    <nav aria-label="Jump to a rule" data-testid="rules-jump">
+      <p class="strap">Jump to a rule</p>
+      <ul>
+        {RULES.map(([name, , id]) => (
+          <li key={id}>
+            <a href={`#${id}`}>{name}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
     <ol data-testid="rules-list" class="facts">
-      {RULES.map(([name, body]) => (
-        <li class="card" key={name}>
-          <h2>{name}</h2>
+      {RULES.map(([name, body, id]) => (
+        <li class="card" key={id}>
+          <h2 id={id}>{name}</h2>
           <p>{body}</p>
+          <a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>
+            Permalink
+          </a>
         </li>
       ))}
     </ol>

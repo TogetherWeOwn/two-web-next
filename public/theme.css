@@ -94,6 +94,13 @@
 .content-page [data-testid='about-facts'] { gap: 0; }
 .content-page [data-testid='rules-list'] { display: block; list-style: decimal; padding-left: 2rem; }
 .content-page [data-testid='rules-list'] li::marker { color: var(--brand); font-weight: 700; font-size: 1.5rem; }
+/* Rules jump index: plain fragment links, one per addressed rule. */
+.content-page [data-testid='rules-jump'] ul { list-style: none; margin: 0 0 1.5rem; padding: 0; display: grid; gap: .25rem; }
+.content-page [data-testid='rules-jump'] a { display: flex; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
+.content-page [data-testid='rules-list'] .rule-permalink { display: inline-flex; align-items: center; min-height: 44px; font-size: .9rem; }
+/* The addressed rule stays visibly identified: surface tint plus an inset
+brand bar, both paint-only so jumping never shifts the layout. */
+.content-page [data-testid='rules-list'] > li:has(> h2:target) { background: var(--surface); box-shadow: inset 3px 0 0 var(--brand); }
 .base-theme [data-testid='faq-list'] section { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 2rem; }
 /* LCP: render offscreen faq sections only when scrolled near. */
 [data-testid='faq-list']>section{content-visibility:auto;contain-intrinsic-size:auto 20rem}

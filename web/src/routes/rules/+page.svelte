@@ -33,7 +33,8 @@ const { appUrl, rules, lastUpdated, leafCss } = $derived(data);
   <ContentLeaf navCurrent="rules" headingId="rules-heading" heading="House rules">
     <p class="lead">Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.</p>
     {#if lastUpdated}<p data-testid="rules-last-updated" class="strap">Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time></p>{/if}
-    <ol data-testid="rules-list" class="facts">{#each rules as [name, body] (name)}<li class="card"><h2>{name}</h2><p>{body}</p></li>{/each}</ol>
+    <nav aria-label="Jump to a rule" data-testid="rules-jump"><p class="strap">Jump to a rule</p><ul>{#each rules as [name, , id] (id)}<li><a href={`#${id}`}>{name}</a></li>{/each}</ul></nav>
+    <ol data-testid="rules-list" class="facts">{#each rules as [name, body, id] (id)}<li class="card"><h2 id={id}>{name}</h2><p>{body}</p><a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>Permalink</a></li>{/each}</ol>
     <p><a class="btn" href="/join" data-testid="rules-join">Join with Discord</a>{" "}<a href="/">Back to the homepage</a></p>
   </ContentLeaf>
 </Shell>
