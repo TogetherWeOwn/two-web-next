@@ -572,7 +572,7 @@ and **Attempted** (UTC). It shows up to **100 rows per page** from the last
 **90 days**, newest first, not every server join or sign-in. Use **Next** for older
 rows and **Previous** to return, retaining filters; **Filter** returns to page 1.
 
-Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`) and
+Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`, `rate_limited`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
 a username/substring search. Empty cells mean unavailable values, not verified
 anonymity. Source is attribution, not authenticated identity. Select an outcome
@@ -615,8 +615,9 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content** and **Activity log** cards plus
-these diagnostic sections when their data is available:
+`/admin` has **Events**, **Featured content**, **Activity log**, **Join attempts**
+and **Moderation settings** cards plus these diagnostic sections when their data
+is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member

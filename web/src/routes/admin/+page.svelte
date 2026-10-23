@@ -35,6 +35,10 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       <h2><a href="/admin/join-attempts">Join attempts</a></h2>
       <p>Every join try, outcome and refusal. Read-only.</p>
     </li>
+    <li class="card">
+      <h2><a href="/admin/moderation">Moderation settings</a></h2>
+      <p>Live automod limits over the bot settings path. Writes re-check the Discord role.</p>
+    </li>
   </ul>
   {#if funnel}
     <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">
@@ -42,7 +46,16 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       {#if outcomes.length === 0}
         <p data-testid="join-funnel-empty">No join attempts in the window.</p>
       {:else}
-        <div class="admin-table-scroll">
+        <p id="join-funnel-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the wide table on narrow screens (axe scrollable-region-focusable requires it); region pattern matches src/admin/pages/dashboard.tsx. -->
+        <div
+          class="admin-table-scroll"
+          role="region"
+          aria-label="Join funnel"
+          aria-describedby="join-funnel-scroll-hint"
+          tabindex="0"
+          data-testid="join-funnel-table-scroll"
+        >
           <table class="admin-table">
             <thead>
               <tr><th scope="col">Outcome</th><th scope="col">Attempts</th></tr>
@@ -70,7 +83,16 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       {#if zeroSearches.length === 0}
         <p data-testid="top-zero-searches-empty">No missed searches.</p>
       {:else}
-        <div class="admin-table-scroll">
+        <p id="top-zero-searches-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the wide table on narrow screens (axe scrollable-region-focusable requires it); region pattern matches src/admin/pages/dashboard.tsx. -->
+        <div
+          class="admin-table-scroll"
+          role="region"
+          aria-label="Top searches with no results"
+          aria-describedby="top-zero-searches-scroll-hint"
+          tabindex="0"
+          data-testid="top-zero-searches-table-scroll"
+        >
           <table class="admin-table">
             <thead>
               <tr><th scope="col">Search</th><th scope="col">Misses</th><th scope="col">Last searched</th></tr>
@@ -91,3 +113,9 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
   {/if}
 </section>
 </AdminShell>
+
+<style>
+  .admin-table-scroll:focus-visible {
+    outline-color: currentColor;
+  }
+</style>
