@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { archiveContext } from "../src/events/archive-context";
-import { archiveEventHref, archiveReturnHref } from "../src/events/attendee-paths";
+import { archiveEventHref } from "../src/events/attendee-paths";
+import { archiveReturnHref } from "../src/events/archive-links";
 import { normalizePastPage } from "../src/events/reads";
 
 const query = 'Raid 🌌 "night" & <crew>';

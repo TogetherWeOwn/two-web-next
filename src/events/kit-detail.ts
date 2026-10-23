@@ -59,7 +59,8 @@ import {
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref, archiveReturnLink } from "./attendee-paths";
+import { archiveEventHref } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {

@@ -8,7 +8,6 @@
 //
 // Framework-free so the refusal core and Svelte/Kit renderers can share URL
 // builders without pulling in the reads layer or server-side input parsing.
-import { pastEventsUrl } from "../islands/contracts-past-events";
 
 export function attendeePageHref(eventKey: string, page: number): string {
   return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
@@ -32,17 +31,6 @@ export function archiveEventHref(
   params.set("archivePage", String(archive.page));
   if (archive.q) params.set("archiveQuery", archive.q);
   return `${base}?${params}`;
-}
-
-export function archiveReturnHref(archive: ArchiveContext | null | undefined): string | null {
-  return archive ? pastEventsUrl(archive.page, archive.q) : null;
-}
-
-export function archiveReturnLink(archive: ArchiveContext | null | undefined) {
-  const href = archiveReturnHref(archive);
-  return href
-    ? { href, label: archive?.q ? "← Back to search results" : "← Back to past events" }
-    : null;
 }
 
 export function rsvpPageReturnPath(eventKey: string, page: number): string {

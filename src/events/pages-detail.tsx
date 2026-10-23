@@ -6,7 +6,8 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
-import { archiveEventHref, archiveReturnLink, type ArchiveContext } from "./attendee-paths";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import type {
   EventAttendee,
   EventLink,
