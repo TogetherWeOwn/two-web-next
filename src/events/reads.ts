@@ -33,6 +33,8 @@ import {
 } from "../islands/contracts";
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
+import { normalizePastPage } from "./past-page";
+export { normalizePastPage } from "./past-page";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -557,13 +559,6 @@ export async function listCalendarPast(
   const truncated = rows.length >= EVENTS_PAST_DRAWER_LIMIT;
   const visible = await withGoing(db, rows.filter(isRenderableEventWindow));
   return Object.assign(visible, { mayBeTruncated: truncated });
-}
-
-/** Invalid HTML archive pages/offsets retain the page-one fallback. */
-export function normalizePastPage(page: number): number {
-  return Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger((page - 1) * PAGE_SIZE)
-    ? page
-    : 1;
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */

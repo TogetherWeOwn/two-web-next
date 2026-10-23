@@ -1,0 +1,64 @@
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
+import { describe, expect, it } from "vitest";
+import { archiveContext } from "../src/events/archive-context";
+
+function refresh(source: string, search: string): string {
+  const requests: string[] = [];
+  let broadcast: (event: unknown) => void = () => {};
+  const root = { getAttribute: () => null, setAttribute() {} };
+  runInContext(
+    source,
+    createContext({
+      AbortController,
+      URLSearchParams,
+      location: { pathname: "/e/evt-1", search },
+      setTimeout: () => 1,
+      clearTimeout() {},
+      document: {
+        documentElement: root,
+        body: null,
+        activeElement: null,
+        querySelector: (selector: string) =>
+          selector === '[data-island="rsvp-button"]' ? { getAttribute: () => "evt-1" } : null,
+        addEventListener: (_: string, listener: typeof broadcast) => {
+          broadcast = listener;
+        },
+      },
+      fetch: (url: string) => {
+        requests.push(url);
+        return new Promise(() => {});
+      },
+    }),
+  );
+  broadcast({ detail: { eventKey: "evt-1" } });
+  expect(requests).toHaveLength(1);
+  return requests[0]!;
+}
+
+describe.each(["assets", "public"])("%s roster refresh archive continuity", (directory) => {
+  const source = readFileSync(`${directory}/islands/attendees-live.js`, "utf8");
+  it.each(["", "attendees=2&", "attendees=2x&"])(
+    "retains bounded context independent of attendee page %s",
+    (attendees) => {
+      const q = 'Raid 🌌 "night" & <crew>';
+      const search = `?${attendees}${new URLSearchParams({ archivePage: "2", archiveQuery: q, next: "//evil.example" })}`;
+      const url = new URL(refresh(source, search), "https://example.test");
+      expect(url.pathname).toBe("/e/evt-1");
+      expect(url.searchParams.get("attendees")).toBe(attendees === "attendees=2&" ? "2" : null);
+      expect(archiveContext(url.search)).toEqual({ page: 2, q });
+      expect(url.searchParams.has("next")).toBe(false);
+    },
+  );
+
+  it.each([
+    "archivePage=2&archivePage=2&archiveQuery=x",
+    "archivePage=2&archiveQuery=x&archiveQuery=x",
+    "archivePage=2&archiveQuery=%E0%A4%A",
+    `archivePage=2&archiveQuery=${"x".repeat(256)}`,
+  ])("does not repair invalid archive state during refresh %s", (archive) => {
+    const url = new URL(refresh(source, `?attendees=2&${archive}`), "https://example.test");
+    expect(url.searchParams.get("attendees")).toBe("2");
+    expect(archiveContext(url.search)).toBeNull();
+  });
+});
