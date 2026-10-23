@@ -6,9 +6,10 @@
 // route-inventory: GET /join
 //
 // Rich unfurl acceptance: every public leaf (event detail, the four content
-// leaves, join) emits og:image + og:image:alt on BOTH renderers, pointing at
-// ONE static brand asset via an absolute URL on the canonical host. The
-// referenced file must live under public/ with image bytes and an image MIME
+// leaves, join) emits og:image + og:image:alt on BOTH renderers. Kit home and
+// both profile route renders also pin the exact brand asset and alt text via
+// an absolute URL on the canonical host. The referenced file must live under
+// public/ with image bytes and an image MIME
 // mapping, and no Hono route may shadow its path (the platform serves
 // public/ before the Worker runs, so file-on-disk plus no-shadow is the
 // served proof). Event share copy stays pinned identical Hono vs Kit,
@@ -39,7 +40,9 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import type { PublicEvent } from "../src/events/reads";
 import { faqPageData } from "../src/faq-content";
-import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
+import { resolveKitProfile } from "../src/profiles/kit";
+import { createMemoryProfileStore, type MemberView } from "../src/profiles/store";
 import type { KitRequestSession } from "../src/kit-session";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { POLICY_VERSION, renderPolicyMarkdown } from "../src/privacy";
@@ -261,8 +264,12 @@ function expectRichUnfurl(
   );
   const images = metaContents(html, "property", "og:image");
   expect(images, `${page}: exactly one og:image`).toHaveLength(1);
+  expect(images, `${page}: exact brand asset on the canonical origin`).toEqual([
+    `${new URL(canonical).origin}/icons/icon-512.png`,
+  ]);
   const alts = metaContents(html, "property", "og:image:alt");
   expect(alts, `${page}: exactly one og:image:alt`).toHaveLength(1);
+  expect(alts, `${page}: exact community-logo alt`).toEqual(["Together We Own community logo"]);
   expect(alts[0], `${page}: brand alt names the community`).toContain(SITE_NAME);
   expect(alts[0], `${page}: alt is text, not a URL`).not.toContain("http");
   return images[0]!;
@@ -290,9 +297,10 @@ async function expectBrandAssetServed(imageUrl: string, canonical: string) {
   expect(image.search, "og:image carries no query").toBe("");
   expect(image.hash, "og:image carries no fragment").toBe("");
   expect(image.pathname.startsWith("//"), "og:image has no double slash").toBe(false);
-  const approved =
-    image.pathname === "/logo.svg" ||
-    (image.pathname.startsWith("/icons/") && image.pathname.endsWith(".png"));
+  expect(imageUrl, "served image is the exact absolute brand URL").toBe(
+    `${canon.origin}/icons/icon-512.png`,
+  );
+  const approved = image.pathname === "/icons/icon-512.png";
   expect(approved, `og:image reuses an approved brand file, got ${image.pathname}`).toBe(true);
   const diskPath = join(root, "public", image.pathname);
   expect(existsSync(diskPath), `og:image exists under public/: ${image.pathname}`).toBe(true);
@@ -353,6 +361,9 @@ const { compile } = webRequire("svelte/compiler") as {
 };
 
 type KitBundle = {
+  renderHome: (data: Record<string, unknown>) => string;
+  renderProfile: (data: Record<string, unknown>) => string;
+  renderMember: (data: Record<string, unknown>) => string;
   renderAbout: (data: Record<string, unknown>) => string;
   renderFaq: (data: Record<string, unknown>) => string;
   renderRules: (data: Record<string, unknown>) => string;
@@ -379,6 +390,9 @@ async function buildKitUnfurlBundle(): Promise<KitBundle> {
       entry,
       `
 import { render } from "svelte/server";
+import Home from ${JSON.stringify(join(worktree, "web/src/routes/+page.svelte"))};
+import Profile from ${page("profile")};
+import Member from ${page("members/[user]")};
 import About from ${page("about")};
 import Faq from ${page("faq")};
 import Rules from ${page("rules")};
@@ -387,6 +401,9 @@ import Join from ${page("join")};
 import Detail from ${lib("EventDetail")};
 import Gone from ${lib("EventGone")};
 import Forbidden from ${lib("ErrorShell")};
+${doc("renderHome", "Home", "{ data: input }")}
+${doc("renderProfile", "Profile", "{ data: input }")}
+${doc("renderMember", "Member", "{ data: input }")}
 ${doc("renderAbout", "About", "{ data: input }")}
 ${doc("renderFaq", "Faq", "{ data: input }")}
 ${doc("renderRules", "Rules", "{ data: input }")}
@@ -435,11 +452,50 @@ export function renderForbidden(code, inviteUrl) {
 }
 
 // One bundle build per file: every Kit suite shares this lazy build, so the
-// eight Svelte components compile once no matter how many describes use them.
+// eleven Svelte entry components compile once no matter how many describes use them.
 let sharedKitBuild: Promise<KitBundle> | null = null;
 function sharedKitBundle(): Promise<KitBundle> {
   sharedKitBuild ??= buildKitUnfurlBundle();
   return sharedKitBuild;
+}
+
+function kitHomeData(): Record<string, unknown> {
+  return {
+    appUrl: APP_URL,
+    session: null,
+    sessionUnavailable: false,
+    notice: null,
+    joinResult: null,
+    inviteUrl: "https://discord.gg/configured",
+    counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+    upcomingEvents: [],
+    eventsUnavailable: false,
+    featured: [],
+    imageHosts: "",
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+  };
+}
+
+async function kitProfileData(isOwner: boolean): Promise<Record<string, unknown>> {
+  const member: MemberView = {
+    id: "100000000000000003",
+    username: "Public Member",
+    avatar: "profileavatarcanary",
+    bio: "private-bio-canary",
+    games: ["Chess"],
+    timezone: "UTC",
+    leaderboardOptOut: true,
+  };
+  const session = kitMember();
+  if (isOwner && session.session) session.session.userId = member.id;
+  const outcome = await resolveKitProfile(
+    { session, requestedId: member.id, joinResult: null },
+    { store: createMemoryProfileStore([member]) },
+  );
+  expect(outcome.kind).toBe("ok");
+  if (outcome.kind !== "ok") throw new Error(`expected profile, got ${outcome.kind}`);
+  expect(outcome.isOwner).toBe(isOwner);
+  return { ...outcome, appUrl: APP_URL };
 }
 
 function kitLeafData(): Record<string, Record<string, unknown>> {
@@ -661,6 +717,54 @@ describe("Kit leaves emit the same brand unfurl image", () => {
       page: "Kit event detail",
     });
   });
+});
+
+describe("Kit home and both profile routes emit the exact brand image", () => {
+  let kit: KitBundle;
+
+  beforeAll(async () => {
+    kit = await sharedKitBundle();
+  }, 60_000);
+
+  it("homepage SSR carries the brand image on its canonical host", () => {
+    const html = kit.renderHome(kitHomeData());
+    expect(html).toContain('id="home-heading"');
+    const head = headOf(html);
+    expect(canonicals(head)).toEqual(["https://next.example.test/"]);
+    expect(metaContents(head, "property", "og:url")).toEqual(["https://next.example.test/"]);
+    expect(metaContents(head, "property", "og:image")).toEqual([
+      "https://next.example.test/icons/icon-512.png",
+    ]);
+    expect(metaContents(head, "property", "og:image:alt")).toEqual([
+      "Together We Own community logo",
+    ]);
+  });
+
+  it.each([
+    ["/profile", true],
+    ["/members/[user]", false],
+  ] as const)(
+    "%s SSR carries the brand image, not member or viewer art",
+    async (route, isOwner) => {
+      const data = await kitProfileData(isOwner);
+      const html = isOwner ? kit.renderProfile(data) : kit.renderMember(data);
+      expect(html).toContain("Public Member");
+      expect(html.includes('data-testid="profile-form"')).toBe(isOwner);
+      const head = headOf(html);
+      expect(
+        metaContents(head, "property", "og:image"),
+        `${route}: exactly one brand image`,
+      ).toEqual(["https://next.example.test/icons/icon-512.png"]);
+      expect(
+        metaContents(head, "property", "og:image:alt"),
+        `${route}: exactly one brand alt`,
+      ).toEqual(["Together We Own community logo"]);
+      expect(metaContents(head, "name", "robots")).toEqual(["noindex, nofollow"]);
+      for (const leak of [HEAD_CANARY, "private-bio-canary", "profileavatarcanary"]) {
+        expect(head, `${route}: no private share data (${leak})`).not.toContain(leak);
+      }
+    },
+  );
 });
 
 describe("one static brand asset across every leaf and renderer", () => {
