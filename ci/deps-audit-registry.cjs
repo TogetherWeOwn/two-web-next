@@ -26,14 +26,41 @@ function validBulk(value) {
   );
 }
 
-module.exports = { validBulk };
+const transientNetworkCodes = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "ECONNABORTED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ENETRESET",
+  "ENETDOWN",
+  "EHOSTDOWN",
+]);
+
+module.exports = { validBulk, transientNetworkCodes };
 
 // Observe the very response npm consumes, without rerouting traffic or copying
 // registry credentials. npm may normalize malformed bulk data into a clean audit
 // or default a missing severity to high. The parent requires this separate check.
 if (process.env.DEPS_AUDIT_REGISTRY_GUARD === "1") {
-  const result = { version: 1, valid: true, responses: 0, pending: 0 };
-  process.once("exit", () => writeSync(3, JSON.stringify(result)));
+  const result = {
+    version: 1,
+    valid: true,
+    responses: 0,
+    pending: 0,
+    permanent: false,
+    transport: null,
+  };
+  // Publish progress synchronously, before npm sees it. A timeout/signal can
+  // prevent exit handlers from running; it must not erase an invalid response.
+  // Only fixed state/codes cross fd 3, never URLs, messages, bodies or credentials.
+  const publish = () => writeSync(3, `${JSON.stringify(result)}\n`);
+  publish();
+  process.once("exit", publish);
   const observed = new WeakSet();
   function observe(request) {
     if (observed.has(request)) return request;
@@ -44,17 +71,46 @@ if (process.env.DEPS_AUDIT_REGISTRY_GUARD === "1") {
     if (!bulk && !quick) return request;
     result.pending++;
     // The legacy quick fallback cannot prove that the bulk response was valid.
-    if (quick) result.valid = false;
+    if (quick) {
+      result.valid = false;
+      result.permanent = true;
+    }
+    publish();
     let finished = false;
-    const finish = (valid) => {
+    let responseStarted = false;
+    const finish = (valid, transport = null) => {
       if (finished) return;
       finished = true;
       result.pending--;
       result.responses++;
       result.valid &&= valid;
+      if (!valid) {
+        result.permanent ||= transport === null;
+        result.transport = transport;
+      }
+      publish();
     };
-    request.once("error", () => finish(false));
+    request.once("error", (error) =>
+      finish(
+        false,
+        bulk && !responseStarted && transientNetworkCodes.has(error.code)
+          ? { kind: "network", code: error.code }
+          : null,
+      ),
+    );
     request.prependListener("response", (response) => {
+      responseStarted = true;
+      const httpOutage =
+        bulk && response.statusCode >= 500 && response.statusCode <= 599
+          ? { kind: "http", statusCode: response.statusCode }
+          : null;
+      // Record permanent HTTP failures before waiting for their body. A 401
+      // followed by a stall is still a 401, irrespective of any body tokens.
+      if (!bulk || (response.statusCode !== 200 && httpOutage === null)) {
+        result.valid = false;
+        result.permanent = true;
+      }
+      publish();
       const chunks = [];
       let size = 0;
       const emit = response.emit;
@@ -71,7 +127,7 @@ if (process.env.DEPS_AUDIT_REGISTRY_GUARD === "1") {
         } else if (event === "aborted" || event === "error") finish(false);
         else if (event === "end" && !finished) {
           try {
-            if (!bulk || response.statusCode !== 200) finish(false);
+            if (!bulk || response.statusCode !== 200) finish(false, httpOutage);
             else {
               let body = Buffer.concat(chunks);
               const encoding = response.headers["content-encoding"]?.toLowerCase();
