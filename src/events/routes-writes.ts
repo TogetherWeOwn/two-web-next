@@ -263,7 +263,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
-      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      if (!db) return dbUnavailableJson(c);
       try {
         const key = c.req.param("key");
         if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
