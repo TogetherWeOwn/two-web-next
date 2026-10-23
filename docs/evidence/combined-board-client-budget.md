@@ -692,3 +692,54 @@ and staging are not rerun in this reconciliation. No user-facing page differs
 from the merged base. Prior-head CI/review is not approval of the new head;
 all exact-head merge gates remain mandatory. Rollback reverts only the new
 history/evidence record, with no numeric ceiling change to undo.
+
+## Tenth base-conflict reconciliation: retain merged allocation, no new allowance
+
+On 2026-10-23 GitHub confirmed a live conflict on `bc60f7153` against pinned
+main `2b4f1902e` (seven commits: #1690, #1640, #1650, #1431, #1702,
+#1686 and #1652). Only `ci/kit-perf-budget.json` conflicts. Preserve main's
+complete comment verbatim, then the prerequisite's unique prior record once;
+both tails were verified absent from the opposite side. All numeric ceilings
+now equal this merged base. In particular, retain the independently merged
+server gzip allocation **333312 B** from #1686, rather than restore the older
+329472 B or add another allowance. The obsolete client increase remains
+withdrawn. No source, tests, lockfiles, baselines, checker or CI wiring differ
+from that base; the historical per-file TSV is unchanged.
+
+This is a conflict repair, not refreshed feature-union admission. The frozen
+feature overlay was not rebuilt. The old one-file/370-gzip-byte breach remains
+pinned to `d6a65b4fa`, not asserted for this new base. The separately merged
+server allocation is not proof that the source feature's exact union fits.
+Keep the source feature/server HOLD until its own then-current union and
+independent CI/review satisfy the gates. No source feature ref was modified
+or pushed.
+
+With Node `v24.22.1` and fresh external locked root/web
+`npm ci --include=dev` installs, the actual resolved prerequisite-tree command
+`npm --prefix web run build && node ci/check-kit-perf.mjs` passes:
+
+| Group | Actual prerequisite tree | Unchanged merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 245331/99255 B | 251904/101632 B |
+| Client JS files | 53 | 54 |
+| Server JS raw/gzip | 1129528/328711 B | 1203200/333312 B |
+| Server JS files | 117 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2878/1024 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 | 0 required |
+
+This is one actual-tree build, not repeated determinism or a feature-overlay
+measurement. CSS gzip is exactly at its unchanged ceiling: zero margin is
+reported, not loosened. Startup 60000 ms is configuration, not measured latency.
+Unchanged checker selftests **6/6**, checker tests **13/13**, parity suites
+**67/67**, config selftests **34/34**, gate selftest **6/6**, bundle selftest
+**34/34**, parity citations **12/12**, and inventory **1151/1151** pass.
+Lint, root/CI typecheck, asset drift, Hono bundle budget, floor guard, docs
+links (**129 Markdown files**) and the internal-ref ratchet pass. No acceptance
+test files were edited. Full `npm run check`, fresh feature acceptance,
+browser/visual/quality gates, startup latency and staging were not rerun.
+No user-facing page differs from the merged base. Prior-head green CI/review
+is not approval of the new head; all exact-head merge gates remain mandatory.
+Rollback reverts only this new history/evidence reconciliation relative to
+the merged base; it must not undo the independent allocation from #1686.
