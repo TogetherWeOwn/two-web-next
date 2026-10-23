@@ -33,7 +33,9 @@ export default defineConfig({
             // separately. This does not change client chunking.
             codeSplitting: {
               groups: [
-                { name: "admin", test: /\/src\/admin\// },
+                // The Kit homepage already imports the Hono shared chunk.
+                // Co-locate its mirror markup so both home renderers gzip together.
+                { name: "admin", test: /\/(?:src\/admin\/|web\/src\/routes\/\+page\.svelte$)/ },
                 {
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
