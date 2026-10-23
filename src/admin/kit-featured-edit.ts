@@ -18,6 +18,7 @@ import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
+import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
 import type { FeaturedEditRow } from "./store-featured";
@@ -50,6 +51,8 @@ export type KitFeaturedEditView = {
   imageSrc: string | null;
   /** Homepage alt fallback (imageAlt?.trim() || title). */
   imageAlt: string;
+  /** Stored-link judged preview href (null when the homepage suppresses the link). */
+  previewUrl: string | null;
 };
 
 export type KitFeaturedEditOutcome =
@@ -100,6 +103,10 @@ export async function resolveKitFeaturedEdit(
   const imageSrc = row.imageUrl
     ? featuredImageSrc(row.imageUrl, deps.appUrl ?? "", deps.imageHosts)
     : null;
+  // Same for the preview link: judge the stored URL with the shared
+  // stored-link policy so the preview cannot link what the homepage hides.
+  // The form value below stays raw so the moderator can correct the link.
+  const previewUrl = safeStoredLink({ url: row.url }).url;
   return {
     kind: "ok",
     view: {
@@ -124,6 +131,7 @@ export async function resolveKitFeaturedEdit(
       checkedAt: now.toISOString(),
       imageSrc,
       imageAlt: row.imageAlt?.trim() || row.title,
+      previewUrl,
     },
   };
 }
