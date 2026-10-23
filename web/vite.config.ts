@@ -36,7 +36,7 @@ export default defineConfig({
                 { name: "admin", test: /\/src\/admin\// },
                 {
                   name: "events",
-                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
                 },
               ],
             },
