@@ -774,6 +774,137 @@ export async function listRelatedEvents(
   return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
+/** Series context for one detail render: the hosts behind the run plus the
+ * adjacent published/past nights by series index. Null for standalone events,
+ * so both renderers keep today's markup byte-identical there. */
+export interface EventSeriesContext {
+  /** Distinct non-blank organizers across the visible run, current host
+   * first, the rest in ascending series-index order. Empty when nobody in
+   * the run names a host; the view then omits the line but keeps prev/next. */
+  hosts: string[];
+  previous: EventLink | null;
+  next: EventLink | null;
+}
+
+/** The series-membership slice of the loaded row the context read keys on. */
+export type SeriesEventRef = Pick<
+  PublicEvent,
+  "id" | "parentEventId" | "recurrenceFrequency" | "recurrenceIndex" | "organizer_name"
+>;
+
+// Native recurrence creates at most 52 occurrences, but legacy imports have
+// no such invariant. One extra row detects overflow; never show partial history.
+export const SERIES_CONTEXT_MAX_EVENTS = 52;
+export const SERIES_CONTEXT_MAX_TEXT_BYTES = 4096;
+
+/**
+ * One bounded projection for the parent and its children, in series-index
+ * order. Published and past rows form the readable history; draft/cancelled
+ * siblings never leave the database. Oversized imported runs or public text
+ * omit the entire decorative block rather than suggest it is complete.
+ * Organizer names are already public, so this is anonymous-safe and audit-silent.
+ */
+export async function getEventSeriesContext(
+  db: Db,
+  event: SeriesEventRef,
+): Promise<EventSeriesContext | null> {
+  // Standalone fast path: no series pointer, rule, or index means no run to
+  // read, so the detail skips the query entirely (zero reads, not one empty).
+  if (
+    event.parentEventId == null &&
+    event.recurrenceFrequency == null &&
+    event.recurrenceIndex == null
+  ) {
+    return null;
+  }
+  const rootId = event.parentEventId ?? event.id;
+  // Bound transport bytes as well as row count: imported text columns have no
+  // schema length limit. CASE omits all text on overflow, including a huge host
+  // name; the marker below then refuses the whole context, not just that host.
+  const textFits = sql<boolean>`(
+    octet_length(${events.eventKey}) + octet_length(${events.title}) +
+    octet_length(${events.timezone}) + coalesce(octet_length(${events.location}), 0) +
+    coalesce(octet_length(${events.organizer_name}), 0)
+  ) <= ${SERIES_CONTEXT_MAX_TEXT_BYTES}`;
+  const rows = await nonSensitiveRead("events", () =>
+    db
+      .select({
+        ...eventLinkColumns,
+        eventKey: sql<string>`case when ${textFits} then ${events.eventKey} end`,
+        title: sql<string>`case when ${textFits} then ${events.title} end`,
+        timezone: sql<string>`case when ${textFits} then ${events.timezone} end`,
+        location: sql<string | null>`case when ${textFits} then ${events.location} end`,
+        organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
+        recurrenceIndex: events.recurrenceIndex,
+        textFits,
+      })
+      .from(events)
+      .where(
+        and(
+          inArray(events.status, ["published", "past"]),
+          finiteEventStart,
+          or(eq(events.id, rootId), eq(events.parentEventId, rootId)),
+        ),
+      )
+      .orderBy(asc(events.recurrenceIndex), asc(events.id))
+      .limit(SERIES_CONTEXT_MAX_EVENTS + 1),
+  );
+  if (rows.length > SERIES_CONTEXT_MAX_EVENTS || rows.some((row) => !row.textFits)) return null;
+  // Finite PostgreSQL timestamps can still decode to invalid JS Dates. Drop
+  // those rows before hosts/adjacency, so mapping a Kit link cannot throw.
+  const run = rows
+    .filter((row) => Number.isFinite(row.startsAt.getTime()))
+    .sort(
+      (a, b) =>
+        (a.recurrenceIndex ?? Number.MAX_SAFE_INTEGER) -
+        (b.recurrenceIndex ?? Number.MAX_SAFE_INTEGER),
+    );
+  const toLink = (row: (typeof run)[number]): EventLink => ({
+    id: row.id,
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+  });
+  // A run of one is a standalone render: the current row with no visible
+  // siblings keeps today's markup with no series block at all.
+  if (run.filter((row) => row.id !== event.id).length === 0) return null;
+  const at = run.findIndex((row) => row.id === event.id);
+  let previous: EventLink | null = null;
+  let next: EventLink | null = null;
+  if (at >= 0) {
+    previous = at > 0 ? toLink(run[at - 1]!) : null;
+    next = at + 1 < run.length ? toLink(run[at + 1]!) : null;
+  } else {
+    // The current row is not public (a moderator reading a draft child):
+    // bracket its index among the visible run instead of a list position.
+    const idx = event.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;
+    for (const row of run) {
+      const rowIdx = row.recurrenceIndex ?? Number.MAX_SAFE_INTEGER;
+      if (rowIdx < idx) previous = toLink(row);
+      else if (rowIdx > idx && !next) next = toLink(row);
+    }
+  }
+  // Current host first (already visible in this page's Hosted-by line), then
+  // distinct others in index order; null/blank organizers omitted.
+  const seen = new Set<string>();
+  const hosts: string[] = [];
+  const current = (event.organizer_name ?? "").trim();
+  if (current) {
+    seen.add(current);
+    hosts.push(current);
+  }
+  for (const row of run) {
+    if (row.id === event.id) continue;
+    const name = (row.organizer_name ?? "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    hosts.push(name);
+  }
+  return { hosts, previous, next };
+}
+
 /** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row
  * only — keyed on the session user, never another member's. Null when the
  * viewer has not answered. Waitlist copy uses the null-position fallback:
