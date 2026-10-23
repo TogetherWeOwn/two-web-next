@@ -84,9 +84,9 @@ fragments, malformed/unavailable URL state, non-string native URL properties,
 fixed exits, distinct titles and noindex. Neighboring suites cover the unchanged auth/cache/header/correlation
 contracts. Rendering imports no database/session helper and performs no fetch.
 
-`npm run lint`, `npm run typecheck`, `npm run check --prefix web`,
-`npm run build --prefix web` and `npm run kit-perf` passed. Kit measurements stay
-within the unchanged ceilings: server gzip 328679/329472 B, client JavaScript
+At the initial implementation head, `npm run lint`, `npm run typecheck`,
+`npm run check --prefix web`, `npm run build --prefix web` and `npm run kit-perf`
+passed. Those pre-integration measurements were server gzip 328679/329472 B, client JavaScript
 gzip 99398/101632 B and client CSS gzip 1000/1024 B.
 
 Hono-only checks: `npm run a11y` passed 146 fixture rows, and
@@ -95,3 +95,63 @@ exercise the Kit error routes. Mobile Lighthouse initially failed before content
 admission because its fixed fixture port was occupied; no page was measured in
 that attempt. Full-suite, mobile-performance and pinned visual-gate outcomes
 belong in the PR's current Verification section, not an inferred green verdict.
+
+## Integrated-head server compression repair
+
+After the automated main integration, head `12065f074252544c3030f52ac3eec27f05a2f115`
+failed the Kit server gzip gate by **483 B**. [The failing check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/40007046058/job/120597618796)
+reports 329955/329472 B; `ci-ok` correctly propagates that failure. The incorporated
+main parent `46332992e` had passing CI. This is a real, reproduced branch-specific
+budget failure, not a flake; no rerun or additional main merge is used as a fix.
+
+The repair adds one SSR-only `admin-errors` group in `web/vite.config.ts`. It
+co-compresses both admin error components, `AdminShell.svelte` and the retry URL
+helper. Rolldown's recursive grouping also relocates the existing page-state and
+Kit error-function definitions; those define functions/getters without a request,
+session or database read at module initialization. Existing groups, conservative
+minification, constructor names, legal comments and every budget stay unchanged.
+No renderer, helper implementation or acceptance file changes.
+
+Node 24.22.1, locked root/web dependencies, `npm run build --prefix web`, then
+`node ci/check-kit-perf.mjs`:
+
+| Tree | Server JS files | Server raw B | Server gzip B | Gzip ceiling B | Checker exit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Failed integrated head | 119 | 1129582 | 329955 | 329472 | 1 |
+| SSR group, build 1 | 116 | 1128917 | 328917 | 329472 | 0 |
+| SSR group, clean build 2 | 116 | 1128917 | 328916 | 329472 | 0 |
+
+Savings are **1038 / 1039 B**, leaving **555 / 556 B** margin, not a new growth
+allowance. Both repaired builds have byte-identical client JS/CSS path/SHA-256
+inventories and Worker entry bytes versus the failed head. Client JS remains
+54 files, 246399/99897 B raw/gzip; CSS remains 2 files, 2784/1000 B; Worker remains
+2551/1219 B. No client chunking setting changes.
+
+For each repaired build, direct imports of each tree's own emitted admin error
+entry and emitted SSR `render` produce byte-identical head/body output across
+**43 fixtures**: list/detail and filtered reads, 404/500/503, missing/forged URL
+state, mutation paths and an encoded hostile query. The comparator supplies
+request-local page context, checks real dashboard/noindex output and rejects
+error reflection. It does not replace emitted modules with source compilations.
+
+`test/kit-admin-error-chunking.test.ts` parses the actual SSR configuration with
+the existing Babel parser. Two tests fail on the old configuration with
+`missing server group: admin-errors`; all three pass with the repair. The tests
+exercise the real inclusion/exclusion regex and pin SSR-only placement and the
+existing minification settings. The unchanged size gate proves actual bytes.
+An initial scratch test draft used the unavailable TypeScript compiler API;
+that harness error is not the red-before proof.
+
+The targeted command above, plus `test/kit-admin-error-chunking.test.ts`, passes
+**359/359 tests in 14 files, zero skips**. A separate Chromium run passes 41/41,
+including all twelve admin keyboard/no-JS cases. The first browser attempt lacked
+shared libraries and failed its launch hook (318 passed, 41 skipped); after
+verifying the existing local Chromium library paths, the full targeted run passes.
+No host installation or browser/test gate is weakened.
+
+Fresh root lint/typecheck, Kit check, 26 budget/browser-wiring tests, six budget
+selftests, floor guard, 1150/1150 test inventory and diff checks pass. Full
+`npm run check`, Hono UI gates, screenshots and deployed routes are not rechecked
+for this configuration-only repair. Their earlier evidence is not a current
+whole-app or deployment PASS. Exact-head CI and independent review remain required.
+Undo is to revert the SSR grouping repair; no data rollback is involved.
