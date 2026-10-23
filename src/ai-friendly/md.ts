@@ -11,7 +11,7 @@ import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
 import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
-import { RULES } from "../rules-content";
+import { RULES, RULES_INTRO } from "../rules-content";
 
 export const MARKDOWN_MIME = "text/markdown; charset=utf-8";
 
@@ -138,14 +138,7 @@ export function mdFaq(appUrl: string): string {
 }
 
 export function mdRules(appUrl: string, stamp: { iso: string; label: string } | null): string {
-  const out = [
-    "# House rules",
-    "",
-    sourceLine(appUrl, "/rules"),
-    "",
-    "Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.",
-    "",
-  ];
+  const out = ["# House rules", "", sourceLine(appUrl, "/rules"), "", RULES_INTRO, ""];
   if (stamp) out.push(`Last updated ${stamp.label} (${stamp.iso}).`, "");
   RULES.forEach(([name, body], i) => {
     out.push(`## ${i + 1}. ${mdText(name)}`, "", mdText(body), "");

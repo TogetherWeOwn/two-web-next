@@ -1,7 +1,7 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
-import { RULES } from "../rules-content";
+import { RULES, RULES_INTRO } from "../rules-content";
 
 // Re-exported so existing importers (the Markdown alternate) keep working.
 export { RULES };
@@ -18,10 +18,7 @@ export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: stri
     headingId="rules-heading"
     heading="House rules"
   >
-    <p class="lead">
-      Five rules that keep the lobby a place people come back to. Short on purpose — if anything is
-      unclear, ask in Discord before you assume.
-    </p>
+    <p class="lead">{RULES_INTRO}</p>
     {lastUpdated ? (
       <p data-testid="rules-last-updated" class="strap">
         Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>

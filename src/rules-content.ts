@@ -4,6 +4,9 @@
 // cookie, no database — importing this module must never connect to anything.
 import { rulesLastUpdated } from "./rules-last-updated";
 
+export const RULES_INTRO =
+  "Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.";
+
 export const RULES: Array<[title: string, body: string, id: string]> = [
   // Stable fragment ids, assigned once per rule: the jump index targets them
   // and moderators share `#rule-*` links. Never derived from the wording or
