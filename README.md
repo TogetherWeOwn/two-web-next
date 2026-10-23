@@ -48,6 +48,8 @@ for matching rules, empty-state recovery and cache boundaries.
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
+- [RSVP states and safe recovery](docs/rsvp-recovery.md): seats, waitlist positions,
+  pending Discord mirrors, uncertain writes, and bounded support steps.
 
 ## Develop and test safely
 
@@ -112,6 +114,17 @@ proofs behind the same skip and keeps its P1-3 refusal proofs offline.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
+
+### Machine-docs check
+
+Agents fetch `/join.md`, `/llms.txt` and `/events.md` literally, so this one
+command re-proves the three truths after any machine-doc change: the join
+invite resolves through the sanitized floor, llms.txt guidance matches its
+content, and documented per-event URLs are fetchable or marked templates.
+
+```sh
+npx vitest run test/machine-docs-followable-links-acceptance.test.ts test/ai-friendly-md.test.ts
+```
 
 ## Coverage ratchet
 
