@@ -33,7 +33,9 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { serializeSigned } from "hono/utils/cookie";
+import { resolveEventState } from "../src/kit-event-states";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -51,7 +53,7 @@ import {
   spotsLeftText,
 } from "../src/islands/contracts";
 import type { KitRequestSession } from "../src/kit-session";
-import { createMemorySessionStore } from "../src/sessions";
+import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   cancellationEvent,
   publishedScheduleEvent,
@@ -97,9 +99,10 @@ const CASES: ({ name: string } & DetailCounts)[] = [
 const CANCELLED_CASES: ({ name: string } & DetailCounts)[] = [
   ...CASES,
   { name: "singular", going: 1, occupancy: 1, capacity: 10 },
+  { name: "divergent", going: 1, occupancy: 2, capacity: 10 },
 ];
 
-type DetailStatus = "past" | "cancelled" | "published";
+type DetailStatus = "past" | "cancelled" | "published" | "draft";
 
 function detailRow(status: DetailStatus, capacity: number | null): typeof events.$inferSelect {
   // Past uses elapsed dates; cancelled stays future-dated so the 410 proves
@@ -146,8 +149,12 @@ function detailRow(status: DetailStatus, capacity: number | null): typeof events
 // (listRelatedEvents) and the two going-count aggregates (named join vs seat
 // occupancy). Everything else finds nothing, as in the gone-alternatives and
 // event-page suites.
-function honoFixture(status: DetailStatus, counts: DetailCounts) {
-  const row = detailRow(status, counts.capacity);
+function honoFixture(
+  status: DetailStatus,
+  counts: DetailCounts,
+  overrides: Partial<typeof events.$inferSelect> = {},
+) {
+  const row = { ...detailRow(status, counts.capacity), ...overrides };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
   const db = drizzle(async (sql) => {
     if (sql.includes('from "rsvps"')) {
@@ -181,15 +188,36 @@ function honoFixture(status: DetailStatus, counts: DetailCounts) {
     }
     return { rows: [] };
   });
+  const sessions = createMemorySessionStore();
   const env = {
     APP_URL: `${APP_URL}/`,
     SESSION_SECRET: SECRET,
-    SESSION_STORE: createMemorySessionStore(),
+    SESSION_STORE: sessions,
     ADMIN_DB: db as unknown as Db,
   } as unknown as Env;
   return {
-    request() {
-      return app.request(`/e/${KEY}`, {}, env);
+    async moderatorCookie() {
+      const token = newSessionToken();
+      await sessions.create({
+        tokenHash: await hashToken(token),
+        userId: "100000000000000002",
+        username: "moderator",
+        avatar: null,
+        member: true,
+        moderator: true,
+        expiresAt: new Date(Date.now() + 3600_000),
+      });
+      return (
+        await serializeSigned("__Host-two_session", token, SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
+    },
+    request(cookie?: string) {
+      return app.request(`/e/${KEY}`, cookie ? { headers: { cookie } } : {}, env);
     },
   };
 }
@@ -294,17 +322,21 @@ beforeAll(async () => {
   renderers = await buildKitBundle();
 }, 120_000);
 
-async function kitDetailHtml(status: DetailStatus, counts: DetailCounts): Promise<string> {
-  const outcome = await resolveKitEventDetail({
+function kitDetailOutcome(event: PublicEvent, session: KitRequestSession = GUEST) {
+  return resolveKitEventDetail({
     key: KEY,
     search: "",
     path: `/e/${KEY}`,
     env: { APP_URL } as unknown as Env,
-    session: GUEST,
+    session,
     joinResult: null,
     setHeaders: () => {},
-    store: kitStore(kitEvent(status, counts)),
+    store: kitStore(event),
   });
+}
+
+async function kitDetailHtml(status: DetailStatus, counts: DetailCounts): Promise<string> {
+  const outcome = await kitDetailOutcome(kitEvent(status, counts));
   if (status === "cancelled") {
     expect(outcome.kind).toBe("gone");
     if (outcome.kind !== "gone") throw new Error("unreachable");
@@ -414,6 +446,176 @@ describe("Kit cancelled detail (RED: existing responses, no capacity)", () => {
   it.each(CANCELLED_CASES)("shows existing responses with no capacity ($name)", async (counts) => {
     const html = await kitDetailHtml("cancelled", counts);
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
+    await expectCancelledLineup(html, counts);
+  });
+});
+
+// A published row can outlive its end before reconciliation changes status.
+// The server's RSVP verdict, not a background status update or viewer clock,
+// must close the invitation. A draft keeps its own notice and preview badge.
+// These cases catch status-only spots guards and an endsAt < now boundary bug.
+describe("server-time closure for still-published detail", () => {
+  const NOW = new Date("2030-01-10T22:00:00.000Z");
+  const counts: DetailCounts = { going: 9, occupancy: 9, capacity: 10 };
+  const moderator: KitRequestSession = {
+    status: "authenticated",
+    session: {
+      userId: "100000000000000002",
+      username: "moderator",
+      avatar: null,
+      member: true,
+      moderator: true,
+    },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  async function expectElapsedHtml(html: string) {
+    expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    const text = await visibleText(html);
+    expect(text).toContain("This one has been and gone");
+    expect(text).toContain("9 of 10 going");
+    expect(html).not.toContain("data-rsvp-form");
+    await expectPastLineup(html, counts);
+  }
+
+  async function expectInvitation(html: string) {
+    expect(html).toContain(`data-testid="${SPOTS_LEFT_TESTID}"`);
+    expect(await visibleText(html)).toContain("1 of 10 spots left");
+    expect(await visibleText(html)).toContain("9 of 10 going");
+  }
+
+  it.each([
+    { name: "elapsed by one millisecond", offset: -1 },
+    { name: "exact end boundary", offset: 0 },
+  ])("Hono published closes at server now ($name) (RED)", async ({ offset }) => {
+    const res = await honoFixture("published", counts, {
+      endsAt: new Date(NOW.getTime() + offset),
+    }).request();
+    expect(res.status).toBe(200);
+    await expectElapsedHtml(await res.text());
+  });
+
+  it.each([
+    { name: "elapsed by one millisecond", offset: -1 },
+    { name: "exact end boundary", offset: 0 },
+  ])("Kit published closes at server now ($name) (RED)", async ({ offset }) => {
+    const outcome = await kitDetailOutcome({
+      ...kitEvent("published", counts),
+      endsAt: new Date(NOW.getTime() + offset),
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.rsvpClosed).toBe("past");
+    expect(outcome.model.goingCount).toBe(9);
+    const html = renderers.renderDetail(outcome.model as unknown as Record<string, unknown>);
+    await expectElapsedHtml(html);
+  });
+
+  it("Hono published ending one millisecond later keeps spots (CONTROL)", async () => {
+    const res = await honoFixture("published", counts, {
+      endsAt: new Date(NOW.getTime() + 1),
+    }).request();
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).not.toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    await expectInvitation(html);
+  });
+
+  it("Kit published ending one millisecond later keeps spots (CONTROL)", async () => {
+    const outcome = await kitDetailOutcome({
+      ...kitEvent("published", counts),
+      endsAt: new Date(NOW.getTime() + 1),
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.rsvpClosed).toBeNull();
+    const html = renderers.renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).not.toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    await expectInvitation(html);
+  });
+
+  it("Hono elapsed draft preserves moderator preview and draft closure (CONTROL)", async () => {
+    const fixture = honoFixture("draft", counts, { endsAt: NOW });
+    const res = await fixture.request(await fixture.moderatorCookie());
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="event-draft">Draft');
+    expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    expect(await visibleText(html)).toContain("Not published yet");
+    expect(await visibleText(html)).not.toContain("This one has been and gone");
+    await expectInvitation(html);
+  });
+
+  it("Kit elapsed draft preserves moderator preview and draft closure (CONTROL)", async () => {
+    const outcome = await kitDetailOutcome(
+      { ...kitEvent("draft", counts), endsAt: NOW },
+      moderator,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.rsvpClosed).toBe("draft");
+    const html = renderers.renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-draft">Draft');
+    expect(html).toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    expect(await visibleText(html)).toContain("Not published yet");
+    expect(await visibleText(html)).not.toContain("This one has been and gone");
+    await expectInvitation(html);
+  });
+
+  it("Hono elapsed draft stays forbidden to guests (CONTROL)", async () => {
+    const res = await honoFixture("draft", counts, { endsAt: NOW }).request();
+    expect(res.status).toBe(403);
+  });
+
+  it("Kit elapsed draft stays forbidden to guests (CONTROL)", async () => {
+    const outcome = await kitDetailOutcome({ ...kitEvent("draft", counts), endsAt: NOW });
+    expect(outcome.kind).toBe("forbidden");
+    if (outcome.kind !== "forbidden") throw new Error("unreachable");
+    expect(outcome.status).toBe(403);
+  });
+});
+
+// Named responses and occupied seats can diverge (for example after a user
+// disappears). Cancellation is retained response history, not seat occupancy.
+// Each resolver must carry the nonzero count to its real SSR consumer.
+describe("cancelled divergent named-response history (CONTROL)", () => {
+  const counts: DetailCounts = { going: 1, occupancy: 2, capacity: 10 };
+
+  it("full-detail resolver and SSR retain one named response, not two occupied seats", async () => {
+    const outcome = await kitDetailOutcome(kitEvent("cancelled", counts));
+    expect(outcome.kind).toBe("gone");
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    expect(outcome.status).toBe(410);
+    expect.soft(outcome.model.existingResponses).toBe(1);
+    const html = renderers.renderGone(outcome.model as unknown as Record<string, unknown>);
+    const text = await visibleText(html);
+    expect.soft(text).toContain("1 existing response");
+    expect(text).not.toMatch(/\b(?:0|2) existing responses\b|1 existing responses/);
+    await expectCancelledLineup(html, counts);
+  });
+
+  it("sessionless resolver and SSR retain one named response, not a zero default", async () => {
+    const outcome = await resolveEventState({
+      key: KEY,
+      search: "",
+      path: `/e/${KEY}`,
+      env: { APP_URL } as unknown as Env,
+      setHeaders: () => {},
+      store: kitStore(kitEvent("cancelled", counts)),
+    });
+    expect(outcome.kind).toBe("gone");
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    expect(outcome.status).toBe(410);
+    expect.soft(outcome.model.existingResponses).toBe(1);
+    const html = renderers.renderGone(outcome.model as unknown as Record<string, unknown>);
+    const text = await visibleText(html);
+    expect.soft(text).toContain("1 existing response");
+    expect(text).not.toMatch(/\b(?:0|2) existing responses\b|1 existing responses/);
     await expectCancelledLineup(html, counts);
   });
 });
