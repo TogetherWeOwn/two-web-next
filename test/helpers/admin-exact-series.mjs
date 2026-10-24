@@ -94,7 +94,8 @@ export async function compileSeriesKit() {
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "exact-series-kit-"),
   );
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler");
   const outfile = join(scratch, "kit.mjs");
   const virtual = new Map([
     [
