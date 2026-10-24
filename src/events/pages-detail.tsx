@@ -158,6 +158,26 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        <div hidden>
+          <dt>Compare in another timezone</dt>
+          <dd class="event-device-timezone" data-event-chosen-timezone>
+            <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+            <input
+              type="text"
+              id="chosen-timezone-input"
+              data-testid="event-chosen-timezone-input"
+              maxlength={64}
+              hidden
+              autocomplete="off"
+              spellcheck={false}
+            />
+            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+            <button type="button" hidden data-testid="event-chosen-timezone-button">
+              Compare times
+            </button>
+            <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+          </dd>
+        </div>
         {e.location ? (
           <div>
             <dt>Where</dt>

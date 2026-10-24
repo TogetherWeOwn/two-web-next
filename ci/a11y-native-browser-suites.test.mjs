@@ -74,6 +74,12 @@ const SUITES = [
     title: "event device timezone ends browser acceptance",
     min: 30,
   },
+  {
+    file: "test/event-chosen-timezone.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "event chosen timezone browser acceptance",
+    min: 30,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
