@@ -162,6 +162,22 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        {e.status === "draft" || e.status === "cancelled" ? null : (
+          <div hidden>
+            <dt>Time from now</dt>
+            <dd
+              class="event-device-timezone"
+              data-event-time-from-now
+              data-starts-at={e.startsAt.toISOString()}
+              data-ends-at={e.endsAt.toISOString()}
+            >
+              <button type="button" hidden data-testid="event-time-from-now-button">
+                Show time from now
+              </button>
+              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+            </dd>
+          </div>
+        )}
         {e.location ? (
           <div>
             <dt>Where</dt>
@@ -219,6 +235,7 @@ export const EventPage: FC<{
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
