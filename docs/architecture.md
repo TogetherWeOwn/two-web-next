@@ -340,6 +340,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
 | `src/faq-content.ts` | content |
+| `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
