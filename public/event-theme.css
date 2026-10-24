@@ -59,12 +59,13 @@
   .event-theme .event-share { padding-top: 0; }
   .event-theme .event-pagination a[rel='next'] { align-items: start; text-align: left; }
 }
-/* Print (event routes, both twins): light paper; chrome hides, references reveal. */
+/* Print (event routes only): light-paper summary; chrome hides. */
 @media print {
-  html:root, html:root body { background: #fff; }
+  html:root, html:root body { background: white; }
   .base-theme.event-theme {
-    --color-text: #14161f; --color-page: #fff; --color-accent: #14532d;
-    --color-muted: #3f4459; --color-surface: #fff; --color-border: #c9cddb;
+    background: white;
+    --color-text: var(--color-page); --color-surface: white;
+    --color-muted: var(--color-border); --color-accent: var(--color-border);
   }
   .event-theme .site-header, .event-theme footer, .event-theme [href="#main"],
   .event-theme .event-back, .event-theme .event-rsvp, .event-theme .event-share,

@@ -198,7 +198,7 @@ describe("event detail theme", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
-    // 7160: route-scoped print summary (+1033 over the pre-print 6125):
+    // 7160: route-scoped print summary (+1029 over the pre-print 6125):
     // light-paper token remap, chrome suppression and reference-line reveal
     // for both twins; the ci/bundle-budget.json ceiling (7168 raw) is unchanged.
     expect(css.length).toBeLessThan(7160);
