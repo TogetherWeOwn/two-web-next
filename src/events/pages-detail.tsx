@@ -298,8 +298,33 @@ export const EventPage: FC<{
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
             </a>
+            {e.status === "published" ? (
+              <>
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+                <button
+                  type="button"
+                  hidden
+                  data-native-share
+                  data-share-title={e.title}
+                  data-share-url={canonical}
+                  data-testid="event-share"
+                >
+                  Share
+                </button>
+              </>
+            ) : null}
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          {e.status === "published" ? (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-share-status"
+              data-native-share-status
+            ></p>
+          ) : null}
         </section>
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
@@ -357,6 +382,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />
       <script
