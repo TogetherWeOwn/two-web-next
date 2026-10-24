@@ -80,7 +80,7 @@ const draftValues = (input: Record<string, unknown>, member: MemberView): Profil
 export function registerWriteRoutes(
   app: ProfileApp,
   deps: ProfileDeps,
-  { storeFor, statsFor }: ProfileStores,
+  { storeFor, statsFor, upcomingFor }: ProfileStores,
 ) {
   const admit = admitWrite(deps);
   // Same gate the global middleware runs for reads, here explicitly after
@@ -153,10 +153,13 @@ export function registerWriteRoutes(
         );
       }
       c.status(422);
+      // Owner-only, like the GET self-view, so the upcoming section stays put
+      // next to the rejected draft.
       return c.html(
         <ProfilePage
           member={member}
           stats={await statsFor(c, member.id)}
+          upcoming={await upcomingFor(c, member.id)}
           isOwner
           isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
@@ -208,6 +211,8 @@ export function registerWriteRoutes(
         c.header("cache-control", "no-store, private");
         varyAccept(c);
         c.status(503);
+        // No upcoming fetch: the database just failed the save, so no further
+        // reads are issued against it and the section stays hidden here.
         return c.html(
           <ProfilePage
             member={member}

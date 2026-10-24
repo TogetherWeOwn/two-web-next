@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { JoinResultBanner, Layout } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -28,6 +29,8 @@ import {
 } from "../islands/contracts";
 import type { MemberView } from "./store";
 import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
+import type { UpcomingGameNight } from "./upcoming";
+import { profileUpcomingMarkup } from "./upcoming-markup";
 import {
   PROFILE_BIO_COUNT_ID,
   PROFILE_BIO_HINT_COPY,
@@ -225,6 +228,8 @@ export const ProfilePage: FC<{
   appUrl: string;
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
+  /** Self-view upcoming game nights; null/omitted hides the section. */
+  upcoming?: UpcomingGameNight[] | null;
   errors?: Record<string, string>;
   values?: ProfileFormValues;
   /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
@@ -236,6 +241,7 @@ export const ProfilePage: FC<{
   appUrl,
   joinResult,
   stats,
+  upcoming,
   errors,
   values,
   statsDraftWarning,
@@ -405,6 +411,7 @@ export const ProfilePage: FC<{
             draftWarning={statsDraftWarning}
           />
         ) : null}
+        {upcoming ? raw(profileUpcomingMarkup(upcoming)) : null}
         {isOwner ? (
           <section
             class="profile-panel profile-editor"

@@ -31,6 +31,11 @@ import {
   type MemberStats,
 } from "./stats";
 import { createDbProfileStore, type MemberView, type ProfileStore } from "./store";
+import {
+  readProfileUpcoming,
+  type UpcomingGameNight,
+  type UpcomingGameNightsSource,
+} from "./upcoming";
 
 export const KIT_PROFILE_LOGIN_LOCATION = "/auth/discord";
 
@@ -49,6 +54,9 @@ export type KitProfileDeps = {
   /** Absent (or resolving null) hides the stats block; a read failure resolves
    * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
+  /** Self-view upcoming game nights; resolved only when viewer == member, and
+   * like stats, a null read hides the section. */
+  upcoming?: UpcomingGameNightsSource;
 };
 
 export type KitProfileOutcome =
@@ -60,6 +68,7 @@ export type KitProfileOutcome =
       kind: "ok";
       member: MemberView;
       stats: MemberStats | null;
+      upcoming: UpcomingGameNight[] | null;
       isOwner: boolean;
       isModerator: boolean;
       joinResult: JoinResult | null;
@@ -89,7 +98,12 @@ export function kitProfileDeps(env: Env) {
       });
       return readOwnedMemberStats(drizzle(client), id, signal);
     }, memberId);
-  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET };
+  // Self-view upcoming game nights: one bounded joined read of the viewer's
+  // own answers from the web database, like the profile store above. Null
+  // when the database is unavailable hides the section.
+  const upcomingFor = async (memberId: string): Promise<UpcomingGameNight[] | null> =>
+    readProfileUpcoming(await dbFor({ env }), memberId);
+  return { storeFor, statsFor, upcomingFor, sessionSecret: env.SESSION_SECRET };
 }
 
 export async function resolveKitProfile(
@@ -134,11 +148,16 @@ export async function resolveKitProfile(
     return { kind: "notFound" };
   }
   const stats = deps.stats ? await deps.stats(member.id) : null;
+  const isOwner = viewer.userId === member.id;
+  // Self-only: another member's page never reads the viewer's answers, so it
+  // renders byte-identical with or without upcoming rows.
+  const upcoming = isOwner && deps.upcoming ? await deps.upcoming(member.id) : null;
   return {
     kind: "ok",
     member,
     stats,
-    isOwner: viewer.userId === member.id,
+    upcoming,
+    isOwner,
     isModerator: viewer.moderator,
     joinResult: req.joinResult,
   };

@@ -293,6 +293,7 @@ exactly once.
 | `src/home-cache.ts` | content |
 | `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
+| `src/html-escape.ts` | entry |
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |

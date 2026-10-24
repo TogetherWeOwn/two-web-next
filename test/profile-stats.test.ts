@@ -293,10 +293,13 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
   });
 });
 
-async function harness(db: Db, deps: Pick<ProfileDeps, "stats"> = {}) {
+async function harness(db: Db, deps: Pick<ProfileDeps, "stats" | "upcoming"> = {}) {
   const sessions = createMemorySessionStore();
   const log: AccessEntry[] = [];
   const app = profilesApp({
+    // This suite owns stats, not the upcoming section: the read resolves
+    // unknown so the section stays hidden in every render below.
+    upcoming: async () => null,
     ...deps,
     sessionStore: sessions,
     throttle: async () => ({ limited: false }),

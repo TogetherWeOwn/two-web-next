@@ -107,6 +107,18 @@ export function rawMemberOwner(statement: string): string | undefined {
     )
   )
     return "user_id";
+  // Self-profile upcoming game nights (src/profiles/upcoming.ts): the
+  // viewer's own going/waitlisted answers joined to published events that
+  // have not ended and have JS-renderable boundaries, soonest first, capped at the literal
+  // PROFILE_UPCOMING_LIMIT. The waitlist position counts strictly-earlier
+  // waitlisted rows under the waitlist FIFO key; bound params are the viewer
+  // id and now only. Returns its RSVP owner alongside, never other members.
+  if (
+    /^select r\.user_id as user_id, e\.event_key as event_key, e\.title as title, e\.starts_at as starts_at, e\.timezone as timezone, e\.location as location, r\.status as status, case when r\.status = 'waitlisted' then \( select count\(\*\)::int \+ 1 from rsvps as w where w\.event_id = e\.id and w\.status = 'waitlisted' and \(w\.created_at, coalesce\(w\.legacy_id, w\.id\), w\.id\) < \(r\.created_at, coalesce\(r\.legacy_id, r\.id\), r\.id\) \) else null end as waitlist_position from rsvps as r inner join events as e on e\.id = r\.event_id where r\.user_id = \$\d+ and r\.status in \('going', 'waitlisted'\) and e\.status = 'published' and isfinite\(e\.starts_at\) and isfinite\(e\.ends_at\) and e\.starts_at <= '275760-09-13 00:00:00\+00'::timestamptz and e\.ends_at <= '275760-09-13 00:00:00\+00'::timestamptz and e\.ends_at >= \$\d+ order by e\.starts_at asc, e\.id asc limit 10$/.test(
+      query,
+    )
+  )
+    return "user_id";
   // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
   // row per ranked member with the owner's id alongside, never per-RSVP
   // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with

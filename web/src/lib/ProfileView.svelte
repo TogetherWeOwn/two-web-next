@@ -1,4 +1,5 @@
 <script lang="ts">
+import { BROWSER } from "esm-env";
 import {
   MEMBER_PROFILE_ISLAND,
   PROFILE_AVATAR_TESTID,
@@ -22,6 +23,7 @@ import {
   profileIsNewMember,
   profileJoinedMonth,
 } from "../../../src/islands/contracts";
+import { profileUpcomingMarkup } from "../../../src/profiles/upcoming-markup";
 import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
@@ -46,6 +48,7 @@ import {
   parseGamesText,
 } from "../../../src/profiles/composition";
 import type { MemberStats } from "../../../src/profiles/stats";
+import type { UpcomingGameNight } from "../../../src/profiles/upcoming";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
@@ -55,11 +58,16 @@ import { canonicalUrl, shareImageUrl } from "../../../src/seo";
 // test ids and copy are shared, so the existing profile tests and islands
 // apply. Member fields render through Svelte interpolation only — never
 // {@html} — so a hostile username, bio or game name stays escaped text, like
-// the Hono JSX render. The edit form posts to the Hono-owned write routes
-// (POST/PATCH /members/:user stay off the manifest until edit parity).
+// the Hono JSX render. The static upcoming section is the one exception:
+// profileUpcomingMarkup escapes every value before {@html}, matching Hono's
+// escaping (pinned in test/html-escape.test.ts). These csr=false routes never
+// hydrate it, so its markup need not ship again as a client DOM program.
+// The edit form posts to the Hono-owned write
+// routes (POST/PATCH /members/:user stay off the manifest until edit parity).
 let {
   member,
   stats = null,
+  upcoming = null,
   isOwner,
   isModerator = false,
   appUrl,
@@ -69,6 +77,8 @@ let {
 }: {
   member: MemberView;
   stats?: MemberStats | null;
+  /** Self-view upcoming game nights; null hides the section. */
+  upcoming?: UpcomingGameNight[] | null;
   isOwner: boolean;
   isModerator?: boolean;
   appUrl: string;
@@ -321,6 +331,11 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           {/if}
         </section>
       {/if}
+    {/if}
+    <!-- Both profile routes are csr=false: keep this static list server-only,
+      without duplicating its DOM program in the unused client chunk. -->
+    {#if !BROWSER && upcoming}
+      {@html profileUpcomingMarkup(upcoming)}
     {/if}
     {#if isOwner}
       <section
