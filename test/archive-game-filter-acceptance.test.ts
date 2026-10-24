@@ -1,4 +1,5 @@
-// route-inventory: GET /events/past, GET /events
+// route-inventory: GET /events/past
+// route-inventory: GET /events
 // Independent RED handoff: real Hono and executed Kit loader/SSR over disposable SQL.
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
