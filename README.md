@@ -40,7 +40,10 @@ the separate past-event archive and calendar feeds are not game-filtered.
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
-for matching rules, empty-state recovery and cache boundaries.
+for matching rules, empty-state recovery and cache boundaries. Archive cards retain
+the query and page when opening an event, including in another tab; the detail
+page's [archive return link](docs/archive-detail-return.md) takes you back to those
+results without changing the event's canonical or share URLs.
 
 ## Moderator guides
 
