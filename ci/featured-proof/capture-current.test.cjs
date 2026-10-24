@@ -92,9 +92,7 @@ function installFakePlaywright() {
         count: async () => {
           if (selector === '[data-status]') return 4;
           if (selector === 'thead th') return 5;
-          assert.equal(selector, '[data-testid="featured-item"]');
-          assert.equal(fixture, 'scheduled.html');
-          return 0;
+          assert.fail(`unexpected count selector: ${selector}`);
         },
         innerText: async () => selector === '[data-testid="featured-preview"]'
           ? 'Save changes to refresh this preview' : selector.match(/^\[data-status="(\w+)"\]$/)[1],
