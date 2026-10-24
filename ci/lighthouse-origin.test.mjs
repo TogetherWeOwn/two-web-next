@@ -165,11 +165,20 @@ function stubFetch(routes) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url: String(url), init });
-    const route = routes[new URL(url).pathname];
-    const { status = 200, body = "" } = route ?? { status: 404 };
-    return { status, text: async () => body };
+    const entry = routes[new URL(url).pathname];
+    // An array replays one response per request (transient statuses), then
+    // sticks on the last entry; a plain object answers every request alike.
+    const route = Array.isArray(entry) ? (entry.length > 1 ? entry.shift() : entry[0]) : entry;
+    const { status = 200, body = "", headers } = route ?? { status: 404 };
+    return { status, headers, text: async () => body };
   };
   return { calls, fetchImpl };
+}
+
+// Discovery never sleeps for real in tests: the recorded delays pin the
+// backoff (Retry-After honored, exponential fallback) without waiting.
+function recordSleeps(sleeps) {
+  return { sleepImpl: async (ms) => void sleeps.push(ms) };
 }
 
 const rss = (...links) =>
@@ -244,7 +253,8 @@ test("discovery skips 404 candidates and keeps real coverage", async () => {
 });
 
 test("discovery fails closed on unhealthy candidate statuses", async () => {
-  for (const status of [500, 429, 301]) {
+  // 429 is not here: throttling retries, then degrades to a skip (below).
+  for (const status of [500, 301]) {
     const { fetchImpl } = stubFetch({
       "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
       [EVENT_PATH]: { status, body: "<h1>Community game night</h1>" },
@@ -255,6 +265,119 @@ test("discovery fails closed on unhealthy candidate statuses", async () => {
       `status ${status} must throw, never measure`,
     );
   }
+});
+
+// Regression: four consecutive e2e-staging runs failed the mobile step in
+// event discovery with `GET https://next.togetherweown.com/e/<key> returned
+// 429` while the origin was healthy (same-SHA green-to-red). Discovery now
+// retries a transient 429 with backoff honoring Retry-After instead of
+// treating one throttled candidate as a dead origin.
+test("discovery retries a transient 429 on candidate verification and recovers", async () => {
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+    [EVENT_PATH]: [{ status: 429 }, { body: "<h1>Community game night</h1>" }],
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(EVENT_PATH)).length,
+    2,
+    "one retry after the 429, then the 200 verifies",
+  );
+  assert.deepEqual(sleeps, [1000], "no Retry-After header: the 1s base backoff applies");
+});
+
+test("discovery honors Retry-After on 429 and skips a persistently throttled candidate", async () => {
+  const THROTTLED_PATH = "/e/01JEEEEEEEEEEEEEEEEEEEEEEE";
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${THROTTLED_PATH}`, `${APEX}${EVENT_PATH}`) },
+    [THROTTLED_PATH]: { status: 429, headers: { "retry-after": "2" } },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [2000, 2000, 2000], "each retry waits out the Retry-After window");
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(THROTTLED_PATH)).length,
+    lib.DISCOVERY_THROTTLE_RETRIES + 1,
+    "the throttled candidate gets its bounded retries, then the next listing wins",
+  );
+});
+
+test("an unparseable Retry-After falls back to exponential backoff", async () => {
+  const THROTTLED_PATH = "/e/01JFFFFFFFFFFFFFFFFFFFFFFF";
+  const sleeps = [];
+  const { fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${THROTTLED_PATH}`, `${APEX}${EVENT_PATH}`) },
+    [THROTTLED_PATH]: { status: 429, headers: { "retry-after": "soon" } },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [1000, 2000, 4000]);
+});
+
+test("discovery skips the event route, instead of failing, when every candidate is throttled", async () => {
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+    [EVENT_PATH]: { status: 429 },
+    // The listing still links the same throttled path: it must not be
+    // re-requested or counted twice.
+    "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps));
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /no published event is listed/);
+  assert.match(skipped.reason, /1 throttled \(429\) candidate\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(EVENT_PATH)).length,
+    lib.DISCOVERY_THROTTLE_RETRIES + 1,
+    "a throttled candidate is retried to its bound once, never twice",
+  );
+});
+
+test("discovery retries a transient 429 on the feed and recovers", async () => {
+  const sleeps = [];
+  const { fetchImpl } = stubFetch({
+    "/events.rss": [
+      { status: 429, headers: new Map([["retry-after", "1"]]) },
+      { body: rss(`${APEX}${EVENT_PATH}`) },
+    ],
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [1000]);
+});
+
+test("a throttled feed falls through to the next source, then skips with the throttle noted", async () => {
+  const listed = stubFetch({
+    "/events.rss": { status: 429 },
+    "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(
+    await lib.discoverEventPath(APEX, listed.fetchImpl, recordSleeps([])),
+    { path: EVENT_PATH, source: "/events" },
+    "a throttled RSS feed must not hide a healthy /events listing",
+  );
+  const both = stubFetch({ "/events.rss": { status: 429 }, "/events": { status: 429 } });
+  const skipped = await lib.discoverEventPath(APEX, both.fetchImpl, recordSleeps([]));
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /no published event is listed/);
+  assert.match(skipped.reason, /\/events\.rss throttled \(429 after retries\)/);
+  assert.match(skipped.reason, /\/events throttled \(429 after retries\)/);
 });
 
 test("discovery reports cancelled listings when only stale candidates remain", async () => {
