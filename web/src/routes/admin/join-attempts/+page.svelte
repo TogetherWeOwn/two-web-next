@@ -23,7 +23,7 @@ const outcomes = $derived(
 );
 </script>
 
-<AdminShell title="Join attempts">
+<AdminShell title="Join attempts" section="/admin/join-attempts" exact={true}>
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
   <p class="hint">

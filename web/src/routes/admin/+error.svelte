@@ -17,6 +17,22 @@ import { adminReadRetryHref } from "#lib/admin-read-retry.ts";
 // failure above the layout, so the root boundary keeps serving those
 // unchanged. noindex travels via AdminShell.
 const routeId = $derived(page.route.id ?? "");
+// Truthful section for the failing route: exact only on the section root,
+// descendants resolve to the ancestor. Boundary-aware, so a lookalike id
+// such as /admin/events-archive marks nothing current.
+const section = $derived.by(() => {
+  if (routeId === "/admin") return { href: "/admin", exact: true };
+  for (const candidate of [
+    "/admin/events",
+    "/admin/featured",
+    "/admin/join-attempts",
+    "/admin/activity-log",
+  ]) {
+    if (routeId === candidate) return { href: candidate, exact: true };
+    if (routeId.startsWith(`${candidate}/`)) return { href: candidate, exact: false };
+  }
+  return null;
+});
 const eventFamily = $derived(routeId.startsWith("/admin/events/"));
 const featuredFamily = $derived(routeId.startsWith("/admin/featured/"));
 const missing = $derived(page.status === 404);
@@ -37,7 +53,7 @@ const title = $derived(
 );
 </script>
 
-<AdminShell {title}>
+<AdminShell {title} section={section?.href ?? null} exact={section?.exact ?? false}>
 <section aria-labelledby="admin-error-heading">
   <p>
     {#if eventFamily}

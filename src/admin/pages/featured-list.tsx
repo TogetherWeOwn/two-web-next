@@ -12,7 +12,7 @@ export const FeaturedPage: FC<{
   hasNext?: boolean;
   now?: Date;
 }> = ({ rows, query, hasNext = false, now = new Date() }) => (
-  <Shell title="Featured content">
+  <Shell title="Featured content" current={{ href: "/admin/featured", exact: true }}>
     <section>
       <h1>Featured content</h1>
       <p>

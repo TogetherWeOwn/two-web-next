@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminBreadcrumb from "#lib/AdminBreadcrumb.svelte";
 import AdminShell from "#lib/AdminShell.svelte";
 
 // Markup contract of FeaturedFormPage mode="new"
@@ -13,8 +14,9 @@ import AdminShell from "#lib/AdminShell.svelte";
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title="New featured slot">
+<AdminShell title="New featured slot" section="/admin/featured">
 <section class="featured-form">
+  <AdminBreadcrumb section="/admin/featured" />
   <h1>New featured slot</h1>
   <form method="post" action="/admin/featured" data-event-editor="">
     <!-- Native maxlength counts UTF-16 units and truncates supplementary

@@ -29,39 +29,94 @@ export const TableSortHeader: FC<{
   );
 };
 
-export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
-  <>
-    {raw("<!doctype html>")}
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{title} — TWO admin</title>
-        <link rel="stylesheet" href="/styles.css" />
-      </head>
-      <body>
-        <SkipLink />
-        <header class="bar">
-          <a class="brand" href="/admin">
-            TWO admin
-          </a>
-          <nav aria-label="Administration">
-            <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> ·{" "}
-            <a href="/admin/join-attempts">Join attempts</a> ·{" "}
-            <a href="/admin/activity-log">Activity log</a> · <a href="/">Site</a>
-          </nav>
-        </header>
-        <main id="main" tabindex={-1}>
-          {children}
-        </main>
-        <footer>Together We Own · moderators only</footer>
-      </body>
-    </html>
-  </>
-);
+export type AdminSection = {
+  /** Section root href, e.g. "/admin/events". */
+  href: string;
+  /** True only when the rendered page IS the section root, never for a descendant. */
+  exact: boolean;
+};
 
-export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (
-  <Shell title={heading}>
+const ADMIN_SECTIONS = [
+  "/admin/events",
+  "/admin/featured",
+  "/admin/join-attempts",
+  "/admin/activity-log",
+] as const;
+
+/**
+ * Truthful section for an admin path. Exact only on the section root itself;
+ * descendants (new/edit/detail, legacy featured-contents URLs) resolve to the
+ * ancestor. Boundary-aware: "/admin/events-archive" matches nothing.
+ */
+export function adminSectionForPath(path: string): AdminSection | null {
+  if (path === "/admin" || path === "/admin/") return { href: "/admin", exact: true };
+  for (const section of ADMIN_SECTIONS) {
+    if (path === section) return { href: section, exact: true };
+    if (path.startsWith(`${section}/`)) return { href: section, exact: false };
+  }
+  if (path === "/admin/featured-contents" || path.startsWith("/admin/featured-contents/"))
+    return { href: "/admin/featured", exact: false };
+  return null;
+}
+
+export const Shell: FC<PropsWithChildren<{ title: string; current?: AdminSection | null }>> = ({
+  title,
+  current,
+  children,
+}) => {
+  const mark = (href: string): "page" | "location" | undefined =>
+    current?.href === href ? (current.exact ? "page" : "location") : undefined;
+  return (
+    <>
+      {raw("<!doctype html>")}
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>{title} — TWO admin</title>
+          <link rel="stylesheet" href="/styles.css" />
+        </head>
+        <body>
+          <SkipLink />
+          <header class="bar">
+            <a class="brand" href="/admin" aria-current={mark("/admin")}>
+              TWO admin
+            </a>
+            <nav aria-label="Administration">
+              <a href="/admin/events" aria-current={mark("/admin/events")}>
+                Events
+              </a>{" "}
+              ·{" "}
+              <a href="/admin/featured" aria-current={mark("/admin/featured")}>
+                Featured
+              </a>{" "}
+              ·{" "}
+              <a href="/admin/join-attempts" aria-current={mark("/admin/join-attempts")}>
+                Join attempts
+              </a>{" "}
+              ·{" "}
+              <a href="/admin/activity-log" aria-current={mark("/admin/activity-log")}>
+                Activity log
+              </a>{" "}
+              · <a href="/">Site</a>
+            </nav>
+          </header>
+          <main id="main" tabindex={-1}>
+            {children}
+          </main>
+          <footer>Together We Own · moderators only</footer>
+        </body>
+      </html>
+    </>
+  );
+};
+
+export const ErrorPage: FC<{ heading: string; detail?: string; path?: string }> = ({
+  heading,
+  detail,
+  path,
+}) => (
+  <Shell title={heading} current={path ? adminSectionForPath(path) : undefined}>
     <section>
       <h1>{heading}</h1>
       {detail ? <p data-testid="error-detail">{detail}</p> : null}
@@ -70,6 +125,25 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
       </p>
     </section>
   </Shell>
+);
+
+const BREADCRUMB_SECTIONS = {
+  "/admin/events": "Events",
+  "/admin/featured": "Featured",
+} as const;
+
+/**
+ * Compact upper-page breadcrumb for the event/featured editors. Fixed routes
+ * and fixed labels only: editor titles never appear here, so hostile content
+ * cannot select a section or destination. Native anchors, so keyboard/no-JS
+ * navigation and the existing beforeunload draft guard apply unchanged.
+ */
+export const AdminBreadcrumb: FC<{ section: keyof typeof BREADCRUMB_SECTIONS }> = ({ section }) => (
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/admin">Dashboard</a>
+    <span aria-hidden="true"> / </span>
+    <a href={section}>{BREADCRUMB_SECTIONS[section]}</a>
+  </nav>
 );
 
 export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {

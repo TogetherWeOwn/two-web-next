@@ -83,7 +83,8 @@ describe("Kit event-create page contract", () => {
   });
 
   it("renders inside the admin chrome with its own title and ships no hydration bundle", () => {
-    expect(source).toContain('<AdminShell title="New event">');
+    expect(source).toContain("<AdminShell");
+    expect(source).toContain('title="New event"');
     const load = readFileSync(
       fileURLToPath(
         new URL("../web/src/routes/admin/events/new/+page.server.ts", import.meta.url).href,

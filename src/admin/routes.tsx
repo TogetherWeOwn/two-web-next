@@ -138,7 +138,11 @@ function errorPage(
   detail?: string,
 ) {
   c.status(status);
-  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+  return bufferedMemberHtml(
+    c,
+    <ErrorPage heading={heading} detail={detail} path={c.req.path} />,
+    status,
+  );
 }
 
 function writeUnavailable(c: Context<Vars>) {

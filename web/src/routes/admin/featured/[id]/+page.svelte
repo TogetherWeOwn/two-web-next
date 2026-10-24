@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminBreadcrumb from "#lib/AdminBreadcrumb.svelte";
 import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
@@ -28,8 +29,9 @@ let { data }: PageProps = $props();
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
-<AdminShell title={`Edit ${data.view.title}`}>
+<AdminShell title={`Edit ${data.view.title}`} section="/admin/featured">
 <section class="featured-form">
+  <AdminBreadcrumb section="/admin/featured" />
   <h1>Edit {data.view.title}</h1>
   <section
     class="featured-preview"
