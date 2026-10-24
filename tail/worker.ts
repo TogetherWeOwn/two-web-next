@@ -429,6 +429,7 @@ export const ALERT_ROUTES = new Set([
   "/llms.txt",
   "/login",
   "/logout",
+  "/logout/everywhere",
   "/mcp",
   "/members",
   "/members/",
