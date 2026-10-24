@@ -31,12 +31,27 @@ sibling within the same styled attendance run.
 
 ## Baseline conflict disposition
 
-The four events-index binary conflicts retain the base branch's images. Neither
-prior image set represents the combined availability text plus the newly masked
-end-time element. Any intentional difference must be reviewed and accepted from
-the combined head's pinned-CI failure artifact using the documented visual accept
-commands. No baseline was synthesized locally, no audit was skipped, and no
-threshold was increased. See [visual regression](../../visual-regression.md).
+The initial binary conflict resolution retained the base images until combined
+head `86a4007fc` produced a pinned-runner artifact in
+[CI run 40141240688](https://github.com/TogetherWeOwn/two-web-next/actions/runs/40141240688).
+That run differed only on the Hono/Kit events-index desktop/mobile images. All
+four actuals and all four diffs were opened: availability adds `10 seats left`
+and moves the sign-in link; on mobile each of the three cards grows by one line
+(the full image grows from 2172 to 2256 pixels). The new end-time mask stays
+intact. Hono and Kit actuals are byte-identical at each width.
+
+Accepted only those four reviewed actuals using `ci/visual-accept.mjs` and
+`ci/kit-visual-accept.mjs`. Their SHA-256 values are:
+
+- Desktop: `f905b77e81731fadf910df11f5f8f7c042115b6eb840b4dfd3bb37ff562c8d66`
+- Mobile: `aea19f98404980ffb44ebd1459f6399382e113506ba2c186c1398141ca1a189b`
+
+The full artifact also carries now-stale copies of unrelated cancelled-detail
+baselines from before a newer base merge. The accept tool refused those copies.
+The original artifact was preserved, and a separate selection containing only
+the four reviewed, byte-verified actuals was accepted. The newer cancelled-detail
+images stay unchanged. No baseline was synthesized locally, no audit was skipped,
+and no threshold was increased. See [visual regression](../../visual-regression.md).
 
 Hono accessibility and Lighthouse gates do not exercise Kit routes. Kit browser
 coverage above exercises its shared renderer, not a deployed Kit route. This PR
