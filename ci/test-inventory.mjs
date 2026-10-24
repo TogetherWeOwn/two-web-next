@@ -314,16 +314,26 @@ function collectWorkflowFiles(root) {
 // tokenized, not regex-matched, because npm config flags sit around the
 // script name: `npm run b --silent -- x` and `npm run --silent b` both run
 // `b`, and a bare `--` after any flags still forwards file filters. An
-// `npm run` with forwarded `--` arguments fails closed when the target runs
+// `npm run` with forwarded arguments fails closed when the target runs
 // `playwright test` (the gate cannot expand forwarded file filters) —
 // whether the forwarding sits in the workflow or in an invoked script body
-// (`"a": "npm run b -- e2e/x.spec.ts"` is the same filter). `--prefix` and
-// `--workspace`/`-w` redirect the run into another package directory, which
-// the gate cannot model, so they fail closed on Playwright targets too
-// (the live `npm run check --prefix web` idiom targets non-Playwright
-// scripts and stays green); `--prefix=.` is the same directory and is
-// allowed. Bundled short flags (`-sw`) and other unmodelable tokens fail
-// closed when the target could run Playwright.
+// (`"a": "npm run b -- e2e/x.spec.ts"` is the same filter). Forwarding is
+// any post-name positional, not just `--`: oracle shows npm forwards bare
+// positionals (`npm run b e2e/x.spec.ts`) while the shell strips output
+// redirection first (`2>/dev/null` never reaches npm), so redirect operators
+// and their targets are skipped. Past the first bare `--` npm forwards
+// everything literally, so later `--prefix` forms are filters, not
+// redirects. `--prefix` and `--workspace`/`-w` before any `--` redirect the
+// run into another package directory, which the gate cannot model, so they
+// fail closed on Playwright targets too (the live `npm run check --prefix
+// web` idiom targets non-Playwright scripts and stays green); `--prefix=.`
+// is the same directory and is allowed. Bundled short flags (`-sw`) and
+// other unmodelable tokens fail closed when the target could run Playwright.
+// A workflow step that runs Playwright (directly, or via `npm run`) must run
+// at the repo root: `working-directory:` (step level or an inherited job or
+// workflow `defaults:`) and the step's own `cd` resolve configs, filters and
+// (for npm) the script itself against another directory, so anything but a
+// provable root fails closed.
 
 // npm config flags that consume the following token as their value when
 // written without `=` (oracle: npm 11.19.1; `--prefix web b` reads package
@@ -449,44 +459,61 @@ function parseNpmRunOccurrences(text) {
         i++;
       }
     }
+    // Past the name, any positional forwards (oracle: npm 11.19.1 passes
+    // bare positionals to the script; boolean flags consume nothing). Shell
+    // redirection never reaches npm, so operators and their targets are
+    // skipped; past the first bare `--` everything is a literal forwarded
+    // argument, never a redirect. Post-name unmodelable tokens stay ignored:
+    // oracle shows npm either errors loudly (`-sw`, exit 1) or warns and
+    // runs clean with no forwarding and no redirect (`-wweb`, `-x=y`).
+    let seenSep = false;
     for (; i < tokens.length; i++) {
-      if (kinds[i] === "sep") forwarding = true;
-      else if (kinds[i] === "value") {
+      if (kinds[i] === "sep") {
+        forwarding = true;
+        seenSep = true;
+      } else if (seenSep) {
+        continue;
+      } else if (kinds[i] === "value") {
         redirectAt(i);
         i++;
+      } else if (/^\d*[<>]/.test(tokens[i])) {
+        if (/^\d*[<>]+$/.test(tokens[i])) i++; // bare operator: skip its target
+      } else if (kinds[i] === "other") {
+        forwarding = true;
       }
     }
-    out.push({ name, forwarding, redirect, unknown });
+    out.push({ name, forwarding, redirect, unknown, index: m.index });
   }
   return out;
+}
+
+// Whether a script reaches `playwright test`, directly or through nested
+// `npm run` occurrences. `unknown` is set when a nested occurrence has an
+// unmodelable token, so its target is uncertain: callers fail closed on
+// unknown instead of reading it as clean.
+function scriptRunsPlaywright(scripts, name, seen = new Set()) {
+  if (seen.has(name)) return { runs: false, unknown: false };
+  seen.add(name);
+  const body = scripts[name] ?? "";
+  if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
+  let unknown = false;
+  for (const occ of parseNpmRunOccurrences(body)) {
+    if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+    const nested = scriptRunsPlaywright(scripts, occ.name, seen);
+    if (nested.runs) return { runs: true, unknown: false };
+    if (occ.unknown || nested.unknown) unknown = true;
+  }
+  return { runs: false, unknown };
 }
 
 function invokedScriptNames(scripts, workflowText) {
   const invoked = new Set();
   const queue = [];
-  // Whether a script reaches `playwright test`, directly or through nested
-  // `npm run` occurrences. `unknown` is set when a nested occurrence has an
-  // unmodelable token, so its target is uncertain: callers fail closed on
-  // unknown instead of reading it as clean.
-  const runsPlaywright = (name, seen = new Set()) => {
-    if (seen.has(name)) return { runs: false, unknown: false };
-    seen.add(name);
-    const body = scripts[name] ?? "";
-    if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
-    let unknown = false;
-    for (const occ of parseNpmRunOccurrences(body)) {
-      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
-      const nested = runsPlaywright(occ.name, seen);
-      if (nested.runs) return { runs: true, unknown: false };
-      if (occ.unknown || nested.unknown) unknown = true;
-    }
-    return { runs: false, unknown };
-  };
   const scan = (text, where) => {
     for (const occ of parseNpmRunOccurrences(text)) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
       if (occ.unknown) {
-        const target = runsPlaywright(occ.name);
+        const target = scriptRunsPlaywright(scripts, occ.name);
         if (target.runs || target.unknown) {
           assert.fail(
             `CI runs ${where} with an npm flag form this gate cannot parse (npm run ... ${occ.name} ...): bundled short flags and -x=y forms hide the script name; use one flag per token or teach ci/test-inventory.mjs the new form`,
@@ -512,7 +539,7 @@ function invokedScriptNames(scripts, workflowText) {
   for (const [text, where] of forwardSources) {
     for (const occ of parseNpmRunOccurrences(text)) {
       if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
-      const target = runsPlaywright(occ.name);
+      const target = scriptRunsPlaywright(scripts, occ.name);
       if (occ.redirect && (target.runs || target.unknown)) {
         assert.fail(
           `CI runs ${where} with ${occ.redirect.flag} (npm run ... ${occ.name}): this gate cannot model cross-directory npm runs; run the package's own script graph or teach ci/test-inventory.mjs the new form`,
@@ -521,12 +548,12 @@ function invokedScriptNames(scripts, workflowText) {
       if (occ.forwarding) {
         if (target.runs) {
           assert.fail(
-            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} <forwarded args>): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
           );
         }
         if (target.unknown) {
           assert.fail(
-            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...) and this gate cannot determine whether it runs playwright (unknown npm flag form in its script graph); disambiguate the flags or teach ci/test-inventory.mjs the new form`,
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} <forwarded args>) and this gate cannot determine whether it runs playwright (unknown npm flag form in its script graph); disambiguate the flags or teach ci/test-inventory.mjs the new form`,
           );
         }
       }
@@ -539,6 +566,301 @@ function stripYamlComment(line) {
   if (/^\s*#/.test(line)) return "";
   const hash = line.indexOf(" #");
   return hash === -1 ? line : line.slice(0, hash);
+}
+
+// A workflow file's `run: |` script lines: literal blocks are shell, not YAML
+// keys, so structural scans skip them (a heredoc can hold `- ` or
+// `working-directory:` lines that mean nothing to Actions) while the `cd`
+// scan reads only them. `run: ">"` and `run: foo | bar` are inline values,
+// not blocks, and never match.
+function literalScriptLines(lines) {
+  const content = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)(?:-\s+)?run\s*:\s*[|>].*$/.exec(lines[i]);
+    if (!m) continue;
+    const indent = m[1].length;
+    // Block-scalar content indent is auto-detected from the first line (a
+    // step key after the block, however deep, still ends it).
+    let threshold = null;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === "") continue;
+      if (threshold === null) {
+        if (indentOf(lines[j]) <= indent) break; // empty block
+        threshold = indentOf(lines[j]);
+      }
+      if (indentOf(lines[j]) < threshold) break;
+      content.add(j);
+    }
+  }
+  return content;
+}
+
+function indentOf(line) {
+  return /^\s*/.exec(line)[0].length;
+}
+
+// First non-blank line at or above `indent`, starting at `from`.
+function blockEnd(lines, from, indent) {
+  let end = from;
+  while (end < lines.length) {
+    if (lines[end].trim() !== "") {
+      if (indentOf(lines[end]) <= indent) break;
+    }
+    end += 1;
+  }
+  return end;
+}
+
+// Step items GitHub Actions allows: only these shapes open a step block, so
+// a `- ` shell or heredoc line never mis-attributes one.
+const STEP_ITEM_RE =
+  /^\s*-\s*($|run\s*:|name\s*:|uses\s*:|id\s*:|if\s*:|working-directory\s*:|shell\s*:|env\s*:|with\s*:|continue-on-error\s*:|timeout-minutes\s*:)/;
+
+// The step block containing lines[idx]: step keys above and below `run:` (a
+// `working-directory:` may follow the command), bounded by indentation.
+// Null when no step item opens above the line.
+function stepBlockBounds(lines, idx, content) {
+  let start;
+  if (!content.has(idx) && STEP_ITEM_RE.test(lines[idx])) start = idx;
+  else {
+    const occIndent = indentOf(lines[idx]);
+    start = idx - 1;
+    while (
+      start >= 0 &&
+      (content.has(start) ||
+        !STEP_ITEM_RE.test(lines[start]) ||
+        indentOf(lines[start]) >= occIndent)
+    )
+      start -= 1;
+    if (start < 0) return null;
+  }
+  return { start, end: blockEnd(lines, idx + 1, indentOf(lines[start])) };
+}
+
+// The job block enclosing a step: hop from the step to its `steps:` list,
+// then to the job id, verified as a direct child of `jobs:`. Null when the
+// ancestry is not a normal job (failing closed at the caller).
+function jobBlockBounds(lines, stepStart, stepIndent, content) {
+  let list = stepStart - 1;
+  while (
+    list >= 0 &&
+    (content.has(list) ||
+      indentOf(lines[list]) >= stepIndent ||
+      !/^\s*steps\s*:\s*(#.*)?$/.test(lines[list]))
+  )
+    list -= 1;
+  if (list < 0) return null;
+  const listIndent = indentOf(lines[list]);
+  let job = list - 1;
+  while (
+    job >= 0 &&
+    (content.has(job) ||
+      lines[job].trim() === "" ||
+      indentOf(lines[job]) >= listIndent ||
+      /^\s*-/.test(lines[job]) ||
+      !/^\s*\S[^:]*:\s*(#.*)?$/.test(lines[job]))
+  )
+    job -= 1;
+  if (job < 0) return null;
+  const jobIndent = indentOf(lines[job]);
+  let jobs = job - 1;
+  while (
+    jobs >= 0 &&
+    (content.has(jobs) || lines[jobs].trim() === "" || indentOf(lines[jobs]) >= jobIndent)
+  )
+    jobs -= 1;
+  if (jobs < 0 || !/^\s*jobs\s*:\s*(#.*)?$/.test(lines[jobs])) return null;
+  return { start: job, end: blockEnd(lines, job + 1, jobIndent) };
+}
+
+// Nearest structural line above idx (skipping blanks and run-script
+// content): the parent key, or -1 at the top level.
+function parentLine(lines, idx, content) {
+  const indent = indentOf(lines[idx]);
+  let p = idx - 1;
+  while (p >= 0 && (lines[p].trim() === "" || content.has(p) || indentOf(lines[p]) >= indent))
+    p -= 1;
+  return p;
+}
+
+// `key:` lines in [from, to) whose parent is parentIdx (-1 for top level).
+function childKeys(lines, from, to, parentIdx, key, content) {
+  const found = [];
+  const re = new RegExp(`^\\s*${key}\\s*:(.*)$`);
+  for (let i = from; i < to; i++) {
+    if (content.has(i)) continue;
+    const m = re.exec(lines[i]);
+    if (!m) continue;
+    if (parentLine(lines, i, content) !== parentIdx) continue;
+    found.push({ idx: i, rest: m[1] });
+  }
+  return found;
+}
+
+// `working-directory:` values that still mean the repo root (mirrors the
+// `--prefix=.` exemption: `.` is the same directory, not a redirect).
+function isRootCwd(value) {
+  const v = value
+    .trim()
+    .replace(/^(['"])([\s\S]*)\1$/, "$2")
+    .trim();
+  return (
+    v === "." || v === "./" || v === "${{ github.workspace }}" || v === "${{ github.workspace }}/"
+  );
+}
+
+// `working-directory:` under a `defaults:` key parented at parentIdx: the
+// `defaults: { run: { working-directory: X } }` chain. Inline flow values
+// fail closed only when they carry working-directory (a `shell:`-only flow
+// changes nothing about the directory).
+function defaultsCwdAt(lines, from, to, parentIdx, content, where, tail) {
+  for (const d of childKeys(lines, from, to, parentIdx, "defaults", content)) {
+    const rest = d.rest.trim();
+    if (rest !== "") {
+      if (!rest.includes("working-directory")) continue;
+      assert.fail(`${where} uses an inline \`defaults:\` carrying working-directory: ${tail}`);
+    }
+    for (const r of childKeys(lines, d.idx + 1, to, d.idx, "run", content)) {
+      const rRest = r.rest.trim();
+      if (rRest !== "") {
+        if (!rRest.includes("working-directory")) continue;
+        assert.fail(
+          `${where} uses an inline \`run:\` under \`defaults:\` carrying working-directory: ${tail}`,
+        );
+      }
+      for (const w of childKeys(lines, r.idx + 1, to, r.idx, "working-directory", content)) {
+        return w.rest.trim();
+      }
+    }
+  }
+  return null;
+}
+
+// `run:` script slices of a step block: the inline command plus literal-block
+// content lines. Each slice is scanned from `from` (past the `run:` key).
+function stepScriptSlices(lines, start, end, content) {
+  const slices = [];
+  for (let i = start; i < end; i++) {
+    if (content.has(i)) {
+      slices.push({ idx: i, from: 0 });
+      continue;
+    }
+    const m = /^\s*(?:-\s+)?run\s*:\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    if (/^[|>]\s*(#.*)?$/.test(m[1])) continue; // block header: no script here
+    slices.push({ idx: i, from: lines[i].length - m[1].length });
+  }
+  return slices;
+}
+
+// A `cd` that moves the step's shell: command position (line start or after
+// a chain separator, past env assignments and `command`/`builtin`), or a
+// `(cd ...)` subshell wrapping the run. `$(cd ...)` and backticks run in a
+// subshell that cannot persist, so they never match.
+const STEP_CD_RE =
+  /(?:^|[;&|])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?cd(?:\s|$|[;&)])/;
+const SUBSHELL_CD_RE = /(?<!\$)\(\s*cd(?:\s|\)|$|[;&])/;
+
+// Heredoc opener (`<<EOF`, `<<'EOF'`, `<<-EOF`): body lines up to the marker
+// are data, so a bare `cd` line inside one is not a directory change. The
+// `<<` must sit outside quotes (`<<<` herestrings are single-line and never
+// match); the marker itself may be quoted.
+function heredocMarker(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\" && quote !== "'") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "<" && line[i + 1] === "<" && line[i + 2] !== "<") {
+      const m = /^<<-?\s*\\?['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/.exec(line.slice(i));
+      return m ? m[1] : null;
+    }
+  }
+  return null;
+}
+
+// A workflow Playwright execution runs where its step says: the step's own
+// `working-directory:`, else the job's `defaults:`, else the workflow's
+// `defaults:`, else the repo root — unless the step's shell `cd`s first. An
+// explicit root (`.` or the workspace) overrides any defaults. Anything but
+// a provable root fails closed: anywhere else npm resolves another
+// package.json and playwright resolves other configs. Multiline quoted
+// strings are not tracked: a bare `cd` line inside one fails closed (rewrite
+// it or teach the gate).
+function assertRootStepCwd(ctx, idx, at, what) {
+  const { file, lines, content } = ctx;
+  const where = `${file} runs ${what}`;
+  const tail =
+    "this gate cannot resolve playwright runs outside the repo root; run the step at the root or teach ci/test-inventory.mjs the new form";
+  const step = stepBlockBounds(lines, idx, content);
+  assert.ok(step, `${where} outside any run step: ${tail}`);
+  let stepValue = null;
+  for (let k = step.start; k < step.end; k++) {
+    if (content.has(k)) continue;
+    const m = /^\s*working-directory\s*:\s*(.+?)\s*(#.*)?$/.exec(lines[k]);
+    if (m) stepValue = m[1];
+  }
+  if (stepValue !== null) {
+    assert.ok(
+      isRootCwd(stepValue),
+      `${where} sets working-directory: ${stepValue.trim()}: ${tail}`,
+    );
+  } else {
+    const job = jobBlockBounds(lines, step.start, indentOf(lines[step.start]), content);
+    assert.ok(job, `${where} sits outside any job: ${tail}`);
+    const jobCwd = defaultsCwdAt(lines, job.start, job.end, job.start, content, where, tail);
+    if (jobCwd !== null) {
+      assert.ok(
+        isRootCwd(jobCwd),
+        `${where} inherits working-directory: ${jobCwd} from job defaults: ${tail}`,
+      );
+    } else {
+      const topCwd = defaultsCwdAt(lines, 0, lines.length, -1, content, where, tail);
+      if (topCwd !== null) {
+        assert.ok(
+          isRootCwd(topCwd),
+          `${where} inherits working-directory: ${topCwd} from workflow defaults: ${tail}`,
+        );
+      }
+    }
+  }
+  let heredoc = null;
+  for (const { idx: sIdx, from } of stepScriptSlices(lines, step.start, step.end, content)) {
+    if (sIdx > idx) continue;
+    const slice = lines[sIdx].slice(from, sIdx === idx ? at : undefined);
+    if (heredoc !== null) {
+      if (slice.trim() === heredoc) heredoc = null;
+      continue;
+    }
+    assert.ok(
+      !STEP_CD_RE.test(slice) && !SUBSHELL_CD_RE.test(slice),
+      `${where} runs after the step cds: ${tail}`,
+    );
+    heredoc = heredocMarker(slice);
+  }
+}
+
+// Workflow `npm run` occurrences that reach a Playwright script must run at
+// the repo root: anywhere else npm resolves another package.json. The
+// invocation scan is whole-text, so this re-scans per line for attribution
+// (the script name sits on the occurrence's first line; continuations only
+// add arguments, which the forwarding check already covers).
+function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
+  for (const { name, text } of workflowFiles) {
+    const lines = text.split("\n").map(stripYamlComment);
+    if (!lines.some((l) => l.includes("npm") && l.includes("run"))) continue;
+    const ctx = { file: name, lines, content: literalScriptLines(lines) };
+    lines.forEach((line, idx) => {
+      for (const occ of parseNpmRunOccurrences(line)) {
+        if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+        const target = scriptRunsPlaywright(scripts, occ.name);
+        if (!target.runs && !target.unknown) continue;
+        assertRootStepCwd(ctx, idx, occ.index, `npm run ${occ.name}`);
+      }
+    });
+  }
 }
 
 // Split an argument string on whitespace, respecting single/double quotes.
@@ -632,12 +954,16 @@ function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
   // Workflow steps: `playwright test` plus YAML `>-` continuation lines (the
   // kit-parity file filters live on the next line). Continuation stops at the
   // next step, key, or blank line so a following `run:` never bleeds in.
+  // Each occurrence must run at the repo root (see assertRootStepCwd).
   for (const { name, text } of workflowFiles) {
     const lines = text.split("\n");
+    const stripped = lines.map(stripYamlComment);
+    const ctx = { file: name, lines: stripped, content: literalScriptLines(stripped) };
     for (let i = 0; i < lines.length; i += 1) {
-      const line = stripYamlComment(lines[i]);
+      const line = stripped[i];
       const at = line.search(/\bplaywright\s+test\b/);
       if (at === -1) continue;
+      assertRootStepCwd(ctx, i, at, "playwright test");
       let rest = line.slice(at).replace(/^\bplaywright\s+test\b/, "");
       for (let j = i + 1; j < lines.length; j += 1) {
         const next = stripYamlComment(lines[j]);
@@ -1363,6 +1689,7 @@ export function playwrightInventory(root = repoRoot) {
   const workflowFiles = collectWorkflowFiles(root);
   const workflowText = workflowFiles.map((w) => w.text).join("\n");
   const invoked = invokedScriptNames(scripts, workflowText);
+  auditWorkflowNpmRunCwd(workflowFiles, scripts);
   const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
   const parsed = new Map();
   for (const config of refs.keys()) parsed.set(config, parsePlaywrightConfig(root, config));
@@ -2897,6 +3224,326 @@ function selftest() {
         );
         writeFileSync(
           join(dir, "playwright.fl.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        for (const name of ["x", "y"]) {
+          writeFileSync(
+            join(dir, `e2e/${name}.spec.ts`),
+            'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+          );
+        }
+        if (e.throws) assert.throws(() => playwrightInventory(dir), e.throws, e.name);
+        else assert.deepEqual(playwrightInventory(dir).orphans, e.orphans, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright npm run positional args forward without --", () => {
+    const pw = "playwright test --config playwright.pos.config.ts";
+    const entries = [
+      // Oracle (npm 11.19.1): bare positionals reach the script without any
+      // `--`, so they are forwarded filters, in workflows and script bodies.
+      {
+        name: "bare positional",
+        scripts: { b: pw },
+        run: "npm run b e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "nested positional",
+        scripts: { a: "npm run b e2e/x.spec.ts", b: pw },
+        run: "npm run a",
+        throws: /cannot expand/,
+      },
+      {
+        name: "positional after boolean flag",
+        scripts: { b: pw },
+        run: "npm run b --silent e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      // Past the first bare `--` npm forwards everything literally: a
+      // `--prefix` there is a filter, never a redirect.
+      {
+        name: "post-separator prefix is forwarding",
+        scripts: { b: pw },
+        run: "npm run b -- --prefix web",
+        throws: /cannot expand/,
+      },
+      // Controls: the shell strips redirection before npm runs, so attached
+      // and bare operators (plus the bare target) never forward.
+      {
+        name: "attached redirect target",
+        scripts: { b: pw },
+        run: "npm run b 2>/dev/null",
+        orphans: [],
+      },
+      {
+        name: "bare redirect skips its target",
+        scripts: { b: pw },
+        run: "npm run b > log.txt",
+        orphans: [],
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.pos.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        for (const name of ["x", "y"]) {
+          writeFileSync(
+            join(dir, `e2e/${name}.spec.ts`),
+            'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+          );
+        }
+        if (e.throws) assert.throws(() => playwrightInventory(dir), e.throws, e.name);
+        else assert.deepEqual(playwrightInventory(dir).orphans, e.orphans, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright workflow steps run at the repo root", () => {
+    const pwRun = "npx playwright test --config playwright.rt.config.ts";
+    const pwScript = "playwright test --config playwright.rt.config.ts";
+    const stdJob = (steps) => `name: ci\njobs:\n  t:\n    steps:\n${steps}`;
+    const entries = [
+      // Step-level working-directory, before or after the run key, on direct
+      // and npm-run executions.
+      {
+        name: "step working-directory before run",
+        workflow: stdJob(
+          `      - name: pw\n        working-directory: web\n        run: ${pwRun}\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "step working-directory after run",
+        workflow: stdJob(
+          `      - name: pw\n        run: ${pwRun}\n        working-directory: web\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "step working-directory with npm run",
+        workflow: stdJob(`      - run: npm run e2e\n        working-directory: web\n`),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "step working-directory after run block",
+        workflow: stdJob(
+          `      - run: |\n          echo hi\n          ${pwRun}\n        working-directory: web\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      // Inherited job and workflow defaults move the step too.
+      {
+        name: "job defaults",
+        workflow:
+          "name: ci\njobs:\n  t:\n    defaults:\n      run:\n        working-directory: web\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        throws: /cannot resolve/,
+      },
+      {
+        name: "workflow defaults",
+        workflow:
+          "name: ci\ndefaults:\n  run:\n    working-directory: web\njobs:\n  t:\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        throws: /cannot resolve/,
+      },
+      {
+        name: "inline flow defaults carrying working-directory",
+        workflow:
+          "name: ci\ndefaults: {run: {working-directory: web}}\njobs:\n  t:\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        throws: /cannot resolve/,
+      },
+      {
+        name: "inline flow run under defaults",
+        workflow:
+          "name: ci\ndefaults:\n  run: {working-directory: web}\njobs:\n  t:\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        throws: /cannot resolve/,
+      },
+      // The step's own shell: same-line, earlier-line, subshell, env-prefixed
+      // and `command`-prefixed cds all move the run.
+      {
+        name: "same-line cd",
+        workflow: stdJob(`      - run: cd web && ${pwRun}\n`),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "earlier-line cd",
+        workflow: stdJob(`      - run: |\n          cd web\n          ${pwRun}\n`),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "subshell cd wraps the run",
+        workflow: stdJob(`      - run: (cd web && ${pwRun})\n`),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "env-prefixed cd",
+        workflow: stdJob(`      - run: FOO=1 cd web && ${pwRun}\n`),
+        throws: /cannot resolve/,
+      },
+      {
+        name: "command-prefixed cd",
+        workflow: stdJob(`      - run: command cd web && ${pwRun}\n`),
+        throws: /cannot resolve/,
+      },
+      // A quoted `<<EOF` is not a heredoc opener: the real cd below it is
+      // still found.
+      {
+        name: "quoted heredoc opener does not hide cd",
+        workflow: stdJob(
+          `      - run: |\n          echo "see <<EOF marker"\n          cd web\n          ${pwRun}\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      // A cd after the heredoc closes is a real directory change.
+      {
+        name: "cd after closed heredoc",
+        workflow: stdJob(
+          `      - run: |\n          cat > run.sh <<'EOF'\n          cd web\n          EOF\n          cd web\n          ${pwRun}\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      // A `- ` line inside a non-run literal is not a step item: the walk
+      // skips it by shape and still finds the step's working-directory.
+      // (`uses:` + `run:` together is GitHub-invalid, but the gate reads
+      // text, not Actions semantics.)
+      {
+        name: "dash line in with-block does not stop the walk",
+        workflow: stdJob(
+          "      - uses: actions/x\n        working-directory: web\n        with:\n          text: |\n            - not-a-step\n" +
+            `        run: ${pwRun}\n`,
+        ),
+        throws: /cannot resolve/,
+      },
+      // Unattributable executions fail closed instead of reading as root.
+      {
+        name: "step outside any job",
+        workflow: `- run: ${pwRun}\n`,
+        throws: /cannot resolve/,
+      },
+      {
+        name: "npm run outside any step",
+        workflow: "name: ci\nenv:\n  X: npm run e2e\n",
+        throws: /cannot resolve/,
+      },
+      // Controls: explicit roots, overrides, and precise attribution.
+      {
+        name: "step working-directory dot is root",
+        workflow: stdJob(`      - run: ${pwRun}\n        working-directory: .\n`),
+        orphans: [],
+      },
+      {
+        name: "step working-directory workspace is root",
+        workflow: stdJob(
+          `      - run: ${pwRun}\n        working-directory: \${{ github.workspace }}\n`,
+        ),
+        orphans: [],
+      },
+      {
+        name: "quoted step working-directory dot is root",
+        workflow: stdJob(`      - run: ${pwRun}\n        working-directory: "."\n`),
+        orphans: [],
+      },
+      {
+        name: "job root overrides workflow defaults",
+        workflow:
+          "name: ci\ndefaults:\n  run:\n    working-directory: web\njobs:\n  t:\n    defaults:\n      run:\n        working-directory: .\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        orphans: [],
+      },
+      {
+        name: "cd on a later line is out of scope",
+        workflow: stdJob(`      - run: |\n          ${pwRun}\n\n          cd web\n`),
+        orphans: [],
+      },
+      {
+        name: "cd after npm run is out of scope",
+        workflow: stdJob(`      - run: npm run e2e && cd web\n`),
+        orphans: [],
+      },
+      {
+        name: "step root overrides workflow defaults",
+        workflow:
+          "name: ci\ndefaults:\n  run:\n    working-directory: web\njobs:\n  t:\n    steps:\n" +
+          `      - run: ${pwRun}\n        working-directory: .\n`,
+        orphans: [],
+      },
+      {
+        name: "job defaults do not leak across jobs",
+        workflow:
+          "name: ci\njobs:\n  a:\n    defaults:\n      run:\n        working-directory: web\n    steps:\n" +
+          "      - run: echo hi\n  b:\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        orphans: [],
+      },
+      {
+        name: "unrelated step working-directory is out of scope",
+        workflow: stdJob(
+          `      - run: echo hi\n        working-directory: web\n      - run: ${pwRun}\n`,
+        ),
+        orphans: [],
+      },
+      {
+        name: "command substitution cd does not persist",
+        workflow: stdJob(`      - run: ROOT=$(cd .. && pwd) && ${pwRun}\n`),
+        orphans: [],
+      },
+      {
+        name: "backtick cd does not persist",
+        workflow: stdJob("      - run: echo `cd web` && " + `${pwRun}\n`),
+        orphans: [],
+      },
+      {
+        name: "mid-line cd word is not a command",
+        workflow: stdJob(`      - run: echo cd web && ${pwRun}\n`),
+        orphans: [],
+      },
+      {
+        name: "heredoc cd is data",
+        workflow: stdJob(
+          `      - run: |\n          cat > run.sh <<'EOF'\n          cd web\n          EOF\n          ${pwRun}\n`,
+        ),
+        orphans: [],
+      },
+      {
+        name: "commented working-directory is not a run",
+        workflow: stdJob(`      - run: ${pwRun}\n      # working-directory: web\n`),
+        orphans: [],
+      },
+      {
+        name: "flow defaults without working-directory",
+        workflow:
+          "name: ci\ndefaults: {run: {shell: bash}}\njobs:\n  t:\n    steps:\n" +
+          `      - run: ${pwRun}\n`,
+        orphans: [],
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { e2e: pwScript } }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(join(dir, ".github", "workflows", "ci.yml"), e.workflow);
+        writeFileSync(
+          join(dir, "playwright.rt.config.ts"),
           'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
         );
         mkdirSync(join(dir, "e2e"), { recursive: true });
