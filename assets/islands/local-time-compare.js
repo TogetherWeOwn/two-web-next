@@ -1,28 +1,12 @@
-// Profile local-time comparison. Both twins server-render the saved member
-// timezone text plus this mount: a hidden action only. The island reveals the
-// action only when the saved zone validates and both formatters construct;
-// each activation snapshots one instant and renders both civil times with
-// explicit zone labels and checked-at wording in a lazily created status, so
-// the page carries no live region until the member asks. The result never
-// refreshes on its own: no fetch, storage, geolocation, timer, focus move,
-// or profile write.
+// Both twins compare only the already-rendered saved zone. An accepted owner
+// save advances that zone and discards an obsolete result, without recomputing
+// or announcing another comparison until explicit activation. No live draft,
+// fetch, storage, geolocation, timer, focus move, or profile write.
 (() => {
   const mount = document.querySelector("[data-local-time-compare]");
   if (!mount) return;
-  const memberZone = mount.getAttribute("data-local-time-compare") || "";
   const button = mount.querySelector("button");
   if (!button) return;
-  if (typeof Intl === "undefined" || typeof Intl.DateTimeFormat === "undefined") return;
-  let deviceZone = "";
-  try {
-    if (!memberZone) return;
-    new Intl.DateTimeFormat("en", { timeZone: memberZone });
-    deviceZone = new Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-    if (!deviceZone) return;
-    new Intl.DateTimeFormat("en", { timeZone: deviceZone });
-  } catch {
-    return;
-  }
   const dateFor = (zone) =>
     new Intl.DateTimeFormat("en-GB", {
       day: "numeric",
@@ -37,21 +21,61 @@
       hourCycle: "h23",
       timeZone: zone,
     });
-  const memberDate = dateFor(memberZone);
-  const memberTime = timeFor(memberZone);
-  const deviceDate = dateFor(deviceZone);
-  const deviceTime = timeFor(deviceZone);
-  const checkedDate = dateFor("UTC");
-  const checkedTime = timeFor("UTC");
+  function formats() {
+    try {
+      const memberZone = mount.getAttribute("data-local-time-compare") || "";
+      const deviceZone = new Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      if (!memberZone || !deviceZone) return;
+      return [
+        memberZone,
+        deviceZone,
+        dateFor(memberZone),
+        timeFor(memberZone),
+        dateFor(deviceZone),
+        timeFor(deviceZone),
+        dateFor("UTC"),
+        timeFor("UTC"),
+      ];
+    } catch {
+      return;
+    }
+  }
+  const status = () => mount.querySelector("[role='status']");
+  function refresh() {
+    button.hidden = !formats();
+  }
+  document
+    .querySelector('[data-testid="profile-timezone"]')
+    ?.addEventListener("two:timezone", (event) => {
+      if (mount.getAttribute("data-local-time-compare") === event.detail) return;
+      mount.setAttribute("data-local-time-compare", event.detail);
+      status()?.remove();
+      refresh();
+    });
   function line(text) {
     const span = document.createElement("span");
     span.textContent = text;
     return span;
   }
-  button.hidden = false;
+  refresh();
   button.addEventListener("click", () => {
-    // One snapshot per activation: every civil time below derives from this
-    // single instant, even when consecutive clock reads would cross midnight.
+    // Re-read the saved zone at activation, and use one instant for all rows.
+    const parts = formats();
+    if (!parts) {
+      status()?.remove();
+      refresh();
+      return;
+    }
+    const [
+      memberZone,
+      deviceZone,
+      memberDate,
+      memberTime,
+      deviceDate,
+      deviceTime,
+      checkedDate,
+      checkedTime,
+    ] = parts;
     const now = new Date();
     if (!Number.isFinite(now.getTime())) return;
     const children = [
@@ -61,7 +85,7 @@
       document.createElement("br"),
       line(`Checked at ${checkedDate.format(now)}, ${checkedTime.format(now)} UTC`),
     ];
-    const existing = mount.querySelector("[role='status']");
+    const existing = status();
     if (existing) {
       existing.replaceChildren(...children);
       return;

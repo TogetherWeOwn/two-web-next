@@ -80,6 +80,12 @@ const SUITES = [
     title: "profile local time comparison in Chromium",
     min: 72,
   },
+  {
+    file: "test/profile-local-time-save.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "profile local time after save in Chromium",
+    min: 36,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
