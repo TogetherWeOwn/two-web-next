@@ -95,6 +95,45 @@ test("nonfinite hits, positions, and ambiguous normalized files are invalid evid
   }
 });
 
+test("explicit null columns are admitted as unknown v8 positions", () => {
+  const coverage = lineCoverage(
+    {
+      "src/a.ts": {
+        path: "src/a.ts",
+        statementMap: {
+          0: { start: { line: 1, column: 0 }, end: { line: 1, column: null } },
+          1: { start: { line: 2, column: null }, end: { line: 3, column: null } },
+        },
+        s: { 0: 1, 1: 0 },
+      },
+    },
+    "/fixture",
+  );
+  assert.deepEqual(score(new Map([["src/a.ts", new Set([1, 2])]]), coverage), {
+    total: 2,
+    hit: 1,
+    pct: 50,
+    added: ["src/a.ts:1", "src/a.ts:2"],
+    missed: ["src/a.ts:2"],
+    skipped: [],
+  });
+});
+
+test("null columns never excuse reversed lines, null lines, or missing fields", () => {
+  for (const statementMap of [
+    { 0: { start: { line: 2, column: null }, end: { line: 1, column: null } } },
+    { 0: { start: { line: 2, column: null }, end: { line: 1, column: 10 } } },
+    { 0: { start: { line: null, column: 0 }, end: { line: 2, column: null } } },
+    { 0: { start: { line: 2 }, end: { line: 2, column: null } } },
+  ]) {
+    assert.throws(
+      () =>
+        lineCoverage({ "src/a.ts": { path: "src/a.ts", statementMap, s: { 0: 1 } } }, "/fixture"),
+      { message: "invalid_coverage" },
+    );
+  }
+});
+
 test("human output stays below 8KiB for thirty long multibyte path IDs", (t) => {
   const root = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "patch-coverage-edge-"),

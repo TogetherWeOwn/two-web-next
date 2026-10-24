@@ -152,9 +152,12 @@ No `--dry-run` is needed or accepted: all modes are already read-only.
   even on an empty diff.
 - The report and every file entry must be objects, not null, arrays or scalars.
   Each file requires `path`, `statementMap` and `s`. Map/hit IDs must match
-  exactly; locations require safe positive integer lines, safe nonnegative
-  integer columns, and an end at or after the start. Hits must be safe
-  nonnegative integers. Empty maps are valid only when both are empty.
+  exactly; locations require safe positive integer lines and either a safe
+  nonnegative integer column or an explicit null (the v8 reporter emits null
+  for unknown positions, and only start lines enter the score). The end must
+  be at or after the start, with same-line column order enforced only when
+  both columns are known. Hits must be safe nonnegative integers. Empty maps
+  are valid only when both are empty.
 - Keys and `path` must normalize to the same nonempty repo-relative path,
   with no control characters or traversal outside the repo. Duplicate
   normalized file entries are ambiguous and rejected. All entries, including

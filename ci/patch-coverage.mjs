@@ -105,12 +105,13 @@ export function parseDiff(diff) {
 }
 
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// Columns are advisory: only start lines enter the score, and the v8
+// reporter emits an explicit null for unknown positions (its normal output
+// for synthesized ends). Null stays distinct from missing/mistyped columns,
+// which are still malformed.
+const isColumn = (value) => value === null || (Number.isSafeInteger(value) && value >= 0);
 const isPosition = (value) =>
-  isRecord(value) &&
-  Number.isSafeInteger(value.line) &&
-  value.line > 0 &&
-  Number.isSafeInteger(value.column) &&
-  value.column >= 0;
+  isRecord(value) && Number.isSafeInteger(value.line) && value.line > 0 && isColumn(value.column);
 
 function requireEvidence(condition) {
   if (!condition) throw new Error("invalid_coverage");
@@ -140,12 +141,15 @@ export function lineCoverage(coverageJson, root = repoRoot) {
     const covered = new Set();
     const statements = new Set();
     for (const [id, loc] of Object.entries(map)) {
+      requireEvidence(isRecord(loc) && isPosition(loc.start) && isPosition(loc.end));
+      // Same-line ordering applies only when both columns are known; a null
+      // column is unknown, not zero, so it cannot prove a reversal.
+      const columnsKnown =
+        Number.isSafeInteger(loc.start.column) && Number.isSafeInteger(loc.end.column);
       requireEvidence(
-        isRecord(loc) &&
-          isPosition(loc.start) &&
-          isPosition(loc.end) &&
-          (loc.end.line > loc.start.line ||
-            (loc.end.line === loc.start.line && loc.end.column >= loc.start.column)),
+        loc.end.line > loc.start.line ||
+          (loc.end.line === loc.start.line &&
+            (!columnsKnown || loc.end.column >= loc.start.column)),
       );
       requireEvidence(Object.hasOwn(hits, id) && Number.isSafeInteger(hits[id]) && hits[id] >= 0);
       statements.add(loc.start.line);
