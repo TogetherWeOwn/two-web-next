@@ -1,6 +1,44 @@
 # Kit server gzip: join freshness prerequisite
 
-## Latest base reconciliation — 2026-10-23
+## Latest base reconciliation — 2026-10-24
+
+Merge main `509cb40a7e978031089d92220a7ea2b2ba55516d`, including calendar
+subscriptions, cancelled-event RSS signals, Lighthouse navigation evidence and
+the accessibility allocation history. Only the budget comment conflicts. Keep
+the full incoming history verbatim, then the existing branch-only join-freshness
+notes exactly once. All numeric limits equal this base, including the inherited
+**333312-byte server gzip ceiling**; this PR adds no allowance.
+
+Two fresh production builds with Node 24.22.1 and the committed root/web locks
+installed outside the checkout pass the unchanged checker:
+
+| Artifact | Two resolved-tree builds | Inherited limit |
+| --- | ---: | ---: |
+| Server JS files | 115 | 126 |
+| Server JS raw bytes | 1148522–1148524 | 1203200 |
+| Server JS gzip bytes | 326248–326249 | 333312 |
+| Client JS files | 54 | 55 |
+| Client JS raw/gzip bytes | 250421/101390 | 251904/101632 |
+| Client CSS files | 2 | 4 |
+| Client CSS raw/gzip bytes | 2861/1019 | 3072/1024 |
+| Worker entry raw/gzip bytes | 2551/1219 | 3584/1536 |
+
+Worst measured server gzip margin: **7063 bytes**. Client gzip has 242 bytes
+and CSS gzip has 5 bytes of margin; neither ceiling changes. These measure the
+prerequisite tree, not the feature integration.
+
+Fresh verification: six checker selftests and thirteen checker tests pass,
+including genuine breaches and incomplete/missing asset refusal. The new-base
+calendar subscription and cancelled-RSS suites report **37 passed, 16 skipped**
+with database bindings unset; database-backed calendar-feed behavior is not
+verified by that run. Lint, typecheck, documentation links and the floor guard
+pass. No test file, runtime, checker, dependency or workflow differs from this
+base. The full `npm run check`, feature-integration builds, join-freshness suites
+and browser/staging checks were not rerun. Earlier results and the original
+broad-check failures remain historical. Exact-head CI and independent review
+must pass again after this resolution; the feature ref remains untouched.
+
+## Earlier base reconciliation — 2026-10-23
 
 Merge base `2b4f1902e096d969ad4a909a085fb6e221ddfc3a`, including the separately
 approved moderation allocation in
