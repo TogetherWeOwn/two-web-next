@@ -16,6 +16,7 @@ import {
   reviewLink,
   rowKeys,
   scopeUrl,
+  stripTags,
 } from "./helpers/admin-exact-series.mjs";
 
 let f;
@@ -80,7 +81,8 @@ for (const twin of ["Hono", "Kit"]) {
       expect(r.html).toContain("Renamed occurrence");
       for (const status of ["draft", "published", "cancelled", "past"])
         expect(r.html).toMatch(new RegExp(`data-testid="event-status-[^"]+">${status}<`));
-      const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(r.html)?.[1]?.replace(/<[^>]*>/g, "");
+      const captured = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(r.html)?.[1];
+      const heading = captured === undefined ? captured : stripTags(captured);
       expect(heading).toMatch(/series/i);
       expect(heading).toContain("Saved &lt;night&gt; &amp; friends");
       expect(r.html).not.toMatch(/audited (?:before|change)|all affected changes/i);

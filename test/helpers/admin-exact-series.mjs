@@ -22,12 +22,56 @@ export const scopeUrl = (id = 100, extra = "") =>
 export const reviewName = "Review occurrences in this series";
 export const rowKeys = (html) =>
   [...html.matchAll(/data-testid="event-status-([^"]+)"/g)].map((m) => m[1]);
-export const decode = (s) =>
-  s.replaceAll("&amp;", "&").replaceAll("&#39;", "'").replaceAll("&quot;", '"');
+export function stripTags(s) {
+  let out = "";
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === "<") {
+      const end = s.indexOf(">", i + 1);
+      if (end === -1) {
+        out += "<";
+        i += 1;
+      } else {
+        i = end + 1;
+      }
+    } else {
+      out += s[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+export function decode(s) {
+  let out = "";
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === "&") {
+      if (s.startsWith("&amp;", i)) {
+        out += "&";
+        i += 5;
+        continue;
+      }
+      if (s.startsWith("&#39;", i)) {
+        out += "'";
+        i += 5;
+        continue;
+      }
+      if (s.startsWith("&quot;", i)) {
+        out += '"';
+        i += 6;
+        continue;
+      }
+      out += "&";
+      i += 1;
+    } else {
+      out += s[i];
+      i += 1;
+    }
+  }
+  return out;
+}
 export function links(html) {
   return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({
     href: decode(/\bhref="([^"]*)"/.exec(m[1])?.[1] ?? ""),
-    text: decode(m[2].replace(/<[^>]*>/g, "").trim()),
+    text: decode(stripTags(m[2]).trim()),
     attrs: m[1],
   }));
 }
