@@ -55,6 +55,8 @@ export function calendarAuthFixture(renderer: "hono" | "kit" = "hono") {
   const encode = (row: typeof events.$inferSelect) =>
     columns.map((key) => (row[key] instanceof Date ? row[key].toISOString() : row[key]));
   const db = drizzle(async (sql, params) => {
+    // Every local event has a null game, so the published-game facet is empty.
+    if (sql.startsWith('select distinct trim("game")')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
     if (sql.startsWith('select "discord_event_id"')) return { rows: [] };
     if (sql.startsWith('insert into "event_search_log"') || sql.startsWith("SET LOCAL"))

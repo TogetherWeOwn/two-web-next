@@ -288,6 +288,7 @@ jobs:
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+          node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "admin failed-read retry: native keyboard/no-JS recovery" 12
       - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
         run: |
           npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json
@@ -539,6 +540,22 @@ jobs:
       - name: Kit adapter build
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run build --prefix web
+      - name: Kit admin contrast (built runtime, intercepted fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_ADMIN_CONTRAST_EVIDENCE_DIR: artifacts/kit-admin-contrast
+        run: |
+          mkdir -p artifacts/kit-admin-contrast
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
+      - name: Kit admin contrast evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-admin-contrast
+          path: artifacts/kit-admin-contrast/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs
