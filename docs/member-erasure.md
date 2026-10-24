@@ -11,7 +11,7 @@ operator command; there is no self-serve path.
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake>
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --target staging
-node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply --target production
+node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply --target production --confirm <host>
 ```
 
 - Dry-run is the default: it prints per-table row counts only, never row
@@ -27,6 +27,14 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
   production-looking URL needs `--target production`, and `--target staging`
   on it is refused. The target is an operator assertion: the tool cannot
   verify which environment a host belongs to.
+- `--apply` against a remote host also needs `--confirm <host>`, typed
+  exactly as the `DATABASE_URL` host (no trimming, no case folding). A missing
+  or different value is refused with `E_CONFIRM` before any connection opens.
+  A remote dry-run (the default) never refuses: it prints `targetHost` and,
+  without the flag, a `confirmHint`, so an agent can read the host, then
+  re-run the apply with `--confirm <host>`. Local hosts ignore the flag. It is
+  a non-interactive check (no prompt), so it narrows the existing destructive
+  path without adding any authority.
 - A remote connection must verify the server certificate. The URL needs
   `sslmode=verify-full` or `sslrootcert=system` (an alias for verify-full).
   `require`, `verify-ca`, `disable`, and other query parameters are refused.
@@ -74,6 +82,7 @@ help commands and checked here by `test/operator-cli-error-table.test.mjs`.
 | E_PRODUCTION_TARGET | 2 | Refusing: production database without --target production. | Verify the intended environment before selecting --target production. |
 | E_REMOTE_TARGET | 2 | Refusing: remote database needs --target staging or --target production. | Verify the intended environment and supply its --target explicitly. |
 | E_TLS_REQUIRED | 2 | Refusing: remote database must use sslmode=verify-full or sslrootcert=system. | Configure verified TLS in the environment URL; do not disable verification. |
+| E_CONFIRM | 2 | Refusing: --apply with --target staging or --target production requires --confirm <host>. | Re-run with --confirm <host> where <host> exactly matches the DATABASE_URL host; a dry-run shows the requirement. |
 | LOCK_TIMEOUT | 1 | operation failed; changes rolled back (lock timeout 55P03). | Retry once the lock clears; verify with a dry-run first. |
 | TX_FAILED | 1 | operation failed; transaction rolled back if it started. | Check connectivity and migrations without logging DATABASE_URL; re-run the dry-run. |
 

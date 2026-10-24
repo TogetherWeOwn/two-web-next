@@ -70,6 +70,26 @@ function text(v: string): string {
     .replace(/\r\n|\r|\n/g, "\\n");
 }
 
+// Feed-host identity: the display name carries the already-public host; the
+// address is a fixed non-routable placeholder (RFC 2606 `.invalid`), never a
+// real member address.
+const FEED_HOST_PLACEHOLDER = "noreply@example.invalid";
+const ICS_ORGANIZER_PLACEHOLDER = `mailto:${FEED_HOST_PLACEHOLDER}`;
+
+/** Trimmed public host, or undefined when blank/missing (emit no property). */
+function feedHost(e: EventRow): string | undefined {
+  const name = e.organizer_name?.trim();
+  return name ? name : undefined;
+}
+
+/** Quoted CN param-text: RFC 5545 §3.1/§3.2 quoted-string is DQUOTE
+ * *QSAFE-CHAR DQUOTE with no backslash escape, so DQUOTE normalizes to an
+ * apostrophe and C0-control/DEL runs to one space. Backslash, comma,
+ * semicolon, colon, caret and `<>&` stay literal inside the quotes. */
+function cnParam(v: string): string {
+  return v.replace(/"/g, "'").replace(/[\u0000-\u001F\u007F]+/g, " ");
+}
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -157,6 +177,8 @@ function vevent(e: EventRow, appUrl: string): string[] {
   ];
   if (e.description) lines.push(`DESCRIPTION:${text(e.description)}`);
   if (e.location) lines.push(`LOCATION:${text(e.location)}`);
+  const organizer = feedHost(e);
+  if (organizer) lines.push(`ORGANIZER;CN="${cnParam(organizer)}":${ICS_ORGANIZER_PLACEHOLDER}`);
   lines.push(
     `URL:${pageUrl(e, appUrl)}`,
     "BEGIN:VALARM",
@@ -256,6 +278,7 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
   const items = renderable
     .map((e) => {
       const url = xml(pageUrl(e, appUrl));
+      const organizer = feedHost(e);
       const cancelled = e.status === "cancelled";
       const title = cancelled ? `${RSS_CANCELLED_TITLE_PREFIX}${e.title}` : e.title;
       const description = cancelled
@@ -266,6 +289,7 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
       return (
         `<item><title>${xml(title)}</title><link>${url}</link><guid isPermaLink="true">${url}</guid>` +
         `<pubDate>${rssDate(e.startsAt)}</pubDate>` +
+        (organizer ? `<author>${xml(`${FEED_HOST_PLACEHOLDER} (${organizer})`)}</author>` : "") +
         (description ? `<description>${xml(description)}</description>` : "") +
         "</item>"
       );
