@@ -218,6 +218,12 @@ function parseCliJson(result, label) {
   return parsed;
 }
 
+function checkById(parsed, id, label) {
+  const found = parsed.groups.flatMap((g) => g.checks).find((c) => c.id === id);
+  assert.ok(found, `${label}: JSON must carry check ${id}`);
+  return found;
+}
+
 // --- Kit inventory REDs (via run API) ---------------------------------------
 
 test("RED kit: empty worker map cannot enforce (exit 2), never fits", (t) => {
@@ -282,6 +288,30 @@ test("RED kit: extra unknown measurement section cannot silently pass (2)", (t) 
   const result = runCaptured(runKit, fx.root);
   assertCannotEnforce(result, /extra|unknown|plan|inventory/i, "extra section");
   assertNoOkLines(result, "extra section");
+});
+
+test("RED kit: extra server group cannot silently pass (2)", (t) => {
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      b.server.wasm = { maxRawBytes: 10, maxGzipBytes: 10, maxFiles: 1 };
+    },
+  });
+  t.after(() => cleanup(fx.root));
+  const result = runCaptured(runKit, fx.root);
+  assertCannotEnforce(result, /server|inventory/i, "extra server group");
+  assertNoOkLines(result, "extra server group");
+});
+
+test("RED kit: extra client group cannot silently pass (2)", (t) => {
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      b.client.wasm = { maxRawBytes: 10, maxGzipBytes: 10, maxFiles: 1 };
+    },
+  });
+  t.after(() => cleanup(fx.root));
+  const result = runCaptured(runKit, fx.root);
+  assertCannotEnforce(result, /client|inventory/i, "extra client group");
+  assertNoOkLines(result, "extra client group");
 });
 
 test("RED kit: absolute worker path is invalid plan (2)", (t) => {
@@ -410,6 +440,18 @@ test("RED worker: extra entry beyond the canonical bundle is unsupported (2)", (
   const result = runCaptured(runWorker, fx.root);
   assertCannotEnforce(result, /extra|unknown|plan|inventory/i, "extra entry");
   assertNoOkLines(result, "extra entry");
+});
+
+test("RED worker: extra top-level section cannot silently pass (2)", (t) => {
+  const fx = makeWorkerFixture({
+    budgetMutate: (b) => {
+      b.extra = { js: { maxRawBytes: 10, maxGzipBytes: 10, maxFiles: 1 } };
+    },
+  });
+  t.after(() => cleanup(fx.root));
+  const result = runCaptured(runWorker, fx.root);
+  assertCannotEnforce(result, /extra|unknown|plan/i, "extra top-level section");
+  assertNoOkLines(result, "extra top-level section");
 });
 
 test("RED worker: absolute bundle path is invalid plan (2)", (t) => {
@@ -628,6 +670,94 @@ test("RED worker: --format json on breach reports failing check with bytes (1)",
   assert.equal(failing[0].id, "worker.bundle.dist/worker.js");
 });
 
+test("RED kit: --format json on missing worker carries MISSING_EVIDENCE (2)", (t) => {
+  const fx = makeKitFixture({ omitWorkerFile: true });
+  t.after(() => cleanup(fx.root));
+  const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
+  assert.equal(result.status, 2, `expected exit 2, got ${result.status}\nstderr: ${result.stderr}`);
+  const parsed = parseCliJson(result, "kit json missing worker");
+  assert.equal(
+    parsed.error?.code,
+    "MISSING_EVIDENCE",
+    "missing canonical file must use MISSING_EVIDENCE, not INVALID_PLAN",
+  );
+  assertJsonReport({
+    parsed,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    status: 2,
+    check: "kit-perf",
+    groupIds: KIT_GROUP_IDS,
+    checkIds: KIT_CHECK_IDS,
+    label: "kit json missing worker",
+  });
+});
+
+test("RED worker: --format json on missing bundle carries MISSING_EVIDENCE (2)", (t) => {
+  const fx = makeWorkerFixture({ omitBundle: true });
+  t.after(() => cleanup(fx.root));
+  const result = runCli(workerScript, ["--root", fx.root, "--format", "json"]);
+  assert.equal(result.status, 2, `expected exit 2, got ${result.status}\nstderr: ${result.stderr}`);
+  const parsed = parseCliJson(result, "worker json missing bundle");
+  assert.equal(
+    parsed.error?.code,
+    "MISSING_EVIDENCE",
+    "missing canonical file must use MISSING_EVIDENCE, not INVALID_PLAN",
+  );
+  assertJsonReport({
+    parsed,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    status: 2,
+    check: "worker-bundle",
+    groupIds: WORKER_GROUP_IDS,
+    checkIds: WORKER_CHECK_IDS,
+    label: "worker json missing bundle",
+  });
+});
+
+test("RED json: fit reports carry exact measured bytes from the fixture", (t) => {
+  const kitFx = makeKitFixture();
+  t.after(() => cleanup(kitFx.root));
+  const workerFx = makeWorkerFixture();
+  t.after(() => cleanup(workerFx.root));
+  const kitResult = runCli(kitScript, ["--root", kitFx.root, "--format", "json"]);
+  assert.equal(kitResult.status, 0, `kit fit must exit 0, got ${kitResult.status}`);
+  const kitParsed = parseCliJson(kitResult, "kit json exact bytes");
+  const expected = [
+    ["kit.worker._worker.js", WORKER_BODY, null],
+    ["kit.server.js", SERVER_BODY, 1],
+    ["kit.client.js", JS_BODY, 1],
+    ["kit.client.css", CSS_BODY, 1],
+  ];
+  for (const [id, body, files] of expected) {
+    const check = checkById(kitParsed, id, "kit json exact bytes");
+    assert.equal(check.status, "pass", `${id} must pass`);
+    assert.equal(check.rawBytes, body.length, `${id} rawBytes must equal the fixture body`);
+    assert.equal(
+      check.gzipBytes,
+      gzipSync(body).length,
+      `${id} gzipBytes must equal the fixture gzip size`,
+    );
+    if (files === null) {
+      assert.ok(!("files" in check), `${id} must not carry a file count`);
+    } else {
+      assert.equal(check.files, files, `${id} files must equal the fixture file count`);
+    }
+  }
+  const workerResult = runCli(workerScript, ["--root", workerFx.root, "--format", "json"]);
+  assert.equal(workerResult.status, 0, `worker fit must exit 0, got ${workerResult.status}`);
+  const workerParsed = parseCliJson(workerResult, "worker json exact bytes");
+  const bundle = checkById(workerParsed, "worker.bundle.dist/worker.js", "worker json exact bytes");
+  assert.equal(bundle.status, "pass", "canonical bundle check must pass");
+  assert.equal(bundle.rawBytes, HONO_BODY.length, "rawBytes must equal the fixture body");
+  assert.equal(
+    bundle.gzipBytes,
+    gzipSync(HONO_BODY).length,
+    "gzipBytes must equal the fixture gzip size",
+  );
+});
+
 test("RED json: repeated --format json runs are byte-identical (idempotent)", (t) => {
   const fx = makeKitFixture();
   t.after(() => cleanup(fx.root));
@@ -690,6 +820,90 @@ test("CONTROL both gates reject a wrong --format value (2) without writes", (t) 
     sameSnapshot(workerBefore, snapshotFs(workerFx.root)),
     "worker wrong format must not write",
   );
+});
+
+test("CONTROL both gates reject empty inline --root= (2) without writes", (t) => {
+  const kitFx = makeKitFixture();
+  t.after(() => cleanup(kitFx.root));
+  const workerFx = makeWorkerFixture();
+  t.after(() => cleanup(workerFx.root));
+  const kitBefore = snapshotFs(kitFx.root);
+  const workerBefore = snapshotFs(workerFx.root);
+  const kitResult = runCli(kitScript, ["--root="]);
+  const workerResult = runCli(workerScript, ["--root="]);
+  for (const [name, result] of [
+    ["kit", kitResult],
+    ["worker", workerResult],
+  ]) {
+    assert.equal(result.status, 2, `${name}: empty inline --root= must exit 2`);
+    assert.ok(
+      /--root needs a directory|usage/i.test(result.stderr),
+      `${name}: empty inline --root= must name the problem, got: ${result.stderr.slice(0, 300)}`,
+    );
+  }
+  assert.ok(sameSnapshot(kitBefore, snapshotFs(kitFx.root)), "kit empty --root= must not write");
+  assert.ok(
+    sameSnapshot(workerBefore, snapshotFs(workerFx.root)),
+    "worker empty --root= must not write",
+  );
+});
+
+test("CONTROL both gates reject an empty --root value (2) without writes", (t) => {
+  const kitFx = makeKitFixture();
+  t.after(() => cleanup(kitFx.root));
+  const workerFx = makeWorkerFixture();
+  t.after(() => cleanup(workerFx.root));
+  const kitBefore = snapshotFs(kitFx.root);
+  const workerBefore = snapshotFs(workerFx.root);
+  const kitResult = runCli(kitScript, ["--root", ""]);
+  const workerResult = runCli(workerScript, ["--root", ""]);
+  for (const [name, result] of [
+    ["kit", kitResult],
+    ["worker", workerResult],
+  ]) {
+    assert.equal(result.status, 2, `${name}: empty --root value must exit 2`);
+    assert.ok(
+      /--root needs a directory|usage/i.test(result.stderr),
+      `${name}: empty --root value must name the problem, got: ${result.stderr.slice(0, 300)}`,
+    );
+  }
+  assert.ok(
+    sameSnapshot(kitBefore, snapshotFs(kitFx.root)),
+    "kit empty --root value must not write",
+  );
+  assert.ok(
+    sameSnapshot(workerBefore, snapshotFs(workerFx.root)),
+    "worker empty --root value must not write",
+  );
+});
+
+test("RED both gates accept inline --root=<dir> for hermetic runs", (t) => {
+  const kitFx = makeKitFixture();
+  t.after(() => cleanup(kitFx.root));
+  const workerFx = makeWorkerFixture();
+  t.after(() => cleanup(workerFx.root));
+  const kitHuman = runCli(kitScript, [`--root=${kitFx.root}`]);
+  assert.equal(kitHuman.status, 0, `kit inline root must exit 0, got ${kitHuman.status}`);
+  assert.ok(kitHuman.stdout.includes(KIT_FITS), "kit inline root must measure the fixture");
+  const workerHuman = runCli(workerScript, [`--root=${workerFx.root}`]);
+  assert.equal(workerHuman.status, 0, `worker inline root must exit 0, got ${workerHuman.status}`);
+  assert.ok(
+    workerHuman.stdout.includes(WORKER_FITS),
+    "worker inline root must measure the fixture",
+  );
+  const kitJson = runCli(kitScript, [`--root=${kitFx.root}`, "--format", "json"]);
+  assert.equal(kitJson.status, 0, `kit inline root json must exit 0, got ${kitJson.status}`);
+  const parsed = parseCliJson(kitJson, "kit inline root json");
+  assertJsonReport({
+    parsed,
+    stdout: kitJson.stdout,
+    stderr: kitJson.stderr,
+    status: 0,
+    check: "kit-perf",
+    groupIds: KIT_GROUP_IDS,
+    checkIds: KIT_CHECK_IDS,
+    label: "kit inline root json",
+  });
 });
 
 test("CONTROL --dry-run is either rejected or the same read-only measurement", (t) => {
