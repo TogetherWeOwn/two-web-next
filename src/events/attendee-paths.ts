@@ -6,10 +6,31 @@
 // builders instead accept route-input keys: they encode the key and fall back
 // to page 1 for malformed or unsafe page numbers.
 //
-// Framework-free: this module imports nothing, so the refusal core and the
-// Svelte/Kit renderers can share it without pulling in the reads layer.
+// Framework-free so the refusal core and Svelte/Kit renderers can share URL
+// builders without pulling in the reads layer or server-side input parsing.
+
 export function attendeePageHref(eventKey: string, page: number): string {
   return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
+}
+
+export interface ArchiveContext {
+  page: number;
+  q: string;
+}
+
+/** Only normalized archive state travels with a detail/roster link, never a return URL. */
+export function archiveEventHref(
+  eventKey: string,
+  archive: ArchiveContext | null | undefined,
+  attendeePage = 1,
+): string {
+  const path = attendeePageHref(eventKey, attendeePage);
+  if (!archive) return path;
+  const [base, search] = path.split("?");
+  const params = new URLSearchParams(search);
+  params.set("archivePage", String(archive.page));
+  if (archive.q) params.set("archiveQuery", archive.q);
+  return `${base}?${params}`;
 }
 
 export function rsvpPageReturnPath(eventKey: string, page: number): string {
