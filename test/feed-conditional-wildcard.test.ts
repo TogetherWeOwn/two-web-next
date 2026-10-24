@@ -130,9 +130,8 @@ describe("successful public feeds accept the wildcard after reading the represen
           dbIdentity
         ],
       ).toBe(dbIdentity);
-      expect(vi.mocked(listFeed).mock.calls.at(-1)![1]).toEqual(
-        path.endsWith(".rss") ? ["published"] : ["published", "cancelled"],
-      );
+      // Both collections read the same published-plus-cancelled scope.
+      expect(vi.mocked(listFeed).mock.calls.at(-1)![1]).toEqual(["published", "cancelled"]);
       expect(readSession).not.toHaveBeenCalled();
       expect(readFragmentSession).not.toHaveBeenCalled();
     });
