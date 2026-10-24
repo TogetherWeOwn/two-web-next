@@ -24,6 +24,7 @@
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
 .events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
 .events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
+.events-page [data-cal-jump]{flex-wrap:wrap;overflow-wrap:anywhere;}
 .events-page [data-cal-jump][data-cancelled] { flex-direction: column; align-items: flex-start; }
 .events-page [data-cal-jump] .schedule-badge { margin: .25rem 0 0; }
 .events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *){background:var(--surface);border-left:4px solid var(--brand);padding:1.5rem;}

@@ -20,6 +20,12 @@ export const EVENTS_JSON_URL = "/events.json";
 export const GOING_COUNT_ISLAND = "going-count";
 export const GOING_COUNT_TESTID = "event-going-count";
 export const SPOTS_LEFT_TESTID = "event-spots-left";
+/** Schedule availability line on calendar cards and month-grid entries
+ * ("2 seats left", "RSVPs paused", "Ended", "No seat limit",
+ * "Discord-managed"): a server-rendered snapshot from existing row data,
+ * never a reservation. Distinct from {@link SPOTS_LEFT_TESTID}, which stays
+ * the Full-only marker shared with the detail lineup. */
+export const SCHEDULE_AVAILABILITY_TESTID = "event-schedule-availability";
 /** Stale-qualification note the binder renders inside the badge on refresh
  * failure (`role="status"`, "could not refresh" copy with last-saved
  * context). Mirrors the attendees-live stale/retry precedent. */

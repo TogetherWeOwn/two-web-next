@@ -1,9 +1,9 @@
 // Calendar card fullness pins (owned): the real CalCard rendered directly
-// with crafted rows. Local fixtures only, no database. The acceptance suite
-// pins the full and uncapped card states through the route; these pins close
-// the remaining mutant: dropping the >= comparison from the card verdict
-// renders "3 of 4 spots left" on an open capped card, which the acceptance
-// open-card pin (asserting only the absence of the word "Full") cannot see.
+// with crafted rows. Local fixtures only, no database. The scheduled
+// availability line reads seat occupancy, so an open capped card shows the
+// occupancy-derived remaining count while the Full marker node stays
+// full-only; these pins close the mutant that drops the >= comparison from
+// the card verdict or derives the remaining count from the named count.
 import { describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import { CalCard } from "../src/events/pages-calendar-card";
@@ -56,6 +56,7 @@ const render = (e: PublicEvent): string =>
   CalCard({
     e,
     zone: "Europe/London",
+    now: new Date(Date.UTC(2030, 0, 1)),
     isPast: false,
     member: true,
     inviteUrl: "https://discord.gg/invite",
@@ -63,10 +64,13 @@ const render = (e: PublicEvent): string =>
   })!.toString() as string;
 
 describe("calendar card fullness pins", () => {
-  it("leaves an open capped card unmarked: count only, no marker node", () => {
+  it("shows remaining seats from occupancy on an open capped card, never the Full marker", () => {
     const html = render(cardRow({ goingCount: 1, goingOccupancy: 1, capacity: 4 }));
     expect(html).toContain("1 of 4 going");
+    expect(html).toContain('data-testid="event-schedule-availability"');
+    expect(html).toContain("3 seats left");
     expect(html).not.toContain("event-spots-left");
+    expect(html).not.toContain(">Full<");
   });
 
   it("marks a full card from occupancy even when the named count has room", () => {
