@@ -32,10 +32,9 @@ describe("attended-history failure policy", () => {
     });
     await expect(readAttendedHistory(db, MEMBER)).resolves.toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Attended history unavailable; hiding the section.",
-      { exception: "Error" },
-    );
+    expect(warn).toHaveBeenCalledWith("Attended history unavailable; hiding the section.", {
+      exception: "Error",
+    });
     // Never a driver message (connection strings) or member data in the warn.
     expect(JSON.stringify(warn.mock.calls)).not.toContain("ENETUNREACH");
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MEMBER);
