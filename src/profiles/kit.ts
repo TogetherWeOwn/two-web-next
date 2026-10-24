@@ -30,6 +30,7 @@ import {
   readOwnedMemberStats,
   type MemberStats,
 } from "./stats";
+import { findSharedGames } from "./shared-games";
 import { createDbProfileStore, type MemberView, type ProfileStore } from "./store";
 
 export const KIT_PROFILE_LOGIN_LOCATION = "/auth/discord";
@@ -63,6 +64,9 @@ export type KitProfileOutcome =
       isOwner: boolean;
       isModerator: boolean;
       joinResult: JoinResult | null;
+      /** Member's displayed game strings the viewer also plays, in list order;
+       * [] when none, including self reads. */
+      sharedGames: string[];
     };
 
 /** Production store/stats wiring for the Kit loads: the Hono resolvers' twin. */
@@ -134,12 +138,20 @@ export async function resolveKitProfile(
     return { kind: "notFound" };
   }
   const stats = deps.stats ? await deps.stats(member.id) : null;
+  const isOwner = viewer.userId === member.id;
+  // Another member's page marks the games the viewer also plays: one extra
+  // keyed read of the viewer's own stored row, bounded by the stored list.
+  // The hook's member-read boundary filters the viewer out of the audit
+  // subjects, so the access log keeps the viewed member only. Self reads skip it.
+  const viewerRow = isOwner ? null : await deps.store.find(viewer.userId);
+  const sharedGames = isOwner ? [] : findSharedGames(member.games, viewerRow?.games ?? []);
   return {
     kind: "ok",
     member,
     stats,
-    isOwner: viewer.userId === member.id,
+    isOwner,
     isModerator: viewer.moderator,
     joinResult: req.joinResult,
+    sharedGames,
   };
 }
