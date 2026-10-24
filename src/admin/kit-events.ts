@@ -11,8 +11,13 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
-import type { EventListRow } from "./store-event-reads";
+import {
+  EVENT_PAGE_SIZE,
+  eventEmptyText,
+  eventScopeRecoveryText,
+  type EventListQuery,
+} from "./event-list";
+import type { EventListRow, EventListScope } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
  * Hono page emits them (<time datetime=ISO>ISO</time>). */
@@ -32,7 +37,32 @@ export type KitEventListView = {
   rows: KitEventListRow[];
   hasNext: boolean;
   emptyText: string;
+  /** Exact-series scope from listSeriesEvents; null renders the unscoped inventory. */
+  scope: EventListScope | null;
+  /**
+   * Pre-escaped scoped H1 inner HTML, or null when unscoped. Svelte escapes
+   * `<` but not `>` in text, while the Hono twin escapes both; rendering the
+   * fully escaped string keeps the twins byte-identical for titles carrying
+   * markup characters. Complete escaping (no markup passthrough), so the
+   * page's single `{@html}` of this field cannot inject elements.
+   */
+  scopeHeadingHtml: string | null;
+  /**
+   * Pre-rendered recovery copy for an unusable scope, or null when the scope
+   * is absent or ok. Server-carried like scopeHeadingHtml so the client
+   * bundle does not ship the recovery strings; same shared copy the Hono
+   * twin renders via eventScopeRecoveryText.
+   */
+  scopeRecoveryText: string | null;
 };
+
+const escapeHtmlText = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
   return {
@@ -51,11 +81,16 @@ export function serializeEventListRow(row: EventListRow): KitEventListRow {
 export function buildEventListView(
   query: EventListQuery,
   fetched: EventListRow[],
+  scope: EventListScope | null = null,
 ): KitEventListView {
   return {
     query,
     rows: fetched.slice(0, EVENT_PAGE_SIZE).map(serializeEventListRow),
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
+    scope,
+    scopeHeadingHtml:
+      scope?.status === "ok" ? `Events in this series: ${escapeHtmlText(scope.parentTitle)}` : null,
+    scopeRecoveryText: scope && scope.status !== "ok" ? eventScopeRecoveryText(scope.status) : null,
   };
 }
