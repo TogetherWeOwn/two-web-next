@@ -4,12 +4,9 @@
 // as the Hono leaf (src/screens/faq.tsx): every question group from the
 // shared source (src/faq-content.ts), the strap and lead, and the exact
 // public URL/canonical/cache contract with no session or database behavior.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { URL, fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "esbuild";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
+import { buildKitFaqBundle, loadKitFaq } from "./helpers/faq-twins";
 import { beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
 import { normalizeSection } from "../ci/kit-section-contract.mjs";
@@ -37,81 +34,6 @@ const env: Env = {
 const SECTION_IDS = FAQS.map((group) => group.sectionId);
 const QUESTIONS = FAQS.flatMap((group) => group.items.map(([question]) => question));
 const QUESTION_COUNT = QUESTIONS.length;
-
-// svelte lives in the web workspace only; the root workspace never sees its
-// types, so the compiler is typed structurally.
-const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
-const { compile } = webRequire("svelte/compiler") as {
-  compile: (
-    source: string,
-    options: { generate: string; dev: boolean; filename: string },
-  ) => { js: { code: string } };
-};
-
-// The real Kit page, SSR-compiled with the web workspace's own
-// svelte/compiler and bundled by esbuild (same shape as ci/kit-preview-e2e.mjs:
-// #lib/* resolves through the web alias, relative src/* through the worktree).
-async function buildKitFaqBundle(): Promise<{
-  renderPage: (data: ReturnType<typeof faqPageData>) => string;
-  applicationModules: string[];
-}> {
-  const worktree = fileURLToPath(new URL("../", import.meta.url));
-  const scratch = mkdtempSync(join(tmpdir(), "kit-faq-"));
-  try {
-    const entry = join(scratch, "kit-faq-entry.mjs");
-    writeFileSync(
-      entry,
-      `
-import { render } from "svelte/server";
-import Page from ${JSON.stringify(join(worktree, "web/src/routes/faq/+page.svelte"))};
-import { LEAF_CRITICAL_CSS } from ${JSON.stringify(join(worktree, "src/leaf-critical-css.ts"))};
-export function renderPage(data) {
-  // Mirror the server load, which merges leafCss into the page data.
-  const { head, body } = render(Page, { props: { data: { ...data, leafCss: LEAF_CRITICAL_CSS } } });
-  return "<head>" + head + "</head><body>" + body + "</body>";
-}
-`,
-    );
-    const outfile = join(scratch, "kit-faq.mjs");
-    const result = await build({
-      metafile: true,
-      entryPoints: [entry],
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      outfile,
-      logLevel: "warning",
-      absWorkingDir: worktree,
-      nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
-      alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
-      plugins: [
-        {
-          name: "kit-faq-svelte-ssr",
-          setup(plugin) {
-            plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-              const source = readFileSync(args.path, "utf8");
-              const { js } = compile(source, {
-                generate: "server",
-                dev: false,
-                filename: args.path,
-              });
-              return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-            });
-          },
-        },
-      ],
-    });
-    const { renderPage } = (await import(pathToFileURL(outfile).href)) as {
-      renderPage: (data: ReturnType<typeof faqPageData>) => string;
-    };
-    const applicationModules = Object.keys(result.metafile.inputs).filter(
-      (module) => !module.includes("node_modules/"),
-    );
-    return { renderPage, applicationModules };
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-}
 
 // The question list both renderers must agree on. The list is a div (not a
 // section), so the shared sectionOf helper cannot anchor it: extract by tag
@@ -315,14 +237,27 @@ describe("Kit /faq parity with Hono", () => {
     // dependency pin runs on code only.
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
     expect(code).not.toMatch(/dbFor|session|SESSION_STORE|postgres|drizzle|cookies|locals|parent/i);
-    // The load takes only setHeaders: a second destructured property
-    // (cookies, locals, request, parent) would be a session/cookie read even
-    // under a name the token list above does not know.
-    expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
+    // URL is the only additional capability search needs. Continue refusing
+    // cookies, locals, request, parent and renamed destructured capabilities.
+    expect(code).toMatch(
+      /async \(\{\s*(?:setHeaders\s*,\s*url|url\s*,\s*setHeaders|setHeaders)\s*,?\s*\}\)/,
+    );
     // The leaf CSS reaches the page only through this load's data merge.
     expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
     // APP_URL is the only config-driven behavior: dropping it must fail this
     // pin rather than silently render a wrong canonical.
-    expect(code).toMatch(/faqPageData\(env\.APP_URL\)/);
+    expect(code).toMatch(/faqPageData\(env\.APP_URL(?:\s*,|\))/);
+  });
+
+  it("executes the public-only load with unavailable session and DB capabilities", async () => {
+    const bundle = await buildKitFaqBundle();
+    const { data, headers, html } = await loadKitFaq(bundle);
+    expect(bundle.csr).toBe(false);
+    expect(data.appUrl).toBe(APP_URL);
+    expect(data.faqs).toEqual(FAQS);
+    expect(headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(headers.getSetCookie()).toEqual([]);
+    expect(html).toContain("How do I join?");
+    expect(html).not.toContain("<script");
   });
 });

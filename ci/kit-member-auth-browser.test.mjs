@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { before, after, test } from "node:test";
 import { chromium } from "playwright";
+import { registerFaqSearchBrowserAcceptance } from "../test/helpers/faq-search-browser-acceptance.ts";
 import {
   BOARD,
   SELF,
@@ -22,6 +23,7 @@ let render;
 let scratch;
 const evidence = process.env.KIT_MEMBER_AUTH_EVIDENCE_DIR;
 const T0 = Date.UTC(2030, 0, 1);
+registerFaqSearchBrowserAcceptance(() => browser);
 before(async () => {
   scratch = await mkdtemp(
     join(
