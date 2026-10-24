@@ -1,12 +1,13 @@
-// Moderator event writes (JSON): POST /events, PATCH /events/:key and the
-// publish/cancel/rsvp-pause/rsvp-reopen transitions. Split out of
-// src/events/routes.tsx; behavior unchanged.
+// Moderator event writes (JSON): POST /events, PATCH /events/:key, the
+// publish/cancel/rsvp-pause/rsvp-reopen transitions and the duplicate copy
+// action. Split out of src/events/routes.tsx; behavior unchanged.
 import type { MiddlewareHandler } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { dbFor } from "../admin/db";
 import {
   NotFoundError,
   createEvent,
+  duplicateEvent,
   patchEvent,
   setRsvpOpen,
   transitionEvent,
@@ -250,4 +251,29 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       },
     );
   }
+
+  // Duplicate-as-draft (S4): same action stack as the transitions above. The
+  // action takes no body; 201 carries the fresh copy's envelope. A draft is
+  // never mirrored, so no write-back leaves this handler.
+  app.post(
+    "/events/:key/duplicate",
+    requestBodyLimit("action"),
+    throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
+    moderatorGate,
+    async (c) => {
+      const who = c.get("eventModerator");
+      const db = await dbFor(c);
+      if (!db) return dbUnavailableJson(c);
+      try {
+        const key = c.req.param("key");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+        const { row } = await duplicateEvent(db, { id: who.id, username: who.username }, key);
+        return c.json({ data: eventJson(await withGoingCount(db, row)) }, 201);
+      } catch (err) {
+        if (err instanceof ValidationError) return invalid(c, err);
+        if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+        throw err;
+      }
+    },
+  );
 }
