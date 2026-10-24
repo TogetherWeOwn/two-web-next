@@ -87,6 +87,21 @@ function sha256(value: string | Buffer) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+const stripHtmlComments = (html: string): string => {
+  let out = "";
+  let index = 0;
+  while (index < html.length) {
+    if (html.startsWith("<!--", index)) {
+      const end = html.indexOf("-->", index + 4);
+      index = end === -1 ? html.length : end + 3;
+    } else {
+      out += html[index];
+      index += 1;
+    }
+  }
+  return out;
+};
+
 describe("published privacy history: metadata and source integrity", () => {
   it("PH-01 requires stable IDs, descending order and evidence-backed eligible earlier sources", () => {
     const values = entries();
@@ -218,7 +233,9 @@ for (const twin of ["Hono", "Kit"] as const) {
       const body = signed.html.match(
         /<div\b[^>]*data-testid="privacy-policy"[^>]*>([\s\S]*?)<\/div>/,
       )?.[1];
-      expect(body?.replace(/<!--[\s\S]*?-->/g, "")).toBe(renderPolicyMarkdown(POLICY_MARKDOWN));
+      expect(body === undefined ? body : stripHtmlComments(body)).toBe(
+        renderPolicyMarkdown(POLICY_MARKDOWN),
+      );
       expect(fetches).toBe(0);
       if (twin === "Kit") expect(fixture.csr).toBe(false);
     });
