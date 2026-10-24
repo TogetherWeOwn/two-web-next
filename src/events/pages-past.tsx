@@ -184,7 +184,7 @@ export const PastEventsPage: FC<{
               </>
             ) : (
               <>
-                Past events for game “{game}”. <a href="/events/past">Clear game filter</a>
+                Past events for game “{game}”. <a href="/events/past">Clear game</a>
               </>
             )}
           </p>
@@ -204,7 +204,7 @@ export const PastEventsPage: FC<{
                 </>
               ) : (
                 <>
-                  No past events for game “{game}”. <a href="/events/past">Clear game filter</a>
+                  No past events for game “{game}”. <a href="/events/past">Clear game</a>
                 </>
               )}
             </p>

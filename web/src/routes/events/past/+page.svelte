@@ -3,8 +3,6 @@ import EventCard from "#lib/EventCard.svelte";
 import Shell from "#lib/Shell.svelte";
 import {
   EVENTS_EMPTY_COPY,
-  EVENTS_GAME_ALL_COPY,
-  EVENTS_GAME_FILTER_LABEL,
   EVENTS_SUBSCRIBE_TESTID,
   PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
@@ -82,9 +80,12 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     </details>
     <div data-archive-state>
       <form method="get" action="/events/past" role="search">
-        <label for="past-events-game-filter">{EVENTS_GAME_FILTER_LABEL}</label>
+        <!-- Facet labels mirror EVENTS_GAME_FILTER_LABEL / EVENTS_GAME_ALL_COPY
+          (contracts-calendar) as literals: importing the calendar module would
+          add a client graph edge for two strings (Kit perf budget). -->
+        <label for="past-events-game-filter">Filter by game</label>
         <select id="past-events-game-filter" name="game" aria-describedby="past-events-game-scope">
-          <option value="" selected={game === ""}>{EVENTS_GAME_ALL_COPY}</option>
+          <option value="" selected={game === ""}>All games</option>
           {#each games as suggestion}<option value={suggestion} selected={suggestion === game}>{suggestion}</option>{/each}
           {#if game !== "" && !games.includes(game)}<option value={game} selected>{game}</option>{/if}
         </select>
@@ -97,7 +98,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
         <p role="status">
           {#if q && game}Past events matching “{q}” for game “{game}”.{" "}<a href={pastEventsUrl(1, q)}>Clear game</a>{" "}<a href={pastEventsUrl(1, "", game)}>Clear search</a>
           {:else if q}Past events matching “{q}”. <a href="/events/past">Clear search</a>
-          {:else}Past events for game “{game}”.{" "}<a href="/events/past">Clear game filter</a>{/if}
+          {:else}Past events for game “{game}”.{" "}<a href="/events/past">Clear game</a>{/if}
         </p>
       {/if}
       {#if rows.length === 0}
@@ -105,7 +106,7 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
           <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
             {#if q && game}No past events match “{q}” for game “{game}”.{" "}<a href={pastEventsUrl(1, q)}>Clear game</a>{" "}<a href={pastEventsUrl(1, "", game)}>Clear search</a>
             {:else if q}No past events match “{q}”. <a href="/events/past">Clear search</a>
-            {:else}No past events for game “{game}”.{" "}<a href="/events/past">Clear game filter</a>{/if}
+            {:else}No past events for game “{game}”.{" "}<a href="/events/past">Clear game</a>{/if}
           </p>
         {:else if totalPages === 0}
           <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
