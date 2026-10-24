@@ -871,3 +871,77 @@ Prior-head green CI/review is not approval of the new head; all exact-head
 merge gates remain mandatory. Rollback reverts only this new history/evidence
 reconciliation relative to the merged base; it must not undo the independent
 allocation from #1686 or the canonical repair from #1716.
+
+## Thirteenth base-conflict reconciliation: absorb soft-answer/calendar/event main-side work, no new allowance
+
+On 2026-10-24 GitHub confirmed a live conflict on `a05462df` against pinned
+main `c0e1582bd` (thirteen commits: #1463 RSVP soft-answer event page, #1717
+Lighthouse Zod removal, #1723 admin inventory recovery, #1729 ZAP retry
+verdicts, #1657 home teaser grouping, #1720 staging journey receipts, #1724
+patch-coverage evidence, #1730 privacy policy history, #1701 adjacent event
+previews, #1722 calendar phase attribution, #1647 Kit payload contract,
+#1726 calendar recovery allocation, plus the #1710 FAQ stamp). Only
+`ci/kit-perf-budget.json` conflicts: #1463 is the sole main-side commit that
+touches it, appending its preserved soft-answer history. All numeric ceilings
+are byte-equal on all three sides, so the resolution is history-only: base
+comment verbatim, then main's unique tail, then the prerequisite's unique
+record once. Each tail was verified absent from the opposite side and each
+appears exactly once in the merged comment. Main's file encodes non-ASCII as
+`\uXXXX` escapes (from the #1463 merge) while the base used literal UTF-8;
+the resolution matches the main tip's exact encoding (`indent=2`,
+`ensure_ascii=True`, round-trip verified byte-identical on the unmodified
+object), so the file diff against the main tip is the single `$comment` line
+and purely additive. Every numeric ceiling equals the merged base. The
+obsolete client increase stays withdrawn. The main-side feature files are
+taken verbatim as merged; no allowance, exception, source, test, baseline,
+checker or CI-wiring change is authored here. The historical per-file TSV is
+unchanged. While verification ran, main advanced by one commit (#1721
+auth-perf probe settlement, 8 files, no budget touch); it was absorbed in a
+second conflict-free merge, and every suite below was rerun on that final
+tree.
+
+This is a conflict repair, not refreshed feature-union admission. The frozen
+feature overlay was not rebuilt. The old one-file/370-gzip-byte breach
+remains pinned to `d6a65b4fa`, not asserted for this new base. Separately
+merged allocations are not proof that the source feature's exact union fits.
+Keep the source feature/server HOLD until its own then-current union and
+independent CI/review satisfy the gates. No source feature ref was modified
+or pushed.
+
+With Node `v24.22.1` and fresh locked root/web `npm ci --include=dev`
+installs, three actual-tree `npm --prefix web run build` runs (two before the
+tip merge, one after) all pass `node ci/check-kit-perf.mjs`:
+
+| Group | Actual prerequisite tree | Unchanged merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 249082/100853 B | 251904/101632 B |
+| Client JS files | 54 | 54 |
+| Server JS raw/gzip | 1140501/324289 B | 1203200/333312 B |
+| Server JS files | 115 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2861/1019 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 | 0 required |
+
+Client output is byte-identical across all three builds. Server gzip reads
+324290/324290/324289 B: 1 B of identical-tree gzip nondeterminism. Startup
+60000 ms is configuration, not measured latency. Unchanged checker selftests
+**6/6**, checker tests **13/13**, parity file suites **67/67**, parity gate
+runner **81 passed / 0 failed**, config selftests **34/34**, gate selftest
+**6/6**, bundle selftest **34/34** plus a fitting Hono budget, parity
+citations **12/12**, inventory **1181/1181**, auth-perf selftest **19 cases**
+plus file suites **12/15/2/10/46/8**, Kit-payload selftests plus **17/17**
+with `--static-only` ok, proxy-peer selftest **10** plus check ok,
+patch-coverage selftest **7** plus acceptance **266/266** and edge **15/15**,
+and dependency-audit selftests **56/56** pass; `npm run deps:audit` exits 0
+with zero blocked findings. Lint (**1947 files**), root/CI typecheck, asset
+drift, floor guard, docs links (**137 Markdown files**), ratchet unit tests
+**27/27** and the `--base origin/main --head HEAD` ratchet scan pass.
+`context-pack --base origin/main` reports 0 changed symbols. No acceptance
+test files were edited. Full `npm run check`, fresh feature acceptance,
+browser/visual/quality gates, startup latency and staging were not rerun. No
+user-facing page differs from the merged base. Prior-head green CI/review is
+not approval of the new head; all exact-head merge gates remain mandatory.
+Rollback reverts only this new history/evidence reconciliation relative to
+the merged base; it must not undo the independent allocations from #1686 and
+#1726, the canonical repair from #1716, or any absorbed main-side feature.
