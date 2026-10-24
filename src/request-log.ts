@@ -1,10 +1,56 @@
 import type { Context, Next } from "hono";
 import { matchedRoutes } from "hono/route";
 import { currentReleaseFields, setReleaseMetadata } from "./release-tag";
+import { STAGING_APP_URL } from "./qa";
+
+const CALENDAR_PHASES = [
+  "public_read_guard",
+  "calendar_model",
+  "canonical_read",
+  "discord_snapshot",
+  "discord_dedupe",
+  "render_cache",
+] as const;
+export type Phase = (typeof CALENDAR_PHASES)[number];
+export type CalendarPhaseRecorder = {
+  measure<T>(name: string, work: () => T | Promise<T>): Promise<T>;
+  snapshot(): Partial<Record<Phase, number>>;
+};
+
+/** Request-local wall times: overlapping branches are not additive. */
+export function createCalendarPhaseRecorder(now: () => number): CalendarPhaseRecorder {
+  const times: Partial<Record<Phase, number>> = {};
+  const reading = () => {
+    try {
+      const value = now();
+      return Number.isFinite(value) ? value : undefined;
+    } catch {
+      // Diagnostics must not replace a work result or its original rejection.
+      return undefined;
+    }
+  };
+  return {
+    async measure<T>(name: string, work: () => T | Promise<T>): Promise<T> {
+      if (!CALENDAR_PHASES.includes(name as Phase)) return work();
+      const start = reading();
+      try {
+        return await work();
+      } finally {
+        const end = reading();
+        if (start !== undefined && end !== undefined) {
+          const elapsed = end - start;
+          if (Number.isFinite(elapsed) && elapsed >= 0) times[name as Phase] = elapsed;
+        }
+      }
+    },
+    snapshot: () => ({ ...times }),
+  };
+}
 
 declare module "hono" {
   interface ContextVariableMap {
     requestId: string;
+    calendarPhaseRecorder: CalendarPhaseRecorder | undefined;
   }
 }
 
@@ -47,6 +93,16 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
   const started = performance.now();
   const requestId = safeRequestId(c.req.header("cf-ray")) ?? newRequestId();
   c.set("requestId", requestId);
+  if (
+    (c.env as { APP_URL?: unknown } | undefined)?.APP_URL === STAGING_APP_URL &&
+    c.req.method === "GET" &&
+    c.req.path === "/events"
+  ) {
+    c.set(
+      "calendarPhaseRecorder",
+      createCalendarPhaseRecorder(() => performance.now()),
+    );
+  }
   // Seed the per-isolate release identity before any downstream alert can
   // fire, so error lines from this request carry the same build SHA.
   setReleaseMetadata(
@@ -58,6 +114,7 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
   await next();
   c.header("x-request-id", requestId);
   const colo = (c.req.raw.cf as { colo?: unknown } | undefined)?.colo;
+  const phases = c.get("calendarPhaseRecorder");
   console.log(
     JSON.stringify({
       event: "http.request",
@@ -70,6 +127,7 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
       // Same fields on every structured line: this record has no error.
       error_class: null,
       ...currentReleaseFields(),
+      ...(phases ? { calendar_phase_ms: phases.snapshot() } : {}),
     }),
   );
 }

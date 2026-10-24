@@ -3,7 +3,9 @@
 // the create-only recurrence fieldset or the edit-only series note, and the
 // save/cancel actions. Field errors render through the shared Field helper.
 
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
@@ -217,6 +219,7 @@ export const EventFormFields: FC<{
           <a href="/admin/events">Cancel</a>
         </div>
       </form>
+      {raw(adminSaveStatus)}
     </>
   );
 };

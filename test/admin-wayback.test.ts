@@ -23,7 +23,7 @@ describe("adminWayBack", () => {
     });
   });
 
-  it.each(["publish", "cancel", "rsvp-pause", "rsvp-reopen"])(
+  it.each(["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"])(
     "maps event lifecycle action %s to the event editor",
     (action) => {
       expect(adminWayBack(`/admin/events/game-night/${action}`)).toEqual({
