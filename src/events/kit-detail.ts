@@ -389,6 +389,7 @@ export async function resolveKitEventDetail(
             title: event.title,
             game: event.game,
             eventKey: event.eventKey,
+            existingResponses: event.goingCount,
             icsUrl: `/events/${event.eventKey}.ics`,
             markdownAlternate: `/e/${event.eventKey}.md`,
             upcomingUrl: "/events",
