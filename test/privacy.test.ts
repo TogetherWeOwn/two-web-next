@@ -43,7 +43,7 @@ const noDbEnv = {
 } as unknown as Env;
 
 describe("/privacy versioned policy page (N1)", () => {
-  it("renders v5 with zero queries: 200 with the app DB down, no cookies, CSP present", async () => {
+  it("renders v6 with zero queries: 200 with the app DB down, no cookies, CSP present", async () => {
     const res = await app.request("/privacy", {}, noDbEnv);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
@@ -52,7 +52,7 @@ describe("/privacy versioned policy page (N1)", () => {
     expect(res.headers.getSetCookie()).toHaveLength(0);
     const html = await res.text();
     expect(html).toContain('data-testid="privacy-version"');
-    expect(html).toContain("Version 5");
+    expect(html).toContain("Version 6");
     expect(html).toContain('data-testid="privacy-policy"');
     expect(html).toContain("<h2>What we store</h2>");
     expect(html).toContain("<strong>Your Discord identity</strong>");
@@ -115,7 +115,7 @@ describe("/privacy versioned policy page (N1)", () => {
     const res = await app.request("/privacy", { headers: { cookie: forged } }, noDbEnv);
     expect(res.status).toBe(200);
     expect(res.headers.getSetCookie()).toHaveLength(0);
-    expect(await res.text()).toContain("Version 5");
+    expect(await res.text()).toContain("Version 6");
   });
 
   it("appears in the sitemap crawl set at 0.7 (parity matrix §1)", async () => {
@@ -125,14 +125,15 @@ describe("/privacy versioned policy page (N1)", () => {
 });
 
 describe("policy versioning contract", () => {
-  it("pins version 5 to the v5 content file and keeps v1/v2/v3/v4 in history", () => {
-    expect(POLICY_VERSION).toBe(5);
-    expect(POLICY_FILE).toBe("content/privacy-policy-v5.md");
+  it("pins version 6 to the v6 content file and keeps v1/v2/v3/v4/v5 in history", () => {
+    expect(POLICY_VERSION).toBe(6);
+    expect(POLICY_FILE).toBe("content/privacy-policy-v6.md");
     expect(POLICY_MARKDOWN.startsWith("## Who we are")).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v1.md"))).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v2.md"))).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v3.md"))).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v4.md"))).toBe(true);
+    expect(existsSync(resolve(root, "content/privacy-policy-v5.md"))).toBe(true);
   });
 
   // v1 described the legacy stack (TOG-12553). These facts are false on Next.

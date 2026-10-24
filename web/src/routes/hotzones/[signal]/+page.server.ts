@@ -3,15 +3,17 @@ import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
 import { alertRequestError } from "../../../../../src/alerts";
-import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
-import type { HotzoneSignal } from "../../../../../src/hotzones/aggregates";
 import { parseSeasonParam } from "../../../../../src/hotzones/season";
+// The season import stays above the vocabulary import: this binding mirrors
+// the Hono order (season grammar before the signal check), and the order pin
+// reads the source top to bottom.
+import { isHotzoneSignal } from "../../../../../src/hotzones/aggregates";
+import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
 import { renderHotzoneGrid, renderPeriodPicker } from "../../../../../src/hotzones/pages";
 
-// Locked signal vocabulary: joins | voice | games exactly. Any other segment
-// 404s at this binding, never a grid; the helper re-checks it for its own
-// callers.
-const SIGNALS: HotzoneSignal[] = ["joins", "voice", "games"];
+// Locked signal vocabulary: joins | voice | games exactly, via the shared
+// predicate. Any other segment 404s at this binding, never a grid; the helper
+// re-checks it for its own callers.
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.
@@ -24,9 +26,17 @@ export const csr = false;
 export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
   // Hono answers the season grammar before the signal vocabulary
   // (src/hotzones/routes.tsx); keep that order here too. The helper
-  // re-checks both for its own callers.
-  if (!parseSeasonParam(url.searchParams.get("season"))) error(400, "Unknown season");
-  if (!SIGNALS.includes(params.signal as HotzoneSignal)) error(404, "Not found");
+  // re-checks both for its own callers. These pre-checks bypass the helper,
+  // so they stamp the helper's no-store headers themselves: exactly one
+  // setHeaders call fires per path either way.
+  if (!parseSeasonParam(url.searchParams.get("season"))) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(400, "Unknown season");
+  }
+  if (!isHotzoneSignal(params.signal)) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(404, "Not found");
+  }
   try {
     const data = await loadHotzoneSignalData({
       env,

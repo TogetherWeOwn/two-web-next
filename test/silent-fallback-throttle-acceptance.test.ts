@@ -15,10 +15,14 @@
 // middleware, join funnel, profile writes) reports it; the store-throw warn
 // lives in the throttleGuard catch. Emit exactly one line per allow: no
 // pre-rethrow warn inside the verdict transaction. Verdicts are unchanged,
-// including the 55P03 busy -> 429 refusal, which stays silent (a refusal is
-// not a fail-open). Throttle names the route/throttle only (e.g. "probe");
+// including the 55P03 busy -> 429 refusal, which stays silent at the verdict
+// level (a refusal is not a fail-open); the guard layer now emits
+// `throttle.refused` telemetry on every 429 it answers, so the guard-refusal
+// pin below expects that warn (see
+// test/throttle-429-refusal-telemetry-acceptance.test.ts for the full
+// telemetry contract). Throttle names the route/throttle only (e.g. "probe");
 // never the full "<name>:<client>" bucket, never IP bytes, never Discord or
-// member IDs (content/privacy-policy-v5.md "never your IP address or who you
+// member IDs (content/privacy-policy-v6.md "never your IP address or who you
 // are"; docs/throttling.md "No header bytes are logged"). Exception is the
 // class only, never the message (it can quote statement bindings).
 //
@@ -82,6 +86,7 @@ function probeApp(throttleStore: () => Promise<Sql | null>) {
   return (init?: RequestInit) =>
     app.request("/probe", { headers: { "cf-connecting-ip": IP }, ...init }, {
       THROTTLE_STORE: throttleStore,
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
     } as unknown as EnvWithThrottle);
 }
 
@@ -151,7 +156,7 @@ describe("throttle fail-open warns (failing-first)", () => {
   });
 });
 
-describe("throttle verdict stability + refusal silence", () => {
+describe("throttle verdict stability + guard refusal telemetry", () => {
   it("an admitted request stays admitted with no warn", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const verdict = await checkJoinThrottle(memorySql({ count: 0 }), "join:admit-quiet", 10);
@@ -177,12 +182,20 @@ describe("throttle verdict stability + refusal silence", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("a refused guard answers 429 with Retry-After and no warn", async () => {
+  it("a refused guard answers 429 with Retry-After and refusal telemetry", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const get = probeApp(async () => memorySql({ count: 999, wait: 17 }));
     const res = await get();
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("17");
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("throttle.refused", {
+      throttle: THROTTLE,
+      outcome: "rate_limited",
+    });
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("bucket");
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(IP);
+    expect(logged).not.toContain(BUCKET);
   });
 });

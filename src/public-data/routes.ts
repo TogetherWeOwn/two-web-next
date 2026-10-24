@@ -14,6 +14,7 @@ import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { varyAccept } from "../errors";
+import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
@@ -22,6 +23,7 @@ import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
   API_PUBLIC_BOUNDS,
+  PUBLIC_DATA_ERROR_NEXT,
   PUBLIC_DATA_INTERNAL_MESSAGE,
   PUBLIC_EVENT_STATUS,
   parsePublicEventId,
@@ -36,6 +38,7 @@ import {
 import {
   apiPublicCacheGeneration,
   apiPublicCacheKey,
+  findCachedClampTarget,
   readApiPublicCache,
   writeApiPublicCache,
   type ApiPublicCacheEntry,
@@ -54,7 +57,14 @@ function apiError(
   message: string,
   status: 422 | 404 | 500 | 503,
 ): Response {
-  const body: PublicDataErrorDto = { error: { code, message } };
+  const body: PublicDataErrorDto = {
+    error: {
+      code,
+      message,
+      request_id: c.get("requestId"),
+      next: PUBLIC_DATA_ERROR_NEXT[code],
+    },
+  };
   return c.json(body, status, { "cache-control": "no-store, private" });
 }
 
@@ -75,31 +85,41 @@ function internalFault(c: Ctx, err: unknown): Response {
 }
 
 /**
- * Shared admission for the read API: the same per-client fixed-window budget
- * as pages and feeds, before any event or database read. A 429 validates the
- * upstream Retry-After through the shared `parseRetryAfterSeconds` parser —
- * usable values pass through (absurd ones cap at 86400), absent/unparseable
- * values fall back to 60 — and speaks the new error envelope instead of the
- * legacy /events.json shape. The one validated value feeds both the message
- * and the response header, so they can never disagree or echo raw upstream
- * text.
+ * Shared admission check for the read API: the same per-client fixed-window
+ * budget as pages and feeds, before any event or database read. Returns the
+ * validated Retry-After seconds when the budget is spent (usable upstream
+ * values pass through, absurd ones cap at 86400, absent/unparseable values
+ * fall back to 60), or null when the request is admitted. Stamps the
+ * validated value on the context header too, not just the per-response one:
+ * the guard chain already set a context-level Retry-After to the RAW upstream
+ * value, and on routes with middleware Hono merges those stale context
+ * headers over the returned response.
  */
-export async function admitted(c: Ctx): Promise<Response | null> {
+export async function admissionRetryAfter(c: Ctx): Promise<number | null> {
   const limited = await publicReadGuard(c);
   if (!limited) return null;
   const retryAfterSeconds = parseRetryAfterSeconds(limited.headers.get("retry-after")) ?? 60;
+  c.header("retry-after", String(retryAfterSeconds));
+  return retryAfterSeconds;
+}
+
+/**
+ * Shared admission for the read API. A 429 speaks the error envelope instead
+ * of the legacy /events.json shape. The one validated value feeds both the
+ * message and the response header, so they can never disagree or echo raw
+ * upstream text.
+ */
+export async function admitted(c: Ctx): Promise<Response | null> {
+  const retryAfterSeconds = await admissionRetryAfter(c);
+  if (retryAfterSeconds === null) return null;
   const body: PublicDataErrorDto = {
     error: {
       code: "rate_limited",
       message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
+      request_id: c.get("requestId"),
+      next: PUBLIC_DATA_ERROR_NEXT.rate_limited,
     },
   };
-  // Stamp the context header too, not just the per-response one: the guard
-  // chain already set a context-level Retry-After to the RAW upstream value,
-  // and on routes with middleware Hono merges those stale context headers
-  // over the returned response. Without this the MCP 429 header echoes raw
-  // upstream text while the body carries the validated value.
-  c.header("retry-after", String(retryAfterSeconds));
   return c.json(body, 429, {
     "retry-after": String(retryAfterSeconds),
     "cache-control": "no-store, private",
@@ -293,15 +313,38 @@ function parseLimit(raw: string): number {
     : API_PUBLIC_BOUNDS.defaultPageSize;
 }
 
+/**
+ * Raw page with the documented ceiling applied before any key or offset is
+ * built. Missing values, values without an integer prefix and sub-1 values
+ * fall back to 1 (never a 422); huge or unsafe integers cap at maxPage so the
+ * offset stays a safe integer. Lenient `parseInt` parsing is preserved:
+ * "2abc" and "2.9" still read as 2, with optional sign and leading whitespace.
+ */
+function parsePage(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n < 1) return 1;
+  if (!Number.isSafeInteger(n) || n > API_PUBLIC_BOUNDS.maxPage) return API_PUBLIC_BOUNDS.maxPage;
+  return n;
+}
+
 export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get("/api/public/events", async (c) => {
     const refused = await admitted(c);
     if (refused) return refused;
     const limit = parseLimit(c.req.query("per_page") ?? c.req.query("limit") ?? "");
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const page = parsePage(c.req.query("page") ?? "1");
     const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Out-of-range replay: only an entry at its own last page proves a clamp,
+    // so never combine metadata and bytes from different cached snapshots.
+    const clampTarget = findCachedClampTarget(limit, page);
+    if (clampTarget !== null && clampTarget !== page) {
+      const clampedHit = readApiPublicCache(
+        apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${clampTarget}`),
+      );
+      if (clampedHit) return cachedEntry(c, clampedHit);
+    }
     // Fence: a retire that lands while this read is in flight refuses the
     // settle below, so pre-retire bytes never refill the retired entry.
     const generation = apiPublicCacheGeneration();
@@ -310,13 +353,15 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
+    let clamped: number = page;
     try {
       const listed = await listPublicApiEvents(db, {
         limit,
         offset: (page - 1) * limit,
       });
       if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-      const { rows, total, page: clamped } = listed;
+      clamped = listed.page;
+      const { rows, total } = listed;
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
         body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
@@ -336,7 +381,14 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body, generation);
+    // Store under the clamped page the database answered, never the raw alias:
+    // N past-the-end pages occupy one entry and cannot evict page 1.
+    const storeKey = apiPublicCacheKey(
+      "GET",
+      "/api/public/events",
+      `?limit=${limit}&page=${clamped}`,
+    );
+    return servePublicJson(c, storeKey, body, generation);
   });
 
   app.get("/api/public/events/:key", async (c) => {
@@ -402,8 +454,14 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
 
   // Static discovery document, database-free like robots.txt: no admission,
   // no session, unchanged bytes per APP_URL with a long edge TTL.
-  app.get("/openapi.json", (c) => {
+  app.get("/openapi.json", async (c) => {
+    const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
+    const etag = await etagFor(body);
     c.header("cache-control", "public, max-age=3600");
-    return c.json(getOpenApiDocument(c.env.APP_URL));
+    c.header("etag", etag);
+    const robots = stagingRobots(c);
+    if (robots) c.header("x-robots-tag", robots);
+    if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
+    return c.body(body, 200, { "content-type": "application/json" });
   });
 }

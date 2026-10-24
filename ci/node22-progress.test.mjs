@@ -67,17 +67,17 @@ test("production defaults cap cadence, reads, process rows and total output befo
   assert.equal(records.length, 1);
   t.mock.timers.tick(1);
   assert.equal(records.length, 2);
-  for (let minute = 2; minute <= 30; minute++) t.mock.timers.tick(60000);
-  assert.equal(records.length, 28);
+  for (let minute = 2; minute <= 45; minute++) t.mock.timers.tick(60000);
+  assert.equal(records.length, 43);
   for (const line of records) {
     const record = JSON.parse(line.slice("[node22-progress] ".length));
     assert.equal(record.processes.length, 32);
     assert.equal(record.truncated, true);
     assert.ok(Buffer.byteLength(line) <= 8192);
   }
-  assert.ok(Buffer.byteLength(records.join("")) <= 28 * 8192);
+  assert.ok(Buffer.byteLength(records.join("")) <= 43 * 8192);
   assert.throws(() => sampleProcesses(101, { maxProcesses: 33 }), /bounds/);
-  assert.throws(() => startProgress(101, { maxSamples: 29 }), /bounds/);
+  assert.throws(() => startProgress(101, { maxSamples: 44 }), /bounds/);
   assert.throws(() => startProgress(101, { intervalMs: NaN }), /bounds/);
 });
 
@@ -171,7 +171,7 @@ test("workflow retains the exact suite, scope gate, hosted runner, timeout and r
     /if: \(needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'\)/,
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
-  assert.match(job, /timeout-minutes: 30\n/);
+  assert.match(job, /timeout-minutes: 45\n/);
   assert.match(job, /!github.event.repository.private && '\["ubuntu-latest"\]'/);
   assert.match(job, /image: node:22\.23\.0-bookworm/);
   assert.match(job, /run: node --test ci\/node22-progress\.test\.mjs/);
@@ -210,7 +210,10 @@ console.error("err:" + stage);
 setTimeout(() => {
   if (process.env.FAIL_AT === "signal" && stage === "test") process.kill(process.pid, "SIGTERM");
   else process.exit(process.env.FAIL_AT === stage ? { lint: 7, typecheck: 8, test: 9 }[stage] : 0);
-}, 100);
+  // 500ms per stage: the lint case fails after the first stage, and the
+  // sidecar's node startup can exceed a 100ms window on a loaded runner,
+  // leaving no [node22-progress] line to assert (red node22-compat).
+}, 500);
 `,
       { mode: 0o755 },
     );

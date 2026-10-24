@@ -4,6 +4,7 @@ import type { Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
+import { shareImageUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -50,6 +51,20 @@ export const Layout: FC<
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {theme && theme !== "content" ? (
+          // First network hint: the Display-700 LCP text must be discovered
+          // with the first document chunk, not after the ~19 KB inlined style
+          // block below. Late discovery left the simulated font completion at
+          // the paint boundary and flipped `/` mobile LCP between FCP and
+          // FCP + ~450 ms across staging runs.
+          <link
+            rel="preload"
+            href="/fonts/display-latin-700.woff2"
+            as="font"
+            type="font/woff2"
+            crossorigin="anonymous"
+          />
+        ) : null}
         <meta name="theme-color" content="#151720" />
         <link rel="manifest" href="/site.webmanifest" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
@@ -73,6 +88,8 @@ export const Layout: FC<
             {shareDescription ? (
               <meta property="og:description" content={shareDescription} />
             ) : null}
+            <meta property="og:image" content={shareImageUrl(canonical)} />
+            <meta property="og:image:alt" content="Together We Own community logo" />
             <meta name="twitter:card" content="summary" />
             <meta name="twitter:title" content={shareTitle ?? title} />
             {shareDescription ? (
@@ -100,25 +117,18 @@ export const Layout: FC<
           // preload hints for the same files measured zero. The homepage
           // reuses the exact same bundle: its hero paints at first paint
           // (LCP equals FCP every staging run), so removing the three external
-          // stylesheet requests is the primary FCP improvement. Keep the Display-700 preload for an early font
-          // fetch; the Arial-metric 'Display Fallback' reduces delayed-font layout shift
-          // (the preload alone cannot close the FCP/font gap on cold mobile). The block is
-          // allowlisted by hash in style-src (no unsafe-inline).
+          // stylesheet requests is the primary FCP improvement. The Display-700
+          // preload stays at the top of the head (above this block) for an early
+          // font fetch; the Arial-metric 'Display Fallback' reduces delayed-font
+          // layout shift (the preload alone cannot close the FCP/font gap on
+          // cold mobile). The block is allowlisted by hash in style-src
+          // (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
           <link rel="stylesheet" href="/styles.css" />
         )}
         {theme ? (
           <>
-            {theme !== "content" ? (
-              <link
-                rel="preload"
-                href="/fonts/display-latin-700.woff2"
-                as="font"
-                type="font/woff2"
-                crossorigin="anonymous"
-              />
-            ) : null}
             {!inlineCriticalCss && theme !== "content" ? (
               <>
                 <link rel="stylesheet" href="/theme-tokens.css" />

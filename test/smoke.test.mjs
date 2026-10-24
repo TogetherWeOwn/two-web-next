@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { build } from "esbuild";
 import {
+  SMOKE_PROBE_KEY,
   SMOKE_QUEUE_CRITICAL_AT,
   SMOKE_QUEUE_WARN_AT,
   SMOKE_SECURITY_TXT_EXPIRES,
   securityTxtAssertions,
   smoke,
+  writeSmokeLedger,
 } from "../bin/smoke.mjs";
 
 // Producer-derived security.txt body: buildSecurityTxt bundled once from
@@ -95,7 +100,7 @@ const fixtures = {
   ],
   // The fixed probe key exists in no database, so like the real handler
   // (src/public-data/routes.ts) the stub answers 404 not_found.
-  "/api/public/events/00000000000000000000000001": [
+  [`/api/public/events/${SMOKE_PROBE_KEY}`]: [
     404,
     "application/json",
     '{"error":{"code":"not_found","message":"No published event with that key."}}',
@@ -118,7 +123,7 @@ const fixtures = {
   // Single-event HTML detail (GET /e/:key, src/events/routes-detail.tsx):
   // the fixed probe key exists in no database, so like the real handler's
   // notFound() the stub answers the branded missing-event page.
-  "/e/00000000000000000000000001": [
+  [`/e/${SMOKE_PROBE_KEY}`]: [
     404,
     "text/html",
     "<title>We cannot find that page — Together We Own</title>",
@@ -374,6 +379,95 @@ test("CLI refuses a present version override without a value", async (t) => {
   assert.equal(requests.length, 0);
 });
 
+test("CLI --help prints the single flag reference without probing", async () => {
+  const result = await cli(["--help"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /Usage: node bin\/smoke\.mjs/);
+  for (const flag of [
+    "--allow-indexable",
+    "--fail-on-ready-wait-critical",
+    "--version-override",
+    "--expected-version-id",
+    "--failed-baseline",
+    "--allow-missing-baseline",
+    "--json",
+    "--ledger",
+  ]) {
+    assert.ok(result.output.includes(flag), flag);
+  }
+});
+
+test("CLI refuses a present ledger flag without a path", async (t) => {
+  const { url, requests } = await stub(t);
+  const result = await cli([url, "--ledger"]);
+  assert.equal(result.code, 2, result.output);
+  assert.match(result.output, /--ledger/);
+  assert.equal(requests.length, 0);
+});
+
+function verdictsOf(output) {
+  return output
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line));
+}
+
+test("CLI --json appends a machine verdict without changing a passing exit", async (t) => {
+  const { url } = await stub(t);
+  const result = await cli([url, "--json"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+  assert.deepEqual(verdictsOf(result.output), [{ ok: true, routes: 24, failed: 0 }]);
+});
+
+test("CLI --json verdict tracks a failing probe", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") result.status = 503;
+  });
+  const result = await cli([url, "--json"]);
+  assert.equal(result.code, 1, result.output);
+  assert.deepEqual(verdictsOf(result.output), [{ ok: false, routes: 24, failed: 1 }]);
+});
+
+test("CLI --ledger writes a json-smoke-shaped evidence file", async (t) => {
+  const { url } = await stub(t);
+  const ledgerPath = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "ledger.json");
+  const result = await cli([url, "--ledger", ledgerPath]);
+  assert.equal(result.code, 0, result.output);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(ledger.ledger, "smoke/1");
+  assert.equal(ledger.origin, url);
+  assert.equal(ledger.checks.length, 24);
+  assert.ok(ledger.checks.every((entry) => entry.status === "pass"));
+  assert.deepEqual(ledger.summary, { total: 24, passed: 24, failed: 0, skipped: 0 });
+});
+
+test("CLI --ledger to an unwritable path keeps the probe result", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") result.status = 503;
+  });
+  const missing = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "missing", "ledger.json");
+  const result = await cli([url, "--ledger", missing]);
+  assert.equal(result.code, 1, result.output);
+  assert.match(result.output, /ledger unwritten/);
+});
+
+test("writeSmokeLedger summarizes pass/fail/skip entries", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "smoke-ledger-")), "ledger.json");
+  const entries = [
+    { check: "/a", status: "pass" },
+    { check: "/b", status: "fail", reason: "1 failed assertion" },
+    { check: "/c", status: "skip", reason: "fixture" },
+  ];
+  writeSmokeLedger(path, "http://127.0.0.1:9", entries);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    ledger: "smoke/1",
+    origin: "http://127.0.0.1:9",
+    checks: entries,
+    summary: { total: 3, passed: 1, failed: 1, skipped: 1 },
+  });
+});
+
 for (const path of Object.keys(fixtures)) {
   test(`rejects wrong status on ${path} and continues through remaining routes`, async (t) => {
     const { url, requests } = await stub(t, (route, result) => {
@@ -445,7 +539,7 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   const brokenBodies = [
     // A success envelope where the missing-event error belongs.
     JSON.stringify({
-      event_key: "00000000000000000000000001",
+      event_key: SMOKE_PROBE_KEY,
       title: "Fixture game night",
       status: "published",
       rsvp_open: true,
@@ -467,12 +561,12 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
   ];
   for (const body of brokenBodies) {
     const { url } = await stub(t, (route, result) => {
-      if (route === "/api/public/events/00000000000000000000000001") result.body = body;
+      if (route === `/api/public/events/${SMOKE_PROBE_KEY}`) result.body = body;
     });
     const result = await run(url);
     assert.equal(result.ok, false, body);
     assert.ok(
-      result.output.includes("FAIL /api/public/events/00000000000000000000000001: expected"),
+      result.output.includes(`FAIL /api/public/events/${SMOKE_PROBE_KEY}: expected`),
       result.output,
     );
     assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
@@ -504,7 +598,7 @@ test("a broken single-event HTML detail fails only that entry", async (t) => {
   ];
   for (const [body, status, contentType, expectedFragment] of broken) {
     const { url } = await stub(t, (route, result) => {
-      if (route === "/e/00000000000000000000000001") {
+      if (route === `/e/${SMOKE_PROBE_KEY}`) {
         result.body = body;
         result.status = status;
         if (contentType) result.headers["content-type"] = `${contentType}; charset=UTF-8`;
@@ -513,19 +607,19 @@ test("a broken single-event HTML detail fails only that entry", async (t) => {
     const result = await run(url);
     assert.equal(result.ok, false, body);
     assert.ok(
-      result.output.includes("FAIL /e/00000000000000000000000001: expected"),
+      result.output.includes(`FAIL /e/${SMOKE_PROBE_KEY}: expected`),
       `${body}\n${result.output}`,
     );
     if (expectedFragment) {
       assert.ok(
-        result.output.includes(`FAIL /e/00000000000000000000000001: ${expectedFragment}`),
+        result.output.includes(`FAIL /e/${SMOKE_PROBE_KEY}: ${expectedFragment}`),
         `${body}\n${result.output}`,
       );
     }
     assert.match(result.output, /^PASS \/events$/m, `${body}\n${result.output}`);
     assert.match(
       result.output,
-      /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+      new RegExp(`^PASS \\/api\\/public\\/events\\/${SMOKE_PROBE_KEY}$`, "m"),
       `${body}\n${result.output}`,
     );
     assert.match(result.output, /^PASS \/__smoke_unknown_route__$/m, `${body}\n${result.output}`);
@@ -807,7 +901,7 @@ test("security.txt passes in both indexing modes", async (t) => {
       if (
         allowIndexable &&
         (route === "/events/past" ||
-          route === "/e/00000000000000000000000001" ||
+          route === `/e/${SMOKE_PROBE_KEY}` ||
           route === "/__smoke_unknown_route__")
       )
         return;
@@ -932,6 +1026,8 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
   );
   const upcoming = EventsCalendarPage({
     state: { view: "list", month: "2026-10", q: "", past: false },
+    games: [],
+    gameFilter: null,
     upcoming: [],
     past: [],
     zone: "UTC",
@@ -1972,7 +2068,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   const { url, requests } = await stub(t, (route, result) => {
     if (
       route === "/events/past" ||
-      route === "/e/00000000000000000000000001" ||
+      route === `/e/${SMOKE_PROBE_KEY}` ||
       route === "/__smoke_unknown_route__"
     )
       return;
@@ -2013,7 +2109,7 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (
       route === "/events/past" ||
-      route === "/e/00000000000000000000000001" ||
+      route === `/e/${SMOKE_PROBE_KEY}` ||
       route === "/__smoke_unknown_route__"
     )
       return;

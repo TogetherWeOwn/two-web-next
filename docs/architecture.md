@@ -181,8 +181,10 @@ request and never stored. The session cookie (`__Host-two_session`,
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
-sessions last 120 minutes with rotation on authenticated reads
-(`SESSION_TTL_SECONDS`), and logout revokes the row. Operators can revoke
+sessions have a 120-minute sliding window with rotation on authenticated reads
+(`SESSION_TTL_SECONDS`) and an absolute 24-hour lineage cap
+(`SESSION_ABSOLUTE_MAX_AGE_SECONDS`). Rotation preserves the original login's
+`created_at`; a fresh login is required at the cap. Logout revokes the row. Operators can revoke
 one member's active sessions with
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs) (dry-run count by
 default, `--apply` revokes), implemented in
@@ -294,6 +296,7 @@ exactly once.
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
+| `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
@@ -311,6 +314,7 @@ exactly once.
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
 | `src/member-erasure.ts` | profiles |
@@ -322,6 +326,7 @@ exactly once.
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
+| `src/privacy-history.ts` | content |
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
@@ -335,6 +340,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
 | `src/faq-content.ts` | content |
+| `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |

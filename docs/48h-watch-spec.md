@@ -33,7 +33,7 @@ the separately approved operator procedure.
 | --- | --- | --- |
 | R readiness | `GET /up` on the apex | 200, `db: "ok"`, `pending_migrations: 0`, no `config` key, `X-TWO-Origin: two-web-next`, `Cache-Control: no-store` |
 | S static DB-free | `GET /`, `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET), `GET /discord` (302 invite), `POST /csp-reports` (204) | Stay 200/302/204 during a database outage; never 5xx for a DB reason |
-| G guest reads (DB-backed) | `GET /events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key`, `/sitemap_index.xml` event lookups | Event list/feed routes return 200 guest HTML/RSS/iCal when available; missing event DB returns plain-text 503. Classified DB outages use the shared sanitized 503. Other failures use 500 HTML on list/feed routes; `/e/:key` refuses failed reads with plain-text 503. |
+| G guest reads (DB-backed) | `GET /events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key`, `/sitemap_index.xml` event lookups | Event list/feed routes return 200 guest HTML/RSS/iCal when available; missing event DB returns plain-text 503 on list/feed routes. Classified DB outages use the shared sanitized 503. Other failures use 500 HTML on list/feed routes; `/e/:key` with a missing event DB returns the shared sanitized branded HTML 503, or negotiated JSON 503 with `error: "db_unavailable"`; its other failed reads remain plain-text 503. |
 | M member writes | OAuth callback, join callback, `PUT/DELETE /events/:key/rsvp`, profile read/save, `POST/PATCH /events*` | Auth gates 401/403 first; classified DB outage and profile read failure 503; other session, transaction or save failure 500; missing store 503; post-commit enqueue failure keeps the 2xx |
 | A privileged | Implemented `/admin/*`, `POST /api/agent-events` | Session resolution, admin reads, missing resource DB and classified DB outage 503; other uncaught admin-write failure 500 HTML; guest 302, non-moderator 403; agent-events ingress disabled 404, no source 503, service failure 500 JSON |
 | Q async | `two-sync-event`, `two-internal-action` ledger + transport | `pending < 20` healthy; `pending >= 20` degraded; ledger unreadable is `unknown` |
@@ -100,27 +100,65 @@ Engineer, never a silent threshold relaxation.
 
 No new infrastructure, no Logpush, no external shipper, no new pager.
 
-1. **Cloudflare dashboard, Workers & Pages, `two-web-next-production`, Observability.**
-   Workers Logs is enabled on the production app and on its Tail Worker
-   (`two-web-next-alerts-production` per `wrangler.jsonc` `env.production`).
-   Use the log message contains filter (records are serialized JSON strings):
-   - `http.request` with `route`, `status`, `duration_ms`, `colo` for
-     availability, p95 and 5xx rate per class above.
-   - `"event":"error.alert"` with `fingerprint` (`ExceptionClass@/route/pattern`)
-     for 5xx attribution; correlate by `request_id` with the `http.request` record.
-   - `"event":"queue.failing"` with job class and attempts for queue failure spikes.
-   - On the production Tail Worker, `"delivery":"ops.alert.delivered"` and
-     `"delivery":"ops.alert.delivery_failed"` for pager proof versus loss.
+**Production source precondition:** the producer split below is the checked-in
+expectation, not proof that the live jobs transfer completed. Before choosing a
+queue or scheduled source in either dashboard or live tail, have the authorized
+Operator record read-only consumer and cron ownership using
+`node ci/check-production-triggers.mjs` and the
+[environment-specific readback](runbook.md#queue-incident-targets-by-environment-checked-in-expectations-live-readback-required).
+Exit 0 confirms both production queues and crons match the jobs topology. A
+version promotion or an active jobs deployment alone does not prove trigger
+ownership. Transfer pending: queue consumers and crons may still run on
+`two-web-next-production`; use that source for the corresponding failures.
+If ownership is partial or unreadable, inspect both production source streams,
+report the gap rather than infer health from silence, and reconcile through
+[the production jobs handoff](production-jobs-handoff.md) before owner-sensitive
+actions. These recipes do not authorize the transfer or any trigger mutation.
+
+1. **Cloudflare dashboard, Workers & Pages, Observability > Logs.**
+   Workers Logs is enabled on the web and jobs producers and their corresponding
+   Tail Worker (`wrangler.jsonc`, `wrangler.jobs.jsonc`, `tail/wrangler.jsonc`).
+   Select the producer for the signal; use the log message contains filter
+   (records are serialized JSON strings):
+   - Web `two-web-next-production` (staging `two-web-next`): `http.request`
+     with `route`, `status`, `duration_ms`, `colo` for availability, p95 and
+     5xx rate per class above; `"event":"error.alert"` with `fingerprint`
+     (`ExceptionClass@/route/pattern`) for 5xx attribution, correlated by
+     `request_id` with the `http.request` record.
+   - Jobs `two-web-jobs-production` after confirmed transfer (staging
+     `two-web-jobs`): `"event":"queue.failing"` with job class and attempts for
+     queue failure spikes; `"event":"scheduled.failing"` with job and exception
+     class for reconcile/prune failures, including handled partial or capped
+     outcomes whose scheduled handler can still resolve. Until the corresponding
+     consumer or cron moves, apply these same filters to `two-web-next-production`
+     instead, as determined by the readback above.
+   - Tail `two-web-next-alerts-production` (staging `two-web-next-alerts`):
+     `"delivery":"ops.alert.delivered"` and
+     `"delivery":"ops.alert.delivery_failed"` for redacted delivery receipts
+     versus loss. A source alert line alone does not prove pager delivery.
 2. **Live tail on production (authorized Cloudflare access only).**
+   Choose queue/scheduled sources from the readback above; keep the web error
+   and Tail receipt streams in either topology.
    ```sh
    npx wrangler tail two-web-next-production --format json \
-     | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
+     | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"error[.]alert\""))'
+   # Confirmed jobs ownership for the corresponding consumer or cron:
+   npx wrangler tail two-web-jobs-production --format json \
+     | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(queue[.]failing|scheduled[.]failing)\""))'
+   # Transfer pending: corresponding consumer or cron still on the web Worker:
+   npx wrangler tail two-web-next-production --format json \
+     | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(queue[.]failing|scheduled[.]failing)\""))'
    npx wrangler tail two-web-next-alerts-production --search '"delivery":"ops.alert.'
    ```
-   Raw source traces stay the diagnostic fallback; never publish them.
-   Staging comparison only: dashboard `two-web-next`, and
-   `npx wrangler tail two-web-next` plus
-   `npx wrangler tail two-web-next-alerts` with the same filters.
+   Staging comparison only: substitute `two-web-next`, `two-web-jobs` and
+   `two-web-next-alerts` for the web error, jobs and receipt commands, respectively,
+   keeping each filter. The transfer-pending web queue/cron fallback is production-only.
+   Source traces remain the private diagnostic fallback, distinct from redacted
+   delivery receipts. Never publish raw source traces or receipt streams; retain
+   only redacted receipt lines as evidence. See the canonical
+   [Tailing and fallback](runbook-alerts.md#tailing-and-fallback) procedure.
+   These diagnostic recipes do not change direct scheduled paging, thresholds
+   or mute/silence policy, and grant no additional operational authority.
 3. **`GET /up` on the apex.** Readiness, not liveness: HTTP status, `db`,
    `pending_migrations`, optional `config`, and the full queue envelope with
    `warn_at`/`critical_at`. Preserve the JSON plus timestamp per checkpoint.

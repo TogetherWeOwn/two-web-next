@@ -12,6 +12,7 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
+import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
 import { matchQuery } from "./events/search-log";
 import { publicReadGuard } from "./events/routes-shared";
@@ -204,9 +205,54 @@ export async function loadPastArchivePage<Row>({
     setHeaders({
       "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
       "x-two-past-cacheable": String(!input.searching && rows.length > 0),
+      // Browsing renders are public and shared, like the Hono twin: name the
+      // Cookie variance so shared caches key anonymous and signed-in shells
+      // apart. Searching renders stay private no-store with no Vary.
+      ...(!input.searching ? { vary: "Cookie" } : {}),
     });
     return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
   } catch (err) {
     reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
+}
+
+/**
+ * The anonymous-safe slice of a past-archive row: the fields the archive
+ * card renders (key/title/time/zone/location/game/counts/capacity) plus the
+ * occupancy aggregate and the public-by-design Discord event id. Kit
+ * serializes load data into `__data.json` for anonymous clients even with
+ * `csr=false`, so the past load returns this projection, never the full
+ * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
+ * for retention), descriptions, organizer names and sync internals never
+ * leave the server on this logged-out, indexed page. Mirrors the join
+ * precedent (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
+ */
+export type PastArchiveEvent = Pick<
+  PublicEvent,
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "goingCount"
+  | "goingOccupancy"
+  | "capacity"
+  | "discordEventId"
+>;
+
+/** Project a past-archive row to its anonymous-safe slice. */
+export function toPublicPastArchiveRow(row: PublicEvent): PastArchiveEvent {
+  return {
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+    game: row.game,
+    goingCount: row.goingCount,
+    goingOccupancy: row.goingOccupancy,
+    capacity: row.capacity,
+    discordEventId: row.discordEventId,
+  };
 }

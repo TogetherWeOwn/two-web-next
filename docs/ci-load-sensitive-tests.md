@@ -11,7 +11,7 @@ written for a laptop fail under normal queue load (TOG-12177).
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| `check` job | 40 min | `.github/workflows/ci.yml`, pinned by `ci/a11y-policy.test.mjs` |
+| `check` job | 60 min | `.github/workflows/ci.yml`, pinned by `ci/a11y-policy.test.mjs` |
 | Default test timeout | 30 s | `vitest.config.ts` (`testTimeout`) |
 | Default hook timeout | 60 s | `vitest.config.ts` (`hookTimeout`) |
 
@@ -125,6 +125,7 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/jobs-postgres.test.ts` "flight body queries run on the reserved tx (no max:1 deadlock)" | 3 s race timer | Detects the `max: 1` pool deadlock; a passing run finishes in milliseconds |
 | `test/jobs-postgres.test.ts` "overlapping cron invocations single-flight…", "different jobs do not block each other" | 200 ms / 100 ms sleeps | Give the first flight time to take its lock before the second starts; a longer pause is safe, a shorter one can let the second flight win |
 | `test/rsvp-lock-busy.test.ts` (queued control) | `expect.poll` 4 s | Waits for the waiter backend to queue on the member advisory lock before releasing, proving the wait-then-judge path rather than a race past the holder |
+| `test/agent-events-inner-lock-busy.test.ts` (busy cases) | 8 s `pg_stat_activity` poll | Waits for the measured backend to block on the held inner advisory lock before starting the 1 s database-side self-release, so CI-load pre-lock latency cannot spend the magnitude window; an admitted verdict without any observed block fails as a stall, distinct from the magnitude failure |
 | `test/human-throttle-concurrency.test.ts` "uses post-lock time for expiry…" | 1.1 s held lock vs 2 s `WEB_THROTTLE_LOCK_TIMEOUT_MS` | The admission must acquire the held lock before the 2 s timeout so the post-lock expiry read still charges; a much slower host would refuse with no hit and break the row-count asserts |
 | `test/alert-probe-disposal-acceptance.test.ts` (5× 3 s) | 3 s per test (`it.each` trailing literal) | The disposal probes assert the probe's own 2 s `timeoutMs` budget with exactly-once disposal per mode; 3 s bounds the five disposal-mode `it.each` blocks without tripping the 30 s default on a loaded host |
 | `test/admin-editor-expiry-departure.test.ts` (4× 20 s) | 20 s per test | Browser-driven expiry/departure flows (reloads with 5 s Playwright caps, session-expired veto, recovery landing); 20 s bounds the Chromium round-trips |
@@ -143,19 +144,21 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/member-erasure-inflight-rotation-acceptance.test.ts` (4× 15 s) | 15 s per test | Held-row rotation/erasure rendezvous, bystander isolation, queued-erasure ordering and rollback controls; 15 s bounds the database lock-wait handshakes and cleanup |
 | `test/prune-execution-budget-acceptance.test.ts` | 8,000 ms default JavaScript observation ceiling (2,000 ms lease controls) vs 5,000 ms DB-side lock/statement budget | Witnesses active DELETE waits through `pg_stat_activity` (`Lock` plus `pg_blocking_pids`, or `PgSleep`) and requires settlement before external release/cleanup; leaves margin beyond the DB cap while proving cancellation, restored settings and healthy-sibling commits |
 
-The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
-`test/agent-events-inner-lock-busy.test.ts`, and the busy cases in
-`test/rsvp-lock-busy.test.ts`) carry no JavaScript timing assert and need no
-row here: the holder handshake plus a direct await proves the configured
-database-side lock timeout fired, with the vitest test timeout as the
-backstop for an unbounded wait. Magnitude is pinned deterministically: the
-containment suites pin `WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000` and
-`RSVP_LOCK_TIMEOUT_MS = 5000`, and every busy case holds its lock on a
-database-side self-release schedule (`pg_sleep` inside the holder
-transaction, then ROLLBACK — 5s web-throttle, 7s rsvp, 1s inner at
-`lockWaitMs: 50`). A wait ignoring its bound would still be blocked at that
-release and be admitted instead of refused, failing the verdict assert. Only
-the rsvp queued control keeps a coordination poll (row above).
+The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts` and the
+busy cases in `test/rsvp-lock-busy.test.ts`) carry no JavaScript timing
+assert and need no row here: the holder handshake plus a direct await proves
+the configured database-side lock timeout fired, with the vitest test
+timeout as the backstop for an unbounded wait. Magnitude is pinned
+deterministically: the containment suites pin `WEB_THROTTLE_LOCK_TIMEOUT_MS
+= 2000` and `RSVP_LOCK_TIMEOUT_MS = 5000`, and every busy case holds its
+lock on a database-side self-release schedule (`pg_sleep` inside the holder
+transaction, then ROLLBACK — 5s web-throttle, 7s rsvp). A wait ignoring its
+bound would still be blocked at that release and be admitted instead of
+refused, failing the verdict assert. The inner-lock-busy cases add one
+coordination poll (row above): their 1s self-release at `lockWaitMs: 50`
+starts only after the measured backend is observed blocked, so the same
+magnitude proof holds without spending the window on pre-lock latency. Only
+the rsvp queued control and the inner observer keep coordination polls.
 
 ## Dashboard widget deadline
 

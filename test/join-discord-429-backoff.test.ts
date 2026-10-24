@@ -2,13 +2,15 @@
 // Acceptance: Discord's own 429 backoff reaches the join recovery response.
 //
 // When Discord rate-limits the OAuth token exchange (or the user fetch that
-// follows it), the join callback renders the 503 "Discord is unreachable"
-// recovery page. Discord sends its backoff as a `retry-after` response
-// header; that bounded numeric value must flow through to a `Retry-After`
-// header on the 503 recovery response, so browsers and intermediaries honour
-// the provider's wait instead of hammering a rate-limited endpoint.
+// follows it), the join callback renders the 503 throttle recovery page:
+// status, header and copy agree that the member must wait. Discord sends
+// its backoff as a `retry-after` response header; that bounded numeric
+// value must flow through to a `Retry-After` header on the 503 recovery
+// response, so browsers and intermediaries honour the provider's wait
+// instead of hammering a rate-limited endpoint. A true outage (5xx,
+// transport) keeps the "Discord is unreachable" copy below.
 //
-// Pinned contract (header only — status and copy never change):
+// Pinned contract (status, header and copy agree):
 //   - numeric provider values are emitted as integer delta-seconds, rounded
 //     UP (never tell the client to retry sooner than the provider asked;
 //     same admission posture as src/jobs/retry-delay.ts), minimum 1;
@@ -20,7 +22,7 @@
 //     fraction, finite and representable): HTTP-dates, signs, exponents,
 //     units, empty and unrepresentable values are not usable backoff;
 //   - absent or unusable provider backoff falls back to today's behaviour:
-//     the same 503 recovery page with NO `Retry-After` header (never "0",
+//     the same 503 throttle page with NO `Retry-After` header (never "0",
 //     never a raw provider string, never a value mined from the error body);
 //   - non-429 failure paths and the success path are unchanged and never
 //     gain a `Retry-After` header, even if the provider sent one.
@@ -167,7 +169,26 @@ async function joinCallback(e: Env) {
   );
 }
 
-// The recovery page every provider-failure case below must keep, verbatim.
+// The recovery page every throttled (429) case below must keep, verbatim:
+// 503 + copy that names the throttle and the wait, never "unreachable".
+async function expectThrottleRecovery(res: Response) {
+  expect(res.status).toBe(503);
+  const html = await res.text();
+  expect(html).toContain("Discord throttled the approval");
+  expect(html).toContain("rate-limiting approvals");
+  expect(html).toContain("Wait a moment, then try again below, or use the invite link.");
+  expect(html).toContain('href="/join/discord"');
+  expect(html).toContain("https://discord.gg/invite");
+  expect(html).not.toContain("unreachable");
+  expect(html).not.toContain("expired");
+  expect(html).not.toContain("Join approval expired");
+  expect(html).not.toContain("Join link expired");
+  expect(html).not.toContain(PROVIDER_MARKER);
+  expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+  return html;
+}
+
+// The recovery page every true-outage case below must keep, verbatim.
 async function expectUnreachableRecovery(res: Response) {
   expect(res.status).toBe(503);
   const html = await res.text();
@@ -197,12 +218,12 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
     ["2.5", "3"],
     ["0.4", "1"],
   ])(
-    "token 429 with retry-after %s emits Retry-After: %s on the 503 recovery page",
+    "token 429 with retry-after %s emits Retry-After: %s on the 503 throttle page",
     async (provider, expected) => {
       const { fake, create, env: e } = isolated();
       const calls = stubTokenExchange(() => rateLimited(provider));
       const res = await joinCallback(e);
-      await expectUnreachableRecovery(res);
+      await expectThrottleRecovery(res);
       expect(res.headers.get("retry-after")).toBe(expected);
       expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
       expect(calls).toEqual(["/api/v10/oauth2/token"]);
@@ -218,7 +239,7 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
     const { env: e } = isolated();
     stubTokenExchange(() => rateLimited("999999999"));
     const res = await joinCallback(e);
-    await expectUnreachableRecovery(res);
+    await expectThrottleRecovery(res);
     const header = res.headers.get("retry-after");
     expect(header).not.toBeNull();
     expect(header).toMatch(/^\d+$/);
@@ -231,7 +252,7 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
     const { fake, create, env: e } = isolated();
     const calls = stubTokenThenUser(() => rateLimited("45"));
     const res = await joinCallback(e);
-    await expectUnreachableRecovery(res);
+    await expectThrottleRecovery(res);
     expect(res.headers.get("retry-after")).toBe("45");
     expect(calls).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
     expect(create).not.toHaveBeenCalled();
@@ -241,11 +262,11 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
 });
 
 describe("absent or unusable provider backoff falls back to today's response", () => {
-  it("429 without a retry-after header: 503 recovery page, no Retry-After", async () => {
+  it("429 without a retry-after header: 503 throttle page, no Retry-After", async () => {
     const { fake, env: e } = isolated();
     stubTokenExchange(() => rateLimited());
     const res = await joinCallback(e);
-    await expectUnreachableRecovery(res);
+    await expectThrottleRecovery(res);
     // The body's own retry_after (77) is never mined as a substitute.
     expect(res.headers.get("retry-after")).toBeNull();
     const requestId = res.headers.get("x-request-id");
@@ -265,7 +286,7 @@ describe("absent or unusable provider backoff falls back to today's response", (
     const { env: e } = isolated();
     stubTokenExchange(() => rateLimited(raw));
     const res = await joinCallback(e);
-    const html = await expectUnreachableRecovery(res);
+    const html = await expectThrottleRecovery(res);
     expect(res.headers.get("retry-after")).toBeNull();
     if (raw) expect(html).not.toContain(raw);
   });
@@ -274,7 +295,7 @@ describe("absent or unusable provider backoff falls back to today's response", (
     const { env: e } = isolated();
     stubTokenExchange(() => rateLimited("0"));
     const res = await joinCallback(e);
-    await expectUnreachableRecovery(res);
+    await expectThrottleRecovery(res);
     const header = res.headers.get("retry-after");
     expect(header === null || (/^\d+$/.test(header) && Number(header) >= 1)).toBe(true);
   });

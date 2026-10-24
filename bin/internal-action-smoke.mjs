@@ -11,7 +11,7 @@
 // event.upsert, so only --channel-key is required:
 //   ... bin/internal-action-smoke.mjs --announcement-only --channel-key=<throwaway>
 //
-// Modes: without flags the tool prints an effect-free plan and exits 0 — no
+// Modes: no mode flag or --dry-run prints an effect-free plan and exits 0 — no
 // secrets needed, no fetch attempted, no queue carriers sent. The bare
 // `--apply` flag runs the existing staging effects. `--run-id=<id>` names the
 // run identity a repeated apply resumes under (same carriers, same generated
@@ -57,6 +57,10 @@ try {
   args = parseInternalActionArgs(process.argv.slice(2), true);
 } catch (e) {
   fail(ERROR_CODES.INVALID_ARGUMENTS, e.message);
+}
+if (args.help) {
+  console.log(args.usage);
+  process.exit(0);
 }
 const { discordId, roleKey, channelKey, announcementOnly, runId, apply } = args;
 

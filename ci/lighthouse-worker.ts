@@ -6,7 +6,11 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
+import {
+  EVENTS_DISTINCT_GAMES_LIMIT,
+  EVENTS_MONTH_GRID_LIMIT,
+  EVENTS_UPCOMING_PAGE_SIZE,
+} from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
 import { auditPaths, fixtureKey } from "./lighthouse-paths";
@@ -112,6 +116,13 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         return { rows: [] }; // Only these transaction-local read timeouts are simulated.
       }
       if (method === "all") {
+        if (
+          sql ===
+            `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1` &&
+          sameParams(params, [EVENTS_DISTINCT_GAMES_LIMIT])
+        ) {
+          return { rows: [[fixture.game]] };
+        }
         if (sql === goingSql && sameParams(params, [fixture.id, "going", ""]))
           return { rows: [[fixture.id, 3]] };
         if (sql === occupancySql && sameParams(params, [fixture.id, "going"]))
@@ -201,9 +212,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
+        // Past drawer: finite-window guard keeps infinity rows from occupying
+        // limit slots (like the sibling upcoming reads), so the pinned
+        // statement carries the same isfinite pair.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
           params.length === 2 &&
           isInstant(params[0]) &&
           params[1] === 20
