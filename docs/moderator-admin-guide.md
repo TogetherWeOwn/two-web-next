@@ -235,6 +235,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key` | **Save** event fields. |
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
+| POST | `/admin/events/:key/duplicate` | **Duplicate as draft**: copy the event into a new unpublished draft. |
 | POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
@@ -247,7 +248,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 | GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 19 canonical routes in `src/admin/routes.tsx` (10 GET, 9 POST).
+These are the 20 canonical routes in `src/admin/routes.tsx` (10 GET, 10 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -258,7 +259,7 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
+All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Mutating buttons submit immediately: there is no action-confirmation dialog.
@@ -268,7 +269,7 @@ editor's separate browser warning for unsaved changes is not action approval.
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
 Each of the 10 admin GET routes above also ships a Kit shell. The
-mixed-mode truth: the migration is GET-only; all 9 POST form actions stay
+mixed-mode truth: the migration is GET-only; all 10 POST form actions stay
 Hono with no manifest entries of their own. Most shell entries in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
 Hono serves those pages; the join-attempts list and detail entries read
@@ -378,6 +379,12 @@ leave-page warning for unsaved changes (including after a rejected Save).
   Use the [event cancellation and reschedule communication checklist](events-communications.md)
   after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
+- **Duplicate as draft** on edit copies a draft, published or cancelled event
+  into a new unpublished draft titled `Copy of …` with the same venue, access,
+  joining, capacity and organizer, a fresh key, and cleared RSVPs, series
+  linkage and Discord mirror state. The copy is never published or announced:
+  review it and publish it like any new draft. A series parent duplicates as
+  one standalone event; siblings are never materialized.
   Public pages can classify an event as past by its end time even while the stored
   status still says `published`; the admin `past` filter need not include every
   ended event.

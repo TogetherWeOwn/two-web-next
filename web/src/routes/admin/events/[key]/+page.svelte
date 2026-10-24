@@ -13,7 +13,8 @@ import type { PageProps } from "./$types";
 // Hono eventValues shape (retained input, per-field messages, empty on a
 // fresh GET). No island and no event handlers of its own: the edit, status
 // and status-change forms post to the Hono-owned POST /admin/events/:key,
-// .../publish, .../cancel, .../rsvp-pause and .../rsvp-reopen endpoints, so
+// .../publish, .../cancel, .../duplicate, .../rsvp-pause and .../rsvp-reopen
+// endpoints, so
 // the page works with JavaScript disabled, exactly like the Hono panel. The
 // text-limit and editor islands enhance it when JavaScript runs. There is
 // deliberately no removal affordance anywhere on this resource, and this
@@ -212,6 +213,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
+        </form>
+      {/if}
+      {#if view.status === "draft" || view.status === "published" || view.status === "cancelled"}
+        <form method="post" action={`/admin/events/${view.key}/duplicate`}>
+          <button type="submit" class="link" data-testid="duplicate-event">Duplicate as draft</button>
         </form>
       {/if}
       {#if view.rsvpAction}
