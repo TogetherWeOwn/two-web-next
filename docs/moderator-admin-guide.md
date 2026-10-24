@@ -638,7 +638,10 @@ Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
-Request ID is normally blank for the current live Discord add-member call.
+Request ID carries the website's correlation ID (the callback's
+`x-request-id`) on `denied` and `error` rows, so those rows join to request
+logs. On `added`, `already_member`, `degraded` and `rate_limited` rows it
+stays blank because the live add-member call returns no request ID.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 
