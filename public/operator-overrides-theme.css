@@ -1,0 +1,14 @@
+.ops-overrides {
+  overflow-wrap: anywhere;
+}
+.ops-overrides table {
+  table-layout: fixed;
+}
+.ops-overrides th:first-child {
+  width: 44%;
+}
+.ops-overrides th,
+.ops-overrides td {
+  padding: 0.5rem;
+  vertical-align: top;
+}

@@ -37,6 +37,7 @@ const AUTHORED_CSS = new Set([
   "public/theme.css",
   "public/event-theme.css",
   "public/profile-theme.css",
+  "public/operator-overrides-theme.css",
   "public/schedule-theme.css",
   "public/theme-tokens.css",
 ]);
