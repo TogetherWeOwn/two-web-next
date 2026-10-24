@@ -18,14 +18,28 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a
       moderator.
     </p>
+    <nav aria-label="FAQ topics">
+      <p>Jump to a topic</p>
+      <div class="facts rank-stack">
+        {FAQS.map((group) => (
+          <a href={`#${group.sectionId}`} key={group.sectionId}>
+            {group.section}
+          </a>
+        ))}
+      </div>
+    </nav>
     <div data-testid="faq-list">
       {FAQS.map((group) => (
         <section aria-labelledby={group.sectionId} key={group.sectionId}>
-          <h2 id={group.sectionId}>{group.section}</h2>
+          <h2 id={group.sectionId} class="faq-target" tabindex={-1}>
+            {group.section}
+          </h2>
           <div>
-            {group.items.map(([q, a, link]) => (
-              <div class="card" key={q}>
-                <h3>{q}</h3>
+            {group.items.map(([q, a, link, id]) => (
+              <div class="card" key={id}>
+                <h3 id={id} class="faq-target" tabindex={-1}>
+                  {q}
+                </h3>
                 <p>
                   {a}
                   {link ? (
@@ -35,6 +49,9 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
                     </>
                   ) : null}
                 </p>
+                <a href={`#${id}`} class="faq-permalink" aria-label={`Link to this answer — ${q}`}>
+                  Link to this answer
+                </a>
               </div>
             ))}
           </div>

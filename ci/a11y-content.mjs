@@ -154,6 +154,30 @@ export function contentExpectations(scenario) {
   ];
 }
 
+// Visiting each deferred section lets Chromium remember its real intrinsic size.
+// Otherwise axe can measure skipped descendants against the 20rem placeholder,
+// reporting offscreen answers as overlapping unrelated later topics.
+export async function renderDeferredFaqSections(page) {
+  const sections = page.locator('[data-testid="faq-list"] > section');
+  const count = await sections.count();
+  assert(count > 0, "FAQ audit must render its answer sections");
+  const position = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+  const painted = () =>
+    page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    );
+  try {
+    for (let i = 0; i < count; i++) {
+      await sections.nth(i).scrollIntoViewIfNeeded();
+      await painted();
+    }
+  } finally {
+    await page.evaluate(({ x, y }) => window.scrollTo(x, y), position);
+    await painted();
+  }
+  return count;
+}
+
 export async function assertAuditContent(page, scenario) {
   const expectations = contentExpectations(scenario);
   for (const expectation of expectations) {
