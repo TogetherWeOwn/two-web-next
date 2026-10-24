@@ -10,6 +10,7 @@ import {
 } from "../src/featured-eligibility";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit";
 import type { Db } from "../src/db";
+import { featuredContents } from "../src/db/admin-schema";
 import { APP_URL, CHECKED_AT, savedFeatured } from "./helpers/featured-saved-content-cases";
 import { renderSavedHono, renderSavedKit } from "./helpers/featured-saved-content-render";
 
@@ -106,6 +107,67 @@ describe("server-resolved Kit preview wording", () => {
     });
   });
 });
+
+// Removing the admin-only undecodable-bound guard would restore a false live
+// verdict. Decode the driver's actual timestamp strings with the schema column,
+// then exercise both production renderers rather than testing a mock verdict.
+const undecodableWindows = [
+  { name: "infinite start", startsAt: "infinity", endsAt: null, savedText: "infinity" },
+  { name: "negative infinite end", startsAt: null, endsAt: "-infinity", savedText: "-infinity" },
+  { name: "BC end", startsAt: null, endsAt: "0199-10-01 13:45:12.345678+00 BC", savedText: BC_END },
+  {
+    name: "BC start",
+    startsAt: "0200-10-01 12:34:56.789123+00 BC",
+    endsAt: null,
+    savedText: BC_START,
+  },
+  { name: "negative infinite start", startsAt: "-infinity", endsAt: null, savedText: "-infinity" },
+  { name: "infinite end", startsAt: null, endsAt: "infinity", savedText: "infinity" },
+];
+
+for (const [renderer, render] of [
+  ["Hono", renderSavedHono],
+  ["Kit-executed", renderSavedKit],
+] as const) {
+  describe(`${renderer}: undecodable saved eligibility`, () => {
+    it.each(undecodableWindows)("withholds the verdict for $name", async (fixture) => {
+      const html = await render(
+        savedFeatured({
+          startsAt:
+            fixture.startsAt === null
+              ? null
+              : (featuredContents.startsAt.mapFromDriverValue(fixture.startsAt) as Date),
+          endsAt:
+            fixture.endsAt === null
+              ? null
+              : (featuredContents.endsAt.mapFromDriverValue(fixture.endsAt) as Date),
+          startsAtText: fixture.startsAt === null ? null : fixture.savedText,
+          endsAtText: fixture.endsAt === null ? null : fixture.savedText,
+        }),
+      );
+      expect(html).toContain('data-status="unavailable"');
+      expect(html).toContain("Eligibility cannot be determined");
+      expect(html).toContain(fixture.savedText);
+      expect(html).toContain('data-testid="featured-item"');
+      expect(html).not.toContain('data-status="live"');
+      expect(html).not.toContain("Eligible —");
+    });
+
+    it("keeps unpublished precedence even when the saved bound cannot be decoded", async () => {
+      const html = await render(
+        savedFeatured({
+          isPublished: false,
+          startsAt: featuredContents.startsAt.mapFromDriverValue("infinity") as Date,
+          startsAtText: "infinity",
+        }),
+      );
+      expect(html).toContain('data-status="unpublished"');
+      expect(html).toContain("Not published — publication is off");
+      expect(html).not.toContain('data-status="unavailable"');
+      expect(html).not.toContain("Eligible —");
+    });
+  });
+}
 
 describe("saved panel with driver-undecodable bounds", () => {
   const bcRow = () =>

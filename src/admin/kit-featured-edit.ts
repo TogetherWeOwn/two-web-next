@@ -9,8 +9,8 @@
 // admin.featured.edit): the same canonical parseRecordId admission (a
 // non-canonical spelling 404s before any record lookup), the same shared
 // getFeatured read, the same featuredValues shape for the form, and the same
-// shared featuredStatus()/currentlyVisible() preview the Hono edit page
-// renders. Dates cross into the view pre-rendered as UTC ISO strings, with
+// shared saved eligibility the Hono edit page renders, including an unavailable
+// verdict for published undecodable bounds. Dates cross into the view as UTC ISO strings, with
 // the exact saved SQL text alongside for driver-undecodable bounds (BC,
 // infinity). The
 // POST /admin/featured/:id and POST /admin/featured/:id/delete siblings and
@@ -25,8 +25,9 @@ import {
   FEATURED_WINDOW_RULES_COPY,
   featuredBoundDisplay,
   featuredEligibilityReasonFor,
+  featuredEligibilityStatus,
+  type FeaturedEligibilityStatus,
 } from "../featured-eligibility";
-import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
@@ -49,7 +50,7 @@ export type KitFeaturedEditView = {
   id: number;
   title: string;
   values: KitFeaturedEditValues;
-  status: FeaturedStatus;
+  status: FeaturedEligibilityStatus;
   /** Resolve shared copy server-side; even csr=false emits a structural client chunk. */
   eligibilityReason: string;
   startsAtLabel: string;
@@ -62,7 +63,7 @@ export type KitFeaturedEditView = {
   startsAtText: string | null;
   endsAtText: string | null;
   updatedAt: string;
-  /** Evaluation instant featuredStatus() ran at (Hono prints now, not updatedAt). */
+  /** Saved eligibility evaluation instant (Hono prints now, not updatedAt). */
   checkedAt: string;
   /** Homepage-policy preview src (null when the homepage suppresses the image). */
   imageSrc: string | null;
@@ -129,7 +130,7 @@ export async function resolveKitFeaturedEdit(
   // the exact saved text so the load never throws on them.
   const startBound = featuredBoundDisplay(row.startsAt, row.startsAtText);
   const endBound = featuredBoundDisplay(row.endsAt, row.endsAtText);
-  const status = featuredStatus(row, now);
+  const status = featuredEligibilityStatus(row, now);
   return {
     kind: "ok",
     view: {
@@ -161,7 +162,7 @@ export async function resolveKitFeaturedEdit(
             ? endBound.text
             : FEATURED_OPEN_END_COPY,
       windowRules: FEATURED_WINDOW_RULES_COPY,
-      visible: currentlyVisible(row, now),
+      visible: status === "live",
       startsAt: startBound.kind === "instant" ? startBound.iso : null,
       endsAt: endBound.kind === "instant" ? endBound.iso : null,
       startsAtText: row.startsAtText ?? null,

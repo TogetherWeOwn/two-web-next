@@ -1,17 +1,32 @@
 // Saved-slot eligibility wording shared by the Hono and Kit admin edit panels.
 //
-// The verdict stays the existing status authority (featuredStatus: unpublished
-// precedence, start inclusive, end exclusive); this module only phrases the
-// verdict and the saved window bounds so both twins explain the same row the
-// same way. Eligibility is a point-in-time verdict, never proof of guest
-// homepage delivery.
+// Finite windows use the existing status authority (featuredStatus: unpublished
+// precedence, start inclusive, end exclusive). Published windows the driver
+// cannot decode withhold the admin verdict rather than falling through to live.
+// Eligibility is a point-in-time verdict, never proof of guest homepage delivery.
 import { featuredStatus, type FeaturedStatus, type FeaturedWindow } from "./featured-status";
 
-export function featuredEligibilityReason(row: FeaturedWindow, now: Date = new Date()): string {
-  return featuredEligibilityReasonFor(featuredStatus(row, now));
+export type FeaturedEligibilityStatus = FeaturedStatus | "unavailable";
+
+/** Admin-only admission: NaN comparisons must not invent a positive verdict. */
+export function featuredEligibilityStatus(
+  row: FeaturedWindow,
+  now: Date = new Date(),
+): FeaturedEligibilityStatus {
+  if (!row.isPublished) return "unpublished";
+  for (const bound of [row.startsAt, row.endsAt]) {
+    if (bound !== null && (!(bound instanceof Date) || !Number.isFinite(bound.getTime()))) {
+      return "unavailable";
+    }
+  }
+  return featuredStatus(row, now);
 }
 
-export function featuredEligibilityReasonFor(status: FeaturedStatus): string {
+export function featuredEligibilityReason(row: FeaturedWindow, now: Date = new Date()): string {
+  return featuredEligibilityReasonFor(featuredEligibilityStatus(row, now));
+}
+
+export function featuredEligibilityReasonFor(status: FeaturedEligibilityStatus): string {
   switch (status) {
     case "unpublished":
       return "Not published — publication is off for this saved slot. Publish it before the slot can become eligible for the homepage.";
@@ -21,6 +36,8 @@ export function featuredEligibilityReasonFor(status: FeaturedStatus): string {
       return "Ended — the saved window has closed; its Show until time has passed.";
     case "live":
       return "Eligible — the saved slot is inside its publication window at this check time. Eligibility is not proof of guest homepage delivery: verify the homepage as a guest.";
+    case "unavailable":
+      return "Eligibility cannot be determined — a saved window bound cannot be decoded as a finite UTC instant. Inspect the exact saved bounds before making an authorized correction.";
     default:
       return `Status ${status} — the saved eligibility verdict is unavailable; verify the homepage as a guest.`;
   }

@@ -576,7 +576,11 @@ and image — for every saved status, unpublished included, checked at the
 printed UTC time. **Homepage eligibility** separately reports the status badge,
 the reason (publication off, starts in the future, window ended, or eligible)
 and the saved UTC window bounds; an absent bound means the window is open on
-that side. Pressing **Create** or **Save** refreshes both. Typed-but-unsaved
+that side. For a published slot with a saved bound the editor cannot decode
+(such as a BC timestamp or infinity), the panel reports **unavailable** rather
+than asserting eligibility; the exact saved bound text remains visible. An
+unchecked **Published** setting still reports **unpublished** first. Pressing
+**Create** or **Save** refreshes both. Typed-but-unsaved
 edits never appear in the card, and neither do rejected submissions: after a
 failed save the form keeps the submitted values for correction while the card
 and eligibility still show the last saved row. The new-slot page has no

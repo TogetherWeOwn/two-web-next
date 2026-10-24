@@ -8,10 +8,10 @@ import {
   FEATURED_OPEN_START_COPY,
   FEATURED_WINDOW_RULES_COPY,
   featuredBoundDisplay,
-  featuredEligibilityReason,
+  featuredEligibilityReasonFor,
+  featuredEligibilityStatus,
   type FeaturedBoundDisplay,
 } from "../../featured-eligibility";
-import { FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import { adminSaveStatus } from "../save-status";
 import type { FeaturedRow } from "../store";
@@ -38,6 +38,7 @@ export const FeaturedFormPage: FC<{
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
   const startBound = row ? featuredBoundDisplay(row.startsAt, row.startsAtText) : null;
   const endBound = row ? featuredBoundDisplay(row.endsAt, row.endsAtText) : null;
+  const status = row ? featuredEligibilityStatus(row, now) : null;
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section class="featured-form">
@@ -68,9 +69,12 @@ export const FeaturedFormPage: FC<{
             />
             <h3>Homepage eligibility at this check time</h3>
             <p>
-              Status: <FeaturedStatusBadge row={row} now={now} />
+              Status:{" "}
+              <span class={`featured-status featured-status-${status}`} data-status={status}>
+                {status}
+              </span>
             </p>
-            <p>{featuredEligibilityReason(row, now)}</p>
+            <p>{featuredEligibilityReasonFor(status!)}</p>
             <p>
               Saved window (UTC): show from {savedBoundView(startBound, FEATURED_OPEN_START_COPY)}
               {", "}
