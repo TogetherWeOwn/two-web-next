@@ -73,7 +73,14 @@ function transient(overrides: Partial<DiscordTransient> = {}): DiscordTransient 
 }
 
 async function renderGrid(upcoming: (PublicEvent | DiscordTransient)[]): Promise<string> {
-  const state: CalendarState = { view: "calendar", month: "2030-01", q: "", past: false, page: 1 };
+  const state: CalendarState = {
+    view: "calendar",
+    month: "2030-01",
+    q: "",
+    game: "",
+    past: false,
+    page: 1,
+  };
   return jsx(EventsCalendarPage, {
     state,
     upcoming,
@@ -83,6 +90,8 @@ async function renderGrid(upcoming: (PublicEvent | DiscordTransient)[]): Promise
     totalPages: 1,
     emptyState: null as CalendarEmptyState,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
     inviteUrl: "https://discord.gg/fixture",
     appUrl: APP_URL,
@@ -228,6 +237,7 @@ describe("month grid accessible names", () => {
       view: "calendar",
       month: "2030-02",
       q: "",
+      game: "",
       past: false,
       page: 1,
     };
@@ -240,6 +250,8 @@ describe("month grid accessible names", () => {
       totalPages: 1,
       emptyState: null as CalendarEmptyState,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
       member: false,
       inviteUrl: "https://discord.gg/fixture",
       appUrl: APP_URL,
