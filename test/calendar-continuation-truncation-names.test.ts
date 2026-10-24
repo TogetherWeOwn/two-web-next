@@ -94,7 +94,7 @@ for (const twin of TWINS) {
       const truncated = gridTitle(gatheringTitle);
       expect(truncated).toBe("Multi-day gatherin…");
       for (const link of links) {
-        expect(link.text).toBe(`Continues ${truncated}`);
+        expect(link.text).toBe(`Continues ${truncated} 6 seats left`);
         // Axe label-content-name-mismatch: the visible words must appear in the name.
         expect(link.name).toContain(link.text);
         expect(link.name).toContain(gatheringTitle);
@@ -113,9 +113,11 @@ for (const twin of TWINS) {
       expect(links.map((link) => link.day)).toEqual(["2027-02-01", "2027-02-02"]);
       expect(gridTitle(SHORT_TITLE)).toBe(SHORT_TITLE);
       for (const link of links) {
-        expect(link.text).toBe(`Continues ${SHORT_TITLE}`);
+        expect(link.text).toBe(`Continues ${SHORT_TITLE} 6 seats left`);
         expect(link.name).toContain(link.text);
-        expect(link.name).toBe(`Continues ${SHORT_TITLE}, ${calendarDayLongLabel(link.day)}`);
+        expect(link.name).toBe(
+          `Continues ${SHORT_TITLE} 6 seats left, ${calendarDayLongLabel(link.day)}`,
+        );
       }
     });
 
@@ -127,7 +129,7 @@ for (const twin of TWINS) {
       const start = links.find((link) => link.day === "2027-02-14");
       expect(start).toBeDefined();
       const truncated = gridTitle(gatheringTitle);
-      expect(start!.text).toBe(`23:30 ${truncated}`);
+      expect(start!.text).toBe(`23:30 ${truncated} 6 seats left`);
       // Axe label-content-name-mismatch: the visible words must appear in the name,
       // including the truncated ellipsis form.
       expect(start!.name).toContain(start!.text);
@@ -145,9 +147,9 @@ for (const twin of TWINS) {
       ]);
       const links = calendarLinks(html);
       const start = links.find((link) => link.day === "2027-02-14");
-      expect(start!.text).toBe(`23:30 ${SHORT_TITLE}`);
+      expect(start!.text).toBe(`23:30 ${SHORT_TITLE} 6 seats left`);
       expect(start!.name).toBe(
-        `23:30 ${SHORT_TITLE}, ${cardDayLabel(START_DAY_START, START_DAY_ZONE)}`,
+        `23:30 ${SHORT_TITLE} 6 seats left, ${cardDayLabel(START_DAY_START, START_DAY_ZONE)}`,
       );
     });
   });
