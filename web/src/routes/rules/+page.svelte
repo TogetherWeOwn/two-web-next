@@ -33,8 +33,8 @@ let { data }: PageProps = $props();
   <ContentLeaf navCurrent="rules" headingId="rules-heading" heading="House rules">
     <p class="lead">{RULES_INTRO}</p>
     {#if data.lastUpdated}<p data-testid="rules-last-updated" class="strap">Last updated <time datetime={data.lastUpdated.iso}>{data.lastUpdated.label}</time></p>{/if}
-    <nav aria-label="Jump to a rule" data-testid="rules-jump"><p class="strap">Jump to a rule</p><ul>{#each data.rules as [name, , id] (id)}<li><a href={`#${id}`}>{name}</a></li>{/each}</ul></nav>
-    <ol data-testid="rules-list" class="facts">{#each data.rules as [name, body, id] (id)}<li class="card"><h2 id={id}>{name}</h2><p>{body}</p><a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>Permalink</a></li>{/each}</ol>
+    <nav aria-label="Jump to a rule" data-testid="rules-jump"><p class="strap">Jump to a rule</p><ul class="jump">{#each data.rules as [name, , id] (id)}<li><a href={`#${id}`}>{name}</a></li>{/each}</ul></nav>
+    <ol data-testid="rules-list" class="facts rules">{#each data.rules as [name, body, id] (id)}<li class="card"><h2 id={id}>{name}</h2><p>{body}</p><a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>Permalink</a></li>{/each}</ol>
     <p><a class="btn" href="/join" data-testid="rules-join">Join with Discord</a>{" "}<a href="/">Back to the homepage</a></p>
   </ContentLeaf>
 </Shell>
