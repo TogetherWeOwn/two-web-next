@@ -142,6 +142,26 @@ export const Join: FC<{
             )}
           </div>
         </section>
+        {/* What happens after connecting: a static three-step strip both twins
+            render identically across guest, member, flash, notice, and widget
+            variants. The copy stays inside verified behavior — the default
+            newcomer landing is home with a notice plus the join-result banner
+            (src/join/service.ts finishJoin) — so the strip never promises a
+            profile redirect. Links target existing routes only. */}
+        <section data-testid="join-expectations" aria-labelledby="join-expectations-heading">
+          <h2 id="join-expectations-heading">What happens after you connect</h2>
+          <ol>
+            <li data-testid="join-expectation-connect">
+              Connect with Discord. <a href={oneClickHref}>Join with Discord</a>
+            </li>
+            <li data-testid="join-expectation-recognized">
+              Return signed in, with a welcome banner. <a href="/faq">Questions? Read the FAQ</a>
+            </li>
+            <li data-testid="join-expectation-gamenight">
+              Pick a game night. <a href="/events">Browse game nights</a>
+            </li>
+          </ol>
+        </section>
       </main>
       <SiteFooter />
     </Layout>

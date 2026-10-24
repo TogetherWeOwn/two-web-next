@@ -117,4 +117,24 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
       {/if}
     </div>
   </section>
+  <!-- What happens after connecting: static three-step strip mirrored from
+    the Hono twin (src/screens/join.tsx). Same testids, same copy, same
+    existing-route links; never promises a profile redirect. -->
+  <section data-testid="join-expectations" aria-labelledby="join-expectations-heading">
+    <h2 id="join-expectations-heading">What happens after you connect</h2>
+    <ol>
+      <li data-testid="join-expectation-connect">
+        Connect with Discord.
+        <a href={oneClickHref}>Join with Discord</a>
+      </li>
+      <li data-testid="join-expectation-recognized">
+        Return signed in, with a welcome banner.
+        <a href="/faq">Questions? Read the FAQ</a>
+      </li>
+      <li data-testid="join-expectation-gamenight">
+        Pick a game night.
+        <a href="/events">Browse game nights</a>
+      </li>
+    </ol>
+  </section>
 </Shell>
