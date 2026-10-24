@@ -42,6 +42,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href={view.origin}>Back to these event results</a>
     </p>
   {/if}
+  {#snippet originCarrier()}
+    {#if view.origin}
+      <input type="hidden" name={view.originParam} value={view.origin} />
+    {/if}
+  {/snippet}
   {#if hasErrors}
     <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
       <p>Check the highlighted fields and try again.</p>
@@ -64,9 +69,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-editor=""
     data-event-draft={hasErrors ? "" : undefined}
   >
-    {#if view.origin}
-      <input type="hidden" name={view.originParam} value={view.origin} />
-    {/if}
+    {@render originCarrier()}
     <div class="field">
       <label for="f-title">Title</label>
       <input
@@ -219,17 +222,13 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <div class="actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
-          {#if view.origin}
-            <input type="hidden" name={view.originParam} value={view.origin} />
-          {/if}
+          {@render originCarrier()}
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
         </form>
       {/if}
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
-          {#if view.origin}
-            <input type="hidden" name={view.originParam} value={view.origin} />
-          {/if}
+          {@render originCarrier()}
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
         </form>
       {/if}
@@ -240,9 +239,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
       {#if view.rsvpAction}
         <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
-          {#if view.origin}
-            <input type="hidden" name={view.originParam} value={view.origin} />
-          {/if}
+          {@render originCarrier()}
           <button type="submit" class="link" data-testid={view.rsvpAction}>
             {view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
           </button>

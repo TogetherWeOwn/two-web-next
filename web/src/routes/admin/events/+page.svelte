@@ -52,6 +52,10 @@ const now = new Date();
   </td>
 {/snippet}
 
+{#snippet inventoryCarrier()}
+  <input type="hidden" name={INVENTORY_RETURN_PARAM} value={inventory} />
+{/snippet}
+
 <AdminShell title="Events">
 <section aria-labelledby="events-heading">
   <h1 id="events-heading">Events</h1>
@@ -149,20 +153,20 @@ const now = new Date();
               <td>
                 {#if r.status === "draft"}
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                    <input type="hidden" name={INVENTORY_RETURN_PARAM} value={inventory} />
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link">Publish</button>
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <input type="hidden" name={INVENTORY_RETURN_PARAM} value={inventory} />
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link">Cancel</button>
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
                   <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
-                    <input type="hidden" name={INVENTORY_RETURN_PARAM} value={inventory} />
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link" data-testid={action}>
                       {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
                     </button>
