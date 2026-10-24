@@ -1,3 +1,4 @@
+// route-inventory: POST /events/:key/duplicate
 // Acceptance: on the moderator event writes, the body-size cap is decided
 // before the shared write throttle and before any session read. An oversized
 // body is therefore a 413 even when the caller is unauthenticated, presents
@@ -28,7 +29,7 @@ const ERROR = {
 const eventWrites = [
   ["POST", "/events", BODY_LIMIT_BYTES.json],
   ["PATCH", "/events/test-event", BODY_LIMIT_BYTES.json],
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => [
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => [
     "POST",
     `/events/test-event/${action}`,
     BODY_LIMIT_BYTES.action,
