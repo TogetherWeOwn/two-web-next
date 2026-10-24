@@ -672,12 +672,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           // refusal in the action loop above.
           const row = await getEvent(db, key);
           if (!row) return errorPage(c, 404, "Event not found");
+          // The render shows the row's current content, so the baseline is
+          // minted fresh here — like the publish-location refusal above. Without
+          // it the follow-up save would 400 on a missing baseline.
+          const values = {
+            ...eventValues(row),
+            [EVENT_BASELINE_FIELD]: await eventContentBaseline(row),
+          };
           return formError(
             c,
             err,
             (errors, v) =>
               c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-            eventValues(row),
+            values,
           );
         }
         throw err;

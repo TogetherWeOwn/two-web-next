@@ -40,6 +40,17 @@ export type BaselineContent = {
 };
 
 /**
+ * Stored instants can be nonfinite (legacy ±Infinity rows under repair):
+ * toISOString() throws on those, so encode them by their distinct time value
+ * instead. Finite instants keep hashing as UTC ISO strings, so a fold-second
+ * occurrence keeps its exact instant in the comparison.
+ */
+function instantToken(value: Date): string {
+  const time = value.getTime();
+  return Number.isFinite(time) ? value.toISOString() : `nonfinite:${String(time)}`;
+}
+
+/**
  * Mint the baseline for a row. Nulls stay null (distinct from "") and
  * instants hash as UTC ISO strings, so a fold-second occurrence keeps its
  * exact instant in the comparison.
@@ -51,8 +62,8 @@ export async function eventContentBaseline(row: BaselineContent): Promise<string
       row.game,
       row.description,
       row.accessibilityNotes ?? null,
-      row.startsAt.toISOString(),
-      row.endsAt.toISOString(),
+      instantToken(row.startsAt),
+      instantToken(row.endsAt),
       row.timezone,
       row.location,
       row.capacity,
