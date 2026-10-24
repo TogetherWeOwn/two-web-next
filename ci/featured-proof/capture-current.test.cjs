@@ -82,7 +82,6 @@ function installFakePlaywright() {
     version: () => 'FAKE SELFTEST ONLY; no browser execution',
     close: async () => {},
     newContext: async ({ viewport }) => {
-      let fixture;
       const calls = new Map();
       const locator = selector => ({
         locator,
@@ -110,7 +109,7 @@ function installFakePlaywright() {
         newPage: async () => ({
           locator,
           keyboard: { press: async () => {} },
-          setContent: async html => { fixture = html.match(/<title>([^<]+)<\/title>/)[1]; },
+          setContent: async html => { assert.match(html, /<title>[^<]+<\/title>/); },
           evaluate: async () => ({ viewportWidth: viewport.width, documentWidth: viewport.width, elements: [] }),
           screenshot: async options => {
             assert.equal(options.fullPage, true);
