@@ -229,7 +229,11 @@ export const EventPage: FC<{
             </section>
           ) : null}
           {accessibilityNotes ? (
-            <section class="event-description" aria-labelledby="event-accessibility-heading">
+            <section
+              class="event-description"
+              data-testid="event-accessibility"
+              aria-labelledby="event-accessibility-heading"
+            >
               <h2 id="event-accessibility-heading">Accessibility</h2>
               <p>{accessibilityNotes}</p>
             </section>
