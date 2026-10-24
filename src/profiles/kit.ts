@@ -139,12 +139,16 @@ export async function resolveKitProfile(
   }
   const stats = deps.stats ? await deps.stats(member.id) : null;
   const isOwner = viewer.userId === member.id;
-  // Another member's page marks the games the viewer also plays: one extra
-  // keyed read of the viewer's own stored row, bounded by the stored list.
-  // The hook's member-read boundary filters the viewer out of the audit
-  // subjects, so the access log keeps the viewed member only. Self reads skip it.
-  const viewerRow = isOwner ? null : await deps.store.find(viewer.userId);
-  const sharedGames = isOwner ? [] : findSharedGames(member.games, viewerRow?.games ?? []);
+  // Another member's page marks the games the viewer also plays: at most one
+  // extra keyed read of the viewer's own stored row, bounded by the stored
+  // list. The hook's member-read boundary filters the viewer out of the audit
+  // subjects, so the access log keeps the viewed member only. Self reads skip
+  // it, as do reads of a member listing no games: findSharedGames([], ...)
+  // is [] for any viewer list, so the read would be pure waste and would
+  // trip the single-keyed-read pins on game-less profiles.
+  const needsMatch = !isOwner && member.games.length > 0;
+  const viewerRow = needsMatch ? await deps.store.find(viewer.userId) : null;
+  const sharedGames = needsMatch ? findSharedGames(member.games, viewerRow?.games ?? []) : [];
   return {
     kind: "ok",
     member,
