@@ -33,6 +33,7 @@ dl.facts > div { display: block; }
 .home-event-link h3 { margin: .5rem 0; }
 .home-event-link:hover h3 { color: var(--brand); text-decoration: underline; }
 .home-event-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+.home-events-group { grid-column: 1 / -1; }
 @media (max-width: 40rem) { .home-events { grid-template-columns: 1fr; } }
 .featured-image { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; margin-top: 1rem; border: 1px solid #d8cfc0; }
 
