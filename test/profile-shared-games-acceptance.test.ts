@@ -173,25 +173,47 @@ const gameItems = (block: string): GameItem[] =>
   }));
 
 const decodeEntities = (s: string): string =>
-  // codeql[js/double-escaping]: test-only entity decoding; names flow only into expect() assertions.
   s
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&#39;|&#x27;/g, "'")
-    .replace(/&quot;/g, '"');
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 
-/** Displayed game text of one item: marker span, comments and tags removed. */
-const itemGameName = (inner: string): string =>
-  decodeEntities(
-    // codeql[js/incomplete-multi-character-sanitization]: test-only tag stripping; names flow only into expect() assertions.
-    inner
-      .replace(/<span[^>]*profile-shared-marker[^>]*>[\s\S]*?<\/span>/g, "")
-      .replace(/<!--[\s\S]*?-->/g, "")
-      .replace(/<[^>]*>/g, "")
-      .replace(/\s+/g, " ")
-      .trim(),
-  );
+/** Displayed game text of one item: marker span, comments and tags skipped. */
+const itemGameName = (inner: string): string => {
+  // Token-walking scanner (no regex-rewritten copy): comments end at the
+  // first `-->`, a profile-shared-marker span is skipped through its
+  // `</span>`, and any other `<...>` tag is skipped; text is collected.
+  let text = "";
+  let index = 0;
+  while (index < inner.length) {
+    if (inner.startsWith("<!--", index)) {
+      const end = inner.indexOf("-->", index + 4);
+      index = end === -1 ? inner.length : end + 3;
+      continue;
+    }
+    if (inner[index] === "<") {
+      const close = inner.indexOf(">", index);
+      if (close === -1) {
+        text += inner.slice(index);
+        break;
+      }
+      const tag = inner.slice(index, close + 1);
+      if (tag.startsWith("<span") && tag.includes("profile-shared-marker")) {
+        const endSpan = inner.indexOf("</span>", close + 1);
+        index = endSpan === -1 ? close + 1 : endSpan + "</span>".length;
+        continue;
+      }
+      index = close + 1;
+      continue;
+    }
+    const next = inner.indexOf("<", index);
+    text += inner.slice(index, next === -1 ? inner.length : next);
+    index = next === -1 ? inner.length : next;
+  }
+  return decodeEntities(text.replace(/\s+/g, " ").trim());
+};
 
 const expectMarked = (item: GameItem, name: string) => {
   expect(item.attrs, `${name} carries the shared hook`).toContain(MARK_HOOK);
