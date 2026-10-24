@@ -1,12 +1,14 @@
 // Shared command line for ci/visual-accept.mjs and ci/kit-visual-accept.mjs:
 //   node ci/<script> [--dry-run] [--format json] <artifact-dir>
-// Flags may sit before or after the positional. Anything else starting with
-// "-" is refused (exit 2) before the artifact is read or a baseline written.
+// Flags may sit before or after the positional, each at most once. Anything
+// else starting with "-" is refused (exit 2) before the artifact is read or a
+// baseline written.
 //
 // Order of checks: flags (UNKNOWN_FLAG), then the positional count
 // (MISSING_ARG, EXTRA_ARGS), then the artifact directory (ARTIFACT_NOT_FOUND),
-// then planning (NO_CANDIDATES, COLLISION, STALE_COPY_CONFLICT, IO_ERROR), then
-// the only writes. Usage errors exit 2, refusals and no-ops exit 1, success 0.
+// then planning (NO_CANDIDATES, COLLISION, STALE_COPY_CONFLICT, boundary
+// codes, IO_ERROR), then the only writes. Usage errors exit 2, refusals and
+// no-ops exit 1, success 0.
 //
 // --dry-run prints the plan and writes nothing. --format json replaces the
 // human output with one versioned verdict line on stdout (stderr stays empty),
@@ -33,6 +35,9 @@ export const CODES = Object.freeze({
   NO_CANDIDATES: "NO_CANDIDATES",
   NO_CHANGES: "NO_CHANGES",
   IO_ERROR: "IO_ERROR",
+  SOURCE_SYMLINK: "SOURCE_SYMLINK",
+  DESTINATION_SYMLINK: "DESTINATION_SYMLINK",
+  ARTIFACT_LIMIT: "ARTIFACT_LIMIT",
 });
 
 const NEXT_ACTION = {
@@ -51,21 +56,32 @@ const NEXT_ACTION = {
   NO_CHANGES:
     "Every candidate already matches the checkout; check you unzipped the failed run's artifact.",
   IO_ERROR: "Check read and write permission on the artifact and baseline directories, then rerun.",
+  SOURCE_SYMLINK:
+    "Remove the symlink from the artifact tree and pass a real directory, then rerun.",
+  DESTINATION_SYMLINK: "Remove the linked destination file or directory and rerun.",
+  ARTIFACT_LIMIT: "Narrow the artifact to the failed run's screenshots and rerun.",
 };
 
 // Parses argv (without node and script) into flags and positionals. Never
 // touches the filesystem. `error` is the first failing check in documented
-// order, or null.
+// order, or null. Each flag is accepted at most once: a repeat is most likely
+// a pasted typo, so it fails like any other unknown flag.
 export function parseInvocation(argv) {
   let dryRun = false;
   let json = false;
   let badFlag = false;
+  let seenDryRun = false;
+  let seenFormat = false;
   const positionals = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--dry-run") {
+      if (seenDryRun) badFlag = true;
+      seenDryRun = true;
       dryRun = true;
     } else if (token === "--format") {
+      if (seenFormat) badFlag = true;
+      seenFormat = true;
       if (argv[index + 1] === "json") {
         json = true;
         index += 1;
@@ -154,6 +170,9 @@ function planOutcome(adapter, flags, plan) {
   if (plan.verdict === "stale_copy_conflict") {
     return { ...base, status: 1, ok: false, code: CODES.STALE_COPY_CONFLICT, verdict: "refuse" };
   }
+  if (plan.verdict === "boundary") {
+    return { ...base, status: 1, ok: false, code: plan.boundary.code, verdict: "refuse" };
+  }
   if (plan.writes.length === 0 && adapter.nothingWrittenFails) {
     return { ...base, status: 1, ok: false, code: CODES.NO_CHANGES, verdict: "no-op" };
   }
@@ -189,6 +208,7 @@ function dryRunPlan(plan, outcome, root) {
     skipped: skippedList.shown,
     collisions: collisions.shown,
     collision: plan.verdict === "collision" ? "refused" : "none",
+    boundary: plan.verdict === "boundary" ? { ...plan.boundary } : null,
     verdict: outcome.verdict,
     truncated: {
       destinations: destinations.truncated,
@@ -208,13 +228,19 @@ function dryRunHuman(adapter, plan, outcome, root) {
     lines.push("verdict: refuse (collision; would write no baselines)");
   } else if (plan.verdict === "stale_copy_conflict") {
     lines.push("verdict: refuse (stale copy conflict; would write no baselines)");
+  } else if (plan.verdict === "boundary") {
+    lines.push("verdict: refuse (boundary; would write no baselines)");
   } else if (plan.verdict === "no_candidates") {
     lines.push("verdict: no-op (no baseline candidates in artifact; would write nothing)");
   } else {
     lines.push("verdict: no-op (every candidate matches the checkout; would write nothing)");
   }
   lines.push(`collision: ${plan.verdict === "collision" ? "refused" : "none"}`);
-  if (plan.verdict === "collision" || plan.verdict === "stale_copy_conflict") {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
     lines.push(adapter.refusalMessage(plan, root));
   }
   const writes = listed(plan.writes);
@@ -287,11 +313,17 @@ export function runCli(adapter, argv) {
       outcome.extra = { collisions: collisions.shown, truncated: collisions.truncated };
     } else if (plan.verdict === "stale_copy_conflict") {
       outcome.extra = { conflicts: [plan.conflict.dest] };
+    } else if (plan.verdict === "boundary") {
+      outcome.extra = { boundary: { ...plan.boundary } };
     }
     return finish(adapter, flags, outcome, {});
   }
 
-  if (plan.verdict === "collision" || plan.verdict === "stale_copy_conflict") {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
     return finish(adapter, flags, outcome, {
       stderr: `${adapter.refusalMessage(plan, root)}\n${codeLines(outcome)}`,
     });

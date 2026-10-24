@@ -1,20 +1,39 @@
 #!/usr/bin/env node
 // Accept reviewed Kit baselines from an unzipped failure artifact:
-//   node ci/kit-visual-accept.mjs <unzipped artifact dir>
+//   node ci/kit-visual-accept.mjs [--dry-run] [--format json] <unzipped artifact dir>
 // Only Kit suite directories relative to that root establish ownership; root
 // names and substring-lookalike folders never admit Hono images into Kit.
 // Reviewed actuals can replace checkout bytes. Artifact baseline copies can
 // only add absent files or match existing bytes; stale copies refuse the full
 // plan before any write. Inspect the failure images before accepting them.
-// Flags (all optional, either side of the positional): --dry-run prints the
-// plan and writes nothing; --format json prints one versioned verdict. Any
-// other flag exits 2 with a stable code before the artifact is read. See
-// ci/visual-accept-cli.mjs for the codes.
-import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+//
+// Use `node ci/kit-visual-accept.mjs [--dry-run] [--format json] <artifact-root>`
+// for Kit-only acceptance. Actual replacement authority comes only from
+// the existing exact `test-results-kit-visual` or `test-results-kit-parity`
+// segments inside the artifact; baseline copies retain the existing
+// `e2e/visual/__screenshots-kit__` path. Hono and unrelated/lookalike
+// screenshots have no Kit replacement authority. The extraction folder's name
+// is not a suite marker. Flags may sit before or after the positional:
+// --dry-run prints the plan and writes nothing, --format json prints one
+// versioned verdict, and any other flag exits 2 with a stable code before the
+// artifact is read (ci/visual-accept-cli.mjs lists the codes).
+//
+// Dry-run is read-only and validates the same authority as apply. Reject
+// source symlinks (including root/ancestor links, descendants and cycles) and
+// linked destination files/ancestors before directory creation or writes.
+// Confine the resolved plan to the intended artifact and Kit destination
+// roots. Preflight the entire plan and cache source bytes, preserving
+// actual-over-stale-copy precedence, collision/stale-copy refusal, additions
+// and identical no-ops. Refusal must not change destination or outside bytes.
+// Do not delete newer baselines to bypass a stale-copy conflict. These checks
+// do not promise safety against a concurrent hostile filesystem writer or
+// rollback after an apply-time disk failure.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyPlan, planBaselines } from "./visual-accept.mjs";
 import { runCli } from "./visual-accept-cli.mjs";
+import { collectCandidatesBounded } from "./visual-accept-policy.mjs";
 
 export const KIT_SCREENSHOT_DIR = "e2e/visual/__screenshots-kit__";
 export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
@@ -35,29 +54,8 @@ export function destinationName(entry, relativePath) {
 }
 
 export function collectCandidates(root) {
-  const candidates = [];
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-      } else {
-        const relativePath = relative(root, full);
-        const dest = destinationName(entry, relativePath);
-        if (dest !== null) {
-          const actual =
-            entry.endsWith("-actual.png") &&
-            !dirname(relativePath).split(sep).includes("__screenshots-kit__");
-          candidates.push({ src: full, dest, actual });
-        }
-      }
-    }
-  };
-  walk(root);
-  candidates.sort((a, b) =>
-    a.dest < b.dest ? -1 : a.dest > b.dest ? 1 : a.src < b.src ? -1 : a.src > b.src ? 1 : 0,
-  );
-  return candidates;
+  const rootAbs = resolve(root);
+  return collectCandidatesBounded(rootAbs, destinationName);
 }
 
 const MAX_NAMES_SHOWN = 20;
@@ -79,6 +77,12 @@ export function acceptBaselines(
   }
   if (plan.verdict === "stale_copy_conflict") {
     return { ok: false, message: `kit-visual-accept: ${plan.conflict.message}` };
+  }
+  if (plan.verdict === "boundary") {
+    return {
+      ok: false,
+      message: `kit-visual-accept: refusing: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written`,
+    };
   }
   if (plan.writes.length > 0) mkdir(destDir, { recursive: true });
   for (const { src, target, bytes } of plan.writes) {
@@ -102,10 +106,13 @@ export const KIT_ADAPTER = {
   noCandidatesMessage: NO_CANDIDATES_MESSAGE,
   plan: (artifact) => planKit(artifact, join(process.cwd(), KIT_SCREENSHOT_DIR)),
   apply: (plan) => applyPlan(plan, join(process.cwd(), KIT_SCREENSHOT_DIR)),
-  refusalMessage: (plan) =>
-    plan.verdict === "collision"
-      ? `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`
-      : `kit-visual-accept: ${plan.conflict.message}`,
+  refusalMessage: (plan) => {
+    if (plan.verdict === "collision")
+      return `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`;
+    if (plan.verdict === "boundary")
+      return `kit-visual-accept: refusing: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written`;
+    return `kit-visual-accept: ${plan.conflict.message}`;
+  },
   successLines: (plan) => {
     const names = plan.writes.map(({ dest }) => dest);
     const shown = names.slice(0, MAX_NAMES_SHOWN).join(", ");

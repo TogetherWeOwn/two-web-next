@@ -4,11 +4,34 @@
 // --dry-run prints the plan and writes nothing; --format json prints one
 // versioned verdict. Any other flag exits 2 with a stable code before the
 // artifact is read (ci/visual-accept-cli.mjs lists the codes).
-// Copies every `*-actual.png` under test-results-visual/ (a changed page) over
-// the matching committed baseline, and every new baseline the run wrote under
-// e2e/visual/__screenshots__/ (a page with no baseline yet), into
-// e2e/visual/__screenshots__/. Review the diff images in
+// Copies every `*-actual.png` under the exact test-results-visual/ suite (a
+// changed page) over the matching committed baseline, and every new baseline
+// the run wrote under e2e/visual/__screenshots__/ (a page with no baseline
+// yet), into e2e/visual/__screenshots__/. Review the diff images in
 // the same artifact before committing; a baseline change is a reviewed change.
+//
+// Only actual images under the exact `test-results-visual` directory segment
+// inside the extracted artifact have Hono replacement authority. An extraction
+// folder named like a suite does not itself confer authority. Unrelated,
+// lookalike and Kit suite screenshots are ignored. Copies under the existing
+// Hono baseline path can add absent baselines or match identical bytes, but
+// cannot replace differing checkout bytes; a reviewed matching actual outranks
+// its stale artifact copy. Do not delete the newer checkout baseline to force
+// acceptance.
+//
+// Preview with `node ci/visual-accept.mjs --dry-run <artifact-root>`, or add
+// `--format json` for the versioned verdict with the dry-run plan and next
+// action. Apply uses the same validated plan with `node ci/visual-accept.mjs
+// <artifact-root>`. Validate flags and the entire bounded plan before creating
+// any directory or writing any destination. Input roots must be real
+// directories; reject symlinks at the root, in its ancestry and among
+// discovered descendants, including cycles. Reject linked destination files,
+// the destination root and linked ancestors. Keep resolved sources and
+// destinations inside their intended roots, and apply the source bytes cached
+// during preflight. Any boundary refusal (SOURCE_SYMLINK,
+// DESTINATION_SYMLINK, ARTIFACT_LIMIT) leaves existing destinations and
+// outside files unchanged. This assumes no concurrent hostile filesystem
+// writer; apply-time disk errors are not an atomic rollback guarantee.
 //
 // Collision preflight: the full destination-name map is built and validated
 // before any baseline write. Destinations with two genuinely different sources
@@ -23,10 +46,17 @@
 // conflict refuses the full plan before writes, as do unreadable candidates.
 // Suite directories are exact segments relative to the artifact root, so the
 // extraction folder's own name cannot change the plan.
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runCli } from "./visual-accept-cli.mjs";
+import {
+  BoundaryError,
+  CODE_DESTINATION_SYMLINK,
+  collectCandidatesBounded,
+  safeRelativePath,
+  validateDestinationRoot,
+} from "./visual-accept-policy.mjs";
 
 const MAX_DESTINATIONS_SHOWN = 5;
 const MAX_SOURCES_SHOWN = 5;
@@ -48,11 +78,13 @@ export function displayPath(root, path) {
 // `*-actual.png` flattens to `<name>.png`, and new baselines already under a
 // `__screenshots__` directory keep their filename, even with an -actual suffix.
 //
-// Suite boundary: the shared e2e-failure artifact also carries the Kit
-// outputs (`test-results-kit-visual/`, `test-results-kit-parity/`,
+// Suite boundary: positively admit Hono actuals only from the exact
+// `test-results-visual` segment. The shared e2e-failure artifact also carries
+// foreign outputs (`test-results-staging/`, lookalikes, random folders) and
+// the Kit outputs (`test-results-kit-visual/`, `test-results-kit-parity/`,
 // `__screenshots-kit__/`), which belong to ci/kit-visual-accept.mjs. Anything
-// from those paths is ignored here, so a Kit redesign can never regenerate a
-// Hono baseline.
+// from those paths is ignored here, so a foreign screenshot or Kit redesign
+// can never regenerate a Hono baseline.
 export function destinationName(entry, relativePath) {
   const directories = dirname(relativePath).split(sep);
   if (
@@ -65,7 +97,7 @@ export function destinationName(entry, relativePath) {
   if (entry.endsWith(".png") && directories.includes("__screenshots__")) {
     return basename(entry);
   }
-  if (entry.endsWith("-actual.png")) {
+  if (entry.endsWith("-actual.png") && directories.includes("test-results-visual")) {
     return basename(entry).replace(/-actual\.png$/, ".png");
   }
   return null;
@@ -73,31 +105,12 @@ export function destinationName(entry, relativePath) {
 
 // Walks the artifact tree and returns every admitted candidate as
 // `{ src, dest, actual }`. Baseline-directory copies are never reviewed actuals.
-// No filesystem writes happen here.
+// No filesystem writes happen here. Uses the shared bounded policy: never
+// follows symlinks, enforces depth/entry budgets, and counts out-of-suite
+// entries before filtering.
 export function collectCandidates(root) {
-  const candidates = [];
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-      } else {
-        const relativePath = relative(root, full);
-        const dest = destinationName(entry, relativePath);
-        if (dest !== null) {
-          const actual =
-            entry.endsWith("-actual.png") &&
-            !dirname(relativePath).split(sep).includes("__screenshots__");
-          candidates.push({ src: full, dest, actual });
-        }
-      }
-    }
-  };
-  walk(root);
-  candidates.sort((a, b) =>
-    a.dest < b.dest ? -1 : a.dest > b.dest ? 1 : a.src < b.src ? -1 : a.src > b.src ? 1 : 0,
-  );
-  return candidates;
+  const rootAbs = resolve(root);
+  return collectCandidatesBounded(rootAbs, destinationName);
 }
 
 // One representative per distinct byte content, in first-seen order.
@@ -193,19 +206,50 @@ export function formatCollisionDiagnostic(duplicates, root) {
 // Check every local target before applying either suite's plan. Only an
 // admitted actual may replace differing checkout bytes; artifact baseline
 // copies are additions or identical no-ops, never replacement authority.
+// Rejects linked destination files/roots/ancestors and confinement escapes
+// before any mkdir or write.
 // Returns `{ writes, unchanged }`; `unchanged` holds candidates whose bytes
 // already match the checkout. A stale copy conflict throws with `.dest` and
 // `.visualAcceptCode`.
 export function preflightPlan(resolved, destDir) {
+  const destAbs = resolve(destDir);
+  validateDestinationRoot(destAbs);
   const writes = [];
   const unchanged = [];
   for (const candidate of resolved) {
-    const target = join(destDir, candidate.dest);
-    let current = null;
+    // Destination names are basenames by construction; refuse anything that
+    // would escape the intended destination root.
+    if (
+      typeof candidate.dest !== "string" ||
+      candidate.dest === "" ||
+      candidate.dest === "." ||
+      candidate.dest === ".." ||
+      candidate.dest.includes("/") ||
+      candidate.dest.includes("\\")
+    ) {
+      throw new BoundaryError(CODE_DESTINATION_SYMLINK, ".", "Destination escapes its root.");
+    }
+    const target = join(destAbs, candidate.dest);
+    if (relative(destAbs, target).startsWith("..")) {
+      throw new BoundaryError(CODE_DESTINATION_SYMLINK, ".", "Destination escapes its root.");
+    }
+    let targetStat = null;
     try {
-      current = readFileSync(target);
+      targetStat = lstatSync(target);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
+    }
+    if (targetStat !== null && targetStat.isSymbolicLink()) {
+      const safe = safeRelativePath(destAbs, target);
+      throw new BoundaryError(
+        CODE_DESTINATION_SYMLINK,
+        safe,
+        `Destination file is a symlink: ${safe}.`,
+      );
+    }
+    let current = null;
+    if (targetStat !== null) {
+      current = readFileSync(target);
     }
     if (current !== null) {
       if (current.equals(candidate.bytes)) {
@@ -230,12 +274,34 @@ export function preflightWrites(resolved, destDir) {
   return preflightPlan(resolved, destDir).writes;
 }
 
+function boundaryPlan(error, sources = 0, destinations = 0) {
+  return {
+    verdict: "boundary",
+    sources,
+    destinations,
+    dropped: 0,
+    writes: [],
+    skipped: [],
+    duplicates: [],
+    conflict: null,
+    boundary: { code: error.code, path: error.path ?? "." },
+  };
+}
+
 // Read-only plan for one suite: collect, resolve, collision and stale-copy
 // preflight, with no filesystem writes. `verdict` is one of ok, no_candidates,
-// collision, stale_copy_conflict. Counts: `sources` candidate files,
-// `destinations` distinct destination names. Unreadable files throw.
+// collision, stale_copy_conflict, boundary. Counts: `sources` candidate files,
+// `destinations` distinct destination names. Boundary violations (symlinked
+// sources or destinations, traversal-budget breaches) become a `boundary`
+// verdict with a fixed code; unreadable files throw.
 export function planBaselines(artifactDir, destDir, collect = collectCandidates) {
-  const candidates = collect(artifactDir);
+  let candidates;
+  try {
+    candidates = collect(artifactDir);
+  } catch (error) {
+    if (error instanceof BoundaryError) return boundaryPlan(error);
+    throw error;
+  }
   const plan = {
     verdict: "ok",
     sources: candidates.length,
@@ -245,6 +311,7 @@ export function planBaselines(artifactDir, destDir, collect = collectCandidates)
     skipped: [],
     duplicates: [],
     conflict: null,
+    boundary: null,
   };
   if (candidates.length === 0) {
     plan.verdict = "no_candidates";
@@ -266,6 +333,8 @@ export function planBaselines(artifactDir, destDir, collect = collectCandidates)
       plan.skipped.push({ src, dest, reason: SKIP_UNCHANGED });
     }
   } catch (error) {
+    if (error instanceof BoundaryError)
+      return boundaryPlan(error, candidates.length, resolved.length);
     if (error.visualAcceptCode !== STALE_COPY_CODE) throw error;
     plan.verdict = "stale_copy_conflict";
     plan.conflict = error;
@@ -279,7 +348,16 @@ export function planBaselines(artifactDir, destDir, collect = collectCandidates)
 
 // Applies an `ok` plan: bytes were cached during planning, so nothing is
 // re-read from the artifact. `write(target, bytes)` is injectable for Kit.
+// Refusal verdicts never reach the write loop; plans without writes are a
+// no-op and never create the destination directory.
 export function applyPlan(plan, destDir, write = (target, bytes) => writeFileSync(target, bytes)) {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
+    throw new Error(`Refusing to apply a ${plan.verdict} plan; no baselines written.`);
+  }
   if (plan.writes.length > 0) mkdirSync(destDir, { recursive: true });
   for (const entry of plan.writes) write(entry.target, entry.bytes, entry);
 }
@@ -292,6 +370,13 @@ export function acceptBaselines(artifactDir, destDir) {
     throw new Error(formatCollisionDiagnostic(plan.duplicates));
   }
   if (plan.verdict === "stale_copy_conflict") throw plan.conflict;
+  if (plan.verdict === "boundary") {
+    throw new BoundaryError(
+      plan.boundary.code,
+      plan.boundary.path,
+      `Refusing visual baseline acceptance: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written.`,
+    );
+  }
   applyPlan(plan, destDir);
   return { written: plan.writes.length, dropped: plan.dropped };
 }
@@ -307,10 +392,12 @@ export const HONO_ADAPTER = {
   nothingWrittenFails: true,
   plan: (artifact) => planBaselines(artifact, HONO_DEST_DIR),
   apply: (plan) => applyPlan(plan, HONO_DEST_DIR),
-  refusalMessage: (plan, root) =>
-    plan.verdict === "collision"
-      ? formatCollisionDiagnostic(plan.duplicates, root)
-      : plan.conflict.message,
+  refusalMessage: (plan, root) => {
+    if (plan.verdict === "collision") return formatCollisionDiagnostic(plan.duplicates, root);
+    if (plan.verdict === "boundary")
+      return `Refusing visual baseline acceptance: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written.`;
+    return plan.conflict.message;
+  },
   successLines: (plan) => {
     const lines = [`accepted ${plan.writes.length} baseline(s) into ${HONO_DEST_DIR}`];
     if (plan.dropped > 0) {
