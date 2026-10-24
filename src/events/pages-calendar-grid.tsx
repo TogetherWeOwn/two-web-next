@@ -65,7 +65,7 @@ export const MonthGrid: FC<{
         {CALENDAR_THIS_MONTH_COPY}
       </a>
     </p>
-    {/* Native GET jump: view and the committed past state ride as hidden
+    {/* Native GET jump: view, game and the committed past state ride as hidden
         fields, so the no-JS submit lands on the same URL the binder fetches.
         A jump is month-scoped — the search query never rides along. */}
     <form data-testid={CALENDAR_MONTH_JUMP_TESTID} method="get" action="/events">
@@ -79,6 +79,7 @@ export const MonthGrid: FC<{
         max={CALENDAR_MONTH_MAX}
       />{" "}
       <input type="hidden" name="view" value="calendar" />
+      {state.game?.trim() ? <input type="hidden" name="game" value={state.game.trim()} /> : null}
       {state.past ? <input type="hidden" name="past" value="1" /> : null}{" "}
       <button class="btn" type="submit" data-testid={CALENDAR_MONTH_JUMP_SUBMIT_TESTID}>
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
@@ -125,7 +126,7 @@ export const MonthGrid: FC<{
                       return (
                         <li>
                           <a
-                            href={calendarJumpUrl(state.past, rowKey(e))}
+                            href={calendarJumpUrl(state.past, rowKey(e), state.game)}
                             data-cal-jump
                             data-cancelled={cancelled ? "true" : undefined}
                             aria-label={
