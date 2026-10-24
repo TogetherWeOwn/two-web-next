@@ -1,0 +1,168 @@
+import { getTableColumns } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { Hono } from "hono";
+import type { Db } from "../../src/db/index";
+import { events } from "../../src/db/admin-schema";
+import type { Env } from "../../src/env";
+import { registerEventRoutes } from "../../src/events/routes";
+import { loadEventsPage } from "../../src/kit-events";
+import { renderEventsHtml } from "../../src/kit-events-html";
+import { partialEvent } from "./calendar-discord-partial";
+
+export const GAME_ORIGIN = "https://calendar.example.test";
+export const GAME_ENTRY = "/events?view=list&month=2099-05&game=Chess";
+export type GameTwin = "Hono" | "Kit";
+export const GAME_TWINS: GameTwin[] = ["Hono", "Kit"];
+export const GAME_BUNDLES = ["source", "shipped"] as const;
+
+export function gameRow(id: number, game: string, past = false) {
+  return {
+    ...partialEvent(id),
+    eventKey: id === 1 ? "01ARZ3NDEKTSV4RRFFQ69G5FAA" : "01ARZ3NDEKTSV4RRFFQ69G5FAB",
+    title: `${game} fixture night`,
+    game,
+    startsAt: new Date(past ? "2020-05-12T20:00:00Z" : "2099-05-12T20:00:00Z"),
+    endsAt: new Date(past ? "2020-05-12T22:00:00Z" : "2099-05-12T22:00:00Z"),
+  };
+}
+
+// SQL is the only data boundary replaced. Resolver, predicates, paging, model,
+// both route adapters and the shared renderer are real. No external connection.
+export function gameRecoveryFixture(options: { empty?: boolean; failed?: boolean } = {}) {
+  let failed = options.failed ?? false;
+  let upcoming = options.empty ? [] : [gameRow(1, "Chess"), gameRow(2, "Go")];
+  const past = [gameRow(1, "Chess", true), gameRow(2, "Go", true)];
+  const queries: { sql: string; params: unknown[] }[] = [];
+  const discordCalls: number[] = [];
+  const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+  const encode = (row: ReturnType<typeof gameRow>) =>
+    columns.map((column) => {
+      const value = row[column];
+      return value instanceof Date ? value.toISOString() : value;
+    });
+  const source = {
+    upcoming: async () => {
+      discordCalls.push(1);
+      return [];
+    },
+    lastReadFailed: () => failed,
+  };
+  const db = drizzle(async (sql, params) => {
+    queries.push({ sql, params: [...params] });
+    if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (/^select\s+distinct/i.test(sql)) {
+      const limit = Number(params.at(-1));
+      return {
+        rows: ["Chess", "Go"].slice(0, Number.isSafeInteger(limit) ? limit : 2).map((g) => [g]),
+      };
+    }
+    if (sql.startsWith('select "discord_event_id"')) return { rows: [] };
+    if (!sql.includes('from "events"')) throw new Error("Unexpected fixture SQL boundary");
+    let rows = /"ends_at" </.test(sql) ? past : upcoming;
+    const where = sql.slice(sql.indexOf('from "events"'));
+    if (/"game"/.test(where)) {
+      const game = params.find(
+        (p): p is string =>
+          typeof p === "string" && ["chess", "go"].includes(p.trim().toLowerCase()),
+      );
+      if (game) rows = rows.filter((r) => r.game.toLowerCase() === game.trim().toLowerCase());
+    }
+    const query = params.find(
+      (p): p is string => typeof p === "string" && p.startsWith("%") && p.endsWith("%"),
+    );
+    if (query) {
+      const text = query.slice(1, -1).replace(/\\(.)/g, "$1").toLowerCase();
+      rows = rows.filter((r) => `${r.title} ${r.description}`.toLowerCase().includes(text));
+    }
+    if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
+    if (sql.includes("limit")) {
+      const offset = sql.includes(" offset ") ? Number(params.at(-1)) : 0;
+      const limit = Number(params.at(sql.includes(" offset ") ? -2 : -1));
+      rows = rows.slice(offset, offset + limit);
+    }
+    return { rows: rows.map(encode) };
+  });
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({ execute: async () => [] } as unknown as Db),
+  });
+  const adminDb = db as unknown as Db;
+  const app = new Hono<{ Bindings: Env }>();
+  registerEventRoutes(
+    app,
+    async () => null,
+    async () => null,
+  );
+  const baseEnv = {
+    APP_URL: GAME_ORIGIN,
+    DISCORD_INVITE_URL: "https://discord.gg/example",
+    ADMIN_DB: adminDb,
+    DISCORD_EVENTS: source,
+  } as unknown as Env;
+
+  return {
+    queries,
+    discordCalls,
+    db: adminDb,
+    setFailed(value: boolean) {
+      failed = value;
+    },
+    setEmpty() {
+      upcoming = [];
+    },
+    async render(twin: GameTwin, path: string, island = false, origin = GAME_ORIGIN) {
+      const url = new URL(path, origin);
+      const headers: Record<string, string> = island ? { "x-two-island": "events-calendar" } : {};
+      const env = { ...baseEnv, APP_URL: origin };
+      if (twin === "Hono") return app.request(url.href, { headers }, env);
+      const collected: Record<string, string> = {};
+      const data = await loadEventsPage({
+        env,
+        url,
+        method: "GET",
+        island,
+        request: new Request(url, { headers }),
+        setHeaders: (values) => Object.assign(collected, values),
+        deleteJoinCookie: () => {},
+        dbForFn: async () => adminDb,
+        sessionForFn: async () => null,
+        journeyForFn: async () => null,
+        discordForFn: () => source,
+      });
+      const rendered = await renderEventsHtml(data as never, collected);
+      return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
+    },
+  };
+}
+
+export function decodedText(html: string) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#(?:39|x27);/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function emptyRegion(html: string) {
+  // Rendered HTML boundary only. Scope away from static navigation/icons.
+  return (
+    /<([a-z]+)\b[^>]*data-testid="events-empty-[^"]+"[^>]*>([\s\S]*?)<\/\1>/.exec(html)?.[0] ?? ""
+  );
+}
+
+export function broadeningLinks(html: string) {
+  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
+    .map((m) => ({
+      href: /\bhref="([^"]+)"/.exec(m[1]!)?.[1]?.replace(/&amp;/g, "&") ?? "",
+      name: decodedText(m[2]!),
+    }))
+    .filter(
+      (link) =>
+        /clear|all games|all events|broaden|remove.*filter/i.test(link.name) &&
+        link.href.startsWith("/events"),
+    );
+}
