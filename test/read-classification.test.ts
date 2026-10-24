@@ -50,7 +50,7 @@ const SELF_POSITION =
 // from the reader. Kept in sync on purpose — if the read changes shape, this
 // pin must change too.
 const ATTENDED_HISTORY_READ =
-  "select rsvps.user_id, events.event_key, events.title, events.starts_at, events.ends_at, count(*) over () as total from rsvps inner join events on events.id = rsvps.event_id where rsvps.user_id = $1 and rsvps.status = 'going' and events.ends_at < $2 and events.status in ('published', 'past') order by events.starts_at desc, events.id desc limit 6";
+  "select rsvps.user_id, events.event_key, events.title, events.starts_at, events.ends_at, events.timezone, count(*) over () as total from rsvps inner join events on events.id = rsvps.event_id where rsvps.user_id = $1 and rsvps.status = 'going' and events.ends_at < $2 and events.status in ('published', 'past') and isfinite(events.starts_at) and isfinite(events.ends_at) order by events.starts_at desc, events.id desc limit 6";
 // Relative-scope member board (src/leaderboards/members.ts): exact normalized
 // statements from the query builder, full-filter variants. Kept in sync on
 // purpose — if the read changes shape, these pins must change too.
@@ -256,6 +256,20 @@ describe("rawMemberOwner", () => {
     expect(rawMemberOwner(ATTENDED_HISTORY_READ.replace("limit 6", "limit 7"))).toBeUndefined();
     expect(
       rawMemberOwner(ATTENDED_HISTORY_READ.replace("events.ends_at < $2", "events.ends_at <= $2")),
+    ).toBeUndefined();
+    // The zone projection and the finite-window guard are part of the
+    // exempted shape: without either, infinity rows could occupy the window
+    // or the projection could drift unreviewed.
+    expect(
+      rawMemberOwner(ATTENDED_HISTORY_READ.replace(", events.timezone,", ",")),
+    ).toBeUndefined();
+    expect(
+      rawMemberOwner(
+        ATTENDED_HISTORY_READ.replace(
+          " and isfinite(events.starts_at) and isfinite(events.ends_at)",
+          "",
+        ),
+      ),
     ).toBeUndefined();
     expect(rawMemberOwner(SELF_POSITION.replace("waitlisted", "going"))).toBeUndefined();
     expect(rawMemberOwner(MEMBER_ROW.replace("limit 1", "limit 2"))).toBeUndefined();

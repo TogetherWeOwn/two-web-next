@@ -31,6 +31,7 @@ import {
   PROFILE_FIELD_IDS,
   PROFILE_SHARE_DESCRIPTION,
   PROFILE_TIMEZONE_HELP_ID,
+  attendedDate,
   profileFieldForErrorKey,
   profileInitials,
   statsDate,
@@ -344,7 +345,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             {#each history.nights as night}
               <li>
                 <a href={`/e/${night.eventKey}`}>{night.title}</a>
-                <time datetime={night.startsAt.toISOString()}>{statsDate(night.startsAt)}</time>
+                <time datetime={night.startsAt.toISOString()}>
+                  {attendedDate(night.startsAt, night.timezone)}
+                </time>
               </li>
             {/each}
           </ul>

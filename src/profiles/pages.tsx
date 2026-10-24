@@ -86,6 +86,21 @@ export const statsDate = (date: Date) =>
     year: "numeric",
     timeZone: "UTC",
   });
+// Attended nights render in their event zone, like the past archive: a 20:00
+// New York night reads as its local day, not the UTC day. An invalid stored
+// zone falls back to UTC instead of throwing through the render.
+export const attendedDate = (date: Date, zone: string) => {
+  try {
+    return date.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: zone,
+    });
+  } catch {
+    return statsDate(date);
+  }
+};
 
 // Recovery is an explicit safe GET to the same profile, never a background
 // retry or an automatic reload: over an unsaved editor the link warns that
@@ -226,7 +241,9 @@ const AttendedHistoryBlock: FC<{ history: AttendedHistory }> = ({ history }) => 
           {history.nights.map((night) => (
             <li>
               <a href={`/e/${night.eventKey}`}>{night.title}</a>{" "}
-              <time datetime={night.startsAt.toISOString()}>{statsDate(night.startsAt)}</time>
+              <time datetime={night.startsAt.toISOString()}>
+                {attendedDate(night.startsAt, night.timezone)}
+              </time>
             </li>
           ))}
         </ul>

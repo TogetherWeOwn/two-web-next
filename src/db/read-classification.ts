@@ -141,11 +141,12 @@ export function rawMemberOwner(statement: string): string | undefined {
     return "user_id";
   // Own attended history (src/profiles/history.ts): one window-total row set
   // for the bound viewer only (user_id = $1), so every captured owner equals
-  // the viewer and the read stays unaudited. Only this exact projection,
-  // predicate (going + ended + published/past), past-archive ordering and
-  // literal cap earns the exemption; bound params are the viewer id and now.
+  // the viewer and the read stays unaudited. Only this exact projection
+  // (with the event-zone column), predicate (going + ended + published/past
+  // + finite window), past-archive ordering and literal cap earns the
+  // exemption; bound params are the viewer id and now.
   if (
-    /^select rsvps\.user_id, events\.event_key, events\.title, events\.starts_at, events\.ends_at, count\(\*\) over \(\) as total from rsvps inner join events on events\.id = rsvps\.event_id where rsvps\.user_id = \$\d+ and rsvps\.status = 'going' and events\.ends_at < \$\d+ and events\.status in \('published', 'past'\) order by events\.starts_at desc, events\.id desc limit 6$/.test(
+    /^select rsvps\.user_id, events\.event_key, events\.title, events\.starts_at, events\.ends_at, events\.timezone, count\(\*\) over \(\) as total from rsvps inner join events on events\.id = rsvps\.event_id where rsvps\.user_id = \$\d+ and rsvps\.status = 'going' and events\.ends_at < \$\d+ and events\.status in \('published', 'past'\) and isfinite\(events\.starts_at\) and isfinite\(events\.ends_at\) order by events\.starts_at desc, events\.id desc limit 6$/.test(
       query,
     )
   )
