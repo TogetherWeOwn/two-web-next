@@ -99,6 +99,10 @@ export type KitEventEditView = {
   status: string;
   /** Normalized inventory href from the return carrier; null keeps the direct fallback. */
   origin: string | null;
+  /** Return-carrier field name, server-carried so the edit page never imports
+   * event-list client-side (a second client importer would split a shared
+   * chunk and breach the client file-count budget). */
+  originParam: string;
   values: KitEventEditValues;
   errors: Record<string, string>;
   hasErrors: boolean;
@@ -227,6 +231,7 @@ export async function resolveKitEventEdit(
       // Hono edit handler's queryOrigin. The load already collapsed duplicate
       // carriers first-wins into rawQuery.
       origin: parseInventoryOrigin(rawQuery[INVENTORY_RETURN_PARAM]),
+      originParam: INVENTORY_RETURN_PARAM,
       values: {
         title: row.title,
         game: row.game ?? "",

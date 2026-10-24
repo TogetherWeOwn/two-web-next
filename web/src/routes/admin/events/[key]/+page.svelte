@@ -1,7 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
-import { INVENTORY_RETURN_PARAM } from "../../../../../../src/admin/event-list";
 import type { PageProps } from "./$types";
 
 // Markup contract of EventFormPage mode="edit"
@@ -65,7 +64,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-draft={hasErrors ? "" : undefined}
   >
     {#if view.origin}
-      <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+      <input type="hidden" name={view.originParam} value={view.origin} />
     {/if}
     <div class="field">
       <label for="f-title">Title</label>
@@ -219,7 +218,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
           {#if view.origin}
-            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+            <input type="hidden" name={view.originParam} value={view.origin} />
           {/if}
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
         </form>
@@ -227,7 +226,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
           {#if view.origin}
-            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+            <input type="hidden" name={view.originParam} value={view.origin} />
           {/if}
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
         </form>
@@ -235,7 +234,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if view.rsvpAction}
         <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
           {#if view.origin}
-            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+            <input type="hidden" name={view.originParam} value={view.origin} />
           {/if}
           <button type="submit" class="link" data-testid={view.rsvpAction}>
             {view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
