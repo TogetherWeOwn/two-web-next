@@ -40,10 +40,10 @@ export type BaselineContent = {
 };
 
 /**
- * Stored instants can be nonfinite (legacy ±Infinity rows under repair):
- * toISOString() throws on those, so encode them by their distinct time value
- * instead. Finite instants keep hashing as UTC ISO strings, so a fold-second
- * occurrence keeps its exact instant in the comparison.
+ * Stored instants can be nonfinite (legacy ±Infinity rows under repair, decoded
+ * as Invalid Date): toISOString() throws on those, so encode them distinctly
+ * from any finite instant instead. Finite instants keep hashing as UTC ISO
+ * strings, so a fold-second occurrence keeps its exact instant in the comparison.
  */
 function instantToken(value: Date): string {
   const time = value.getTime();
