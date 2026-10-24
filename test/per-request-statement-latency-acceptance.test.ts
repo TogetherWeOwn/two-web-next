@@ -179,6 +179,9 @@ const fakeRefusingDb = (error: unknown) =>
     select: () => {
       throw error;
     },
+    selectDistinctOn: () => {
+      throw error;
+    },
     execute: async () => {
       throw error;
     },

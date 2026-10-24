@@ -125,9 +125,11 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
       expect(html).toContain('data-total-pages="2"');
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
       expect(html).not.toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
-      // Count, page-one rows and the two going aggregates (attributable +
-      // occupancy); Drizzle elides a zero offset, so a clamped page sends none.
-      expect(statements).toHaveLength(4);
+      // Distinct game suggestions, count, page-one rows and the two going
+      // aggregates (attributable + occupancy); Drizzle elides a zero offset,
+      // so a clamped page sends none.
+      expect(statements).toHaveLength(5);
+      expect(statements[0]).toMatch(/^select distinct/i);
       for (const statement of statements) expect(statement).not.toContain(" offset ");
     },
   );
@@ -150,7 +152,12 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past?page=${raw}"`);
       expect(html).toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
       expect(html).toContain(pastEventsOutOfRangeCopy(Number(raw), 2));
-      expectCountOnly();
+      // Distinct game suggestions plus the count; the page still stops before
+      // any row read, so no OFFSET is ever sent for it.
+      expect(statements).toHaveLength(2);
+      expect(statements[0]).toMatch(/^select distinct/i);
+      expect(statements[1]).toMatch(/^select count\(\*\)/);
+      expect(statements[1]).not.toContain(" offset ");
     },
   );
 

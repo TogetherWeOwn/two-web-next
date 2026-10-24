@@ -1,4 +1,5 @@
-// route-inventory: GET /events/past, GET /events
+// route-inventory: GET /events/past
+// route-inventory: GET /events
 // Builder-owned unit pins for the archive game facet's shared authorities.
 // The Test Author's acceptance suite proves end-to-end behavior; these pin the
 // pure normalization, URL grammar and admission helpers both twins share.
