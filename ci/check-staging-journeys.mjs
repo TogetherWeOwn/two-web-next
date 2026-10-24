@@ -8,6 +8,7 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -74,7 +75,17 @@ export function runGate({
   const paths = [reportPath, ledgerJsonPath, ledgerMdPath, stepSummaryPath]
     .filter(Boolean)
     .map((path) => resolve(path));
-  if (new Set(paths).size !== paths.length) {
+  // stat follows symlinks; device/inode identity also catches hard-linked files.
+  const identities = paths.flatMap((path) => {
+    try {
+      const { dev, ino } = statSync(path, { bigint: true });
+      return [`${dev}:${ino}`];
+    } catch {
+      // Missing/unreadable destinations retain the normal receipt I/O diagnostics.
+      return [];
+    }
+  });
+  if (new Set(paths).size !== paths.length || new Set(identities).size !== identities.length) {
     stderr.write("output_unwritable: choose distinct local input, receipt and summary paths.\n");
     return 2;
   }

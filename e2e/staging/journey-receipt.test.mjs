@@ -1,7 +1,15 @@
 // Builder-owned boundary checks; the independent acceptance file is unchanged.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -180,6 +188,43 @@ test("colliding paths are refused before overwriting the report", (t) => {
   assert.equal(runGate({ ...paths, ledgerJsonPath: paths.reportPath }), 2);
   assert.equal(readFileSync(paths.reportPath, "utf8"), raw);
   assert.match(paths.output(), /output_unwritable/);
+});
+
+const pathRoles = ["reportPath", "ledgerJsonPath", "ledgerMdPath", "stepSummaryPath"];
+for (const [kind, makeLink] of [
+  ["symlink", symlinkSync],
+  ["hard link", linkSync],
+]) {
+  for (let first = 0; first < pathRoles.length; first++) {
+    for (const secondRole of pathRoles.slice(first + 1)) {
+      const firstRole = pathRoles[first];
+      test(`${kind} between ${firstRole} and ${secondRole} refuses all writes`, (t) => {
+        const paths = scratch(t);
+        const raw = JSON.stringify(report());
+        for (const role of pathRoles) {
+          if (role !== secondRole) writeFileSync(paths[role], raw);
+        }
+        makeLink(paths[firstRole], paths[secondRole]);
+        assert.equal(runGate(paths), 2);
+        for (const role of pathRoles) assert.equal(readFileSync(paths[role], "utf8"), raw);
+        assert.equal(
+          paths.output(),
+          "output_unwritable: choose distinct local input, receipt and summary paths.\n",
+        );
+      });
+    }
+  }
+}
+
+test("distinct existing report, receipts and summary remain writable", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  for (const role of pathRoles.slice(1)) writeFileSync(paths[role], "prior fixture output\n");
+  assert.equal(runGate(paths), 0);
+  assert.equal(JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8")).verdict, "pass");
+  assert.match(readFileSync(paths.ledgerMdPath, "utf8"), /Verdict: \*\*pass\*\*/);
+  assert.match(readFileSync(paths.stepSummaryPath, "utf8"), /^prior fixture output\n/);
+  assert.deepEqual(JSON.parse(readFileSync(paths.reportPath, "utf8")), report());
 });
 
 test("CLI invalid flags fail with fixed usage diagnostics, not arguments or stacks", (t) => {

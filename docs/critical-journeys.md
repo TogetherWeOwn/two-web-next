@@ -267,7 +267,10 @@ same Markdown to `GITHUB_STEP_SUMMARY` when set. Valid arguments with distinct,
 writable regular output paths receive both receipts **even when input cannot
 be read or parsed**. Help is effect-free and needs no report or configuration.
 Invalid arguments and colliding input/output/summary paths are refused (exit 2)
-without writing. A filesystem output failure also exits 2, emits only a fixed
+without writing. The pre-write check compares resolved paths and existing-file
+device/inode identities, including symbolic and hard links. Keep local paths
+stable during execution; this is not protection against concurrent path replacement.
+A filesystem output failure also exits 2, emits only a fixed
 `output_unwritable` diagnostic, and marks any writable companion non-pass; no
 promise is made that an unwritable destination receives a file.
 
