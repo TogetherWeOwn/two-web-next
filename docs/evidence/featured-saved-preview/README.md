@@ -11,7 +11,7 @@ Keep the Open Lobby/Logo 1 chrome, semantic tokens, typography, the
 `Homepage preview` panel title and its intro copy. Inside the panel, render a
 `Saved content preview` section with the public card article for every saved
 status, then a `Homepage eligibility at this check time` section with the
-status badge, a one-sentence reason and the saved UTC window bounds. On a
+status badge, a short reason and the saved UTC window bounds. On a
 rejected redisplay, one draft note says the form holds the submitted draft
 while the card and eligibility show the last saved row. References: the
 existing public card, stored link/image admission and status authority; no new
