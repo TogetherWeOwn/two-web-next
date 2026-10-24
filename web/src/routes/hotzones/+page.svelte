@@ -1,5 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { WEEKDAY_NAMES } from "../../../../src/hotzones/weekday-names";
 import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -16,9 +17,19 @@ const {
   gamesHtml,
   retentionNote,
   appUrl,
+  available,
+  joinsPeak,
+  voicePeak,
+  gamesPeak,
   periodPickerHtml,
 } = $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
+
+// Peak summary copy mirrors the Hono PeakLine exactly (src/hotzones/pages.tsx):
+// joins peaks never carry the "estimated" qualifier, voice/games always do.
+type Peak = { weekday: number; hour: number; count: number };
+const peakLine = (peak: Peak, estimated: boolean, unit?: string): string =>
+  `${estimated ? "Estimated peak: " : "Peak: "}${WEEKDAY_NAMES[peak.weekday]} ${String(peak.hour).padStart(2, "0")}:00 (${peak.count}${unit ? ` ${unit}` : ""}).`;
 // Every signal link keeps the selected season; absent/all stays canonical.
 const qs = $derived(season === "all" ? "" : `?season=${season}`);
 </script>
@@ -38,7 +49,11 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   {/snippet}
   <p class="strap">Activity rhythms</p>
   <h1>Hot zones</h1>
-  <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
+  {#if available}
+    <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
+  {:else}
+    <p>Aggregate activity by hour and weekday for season {season}.</p>
+  {/if}
   <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
   {#if retentionNote}<p>{retentionNote}</p>{/if}
   {@html periodPickerHtml}
@@ -51,16 +66,23 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   </nav>
   <section aria-labelledby="hotzones-joins-heading">
     <h2 id="hotzones-joins-heading"><a href="/hotzones/joins{qs}">Joins</a></h2>
-    {@html joinsHtml}
+    {#if !available}
+      <p role="status">Join activity is temporarily unavailable.</p>
+    {:else}
+      {#if joinsPeak}<p>{peakLine(joinsPeak, false, "joins")}</p>{/if}
+      {@html joinsHtml}
+    {/if}
   </section>
   <section aria-labelledby="hotzones-voice-heading">
     <h2 id="hotzones-voice-heading"><a href="/hotzones/voice{qs}">Voice</a></h2>
     <p>Season-independent seeded estimates of voice activity (estimates until calibration).</p>
+    {#if voicePeak}<p>{peakLine(voicePeak, true)}</p>{/if}
     {@html voiceHtml}
   </section>
   <section aria-labelledby="hotzones-games-heading">
     <h2 id="hotzones-games-heading"><a href="/hotzones/games{qs}">Games</a></h2>
     <p>Season-independent seeded estimates of games activity (estimates until calibration).</p>
+    {#if gamesPeak}<p>{peakLine(gamesPeak, true)}</p>{/if}
     {@html gamesHtml}
   </section>
 </Shell>
