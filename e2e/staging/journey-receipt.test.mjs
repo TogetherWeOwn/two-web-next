@@ -311,6 +311,25 @@ test("dangling symlink output alias is refused before any write", (t) => {
   assert.ok(lstatSync(paths.ledgerJsonPath).isSymbolicLink());
 });
 
+test("long dangling symlink chains between outputs are refused before any write", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  let target = paths.ledgerMdPath;
+  for (let index = 11; index >= 0; index--) {
+    const link = join(paths.dir, `chain-${index}`);
+    symlinkSync(target, link);
+    target = link;
+  }
+  const jsonPath = join(paths.dir, "chain-0");
+  assert.equal(runGate({ ...paths, ledgerJsonPath: jsonPath }), 2);
+  assert.equal(
+    paths.output(),
+    "output_unwritable: choose distinct local input, receipt and summary paths.\n",
+  );
+  assert.equal(existsSync(paths.ledgerMdPath), false);
+  assert.ok(lstatSync(jsonPath).isSymbolicLink());
+});
+
 test("symlinked parent directories aliasing the same output are refused", (t) => {
   const paths = scratch(t);
   writeFileSync(paths.reportPath, JSON.stringify(report()));

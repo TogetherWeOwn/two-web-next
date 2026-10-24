@@ -71,7 +71,10 @@ function canonicalRolePath(input) {
   // to the resolved string. Callers keep paths stable during execution.
   let abs = resolve(input);
   const seen = new Set();
-  for (let depth = 0; depth < 10; depth++) {
+  // No hop cap: the seen set terminates cycles, and every acyclic filesystem
+  // chain ends at a non-symlink or a missing path. A numeric cap would let a
+  // longer dangling chain alias two roles past each other.
+  for (;;) {
     if (seen.has(abs)) break;
     seen.add(abs);
     let entry;
