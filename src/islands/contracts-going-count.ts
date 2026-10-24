@@ -20,6 +20,10 @@ export const EVENTS_JSON_URL = "/events.json";
 export const GOING_COUNT_ISLAND = "going-count";
 export const GOING_COUNT_TESTID = "event-going-count";
 export const SPOTS_LEFT_TESTID = "event-spots-left";
+/** Static retained-responses line on the cancelled (410) detail twins. Never an
+ * island mount: a closed event takes no RSVPs, so there is nothing to refresh,
+ * and the going-count binder harness treats its absence as trivially safe. */
+export const EXISTING_RESPONSES_TESTID = "event-existing-responses";
 /** Stale-qualification note the binder renders inside the badge on refresh
  * failure (`role="status"`, "could not refresh" copy with last-saved
  * context). Mirrors the attendees-live stale/retry precedent. */
