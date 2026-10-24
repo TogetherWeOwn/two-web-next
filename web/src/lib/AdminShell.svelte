@@ -19,6 +19,7 @@ let { title, children }: { title: string; children: Snippet } = $props();
   <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>
 
+<div class="kit-admin">
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="bar">
   <a class="brand" href="/admin">TWO admin</a>
@@ -36,3 +37,4 @@ let { title, children }: { title: string; children: Snippet } = $props();
 </header>
 <main id="main" tabindex="-1">{@render children()}</main>
 <footer>Together We Own · moderators only</footer>
+</div>
