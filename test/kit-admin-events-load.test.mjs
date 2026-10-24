@@ -249,8 +249,10 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     );
     const predicate = dialect.sqlToQuery(eventsRead.where[0][0]);
     expect(predicate.sql).toContain('"events"."title" ilike');
+    expect(predicate.sql).toContain('"events"."game" ilike');
     expect(predicate.sql).toContain('"events"."status" =');
-    expect(predicate.params).toEqual(["%Games%", "published"]);
+    // Title and game arms bind the same escaped literal, then the status arm.
+    expect(predicate.params).toEqual(["%Games%", "%Games%", "published"]);
     const goingPredicate = dialect.sqlToQuery(goingRead.where[0][0]);
     expect(goingPredicate.sql).toContain('"rsvps"."event_id" in');
     expect(goingPredicate.sql).toContain('"rsvps"."status" =');
