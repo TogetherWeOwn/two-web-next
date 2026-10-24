@@ -3,7 +3,13 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { safeStoredLink } from "../../featured";
-import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
+import {
+  FEATURED_OPEN_END_COPY,
+  FEATURED_OPEN_START_COPY,
+  FEATURED_WINDOW_RULES_COPY,
+  featuredEligibilityReason,
+} from "../../featured-eligibility";
+import { FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import { adminSaveStatus } from "../save-status";
 import type { FeaturedRow } from "../store";
@@ -38,20 +44,40 @@ export const FeaturedFormPage: FC<{
               <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to
               refresh this preview.
             </p>
+            {Object.keys(errors).length > 0 ? (
+              <p>
+                The form below holds your submitted draft — the card and eligibility still show the
+                last saved row.
+              </p>
+            ) : null}
+            <h3>Saved content preview</h3>
+            <FeaturedContentItem
+              row={safeStoredLink(row)}
+              appUrl={appUrl}
+              imageHosts={imageHosts}
+            />
+            <h3>Homepage eligibility at this check time</h3>
             <p>
               Status: <FeaturedStatusBadge row={row} now={now} />
             </p>
-            {currentlyVisible(row, now) ? (
-              <FeaturedContentItem
-                row={safeStoredLink(row)}
-                appUrl={appUrl}
-                imageHosts={imageHosts}
-              />
-            ) : (
-              <p data-testid="featured-preview-hidden">
-                This slot is not currently visible on the homepage.
-              </p>
-            )}
+            <p>{featuredEligibilityReason(row, now)}</p>
+            <p>
+              Saved window (UTC): show from{" "}
+              {row.startsAt ? (
+                <time datetime={row.startsAt.toISOString()}>{row.startsAt.toISOString()}</time>
+              ) : (
+                FEATURED_OPEN_START_COPY
+              )}
+              {", "}
+              show until{" "}
+              {row.endsAt ? (
+                <time datetime={row.endsAt.toISOString()}>{row.endsAt.toISOString()}</time>
+              ) : (
+                FEATURED_OPEN_END_COPY
+              )}
+              {". "}
+              {FEATURED_WINDOW_RULES_COPY}
+            </p>
           </section>
         ) : null}
         <ValidationSummary errors={errors} kind="featured" mode={mode} />
