@@ -35,6 +35,9 @@ function dateParts(date: Date, zone: string): { month?: string; day?: string } {
 // Card in src/events/pages-past.tsx: zone always, location only when present.
 // (Kept here, not in the template, so the note costs zero client bytes.)
 const badge = $derived(dateParts(e.startsAt, e.timezone));
+// Same compact host line as the Hono twins: trimmed public organizer from the
+// projected row (no new read); blank/missing renders no node.
+const host = $derived((e.organizer_name ?? "").trim());
 </script>
 
 <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
@@ -45,6 +48,7 @@ const badge = $derived(dateParts(e.startsAt, e.timezone));
     </h2>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}<span>{e.timezone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
+    {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}
   </div>
   <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
 </li>

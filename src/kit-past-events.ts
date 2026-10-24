@@ -218,14 +218,16 @@ export async function loadPastArchivePage<Row>({
 
 /**
  * The anonymous-safe slice of a past-archive row: the fields the archive
- * card renders (key/title/time/zone/location/game/counts/capacity) plus the
- * occupancy aggregate and the public-by-design Discord event id. Kit
+ * card renders (key/title/time/zone/location/game/host/counts/capacity) plus
+ * the occupancy aggregate and the public-by-design Discord event id. Kit
  * serializes load data into `__data.json` for anonymous clients even with
  * `csr=false`, so the past load returns this projection, never the full
  * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
- * for retention), descriptions, organizer names and sync internals never
- * leave the server on this logged-out, indexed page. Mirrors the join
- * precedent (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
+ * for retention), descriptions and sync internals never leave the server on
+ * this logged-out, indexed page. The organizer display name rides along
+ * because the card renders it — the same public name the detail page shows,
+ * never an id or a member link. Mirrors the join precedent
+ * (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
  */
 export type PastArchiveEvent = Pick<
   PublicEvent,
@@ -235,6 +237,7 @@ export type PastArchiveEvent = Pick<
   | "timezone"
   | "location"
   | "game"
+  | "organizer_name"
   | "goingCount"
   | "goingOccupancy"
   | "capacity"
@@ -250,6 +253,7 @@ export function toPublicPastArchiveRow(row: PublicEvent): PastArchiveEvent {
     timezone: row.timezone,
     location: row.location,
     game: row.game,
+    organizer_name: row.organizer_name,
     goingCount: row.goingCount,
     goingOccupancy: row.goingOccupancy,
     capacity: row.capacity,
