@@ -34,6 +34,8 @@ export const RSVP_BUTTON_ISLAND = "rsvp-button";
 export const RSVP_GOING_TESTID = "rsvp-going";
 export const RSVP_WITHDRAW_TESTID = "rsvp-withdraw";
 export const RSVP_CONFIRMED_TESTID = "rsvp-confirmed";
+export const RSVP_MAYBE_TESTID = "rsvp-maybe";
+export const RSVP_NOT_GOING_TESTID = "rsvp-not-going";
 export const RSVP_CHECK_TESTID = "rsvp-check";
 export const RSVP_CLOSED_TESTID = "rsvp-closed";
 export const RSVP_PAUSED_TESTID = "rsvp-paused";
@@ -147,6 +149,8 @@ export const RSVP_PAUSED_COPY = "RSVPs are paused for this event — check back 
 export const RSVP_GUEST_CTA_COPY = "Log in with Discord";
 export const RSVP_GUEST_FULL_HINT_COPY = "Sign in to join the waitlist";
 export const RSVP_JOIN_TO_RSVP_COPY = "Join the server to RSVP";
+export const RSVP_MAYBE_COPY = "You're down as a maybe for this one.";
+export const RSVP_NOT_GOING_COPY = "You can't go to this one.";
 
 /** Member-visible copy, pinned verbatim (CM-frozen rows noted). */
 export const RSVP_COPY = {
@@ -154,6 +158,8 @@ export const RSVP_COPY = {
   saving: "Saving…",
   confirmed: RSVP_CONFIRMED_COPY,
   withdraw: RSVP_WITHDRAW_COPY,
+  maybe: RSVP_MAYBE_COPY,
+  notGoing: RSVP_NOT_GOING_COPY,
   removing: "Removing…",
   full: RSVP_FULL_COPY,
   waitlistJoin: RSVP_WAITLIST_JOIN_COPY,

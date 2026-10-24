@@ -20,6 +20,20 @@ import { EventDetailShell } from "./pages-shared";
 
 import { formatEventWhen as fmtWithOffset } from "./date-format";
 
+const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
+  <>
+    {Number.isFinite(event.startsAt.getTime()) ? (
+      <>
+        {" "}
+        <time datetime={event.startsAt.toISOString()}>
+          {fmtWithOffset(event.startsAt, event.timezone)}
+        </time>
+      </>
+    ) : null}
+    {event.location ? <span class="event-related-location">{event.location}</span> : null}
+  </>
+);
+
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
 // non-member) never sees it. The pitch carries this page as ?next= so the
@@ -349,19 +363,21 @@ export const EventPage: FC<{
       />
       <div class="event-discovery">
         {series && (series.previous || series.next) ? (
-          <nav aria-label="Series events" data-testid="event-series-nav">
+          <nav class="event-pagination" aria-label="Series events" data-testid="event-series-nav">
             {series.previous ? (
               <a
                 href={`/e/${series.previous.eventKey}`}
                 rel="prev"
                 data-testid="event-series-previous"
               >
-                ← Previous in series: {series.previous.title}
+                <span>← Previous in series: {series.previous.title}</span>
+                <DestinationPreview event={series.previous} />
               </a>
             ) : null}{" "}
             {series.next ? (
               <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
-                Next in series: {series.next.title} →
+                <span>Next in series: {series.next.title} →</span>
+                <DestinationPreview event={series.next} />
               </a>
             ) : null}
           </nav>
@@ -370,12 +386,14 @@ export const EventPage: FC<{
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
-                ← Previous event: {neighbors.previous.title}
+                <span>← Previous event: {neighbors.previous.title}</span>
+                <DestinationPreview event={neighbors.previous} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
-                Next event: {neighbors.next.title} →
+                <span>Next event: {neighbors.next.title} →</span>
+                <DestinationPreview event={neighbors.next} />
               </a>
             ) : null}
           </nav>
