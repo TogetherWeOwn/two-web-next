@@ -122,9 +122,25 @@ const ariaOf = (attrs: string): string | null => /aria-label="([^"]*)"/.exec(att
 // WCAG 2.5.3: speech-input users say the visible words, so the name must start with them.
 function expectNameLeadsWithVisible(name: string, link: GridLink): void {
   // Strip nested markup (the availability suffix node): speech users say the
-  // visible words, not the tags. Rendered titles are escaped, so no literal
-  // title character matches the tag pattern.
-  const lead = link.visible.replace(/<[^>]*>/g, "").replace(/…$/, "");
+  // visible words, not the tags. A manual scan, not a tag-matching regex:
+  // rendered titles are escaped, so the only literal brackets are real tags.
+  let words = "";
+  let rest = link.visible;
+  for (;;) {
+    const open = rest.indexOf("<");
+    if (open === -1) {
+      words += rest;
+      break;
+    }
+    words += rest.slice(0, open);
+    const close = rest.indexOf(">", open + 1);
+    if (close === -1) {
+      words += rest.slice(open);
+      break;
+    }
+    rest = rest.slice(close + 1);
+  }
+  const lead = words.replace(/…$/, "");
   expect(name.slice(0, lead.length)).toBe(lead);
 }
 
