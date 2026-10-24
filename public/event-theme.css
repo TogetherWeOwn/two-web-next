@@ -73,5 +73,6 @@
   .event-theme .event-join-details a, .event-theme .event-screen-only,
   .event-theme .event-gone .facts, .event-theme [data-testid=event-cancelled-ics],
   .event-theme .event-gone .btn, .event-theme [data-testid=join-result] { display: none; }
+  .event-theme .event-hero { background: none; }
   .event-theme .event-print-only { display: block; }
 }
