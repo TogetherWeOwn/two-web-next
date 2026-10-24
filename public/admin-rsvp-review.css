@@ -1,0 +1,33 @@
+.rsvp-actions {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.rsvp-review {
+  max-width: 32rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rsvp-review summary {
+  min-height: 44px;
+  padding: 0.5rem 0;
+  color: var(--brand);
+  cursor: pointer;
+  font-weight: 700;
+}
+.rsvp-review[open] {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid #d8cfc0;
+  border-radius: 0.5rem;
+  background: #fffdf8;
+}
+.rsvp-review p {
+  margin: 0.75rem 0;
+}
+.rsvp-review-id {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.admin-table .rsvp-review {
+  min-width: 16rem;
+}

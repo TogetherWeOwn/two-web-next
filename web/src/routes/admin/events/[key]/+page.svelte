@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import RsvpReview from "#lib/RsvpReview.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -202,7 +203,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   </form>
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
-    <div class="actions">
+    <div class="actions rsvp-actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
@@ -213,11 +214,16 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
         </form>
       {/if}
-      {#if view.rsvpAction}
-        <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
-          <button type="submit" class="link" data-testid={view.rsvpAction}>
-            {view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
-          </button>
+      {#if view.rsvpAction === "rsvp-pause"}
+        <RsvpReview
+          title={view.title}
+          targetId={view.key}
+          action={`/admin/events/${view.key}/rsvp-pause`}
+          testId="rsvp-pause"
+        />
+      {:else if view.rsvpAction === "rsvp-reopen"}
+        <form method="post" action={`/admin/events/${view.key}/rsvp-reopen`}>
+          <button type="submit" class="link" data-testid="rsvp-reopen">Reopen RSVPs</button>
         </form>
       {/if}
     </div>

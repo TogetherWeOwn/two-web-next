@@ -61,6 +61,10 @@
       "maxRawBytes": 6144,
       "maxGzipBytes": 2048
     },
+    "public/admin-rsvp-review.css": {
+      "maxRawBytes": 1024,
+      "maxGzipBytes": 512
+    },
     "public/theme.css": {
       "maxRawBytes": 15360,
       "maxGzipBytes": 3584

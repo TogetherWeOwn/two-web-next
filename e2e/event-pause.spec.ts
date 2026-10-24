@@ -130,8 +130,9 @@ test("paused event refuses RSVPs with the paused reason, then reopens", async ({
     await expect(page.getByTestId("rsvp-going")).toBeVisible();
     await expect(page.getByTestId("rsvp-paused")).toHaveCount(0);
 
-    // The moderator pauses through the admin form; the 303 lands back on the
-    // detail page offering Reopen instead of Pause.
+    // The moderator pauses through the admin review; the 303 lands back on
+    // the detail page offering Reopen instead of Pause.
+    await admin.getByTestId("rsvp-pause-review").locator("summary").click();
     await admin.getByTestId("rsvp-pause").click();
     await expect(
       admin.getByRole("heading", { name: "Status: published", exact: true }),

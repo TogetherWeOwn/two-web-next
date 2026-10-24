@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import RsvpReview from "#lib/RsvpReview.svelte";
 import type { PageProps } from "./$types";
 import {
   eventListUrl,
@@ -154,12 +155,20 @@ const now = new Date();
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
-                  {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
-                  <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
-                    <button type="submit" class="link" data-testid={action}>
-                      {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
-                    </button>
-                  </form>
+                  {#if r.rsvpOpen}
+                    <RsvpReview
+                      title={r.title}
+                      targetId={r.eventKey}
+                      action={`/admin/events/${r.eventKey}/rsvp-pause`}
+                      testId="rsvp-pause"
+                    />
+                  {:else}
+                    <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
+                      <button type="submit" class="link" data-testid="rsvp-reopen">
+                        Reopen RSVPs
+                      </button>
+                    </form>
+                  {/if}
                 {/if}
               </td>
             </tr>
