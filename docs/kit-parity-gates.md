@@ -302,7 +302,14 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
 
-## Performance gates (`ci/check-kit-perf.mjs`, `ci/kit-perf-budget.json`)
+## Performance gates (`ci/check-kit-perf.mjs`, `ci/kit-perf-budgets/`)
+
+The enforced ceilings are `ci/kit-perf-budgets/base.json` plus the sum of
+every `ci/kit-perf-budgets/<pr>.json` note. A PR that moves a ceiling adds its
+own note file instead of editing a shared one, so concurrent PRs do not
+conflict; the check fails if the output exceeds the sum. See
+`ci/kit-perf-budgets/README.md` for the note format and the older decision log
+in `HISTORY.md`.
 
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
 to 256B — the repository rule from `ci/bundle-budget.json`):

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { discoverKitAssets, run } from "./check-kit-perf.mjs";
+import { discoverKitAssets, loadBudget, run } from "./check-kit-perf.mjs";
 
 const scriptPath = fileURLToPath(new URL("./check-kit-perf.mjs", import.meta.url));
 
@@ -63,6 +63,7 @@ const SERVER_BODY = Buffer.from(`/* server chunk */\n${"w".repeat(800)}`);
 const JS_BODY = Buffer.from(`console.log(1);\n${"y".repeat(500)}`);
 const CSS_BODY = Buffer.from(`.a{color:red}\n${"z".repeat(200)}`);
 
+const BUDGET_DIR = "ci/kit-perf-budgets";
 const SERVER_DIR = "web/.svelte-kit/output/server";
 const CLIENT_DIR = "web/.svelte-kit/output/client/_app";
 
@@ -91,6 +92,7 @@ function makeFixture({
   budgetOverrides = {},
   omitServerDir = false,
   omitClientDir = false,
+  notes = {},
 } = {}) {
   const root = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-perf-accept-"),
@@ -120,7 +122,10 @@ function makeFixture({
     },
     startup: { maxMs: 30_000 },
   };
-  writeFixtureFile(root, "ci/kit-perf-budget.json", JSON.stringify(budget));
+  writeFixtureFile(root, `${BUDGET_DIR}/base.json`, JSON.stringify(budget));
+  for (const [name, note] of Object.entries(notes)) {
+    writeFixtureFile(root, `${BUDGET_DIR}/${name}`, JSON.stringify(note));
+  }
   return {
     root,
     runCaptured() {
@@ -302,4 +307,144 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
     `expected breach (1), got ${result.code}\nerrors: ${result.errors.join("\n")}`,
   );
   assert.ok(result.errors.some((line) => /client js/i.test(line)));
+});
+
+// --- Per-PR budget notes ---------------------------------------------------
+// The shared ci/kit-perf-budget.json was the single file every Kit PR edited,
+// so concurrent PRs conflicted on it. The enforced ceiling is now
+// ci/kit-perf-budgets/base.json plus the sum of every <pr>.json note beside
+// it; notes are additive files, so two PRs never touch the same path.
+
+const NOTE_REASON = "adds a route";
+
+test("notes: a note's delta raises the summed ceiling and lets a base breach pass", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: { clientJs: { maxRawBytes: JS_BODY.length - 100 } },
+    notes: { "101.json": { note: NOTE_REASON, client: { js: { maxRawBytes: 100 } } } },
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, `errors: ${result.errors.join("\n")}`);
+  assert.ok(result.logs.some((line) => line.includes("1 note")));
+});
+
+test("notes: the sum is enforced, so an actual over base+notes exits 1", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: { clientJs: { maxRawBytes: JS_BODY.length - 100 } },
+    notes: { "101.json": { note: NOTE_REASON, client: { js: { maxRawBytes: 99 } } } },
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 1, `errors: ${result.errors.join("\n")}`);
+  assert.ok(result.errors.some((line) => /client js: raw \d+B over \d+B/.test(line)));
+});
+
+test("notes: several notes add up, in any file order, across groups and fields", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: {
+      serverJs: { maxFiles: 0 },
+      clientJs: { maxGzipBytes: gzipSync(JS_BODY).length - 3 },
+    },
+    notes: {
+      "7.json": { note: NOTE_REASON, server: { js: { maxFiles: 1 } } },
+      "30.json": { note: NOTE_REASON, client: { js: { maxGzipBytes: 1 } } },
+      "200.json": { note: NOTE_REASON, client: { js: { maxGzipBytes: 2 } } },
+    },
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, `errors: ${result.errors.join("\n")}`);
+  assert.ok(result.logs.some((line) => line.includes("3 notes")));
+});
+
+test("notes: a negative delta lowers the ceiling (a reduction PR)", (t) => {
+  const fx = makeFixture({
+    notes: { "9.json": { note: "drops a chunk", client: { js: { maxRawBytes: -1 } } } },
+  });
+  t.after(fx.cleanup);
+  assert.equal(fx.runCaptured().code, 1);
+});
+
+test("notes: a delta that drives a ceiling to zero or below cannot enforce", (t) => {
+  const fx = makeFixture({
+    notes: { "9.json": { note: "too much", client: { js: { maxRawBytes: -1_000_000 } } } },
+  });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /summed|client\.js/i, "negative sum");
+});
+
+for (const [label, name, note, re] of [
+  ["a non-numeric file name", "fix-it.json", { note: NOTE_REASON }, /fix-it\.json/],
+  ["a zero-padded name", "007.json", { note: NOTE_REASON }, /007\.json/],
+  ["a missing reason", "5.json", { client: { js: { maxFiles: 1 } } }, /5\.json.*note/i],
+  ["a blank reason", "5.json", { note: "  ", client: { js: { maxFiles: 1 } } }, /5\.json.*note/i],
+  [
+    "a fractional delta",
+    "5.json",
+    { note: NOTE_REASON, client: { js: { maxRawBytes: 1.5 } } },
+    /5\.json/,
+  ],
+  [
+    "a string delta",
+    "5.json",
+    { note: NOTE_REASON, client: { js: { maxRawBytes: "10" } } },
+    /5\.json/,
+  ],
+  [
+    "an unknown group",
+    "5.json",
+    { note: NOTE_REASON, client: { wasm: { maxFiles: 1 } } },
+    /5\.json/,
+  ],
+  ["an unknown field", "5.json", { note: NOTE_REASON, client: { js: { maxMs: 1 } } }, /5\.json/],
+  ["a startup override", "5.json", { note: NOTE_REASON, startup: { maxMs: 1 } }, /5\.json/],
+  [
+    "a worker entry the base lacks",
+    "5.json",
+    { note: NOTE_REASON, worker: { "x.js": { maxRawBytes: 1 } } },
+    /5\.json/,
+  ],
+]) {
+  test(`notes: ${label} cannot enforce (exit 2)`, (t) => {
+    const fx = makeFixture({ notes: { [name]: note } });
+    t.after(fx.cleanup);
+    assertCannotEnforce(fx.runCaptured(), re, label);
+  });
+}
+
+test("notes: an unparsable note cannot enforce", (t) => {
+  const fx = makeFixture();
+  t.after(fx.cleanup);
+  writeFixtureFile(fx.root, `${BUDGET_DIR}/12.json`, "{");
+  assertCannotEnforce(fx.runCaptured(), /12\.json/, "bad json");
+});
+
+test("notes: a missing base cannot enforce", (t) => {
+  const fx = makeFixture({ notes: { "5.json": { note: NOTE_REASON } } });
+  t.after(fx.cleanup);
+  rmSync(join(fx.root, BUDGET_DIR, "base.json"));
+  assertCannotEnforce(fx.runCaptured(), /base\.json/, "no base");
+});
+
+test("notes: the retired shared ci/kit-perf-budget.json cannot come back", (t) => {
+  const fx = makeFixture();
+  t.after(fx.cleanup);
+  writeFixtureFile(fx.root, "ci/kit-perf-budget.json", "{}");
+  assertCannotEnforce(fx.runCaptured(), /kit-perf-budget\.json/, "shared file");
+});
+
+test("notes: non-json files in the directory (README, history) are ignored", (t) => {
+  const fx = makeFixture();
+  t.after(fx.cleanup);
+  writeFixtureFile(fx.root, `${BUDGET_DIR}/README.md`, "docs");
+  assert.equal(fx.runCaptured().code, 0);
+});
+
+test("the committed budget directory parses and keeps the shared file retired", () => {
+  const root = new URL("../", import.meta.url).pathname;
+  assert.ok(!existsSync(join(root, "ci/kit-perf-budget.json")));
+  assert.ok(existsSync(join(root, BUDGET_DIR, "base.json")));
+  const { budget, notes } = loadBudget(root);
+  assert.ok(budget.client.js.maxRawBytes > 0 && budget.startup.maxMs > 0);
+  assert.ok(Array.isArray(notes));
 });

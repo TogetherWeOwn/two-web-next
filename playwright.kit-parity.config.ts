@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { requireGithubRunner } from "./e2e/ci-only.mjs";
 import base from "./playwright.config";
-import kitPerfBudget from "./ci/kit-perf-budget.json" with { type: "json" };
+import kitPerfBudget from "./ci/kit-perf-budgets/base.json" with { type: "json" };
 
 requireGithubRunner();
 
@@ -71,7 +71,7 @@ export default defineConfig({
       reuseExistingServer: false,
       // True startup enforcement: a worker that never becomes ready fails
       // the run before any journey executes. The ceiling is startup.maxMs in
-      // ci/kit-perf-budget.json (same cold-start bound as
+      // ci/kit-perf-budgets/base.json (same cold-start bound as
       // ci/kit-worker-e2e.mjs's listen).
       timeout: kitPerfBudget.startup.maxMs,
       env: { WRANGLER_SEND_METRICS: "false" },
