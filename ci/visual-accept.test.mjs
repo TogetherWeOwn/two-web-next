@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { acceptBaselines } from "./visual-accept.mjs";
+import { CODES, parseInvocation } from "./visual-accept-cli.mjs";
 import { acceptBaselines as acceptKitBaselines } from "./kit-visual-accept.mjs";
 
 const SCRIPT = new URL("./visual-accept.mjs", import.meta.url);
@@ -557,4 +558,144 @@ test("Kit: lookalike-only suite directories do not admit Hono actuals", (t) => {
 
   assert.equal(result.ok, true, result.message);
   assert.deepEqual(baselineBytes(dest), { "kit.png": "reviewed-kit" });
+});
+
+// CLI contract (flags, dry run, stable codes). Black-box coverage of both
+// scripts lives in test/visual-accept-cli-safety-acceptance.test.ts; these
+// selftests pin the parser and the properties that file does not: the dry-run
+// plan equals what a real run writes, and I/O failures never echo paths.
+const CLI_SUITES = [
+  {
+    name: "Hono",
+    script: SCRIPT,
+    actuals: "test-results-visual",
+    dest: "e2e/visual/__screenshots__",
+  },
+  {
+    name: "Kit",
+    script: new URL("./kit-visual-accept.mjs", import.meta.url),
+    actuals: "test-results-kit-visual",
+    dest: "e2e/visual/__screenshots-kit__",
+  },
+];
+
+function runScript(suite, args, cwd) {
+  const result = spawnSync(process.execPath, [suite.script.pathname, ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    cwd,
+  });
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+test("parseInvocation accepts flags on either side and refuses everything else first", () => {
+  const ok = (argv) => parseInvocation(argv);
+  assert.deepEqual(ok(["dir"]), { dryRun: false, json: false, error: null, artifact: "dir" });
+  assert.deepEqual(ok(["--dry-run", "--format", "json", "dir"]), {
+    dryRun: true,
+    json: true,
+    error: null,
+    artifact: "dir",
+  });
+  assert.equal(ok(["dir", "--format", "json", "--dry-run"]).error, null);
+  for (const argv of [
+    ["dir", "-x"],
+    ["dir", "--bogus"],
+    ["dir", "--DRY-RUN"],
+    ["dir", "--format=json"],
+    ["dir", "--format"],
+    ["dir", "--format", "xml"],
+    ["dir", "--format", ""],
+    ["dir", "--format", "--dry-run"],
+    ["extra", "dir", "--bogus"],
+    ["--bogus"],
+  ]) {
+    assert.equal(parseInvocation(argv).error, CODES.UNKNOWN_FLAG, argv.join(" "));
+  }
+  assert.equal(parseInvocation([]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["--dry-run"]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["a", "b"]).error, CODES.EXTRA_ARGS);
+});
+
+for (const suite of CLI_SUITES) {
+  test(`${suite.name}: the dry-run plan names exactly what the real run writes`, (t) => {
+    const root = scratchRoot("visual-accept-plan-");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const workspace = join(root, "checkout");
+    const artifact = join(root, "artifact");
+    mkdirSync(workspace, { recursive: true });
+    writeBytes(join(artifact, suite.actuals, "a", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "b", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "home-actual.png"), "home-bytes");
+    writeBytes(join(artifact, suite.dest, "home.png"), "stale-home-bytes");
+    writeBytes(join(artifact, suite.dest, "same.png"), "same-bytes");
+    writeBytes(join(workspace, suite.dest, "same.png"), "same-bytes");
+
+    const plan = JSON.parse(
+      runScript(suite, ["--dry-run", "--format", "json", artifact], workspace).stdout,
+    ).plan;
+    assert.deepEqual(plan.destinations, ["about.png", "home.png"]);
+    assert.deepEqual(
+      plan.skipped.map(({ item, reason }) => [item.replaceAll("\\", "/"), reason]),
+      [
+        [
+          `test-results-${suite.name === "Kit" ? "kit-" : ""}visual/b/about-actual.png`,
+          "byte-identical duplicate",
+        ],
+        [`${suite.dest}/home.png`, "superseded by reviewed actual"],
+        [`${suite.dest}/same.png`, "identical to checkout baseline"],
+      ],
+    );
+    assert.deepEqual(listFilesRecursive(workspace), [`${suite.dest}/same.png`]);
+
+    assert.equal(runScript(suite, [artifact], workspace).status, 0);
+    assert.deepEqual(listFilesRecursive(join(workspace, suite.dest)), [
+      "about.png",
+      "home.png",
+      "same.png",
+    ]);
+  });
+}
+
+test("I/O failures print a fixed code and errno, never a path or raw message", (t) => {
+  const root = scratchRoot("visual-accept-io-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifact = join(root, "artifact");
+  const unreadable = join(artifact, "test-results-visual", "z-actual.png");
+  writeBytes(unreadable, "secret-bytes");
+  const runner = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const [script, unreadable, artifact] = process.argv.slice(1);
+    const original = fs.readFileSync;
+    fs.readFileSync = function (path, ...rest) {
+      if (String(path) === unreadable) {
+        const error = new Error("EACCES: raw message " + path);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(this, path, ...rest);
+    };
+    syncBuiltinESMExports();
+    const { runCli, HONO_ADAPTER } = await import(script).then(async (m) => ({
+      runCli: (await import(new URL("./visual-accept-cli.mjs", script).href)).runCli,
+      HONO_ADAPTER: m.HONO_ADAPTER,
+    }));
+    const { status, stdout, stderr } = runCli(HONO_ADAPTER, ["--format", "json", artifact]);
+    process.stdout.write(JSON.stringify({ status, stdout, stderr }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", runner, SCRIPT.href, unreadable, artifact],
+    { encoding: "utf8", timeout: 30_000, cwd: root },
+  );
+  assert.equal(result.error, undefined);
+  const { status, stdout, stderr } = JSON.parse(result.stdout);
+  assert.equal(status, 1);
+  assert.equal(stderr, "");
+  const verdict = JSON.parse(stdout);
+  assert.equal(verdict.code, CODES.IO_ERROR);
+  assert.equal(verdict.ok, false);
+  assert.ok(!stdout.includes(root) && !stdout.includes("raw message"), stdout);
 });
