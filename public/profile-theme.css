@@ -2,7 +2,7 @@
 .profile-theme main { max-width: 76rem; padding: 2rem 2rem 4rem; }
 .profile-theme section { border-color: var(--line); }
 .profile-theme h1, .profile-theme h2, .profile-theme h3 {
-  font-family: Display, 'Display Fallback', 'Arial Narrow', sans-serif; font-weight: 700; line-height: 1.1; letter-spacing: -.03em;
+  font-family: var(--two-font-display, sans-serif); font-weight: 700; line-height: 1.1; letter-spacing: -.03em;
 }
 .profile-theme h1 { font-size: clamp(2.25rem, 5vw, 4rem); margin: .25rem 0 .75rem; overflow-wrap: anywhere; }
 .profile-theme h2 { font-size: 1.8rem; margin: 0 0 1rem; }
@@ -15,12 +15,12 @@
 .profile-theme .profile-header-actions nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .profile-theme .profile-header-actions form { margin: 0; }
 .profile-theme .profile-header-actions .link { min-height: 44px; padding: 0 .5rem; }
-.profile-theme .brand { font-family: Display, 'Display Fallback', 'Arial Narrow', sans-serif; }
+.profile-theme .brand { font-family: var(--two-font-display, sans-serif); }
 .profile-theme .profile-player, .profile-theme .profile-panel { padding: 2rem; background: var(--surface); border: 1px solid var(--line); margin-bottom: 1.5rem; min-width: 0; overflow-wrap: anywhere; }
 .profile-theme .profile-player { border-top: 4px solid var(--brand); }
 .profile-theme .profile-identity { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 1.5rem; align-items: center; }
 .profile-theme .avatar { width: 96px; height: 96px; }
-.profile-theme .avatar-initial { background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: 700 2.25rem/1 Display, 'Display Fallback', 'Arial Narrow', sans-serif; overflow: hidden; }
+.profile-theme .avatar-initial { background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: 700 2.25rem/1 var(--two-font-display, sans-serif); overflow: hidden; }
 .profile-theme .profile-caption { margin: 0; font-size: .9rem; }
 .profile-theme .profile-meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; }
 .profile-theme .profile-handle { margin: 0 0 .75rem; overflow-wrap: anywhere; }
@@ -35,7 +35,7 @@
 .profile-theme .profile-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 0; }
 .profile-theme .profile-stats-grid > div { background: var(--paper); border: 1px solid var(--line); padding: 1rem; min-width: 0; }
 .profile-theme .profile-stats-grid dt { color: var(--muted); font-size: .9rem; margin-bottom: .5rem; }
-.profile-theme .profile-stats-grid dd { margin: 0; color: var(--ink); font: 700 1.5rem/1.2 Display, 'Display Fallback', 'Arial Narrow', sans-serif; font-variant-numeric: tabular-nums; }
+.profile-theme .profile-stats-grid dd { margin: 0; color: var(--ink); font: 700 1.5rem/1.2 var(--two-font-display, sans-serif); font-variant-numeric: tabular-nums; }
 .profile-theme .profile-milestones { list-style: none; padding: 0; margin: 0; }
 .profile-theme .profile-milestones li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--line); }
 .profile-theme .profile-milestones li:last-child { border: 0; padding-bottom: 0; }

@@ -91,7 +91,7 @@ describe("page description metadata (hermetic renderers)", () => {
     expect(html).toContain(`<meta property="og:description" content="${ESCAPED_DESCRIPTION}"/>`);
     expect(html).toContain(`<meta name="twitter:description" content="${ESCAPED_DESCRIPTION}"/>`);
     expect(html).toContain(`<link rel="canonical" href="${APP_URL}/e/${event().eventKey}"/>`);
-    expect(html).toContain('<meta name="twitter:card" content="summary"/>');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"/>');
     expect(html).not.toContain('<meta name="robots"');
   });
 

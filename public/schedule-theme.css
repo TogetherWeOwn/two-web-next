@@ -17,8 +17,8 @@
 .events-page input::placeholder{color:var(--muted);opacity:1}
 .events-page :is([data-testid=events-list],[data-testid=events-past-list],[data-archive-list]){list-style:none;padding:0;margin:1.5rem 0}
 .events-page .schedule-row{display:grid;grid-template-columns:4.5rem minmax(0,1fr) auto;gap:1.5rem;align-items:start;background:var(--surface);border:1px solid var(--line);margin-bottom:.75rem;padding:1.5rem;overflow-wrap:anywhere}
-.events-page .schedule-date{display:grid;text-align:center;color:var(--brand);border-right:1px solid var(--line);padding-right:1rem;font-family:Display,'Display Fallback','Arial Narrow',sans-serif;text-transform:uppercase;line-height:1.2}
-.events-page .schedule-date strong{font-size:2.5rem;font-variant-numeric:tabular-nums}
+.events-page .schedule-date{display:grid;text-align:center;color:var(--brand);border-right:1px solid var(--line);padding-right:1rem;font-family:var(--two-font-display,sans-serif);text-transform:uppercase;line-height:1.2}
+.events-page .schedule-date strong{font-size:2.5rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .events-page .schedule-info :is(h2, h3){font-size:1.6rem;margin:0;}
 .events-page .schedule-info p{margin:.4rem 0 0;}
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
@@ -59,7 +59,7 @@
 .events-page .subscription-copy [hidden]{display:none;}
 .events-page .subscription-copy input{flex:1 1 20rem;min-width:0;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);padding:.5rem;}
 @media (max-width: 48rem) {
-  .events-page .schedule-row { grid-template-columns: 3.5rem minmax(0, 1fr); padding: 1rem; gap: 1rem; }
+  .events-page .schedule-row { grid-template-columns: 4.5rem minmax(0, 1fr); padding: 1rem; gap: 1rem; }
   .events-page .schedule-actions, .events-page .schedule-row > .schedule-attendance { grid-column: 2; justify-items: start; }
   .events-page .schedule-heading { padding-left: 1rem; }
 }

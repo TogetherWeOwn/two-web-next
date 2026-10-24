@@ -55,7 +55,7 @@ export const canonicalUrl = (appUrl: string, path: string): string =>
 // SVG support is spotty. Shared by the Hono Layout (page-shell.tsx) and the
 // Kit heads (SiteMetadata.svelte, ProfileView.svelte) so both renderers emit
 // identical share image tags.
-export const SHARE_IMAGE_PATH = "/icons/icon-512.png";
+export const SHARE_IMAGE_PATH = "/og-1200x630.png";
 
 // Absolute share-image URL from the page canonical's origin (og:image must be
 // absolute; deriving from the canonical keeps every environment self-

@@ -288,7 +288,9 @@ describe("absent or unusable provider backoff falls back to today's response", (
     const res = await joinCallback(e);
     const html = await expectThrottleRecovery(res);
     expect(res.headers.get("retry-after")).toBeNull();
-    if (raw) expect(html).not.toContain(raw);
+    // The inline header lockup's path data legitimately contains short
+    // substrings like "-5"; the echo check scans past the static SVGs.
+    if (raw) expect(html.replace(/<svg[\s\S]*?<\/svg>/g, "")).not.toContain(raw);
   });
 
   it('429 with retry-after "0" never emits Retry-After: 0', async () => {

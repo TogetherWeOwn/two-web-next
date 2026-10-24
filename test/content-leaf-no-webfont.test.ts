@@ -15,18 +15,61 @@ describe("content leaves render without the Display webfont", () => {
     const offenders: string[] = [];
     // Split the bundle into selector/declaration pairs; @font-face only
     // ships the file (other themes use it) and can never paint text by
-    // itself. Everything else that names Display must stay off the content
+    // itself, and neither can a custom-property DEFINITION (:root --two-*
+    // tokens name the Display fallback in the stack value without using
+    // it). Everything else that names a webfont must stay off the content
     // theme — including ::marker, which does trigger a font fetch.
+    //
+    // The brand stacks live behind --two-font-display/--two-font-body, so
+    // matching the "Display" literal alone is blind to every token use: the
+    // scan flags the token references and the Chakra Petch/Inter faces too.
+    const webfontPattern = /Display|Chakra Petch|\bInter\b|--two-font-display|--two-font-body/;
+    // Unscoped .base-theme font rules in bundle order. The theme-tokens sheet
+    // sets the Inter body font on bare .base-theme and the LATER theme.css
+    // rule resets it to the system stack at equal specificity, so content
+    // leaves (which match bare .base-theme) keep the system stack only while
+    // both rules exist in this order. Pinned explicitly below: any other
+    // unscoped .base-theme font rule breaks the cascade shape and fails.
+    const baseThemeFontRules: string[] = [];
     const rules = LEAF_CRITICAL_CSS.match(/[^{}]+{[^{}]*}/g) ?? [];
     for (const rule of rules) {
       const selector = rule.slice(0, rule.indexOf("{"));
       const declarations = rule.slice(rule.indexOf("{"));
-      if (!/Display/.test(declarations)) continue;
-      const selectorWithoutComments = selector.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      const selectorWithoutComments = selector
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\s+/g, " ")
+        .trim();
       if (/^@font-face/.test(selectorWithoutComments)) continue;
+      const pairs = declarations
+        .slice(1, -1)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split(";")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (pairs.length > 0 && pairs.every((pair) => /^--[a-z0-9-]+\s*:/i.test(pair))) continue;
+      if (
+        selectorWithoutComments === ".base-theme" &&
+        pairs.some((pair) => /^font(-family)?\s*:/i.test(pair))
+      ) {
+        baseThemeFontRules.push(rule.replace(/\s+/g, " ").trim());
+        continue;
+      }
+      if (!webfontPattern.test(declarations)) continue;
       if (!/:not\(\.content-theme\)/.test(selector)) offenders.push(selector.trim());
     }
     expect(offenders).toEqual([]);
+    // The pinned cascade: theme-tokens.css sets the token body font first,
+    // theme.css resets it to the system stack second. A third rule (for
+    // example the theme.css Inter rule with its :not(.content-theme) dropped)
+    // or a swapped order fails here instead of silently reintroducing a
+    // webfont fetch on /about, /faq, /rules and /privacy.
+    expect(
+      baseThemeFontRules,
+      "unscoped .base-theme font cascade must stay [tokens rule, system-ui reset]",
+    ).toHaveLength(2);
+    expect(baseThemeFontRules[0]).toContain("var(--two-font-body");
+    expect(baseThemeFontRules[1]).toContain("system-ui");
+    expect(baseThemeFontRules[1]).not.toMatch(webfontPattern);
   });
 
   it("preloads no font for the content shell but keeps it elsewhere", () => {
@@ -34,7 +77,7 @@ describe("content leaves render without the Display webfont", () => {
     expect(content).not.toContain('.woff2" as="font"');
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
       const html = Layout({ title: "Fixture", theme })!.toString();
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+      expect(html).toContain('href="/fonts/chakra-petch-latin-700-normal.woff2" as="font"');
     }
   });
 });
