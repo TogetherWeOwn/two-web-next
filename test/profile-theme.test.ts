@@ -20,6 +20,7 @@ const stats: MemberStats = {
   joinedAt: new Date("2025-01-01T00:00:00Z"),
   tenureDays: 0,
   isCurrentMember: true,
+  milestonesTruncated: false,
   milestones: [],
 };
 const render = (overrides = {}) =>
@@ -28,7 +29,7 @@ const render = (overrides = {}) =>
     isOwner: true,
     appUrl: "https://next.example.test",
     ...overrides,
-  })!.toString();
+  })!.toString() as string;
 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {

@@ -1,24 +1,39 @@
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
-import { databaseUnavailable, NotFoundPage } from "../errors";
+import {
+  databaseUnavailable,
+  databaseUnavailableBuffered,
+  forbidden,
+  NotFoundPage,
+} from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
+  ATTENDEE_PAGE_SIZE,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  nextAttendeePage,
+  parseAttendeePageParam,
+  type EventLink,
+  type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
 } from "./reads";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
 import {
+  dbUnavailableJson,
   eventJson,
   jsonResponse,
   jsonSession,
@@ -44,6 +59,8 @@ export function registerDetailRoutes(
   readFragmentSession: SessionReader,
 ): void {
   app.get("/events/:key", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const key = c.req.param("key");
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.
@@ -58,7 +75,7 @@ export function registerDetailRoutes(
     if (session instanceof Response) return session;
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    if (!db) return dbUnavailableJson(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.json({ error: "not_found" }, 404);
     if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
@@ -117,7 +134,7 @@ export function registerDetailRoutes(
           }
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
-          if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+          if (!db) return databaseUnavailableBuffered(c);
           const e = await getPublicEvent(db, key);
           if (!e) return notFound();
           if (e.status === "cancelled") {
@@ -127,22 +144,41 @@ export function registerDetailRoutes(
             // varies on the cookie (TOG-10356 finding 5). The cancelled page is
             // viewer-independent: it renders before any session read, so a
             // store outage or a rotated cookie can never turn the static
-            // cancellation into a 500 (TOG-10356 review).
+            // cancellation into a 500 (TOG-10356 review). The alternatives
+            // lookup degrades to an empty list when it fails (mirroring the
+            // Kit gone model), so a related-read outage keeps the 410 with its
+            // calendar download instead of becoming a 500.
             c.header("cache-control", "private, no-store");
+            let related: EventLink[] = [];
+            try {
+              related = await listRelatedEvents(db, e);
+            } catch {
+              related = [];
+            }
             return bufferedMemberHtml(
               c,
               <EventGonePage
                 e={e}
+                related={related}
                 jsonLd={jsonLd(e, c.env.APP_URL)}
                 siteJsonLd={siteIdentities(c.env.APP_URL)}
               />,
               410,
             );
           }
-          const session = await readSession(c);
+          // Non-rotating fragment read: the attendees-live island re-reads
+          // this page after the member's own RSVP while the reloadable page
+          // view (and any in-flight write response) still holds the current
+          // bearer. Rotation mints single-use tokens, so a rotating fragment
+          // read racing the reload would leave exactly one winner and render
+          // the loser as a guest. Same x-two-island contract as the
+          // events-calendar fragment (routes-calendar.tsx).
+          const session =
+            c.req.header("x-two-island") === "attendees-live"
+              ? await readFragmentSession(c)
+              : await readSession(c);
           viewer = session?.id ?? null;
-          if (e.status === "draft" && !session?.moderator)
-            return bufferedMemberText(c, "Forbidden", 403);
+          if (e.status === "draft" && !session?.moderator) return forbidden(c);
           if (e.status === "draft" || e.status === "past")
             c.header("x-robots-tag", "noindex, nofollow");
           // One-shot join confirmation (legacy join_result flash): the event
@@ -152,13 +188,65 @@ export function registerDetailRoutes(
           // consume only after the boundary allows a visible response.
           const joinResult = await readJoinResult(c);
           const member = session?.member === true;
-          const [neighbors, related, attendees, position, answer] = await Promise.all([
-            getEventNeighbors(db, e),
-            listRelatedEvents(db, e),
-            session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+          // Bounded member attendee window: the requested page plus the first
+          // row of the next page (lookahead, never rendered) that powers Next.
+          // Both go through the keyed read, so every retrieved identity —
+          // lookahead included — is audited before any private bytes release.
+          const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
+          const archive = archiveContext(new URL(c.req.url).search);
+          // Decorative reads fail open: a flaky neighbors/related lookup
+          // settles to its empty shape instead of 503ing the whole page.
+          // The page already renders both shapes (a lone event has null
+          // neighbors; an event with no siblings has an empty related
+          // rail), and both reads stay nonSensitive published-only, so no
+          // private bytes release and no audit row is skipped. Viewer reads
+          // below stay closed: their throws still refuse.
+          const neighborsSettled = getEventNeighbors(db, e).then(
+            (neighbors) => neighbors,
+            (): EventNeighbors => ({ previous: null, next: null }),
+          );
+          const relatedSettled = listRelatedEvents(db, e).then(
+            (related) => related,
+            (): EventLink[] => [],
+          );
+          const seriesSettled = getEventSeriesContext(db, e).then(
+            (series) => series,
+            (): EventSeriesContext | null => null,
+          );
+          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
+            neighborsSettled,
+            relatedSettled,
+            seriesSettled,
+            session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
           ]);
+          // One-row lookahead probe that powers Next, only from a full page:
+          // a partial page cannot have a successor, so the probe (and its
+          // audit subject) is skipped there.
+          const attendeeLookahead =
+            session?.member && attendees.length === ATTENDEE_PAGE_SIZE
+              ? await listGoingAttendees(db, e.id, nextAttendeePage(attendeePage), 1)
+              : [];
+          // An empty past-end page links back to page one (the bare URL):
+          // page N-1 may itself be empty, stranding the viewer on empty
+          // pages. Guests never render this section, so the value is inert
+          // for them.
+          const attendeesPaging = {
+            page: attendeePage,
+            prevHref:
+              attendeePage > 1
+                ? archiveEventHref(
+                    e.eventKey,
+                    archive,
+                    attendees.length === 0 ? 1 : attendeePage - 1,
+                  )
+                : null,
+            nextHref:
+              attendeeLookahead.length > 0
+                ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
+                : null,
+          };
           const returnTo = c.req.path + new URL(c.req.url).search;
           return bufferedMemberHtml(
             c,
@@ -166,7 +254,10 @@ export function registerDetailRoutes(
               e={e}
               neighbors={neighbors}
               related={related}
+              series={series}
               attendees={attendees}
+              attendeesPaging={attendeesPaging}
+              archive={archive}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
               siteJsonLd={siteIdentities(c.env.APP_URL)}
@@ -176,6 +267,7 @@ export function registerDetailRoutes(
               member={member}
               answer={answer}
               returnTo={returnTo}
+              attendeePage={attendeePage}
               // Drafts have no Markdown view: the session-free .md route 403s
               // for every viewer, so only link it where it answers 200.
               markdownAlternate={e.status === "draft" ? undefined : `/e/${e.eventKey}.md`}

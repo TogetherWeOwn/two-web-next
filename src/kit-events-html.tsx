@@ -31,12 +31,15 @@ export async function renderEventsHtml(
       state={data.state}
       upcoming={data.upcoming}
       past={data.past}
+      pastMayBeTruncated={data.pastMayBeTruncated}
       zone={data.zone}
       now={data.now}
       totalPages={data.totalPages}
       emptyState={data.emptyState}
       robots={data.robots}
       discordFailed={data.discordFailed}
+      games={data.games}
+      gameFilter={data.gameFilter}
       member={data.member}
       inviteUrl={data.inviteUrl}
       appUrl={data.appUrl}

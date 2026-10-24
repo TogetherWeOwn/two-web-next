@@ -3,21 +3,39 @@
 The public event pages and feeds share one `events-read:<clientKey>` budget:
 **60 admitted requests per client in the last 60 seconds**. This covers GET and
 HEAD on `/events` (including search and island fragments), `/events/past`,
-`/events.rss`, `/events.ics`, `/events/:file.ics` and `/e/:key`. Different query
-values, page numbers, event keys and feed formats do not create new budgets.
+`/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/events.md`,
+`/e/:key.md`, `/sitemap_index.xml` and the hot-zone heatmaps (`/hotzones`,
+`/hotzones/joins`, `/hotzones/voice`, `/hotzones/games`). Different query values,
+page numbers, event keys and feed formats do not create new budgets.
 The guard runs before event-store access, session reads, analytics and Discord
 reads. It also charges redirects and missing-key requests on these routes.
+On the hot-zone paths the guard runs after the season grammar and the signal
+check, so a bad `?season=` (400) and an unknown signal (404) spend nothing;
+everywhere else on these four paths it runs before the aggregate reads and
+the board-view log insert. Invalid seasons return the branded 400 recovery page
+on both Hono and Kit, not a server-outage message; Kit data requests keep their
+machine-shaped error payload.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
-change the session requirement or guest 401 responses on `/events.json` or
-`/events/:key`, the existing write/auth budgets, or `/up` readiness.
+change the existing write/auth budgets or `/up` readiness. The session-adjacent
+reads `/auth/status`, `/auth/recover`, `/events.json` and `/events/:key` share the
+same bucket for GET and HEAD: the guard runs before their session, cookie and
+event-store work, so exhausted callers get the shared 429 while admitted responses
+(including guest 401s on both JSON event routes) are unchanged. The detail JSON
+route also charges canonical-key redirects before any session lookup.
+The sitemap is admitted before database setup and its event scan; its static-only
+200 fallback on a database outage is unchanged. The database-free `/robots.txt`
+and `/openapi.json` routes remain unguarded.
 
 ## Responses and search bounds
 
-An exhausted budget returns the existing branded HTML or JSON 429 response with
-`Retry-After` and `Cache-Control: no-store, private`. The guard sets the header on
-its constructed Response, following Hono's [response-header mutation API](https://hono.dev/docs/api/context#res).
+An exhausted budget returns 429 with `Retry-After`, `Cache-Control: no-store,
+private` and `Vary: Accept`. RSS, ICS and event Markdown paths (`/events.md` and
+`/e/:key.md`) return `text/plain` with the fixed body `Too many requests`, even
+when Accept requests HTML or JSON. Other callers retain the branded HTML or
+JSON response. The guard sets the cache header on its constructed Response,
+following Hono's [response-header mutation API](https://hono.dev/docs/api/context#res).
 Successful cache headers and
 feed ETags/conditional 304 responses are unchanged. Conditional requests that
 reach the Worker consume budget because generating their validator still reads
@@ -30,6 +48,14 @@ private`; it is not reflected, logged or silently truncated. This matches the
 existing search-analytics field maximum. One-character searches remain supported;
 blank queries still mean no search. Existing trimming, NUL stripping and literal
 LIKE wildcard escaping remain unchanged for accepted queries.
+
+The `game` scope on `/events.ics` is limited to **100 Unicode code points**
+after trimming, and refuses CR/LF plus control/invisible characters. An invalid
+scope returns the static 400 body `Invalid game filter.` with
+`Cache-Control: no-store`, before any event read or conditional 304; the input
+is not reflected or logged. Blank means the unfiltered collection; a valid
+unknown game returns an empty scoped calendar with a truthful label, never all
+games. RSS, per-event downloads and the past archive ignore `game`.
 
 ## Cost and failure behavior
 
@@ -49,13 +75,40 @@ NAT share a budget, and the current shared `clientKey` policy determines IPv6
 sharing. Sixty reads per minute leaves room for normal browsing and subscription
 refreshes; heavy shared clients may receive 429 and should respect `Retry-After`.
 
+## CI loopback budget
+
+Off-edge requests carry no `CF-Connecting-IP`, so every suite in the `e2e.yml`
+`browser-smoke` job shares the one `events-read:anon` bucket on the disposable
+Postgres. The visual, journey, parity and perf suites run sequentially and
+issue well over 60 guarded reads inside a 60-second window, so whichever
+navigation lands past the budget gets a 429 with a matching URL and times out
+on content instead of failing fast on status. Both loopback workers therefore
+set `E2E_PUBLIC_READ_BUDGET` to `600` — `e2e/wrangler.jsonc` for Hono and the
+generated Kit fixture in `ci/kit-worker-dev.mjs`, which enforces the same
+bucket on the same disposable Postgres: ten times the per-client production
+budget, enough to absorb the combined suite bursts while a runaway loop still
+429s within the minute. A raise on only one worker would concentrate the flake
+on the other's legs, so the two values move together. The override is scoped
+to those loopback workers only — `publicReadBudget`
+(`src/events/routes-shared.ts`) keeps 60 for absent, invalid or nonpositive
+values, and no deployed config sets the var.
+`test/e2e-public-read-budget.test.ts` pins the override behaviour and the
+deployed-config absence; `ci/kit-parity-ci-wiring.test.mjs` pins the Kit
+fixture value against the Hono one.
+
 ## Verification
 
 `test/public-event-read-admission.test.ts` exercises the real route guards and
 admission statements with local SQL/Drizzle doubles. It pins the shared budget,
 pre-read denials, JSON/HTML/HEAD/island responses, client separation, window expiry,
-feed cache/304 behavior, untouched JSON authentication and query boundaries,
-including supplementary Unicode and a multi-kilobyte query. Existing throttle
-connection and concurrency suites cover Hyperdrive resolution and atomic
+feed cache/304 behavior, admitted JSON authentication and query boundaries,
+including supplementary Unicode and a multi-kilobyte query. Signed-cookie detail
+GET/HEAD cases mount the production app and pin zero session/event-store calls
+under exhaustion, one hit per admitted read or canonical redirect, and fail-open
+limiter outages.
+`test/feed-throttle-429.test.ts` pins plain-text 429 bodies and headers on the
+real RSS, ICS and event Markdown routes across Accept variants, with
+unexhausted-budget controls. Existing throttle connection and concurrency suites
+cover Hyperdrive resolution and atomic
 Postgres admission. Local fixtures do not prove a deployed edge rule or staging
 revision; record staging verification separately after the reviewed head deploys.

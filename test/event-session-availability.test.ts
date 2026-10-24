@@ -57,6 +57,7 @@ const event: PublicEvent = {
   createdAt: new Date("2026-01-01"),
   updatedAt: new Date("2026-01-01"),
   goingCount: 1,
+  goingOccupancy: 1,
 };
 const signedCookie = async (token: string) =>
   (
@@ -121,7 +122,11 @@ describe("guest event pages with unavailable session storage", () => {
       vi.mocked(getPublicEvent).mockResolvedValue({ ...event, status: "draft" });
       const draft = await request(cookie);
       expect(draft.status).toBe(403);
-      expect(await draft.text()).toBe("Forbidden");
+      // Same draft-denial line as a signed-in non-moderator: the branded
+      // page, which invites a sign-in retry instead of bare text.
+      const draftBody = await draft.text();
+      expect(draftBody).toContain("You do not have access to this");
+      expect(draftBody).toContain('data-testid="error-home"');
       expect(listGoingAttendees).not.toHaveBeenCalled();
       expect(connect).not.toHaveBeenCalled();
       expect(ddl).not.toHaveBeenCalled();
@@ -131,7 +136,8 @@ describe("guest event pages with unavailable session storage", () => {
 
   it("a usable signed token still resolves storage and fails closed on session storage failure", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await request(await signedCookie("two_test-token"));
+    // Well-formed bearer (two_ + 43 base64url); malformed bearers stay guests (200) with zero store reads.
+    const res = await request(await signedCookie(`two_${"A".repeat(43)}`));
     expect(res.status).toBe(503);
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);

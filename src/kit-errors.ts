@@ -9,8 +9,17 @@
 // Negotiation mirrors src/error-responses.tsx (quality/specificity/q=0,
 // machine-only contracts win, feeds stay non-HTML) but operates on a plain
 // Request, so the Kit hook and Svelte loads can use it without a Hono Context.
+//
+// 400 is the one status without a RecoveryShell counterpart: its Hono twin is
+// the member-shell board-filter page (src/leaderboards/pages.tsx), so the
+// title and lead below are Kit's own client-error copy, never outage copy.
+// 422 is the other: its Hono twin is the overlong-search notice page
+// (EventsSearchTooLongPage in src/events/pages-calendar-screen.tsx), so the
+// title and lead below match that notice exactly, never outage copy.
 
-export type KitErrorStatus = 404 | 403 | 410 | 429 | 500 | 503;
+import { EVENTS_SEARCH_TOO_LONG_COPY } from "./islands/contracts";
+
+export type KitErrorStatus = 400 | 404 | 403 | 410 | 422 | 429 | 500 | 503;
 
 export interface KitErrorCopy {
   code: string;
@@ -19,6 +28,11 @@ export interface KitErrorCopy {
 }
 
 const COPY: Record<KitErrorStatus, KitErrorCopy> = {
+  400: {
+    code: "400",
+    title: "Check your request",
+    lead: "Check the address or filters and try again.",
+  },
   404: {
     code: "404",
     title: "We cannot find that page",
@@ -27,12 +41,17 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   403: {
     code: "403",
     title: "You do not have access to this",
-    lead: "This page is for members or moderators. If you should see it, sign in again.",
+    lead: "This page needs membership to unlock it — join to get in. Moderator-only areas stay locked otherwise.",
   },
   410: {
     code: "410",
     title: "This page is gone",
     lead: "The page was removed. The lobby is still open — come in and say hello.",
+  },
+  422: {
+    code: "422",
+    title: "Events",
+    lead: EVENTS_SEARCH_TOO_LONG_COPY,
   },
   429: {
     code: "429",
@@ -47,19 +66,12 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   503: {
     code: "503",
     title: "We will be right back",
-    lead: "The site is down for a minute of maintenance. The Discord server never closes.",
+    lead: "The site is temporarily unavailable. You can use the Discord invite or return to the homepage.",
   },
 };
 
 export function isKitErrorStatus(status: number): status is KitErrorStatus {
-  return (
-    status === 404 ||
-    status === 403 ||
-    status === 410 ||
-    status === 429 ||
-    status === 500 ||
-    status === 503
-  );
+  return Object.hasOwn(COPY, status);
 }
 
 export function kitErrorCopy(status: KitErrorStatus): KitErrorCopy {
@@ -81,7 +93,8 @@ function isMachinePath(path: string, method: string): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);

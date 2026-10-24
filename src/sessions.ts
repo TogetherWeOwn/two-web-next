@@ -19,9 +19,22 @@ import {
 } from "./oauth-journeys";
 
 /** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
- * Login and every authenticated-page rotation re-stamp the DB expiry and the
- * cookie Max-Age; the session-status probe cookie follows the same value. */
+ * Login, authenticated-page rotation and member/admin GET renewal re-stamp the
+ * DB expiry and cookie Max-Age; the status probe cookie follows the same value. */
 export const SESSION_TTL_SECONDS = 60 * 120;
+
+/** Absolute session age cap: 24 hours from the login that minted the lineage
+ * (K2). A row is live only while its sliding expiry is future AND its lineage
+ * age is under this cap AND it is unrevoked. Boundary is exclusive like
+ * expires_at: age == cap reads dead. Rotation preserves the lineage start (the
+ * successor does NOT restart the clock); renewal never extends authority past
+ * lineage start + cap. Fresh login (`replace`) mints a new lineage. */
+export const SESSION_ABSOLUTE_MAX_AGE_SECONDS = 24 * 3600;
+
+/** Immediate-predecessor grace: 10s from winning rotation, bounded also by the
+ * predecessor's original expiry. Exact deadline is guest. Lets two overlapping
+ * tab requests both authenticate; logout and revoke kill it inside the window. */
+export const SESSION_PREDECESSOR_GRACE_SECONDS = 10;
 
 export type DbSessionRow = {
   userId: string;
@@ -40,6 +53,8 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
+  /** Extend a live row without rotating its bearer or changing identity/roles. */
+  renew: (tokenHash: string, expiresAt: Date) => Promise<boolean>;
   /** Non-authenticating probe key, stable across rotation of a live session. */
   statusHash: (tokenHash: string) => Promise<string | null>;
   isActive: (statusHash: string) => Promise<boolean>;
@@ -75,10 +90,11 @@ export type Sql = (<T = Record<string, unknown>[]>(
 ) => Promise<T>) & { unsafe: (query: string) => Promise<unknown> };
 
 // Fixture/backfill helper only (TOG-19721): the canonical DDL for these
-// shapes lives in drizzle/1022_web-sessions-oauth-journeys.sql and is applied
-// by the migrate workflow. The request path must NOT call migrate(): the
-// runtime role holds read/write only, no schema CREATE. Tests use this to
-// build disposable schemas; its statements stay identical to the migration.
+// shapes lives in drizzle/1022_web-sessions-oauth-journeys.sql and
+// drizzle/1030_session-predecessor-grace.sql and is applied by the migrate
+// workflow. The request path must NOT call migrate(): the runtime role holds
+// read/write only, no schema CREATE. Tests use this to build disposable
+// schemas; its statements stay identical to the migrations.
 const MIGRATION = [
   `create table if not exists web_sessions (
     token_hash text primary key,
@@ -97,6 +113,23 @@ const MIGRATION = [
   `create index if not exists web_sessions_status_hash_idx on web_sessions (status_hash)`,
   `create index if not exists web_sessions_user_id_idx on web_sessions (user_id)`,
   `create index if not exists web_sessions_expires_at_idx on web_sessions (expires_at)`,
+  `create table if not exists web_session_grace (
+    predecessor_hash text primary key,
+    successor_hash text not null,
+    status_hash text not null,
+    user_id text not null,
+    username text not null,
+    avatar text,
+    member boolean not null,
+    moderator boolean not null default false,
+    expires_at timestamptz not null,
+    grace_expires_at timestamptz not null,
+    created_at timestamptz not null default now()
+  )`,
+  `create index if not exists web_session_grace_successor_hash_idx on web_session_grace (successor_hash)`,
+  `create index if not exists web_session_grace_status_hash_idx on web_session_grace (status_hash)`,
+  `create index if not exists web_session_grace_user_id_idx on web_session_grace (user_id)`,
+  `create index if not exists web_session_grace_grace_expires_at_idx on web_session_grace (grace_expires_at)`,
 ];
 
 export async function migrate(sql: Sql): Promise<void> {
@@ -122,16 +155,26 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
         throw new Error("Session replacement must use a fresh token");
       // Both writes are one statement. An insert failure rolls back revocation;
       // unlike rotation, an unknown prior cookie does not veto fresh login.
+      // Fresh login mints a new lineage: drop any grace the prior token carried
+      // as predecessor or successor so a shared-terminal prior cannot linger.
       await sql`with revoked as (
           update web_sessions set revoked_at = now()
           where token_hash = ${oldTokenHash} and revoked_at is null returning 1
+        ), pruned as (
+          delete from web_session_grace
+          where predecessor_hash = ${oldTokenHash} or successor_hash = ${oldTokenHash}
+          returning 1
         )
         insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
         values (${replacement.tokenHash}, ${replacement.userId}, ${replacement.username},
           ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt})`;
     },
     async create(s) {
-      await sql`
+      // A reused hash stops being a grace predecessor once it is live again:
+      // live reads win, so drop the shadowed grace row in the same statement.
+      await sql`with pruned as (
+          delete from web_session_grace where predecessor_hash = ${s.tokenHash} returning 1
+        )
         insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
         values (${s.tokenHash}, ${s.tokenHash}, ${s.userId}, ${s.username}, ${s.avatar}, ${s.member}, ${s.moderator}, ${s.expiresAt})
         on conflict (token_hash) do update set
@@ -145,22 +188,63 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
         Record<string, unknown>[]
       >`select user_id, username, avatar, member, moderator
         from web_sessions
-        where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()`;
+        where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()
+          and created_at > now() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       const row = rows[0];
-      return row ? toRow(row) : null;
+      if (row) return toRow(row);
+      // Immediate-predecessor grace: same member and lineage, only while the
+      // successor is live, unexpired and unrevoked. Fixed 10s deadline from the
+      // winning rotation plus the predecessor's own expiry; exact deadline is
+      // guest (`>` throughout). No status-key fallback and no history walk.
+      // The successor liveness check carries the absolute age cap, so grace
+      // dies with the lineage past the cap without its own age column.
+      const grace = await sql<
+        Record<string, unknown>[]
+      >`select g.user_id, g.username, g.avatar, g.member, g.moderator
+        from web_session_grace g
+        where g.predecessor_hash = ${tokenHash}
+          and g.grace_expires_at > clock_timestamp()
+          and g.expires_at > clock_timestamp()
+          and exists (
+            select 1 from web_sessions s
+            where s.token_hash = g.successor_hash
+              and s.revoked_at is null and s.expires_at > clock_timestamp()
+              and s.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+              and s.user_id = g.user_id
+              and coalesce(s.status_hash, s.token_hash) = g.status_hash
+          )`;
+      const g = grace[0];
+      return g ? toRow(g) : null;
+    },
+    async renew(tokenHash, expiresAt) {
+      // Check wall-clock liveness after the lock wait, just like rotation. Never
+      // recreate a revoked/expired row or let an older request shorten renewal.
+      // Past the absolute cap the row refuses renewal without writing.
+      const rows = await sql<{ renewed: number }[]>`with locked as materialized (
+          select token_hash, revoked_at, expires_at, created_at from web_sessions
+          where token_hash = ${tokenHash} for update
+        )
+        update web_sessions set expires_at = greatest(web_sessions.expires_at, ${expiresAt})
+        from locked where web_sessions.token_hash = locked.token_hash
+          and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+          and locked.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+        returning 1 as renewed`;
+      return rows.length > 0;
     },
     async statusHash(tokenHash) {
       const rows = await sql<
         { status_hash: string }[]
       >`select coalesce(status_hash, token_hash) as status_hash
         from web_sessions where token_hash = ${tokenHash}
-          and revoked_at is null and expires_at > clock_timestamp()`;
+          and revoked_at is null and expires_at > clock_timestamp()
+          and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       return rows[0]?.status_hash ?? null;
     },
     async isActive(statusHash) {
       const rows = await sql<{ active: boolean }[]>`select exists (
         select 1 from web_sessions where coalesce(status_hash, token_hash) = ${statusHash}
           and revoked_at is null and expires_at > clock_timestamp()
+          and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
       ) as active`;
       return rows[0]?.active === true;
     },
@@ -170,69 +254,168 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // pinned to transaction start and could renew an expired session.
       if (oldTokenHash === replacement.tokenHash) {
         const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
-            select token_hash, revoked_at, expires_at from web_sessions
+            select token_hash, revoked_at, expires_at, created_at from web_sessions
             where token_hash = ${oldTokenHash} for update
           )
           select count(*)::int as n from locked
-          where revoked_at is null and expires_at > clock_timestamp()`;
+          where revoked_at is null and expires_at > clock_timestamp()
+            and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
         return Number(rows[0]?.n ?? 0) > 0;
       }
+      // One winner: only the deleter inserts the successor and its grace row.
+      // Grace keeps the predecessor's own member row for 10s from this commit,
+      // bounded by its original expiry; a grandparent grace (successor = old)
+      // is pruned so only the immediate predecessor stays valid. Reads never
+      // extend the deadline and never mint siblings: get() only follows the
+      // stored successor while it is live.
+      // The successor carries the source's created_at: rotation preserves the
+      // lineage clock instead of restarting it, so the lineage dies with the
+      // cap. Past the cap the source refuses rotation and plants nothing.
       const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
-          select token_hash, revoked_at, expires_at from web_sessions
-          where token_hash = ${oldTokenHash} for update
+          select token_hash, revoked_at, expires_at, created_at, user_id, username, avatar, member, moderator,
+            coalesce(status_hash, token_hash) as status_hash
+          from web_sessions where token_hash = ${oldTokenHash} for update
         ), deleted as (
           delete from web_sessions using locked
           where web_sessions.token_hash = locked.token_hash
             and locked.revoked_at is null and locked.expires_at > clock_timestamp()
-          returning coalesce(web_sessions.status_hash, web_sessions.token_hash) as status_hash
+            and locked.created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+          returning web_sessions.token_hash as old_hash,
+            coalesce(web_sessions.status_hash, web_sessions.token_hash) as status_hash,
+            web_sessions.user_id, web_sessions.username, web_sessions.avatar,
+            web_sessions.member, web_sessions.moderator, web_sessions.expires_at,
+            web_sessions.created_at
+        ), pruned as (
+          delete from web_session_grace using deleted
+          where web_session_grace.successor_hash = deleted.old_hash
+          returning 1
+        ), inserted as (
+          insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, created_at)
+          select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
+            ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt},
+            deleted.created_at
+          from deleted
+          on conflict (token_hash) do update set
+            status_hash = excluded.status_hash,
+            user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
+            member = excluded.member, moderator = excluded.moderator,
+            expires_at = excluded.expires_at, revoked_at = null,
+            created_at = excluded.created_at
+          returning 1
+        ), grace as (
+          insert into web_session_grace
+            (predecessor_hash, successor_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, grace_expires_at)
+          select deleted.old_hash, ${replacement.tokenHash}, deleted.status_hash,
+            deleted.user_id, deleted.username, deleted.avatar,
+            deleted.member, deleted.moderator, deleted.expires_at,
+            clock_timestamp() + make_interval(secs => ${SESSION_PREDECESSOR_GRACE_SECONDS})
+          from deleted
+          on conflict (predecessor_hash) do update set
+            successor_hash = excluded.successor_hash, status_hash = excluded.status_hash,
+            user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
+            member = excluded.member, moderator = excluded.moderator,
+            expires_at = excluded.expires_at, grace_expires_at = excluded.grace_expires_at
+          returning 1
         )
-        insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
-        select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
-          ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt}
-        from deleted
-        on conflict (token_hash) do update set
-          status_hash = excluded.status_hash,
-          user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
-          member = excluded.member, moderator = excluded.moderator,
-          expires_at = excluded.expires_at, revoked_at = null
-        returning (select count(*)::int from deleted) as rotated`;
+        select (select count(*)::int from deleted) as rotated`;
       return Number(rows[0]?.rotated ?? 0) > 0;
     },
     async revoke(tokenHash) {
-      await sql`update web_sessions set revoked_at = now()
-        where token_hash = ${tokenHash} and revoked_at is null`;
+      // Single-token revoke also drops any grace the token carries as
+      // predecessor or successor, so a revoked successor grants nothing
+      // through its predecessor and a revoked predecessor stays dead.
+      await sql`with revoked as (
+          update web_sessions set revoked_at = now()
+          where token_hash = ${tokenHash} and revoked_at is null returning 1
+        ), pruned as (
+          delete from web_session_grace
+          where predecessor_hash = ${tokenHash} or successor_hash = ${tokenHash}
+          returning 1
+        )
+        select 1`;
     },
     async revokeLineage(statusHash) {
-      await sql`update web_sessions set revoked_at = now()
-        where coalesce(status_hash, token_hash) = ${statusHash}
-          and revoked_at is null and expires_at > clock_timestamp()`;
+      // Lineage revoke drops the lineage's grace rows alongside its live rows;
+      // unrelated lineages keep theirs.
+      await sql`with revoked as (
+          update web_sessions set revoked_at = now()
+          where coalesce(status_hash, token_hash) = ${statusHash}
+            and revoked_at is null and expires_at > clock_timestamp() returning 1
+        ), pruned as (
+          delete from web_session_grace where status_hash = ${statusHash} returning 1
+        )
+        select 1`;
     },
     async revokeUserSessions(userId, exceptTokenHash) {
-      await sql`update web_sessions set revoked_at = now()
-        where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
+      // Fresh-login sweep: drop the user's grace rows except any that involve
+      // the freshly issued token (fresh tokens carry no grace yet).
+      await sql`with revoked as (
+          update web_sessions set revoked_at = now()
+          where user_id = ${userId} and token_hash != ${exceptTokenHash}
+            and revoked_at is null and expires_at > clock_timestamp() returning 1
+        ), pruned as (
+          delete from web_session_grace
+          where user_id = ${userId}
+            and predecessor_hash != ${exceptTokenHash} and successor_hash != ${exceptTokenHash}
+          returning 1
+        )
+        select 1`;
     },
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
       // `now` is already invisible. Idempotent: a second pass matches nothing.
       // General-store full drain; the scheduled pass uses the bounded adapter
       // in `src/jobs/postgres.ts` instead, so daily holds stay capped.
+      // Grace drains when either its fixed 10s deadline or the predecessor's
+      // own expiry passes.
+      // Absolutely-aged rows go too: reads require age < cap, so a row aged
+      // exactly the cap is already invisible (`created_at <= now - cap`).
+      const ageCutoff = new Date(now.getTime() - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000);
       const rows = await sql<Record<string, unknown>[]>`delete from web_sessions
-        where expires_at <= ${now} returning 1`;
-      return rows.length;
+        where expires_at <= ${now} or created_at <= ${ageCutoff} returning 1`;
+      const grace = await sql<Record<string, unknown>[]>`delete from web_session_grace
+        where grace_expires_at <= ${now} or expires_at <= ${now} returning 1`;
+      return rows.length + grace.length;
     },
   };
 }
 
 /** Test/memory helper. Same contract, no I/O. */
 export function createMemorySessionStore(clock: () => number = Date.now): SessionStore {
-  const rows = new Map<string, DbSessionRow & { expiresAt: number; statusHash: string }>();
+  const rows = new Map<
+    string,
+    DbSessionRow & { expiresAt: number; statusHash: string; createdAt: number }
+  >();
+  const grace = new Map<
+    string,
+    DbSessionRow & {
+      successorHash: string;
+      statusHash: string;
+      expiresAt: number;
+      graceExpiresAt: number;
+    }
+  >();
+  // createdAt is the lineage start (login mint); rotation inherits it, so the
+  // clock never restarts. Exclusive boundary like expires_at: age == cap reads
+  // dead (`createdAt <= now - cap`). Grace carries no age column: it dies
+  // with the lineage because its successor liveness check runs through here.
   const live = (hash: string) => {
     const r = rows.get(hash);
-    if (!r || r.expiresAt <= clock()) {
+    if (
+      !r ||
+      r.expiresAt <= clock() ||
+      r.createdAt <= clock() - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000
+    ) {
       rows.delete(hash);
       return null;
     }
     return r;
+  };
+  const dropGraceForToken = (hash: string) => {
+    grace.delete(hash);
+    for (const [pre, g] of grace) {
+      if (g.successorHash === hash) grace.delete(pre);
+    }
   };
   return {
     journeys: createMemoryOAuthJourneyStore(clock),
@@ -241,26 +424,61 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         throw new Error("Session replacement must use a fresh token");
       }
       rows.delete(oldHash);
+      dropGraceForToken(oldHash);
+      // Fresh login mints a new lineage: the clock starts now.
       rows.set(replacement.tokenHash, {
         ...replacement,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: replacement.tokenHash,
+        createdAt: clock(),
       });
     },
     async create(s) {
-      rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });
+      grace.delete(s.tokenHash);
+      // Postgres `on conflict` preserves created_at while resetting the status
+      // lineage; mirror it so a re-created hash keeps its lineage clock.
+      const prior = rows.get(s.tokenHash);
+      rows.set(s.tokenHash, {
+        ...s,
+        expiresAt: s.expiresAt.getTime(),
+        statusHash: s.tokenHash,
+        createdAt: prior?.createdAt ?? clock(),
+      });
     },
     async get(hash) {
       const r = live(hash);
-      return r
-        ? {
-            userId: r.userId,
-            username: r.username,
-            avatar: r.avatar,
-            member: r.member,
-            moderator: r.moderator,
-          }
-        : null;
+      if (r) {
+        return {
+          userId: r.userId,
+          username: r.username,
+          avatar: r.avatar,
+          member: r.member,
+          moderator: r.moderator,
+        };
+      }
+      const g = grace.get(hash);
+      if (!g) return null;
+      if (g.graceExpiresAt <= clock() || g.expiresAt <= clock()) {
+        grace.delete(hash);
+        return null;
+      }
+      const successor = live(g.successorHash);
+      if (!successor || successor.userId !== g.userId || successor.statusHash !== g.statusHash) {
+        return null;
+      }
+      return {
+        userId: g.userId,
+        username: g.username,
+        avatar: g.avatar,
+        member: g.member,
+        moderator: g.moderator,
+      };
+    },
+    async renew(hash, expiresAt) {
+      const r = live(hash);
+      if (!r) return false;
+      r.expiresAt = Math.max(r.expiresAt, expiresAt.getTime());
+      return true;
     },
     async statusHash(hash) {
       return live(hash)?.statusHash ?? null;
@@ -272,36 +490,72 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       return false;
     },
     async rotate(oldHash, replacement) {
+      // live() enforces the absolute cap, so a past-cap source refuses here
+      // and plants nothing.
       const source = live(oldHash);
       if (!source) return false;
       if (oldHash === replacement.tokenHash) return true;
+      for (const [pre, g] of grace) {
+        if (g.successorHash === oldHash) grace.delete(pre);
+      }
+      grace.set(oldHash, {
+        userId: source.userId,
+        username: source.username,
+        avatar: source.avatar,
+        member: source.member,
+        moderator: source.moderator,
+        successorHash: replacement.tokenHash,
+        statusHash: source.statusHash,
+        expiresAt: source.expiresAt,
+        graceExpiresAt: clock() + SESSION_PREDECESSOR_GRACE_SECONDS * 1000,
+      });
       rows.delete(oldHash);
+      // The successor inherits the lineage start: rotation never restarts the
+      // absolute clock, so it dies with the lineage at the cap.
       rows.set(replacement.tokenHash, {
         ...replacement,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: source.statusHash,
+        createdAt: source.createdAt,
       });
       return true;
     },
     async revoke(hash) {
       rows.delete(hash);
+      dropGraceForToken(hash);
     },
     async revokeLineage(statusHash) {
       for (const [hash, r] of rows) {
         if (r.statusHash === statusHash) rows.delete(hash);
       }
+      for (const [pre, g] of grace) {
+        if (g.statusHash === statusHash) grace.delete(pre);
+      }
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       for (const [hash, r] of rows) {
-        if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);
+        if (hash !== exceptTokenHash && r.userId === userId && r.expiresAt > clock())
+          rows.delete(hash);
+      }
+      for (const [pre, g] of grace) {
+        if (g.userId === userId && pre !== exceptTokenHash && g.successorHash !== exceptTokenHash) {
+          grace.delete(pre);
+        }
       }
     },
     async sweepExpired(now) {
       const t = now.getTime();
+      const ageCutoff = t - SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000;
       let n = 0;
       for (const [k, r] of rows) {
-        if (r.expiresAt <= t) {
+        if (r.expiresAt <= t || r.createdAt <= ageCutoff) {
           rows.delete(k);
+          n++;
+        }
+      }
+      for (const [pre, g] of grace) {
+        if (g.graceExpiresAt <= t || g.expiresAt <= t) {
+          grace.delete(pre);
           n++;
         }
       }
@@ -314,6 +568,16 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Exact minted bearer shape: `two_` + 43 base64url chars (47 total).
+ * Check this on the verified cookie value before hashing or any store call:
+ * malformed input is guest/no-op with zero store reads. Never a substitute
+ * for signature verification — always verify first, then shape-check. */
+const SESSION_TOKEN_RE = /^two_[A-Za-z0-9_-]{43}$/;
+
+export function isValidSessionToken(token: unknown): token is string {
+  return typeof token === "string" && SESSION_TOKEN_RE.test(token);
 }
 
 /** `two_` + 32 random bytes, base64url. ~256 bits: unguessable, URL/cookie-safe. */

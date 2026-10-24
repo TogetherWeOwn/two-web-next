@@ -17,5 +17,6 @@ export const honoRecoveryRenderer = (model: RecoveryModel) => (
     retryUrl={model.retryUrl}
     retryLabel={model.retryLabel}
     inviteUrl={model.inviteUrl}
+    supportReference={model.supportReference}
   />
 );

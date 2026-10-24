@@ -1,6 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
-import { alertRequestError } from "../alerts";
+import { alertRequestError, exceptionClass } from "../alerts";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { dispatchWriteBack } from "../admin/writeback";
@@ -13,6 +13,7 @@ import {
   type IngressEffects,
   admitAgentEvent,
 } from "./service";
+import { ingressDenial } from "./envelope";
 
 type IngressEnv = {
   Bindings: Env;
@@ -48,10 +49,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const cfg = ingressConfig(c.env);
   if (!cfg.enabled) {
     return c.json(
-      {
-        reason: "ingress_disabled",
-        message: "The agent event ingress is not enabled in this environment.",
-      },
+      ingressDenial(
+        "ingress_disabled",
+        "The agent event ingress is not enabled in this environment.",
+        c.get("requestId"),
+      ),
       404,
     );
   }
@@ -61,21 +63,31 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const url = injected ? undefined : (c.env.AGENT_DB?.connectionString ?? databaseUrl(c.env));
   if (!injected && !url)
     return c.json(
-      { reason: "ingress_unavailable", message: "The agent event store is not configured." },
+      ingressDenial(
+        "ingress_unavailable",
+        "The agent event store is not configured.",
+        c.get("requestId"),
+      ),
       503,
     );
 
   // Release idle sockets even if an admitted upload never reaches EOF.
   const sql = injected ?? postgres(url!, databaseOptions);
   try {
-    // Admit before the transport limiter reads. The bound handler cannot charge
-    // a second shield hit when the parsed body reaches the service.
-    const ip = c.req.header("cf-connecting-ip") ?? null;
+    // The route mounts requestBodyLimit("agent") first, so the body is already
+    // bounded and buffered here. Admission charges the shield exactly once; the
+    // bound handler cannot charge a second hit when the parsed body reaches
+    // the service.
+    // `cf-connecting-ip` wins on the edge (unforgeable); off-edge the first
+    // `x-forwarded-for` hop applies, else nothing (`unknown` downstream).
+    const ip =
+      c.req.header("cf-connecting-ip") ??
+      (c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || null);
     // Effects ride the admitted handler: publish/cancel/update dispatch the same
     // write-back the admin path uses, and read observes through the signed bot
     // client (fail-closed when unconfigured).
     const effects: IngressEffects = {
-      writeBack: (wb) => dispatchWriteBack(c.env, wb),
+      writeBack: (wb) => dispatchWriteBack(c.env, wb, c.get("requestId")),
       readEvent: signedEventReader({
         baseUrl: c.env.BOT_ENDPOINT_URL,
         keyId: c.env.BOT_KEY_ID,
@@ -94,7 +106,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     c.set("agentEventHandler", admitted.handle);
     await next();
   } catch (err) {
-    console.error("agent-events failed", (err as Error).name);
+    console.error("agent-events failed", { exception: exceptionClass(err) });
     alertRequestError(err, {
       method: "POST",
       route: "/api/agent-events",
@@ -104,18 +116,24 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
       return c.json(
-        {
-          reason: "ingress_unavailable",
-          message: "The agent event store is temporarily unavailable. Try again shortly.",
-        },
+        ingressDenial(
+          "ingress_unavailable",
+          "The agent event store is temporarily unavailable. Try again shortly.",
+          c.get("requestId"),
+        ),
         503,
       );
     }
-    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+    return c.json(
+      ingressDenial("internal_error", "The agent event ingress failed.", c.get("requestId")),
+      500,
+    );
   } finally {
-    // Also close on 413, source failures, and shield refusals. Never close the
-    // injected fixture client; its owner manages its lifecycle.
-    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+    // Close on shield refusals, admission/service errors and normal completion
+    // (413 and source-read failures never reach this middleware). Never close
+    // the injected fixture client; its owner manages its lifecycle. A failing
+    // close settles silently so it never surfaces as an unhandled rejection.
+    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }).catch(() => {}));
   }
 };
 
@@ -130,7 +148,7 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
     const a = await c.get("agentEventHandler")(body);
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
-    console.error("agent-events failed", (err as Error).name);
+    console.error("agent-events failed", { exception: exceptionClass(err) });
     alertRequestError(err, {
       method: "POST",
       route: "/api/agent-events",
@@ -140,13 +158,17 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
       return c.json(
-        {
-          reason: "ingress_unavailable",
-          message: "The agent event store is temporarily unavailable. Try again shortly.",
-        },
+        ingressDenial(
+          "ingress_unavailable",
+          "The agent event store is temporarily unavailable. Try again shortly.",
+          c.get("requestId"),
+        ),
         503,
       );
     }
-    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+    return c.json(
+      ingressDenial("internal_error", "The agent event ingress failed.", c.get("requestId")),
+      500,
+    );
   }
 }

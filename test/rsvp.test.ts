@@ -251,17 +251,25 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(sent.map((m) => m.kind)).toEqual(["sync-event", "sync-event", "sync-event"]);
   });
 
-  it("withdraw is quiet without a row or an event, and never touches another member's row", async () => {
+  it("withdraw without a row answers 404 not_found, and never touches another member's row", async () => {
     const ev = await seed();
-    expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
-    expect((await call("DELETE", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(204);
-    expect((await call("DELETE", "not-a-key", "u1")).status).toBe(204);
+    const noRow = await call("DELETE", ev.key, "u1");
+    expect(noRow.status).toBe(404);
+    expect(await noRow.json()).toEqual({ error: "not_found" });
+    const unknown = await call("DELETE", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "not_found" });
+    const forged = await call("DELETE", "not-a-key", "u1");
+    expect(forged.status).toBe(404);
+    expect(await forged.json()).toEqual({ error: "not_found" });
     await put(ev.key, "victim", "going");
-    expect((await call("DELETE", ev.key, "attacker")).status).toBe(204);
+    const other = await call("DELETE", ev.key, "attacker");
+    expect(other.status).toBe(404);
+    expect(await other.json()).toEqual({ error: "not_found" });
     expect((await rows(ev.id)).map((r) => r.userId)).toEqual(["victim"]);
   });
 
-  it("draft, cancelled, ended and paused events refuse PUT with 403 and write nothing; withdraw from cancelled stays 204", async () => {
+  it("draft, cancelled, ended and paused events refuse PUT with 403 and write nothing; withdraw from cancelled answers 404", async () => {
     const cases = {
       draft: await seed({ status: "draft" }),
       cancelled: await seed({ status: "cancelled" }),
@@ -282,7 +290,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       expect(await rows(ev.id), name).toHaveLength(0);
     }
     expect((await put("01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(404);
-    expect((await call("DELETE", cases.cancelled.key, "u1")).status).toBe(204);
+    const cancelledWithdraw = await call("DELETE", cases.cancelled.key, "u1");
+    expect(cancelledWithdraw.status).toBe(404);
+    expect(await cancelledWithdraw.json()).toEqual({ error: "not_found" });
     // Refused writes did not spend the budget.
     const [{ n }] =
       (await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:u1'`) as unknown as [
@@ -401,6 +411,154 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
   });
 
+  it("honeypot: a filled query decoy on PUT answers byte-identical to the body decoy and touches no limiter, auth or table", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const bodyDecoy = await put(ev.key, null, "going", { website: "http://spam.test" });
+    expect(bodyDecoy.status).toBe(201);
+    const bodyDecoyText = await bodyDecoy.text();
+    expect(bodyDecoyText).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    // Guest on purpose: a query decoy that falls through to auth answers the
+    // real 401, which is an oracle the body decoy does not leak.
+    const queryDecoy = await app.request(
+      `/events/${ev.key}/rsvp?website=http%3A%2F%2Fspam.test`,
+      {
+        method: "PUT",
+        headers: {
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going" }),
+      },
+      env,
+    );
+    expect(queryDecoy.status).toBe(201);
+    const queryDecoyText = await queryDecoy.text();
+    expect(queryDecoyText).toBe(bodyDecoyText);
+    expect(JSON.parse(queryDecoyText)).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: duplicate PUT query keys trip when any one value is filled", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    // Every value must be seen, in either position; a member session proves
+    // the write itself is suppressed, not just the guest path.
+    for (const query of ["website=&website=spam", "website=spam&website=", "website=spam"]) {
+      await db.delete(rsvps);
+      await client`delete from web_throttle_hits`;
+      sent.length = 0;
+      const res = await app.request(
+        `/events/${ev.key}/rsvp?${query}`,
+        {
+          method: "PUT",
+          headers: {
+            cookie: await cookieFor(store, "u1"),
+            origin: APP_URL,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ status: "going" }),
+        },
+        env,
+      );
+      expect(res.status, query).toBe(201);
+      expect(await res.text(), query).toBe(real);
+      expect(await state(ev.id), query).toEqual({ rows: 0, hits: 0 });
+      expect(sent, query).toHaveLength(0);
+    }
+    // A filled query decoy also traps a form body, matching the body sources.
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const formRes = await app.request(
+      `/events/${ev.key}/rsvp?website=spam`,
+      {
+        method: "PUT",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "status=going",
+      },
+      env,
+    );
+    expect(formRes.status).toBe(201);
+    expect(await formRes.text()).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: an empty PUT query cannot mask a filled body decoy (no row, no hit)", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const res = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "PUT",
+        headers: {
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going", website: "spam" }),
+      },
+      env,
+    );
+    expect(res.status).toBe(201);
+    expect(await res.text()).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: empty PUT/DELETE query inputs stay genuine (PUT writes, DELETE removes + charges)", async () => {
+    const ev = await seed();
+    const written = await app.request(
+      `/events/${ev.key}/rsvp?website=&website=`,
+      {
+        method: "PUT",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going" }),
+      },
+      env,
+    );
+    expect(written.status).toBe(201);
+    expect(await state(ev.id)).toEqual({ rows: 1, hits: 1 });
+    const removed = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "DELETE",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+      },
+      env,
+    );
+    expect(removed.status).toBe(204);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 2 });
+  });
+
   it("honeypot: a mixed-case JSON media type cannot hide a DELETE body trap", async () => {
     const ev = await seed();
     expect((await put(ev.key, "u1", "going")).status).toBe(201);
@@ -445,9 +603,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(retry).toBeGreaterThanOrEqual(1);
     expect(retry).toBeLessThanOrEqual(60);
     expect(await limited.json()).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: `Too many requests. Try again in ${retry} seconds.`,
       retry_after: retry,
+      next: "Wait for Retry-After, then retry.",
+      request_id: limited.headers.get("x-request-id"),
     });
     expect((await call("DELETE", ev.key, "u1")).status).toBe(429);
     // The budget is per member: someone else is unaffected.
@@ -593,82 +754,8 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await put(ev.key, "u-full", "waitlisted")).status).toBe(429);
   });
 
-  it("expiry is judged after the row lock: an answer queued behind a lock holder is refused once the event ends", async () => {
-    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const holder = client.begin(async (tx) => {
-      await tx`select id from events where id = ${ev.id} for update`;
-      await held;
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const pending = put(ev.key, "late", "going");
-    await new Promise((r) => setTimeout(r, 1800));
-    release();
-    await holder;
-    expect((await pending).status).toBe(403);
-    expect(await rows(ev.id)).toHaveLength(0);
-  });
-  it("expiry is also judged after the member lock wait", async () => {
-    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const holder = client.begin(async (tx) => {
-      await tx`select pg_advisory_xact_lock(hashtext('rsvp-write:late2'))`;
-      await held;
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const pending = put(ev.key, "late2", "going");
-    await new Promise((r) => setTimeout(r, 1800));
-    release();
-    await holder;
-    expect((await pending).status).toBe(403);
-    expect(await rows(ev.id)).toHaveLength(0);
-  });
-
-  it("the budget hit is stamped after the lock wait, not at transaction start", async () => {
-    const ev = await seed();
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const holder = client.begin(async (tx) => {
-      await tx`select id from events where id = ${ev.id} for update`;
-      await held;
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const pending = put(ev.key, "stamp", "going");
-    await new Promise((r) => setTimeout(r, 1500));
-    const [tr] = await client`select clock_timestamp() as t`;
-    const t = tr!.t;
-    release();
-    await holder;
-    expect((await pending).status).toBe(201);
-    const [hit] = await client`select at from web_throttle_hits where bucket = 'rsvp-write:stamp'`;
-    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(t).getTime());
-  });
-  it("withdrawals queued behind the event lock charge after it: 12 DELETEs + 12 PUTs let exactly 12 through", async () => {
-    const ev = await seed();
-    const other = await seed();
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const holder = client.begin(async (tx) => {
-      await tx`select id from events where id = ${ev.id} for update`;
-      await held;
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    const dels = Array.from({ length: 12 }, () => call("DELETE", ev.key, "dq"));
-    await new Promise((r) => setTimeout(r, 300));
-    const puts = Array.from({ length: 12 }, () => put(other.key, "dq"));
-    await new Promise((r) => setTimeout(r, 300));
-    release();
-    await holder;
-    const codes = (await Promise.all([...dels, ...puts])).map((r) => r.status);
-    expect(codes.filter((c) => c === 429)).toHaveLength(12);
-    const [nr] =
-      await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:dq'`;
-    const n = nr!.n;
-    expect(n).toBe(12);
-  });
   // Poll pg_stat_activity until the pending request visibly waits on the lock pattern.
+  // Deterministic lock-acquire wait: replaces fixed pre-contend sleeps below.
   const waitForLock = async (pattern: string): Promise<boolean> => {
     const deadline = Date.now() + 5000;
     for (;;) {
@@ -682,6 +769,125 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     }
   };
 
+  it("expiry is judged after the row lock: an answer queued behind a lock holder is refused once the event ends", async () => {
+    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
+    let release!: () => void;
+    let ready!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      ready();
+      await held;
+    });
+    await acquired;
+    const pending = put(ev.key, "late", "going");
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1800));
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
+    expect((await pending).status).toBe(403);
+    expect(await rows(ev.id)).toHaveLength(0);
+  });
+  it("expiry is also judged after the member lock wait", async () => {
+    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
+    let release!: () => void;
+    let ready!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('rsvp-write:late2'))`;
+      ready();
+      await held;
+    });
+    await acquired;
+    const pending = put(ev.key, "late2", "going");
+    try {
+      // Lock-acquire wait: the PUT blocks on the held member advisory lock.
+      expect(await waitForLock("%pg_advisory_xact_lock%")).toBe(true);
+      // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1800));
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
+    expect((await pending).status).toBe(403);
+    expect(await rows(ev.id)).toHaveLength(0);
+  });
+
+  it("the budget hit is stamped after the lock wait, not at transaction start", async () => {
+    const ev = await seed();
+    let release!: () => void;
+    let ready!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      ready();
+      await held;
+    });
+    await acquired;
+    const pending = put(ev.key, "stamp", "going");
+    let t!: Date;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the queued write age so the hit stamps after the wait; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1500));
+      const [tr] = await client`select clock_timestamp() as t`;
+      t = tr!.t;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
+    expect((await pending).status).toBe(201);
+    const [hit] = await client`select at from web_throttle_hits where bucket = 'rsvp-write:stamp'`;
+    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(t).getTime());
+  });
+  it("withdrawals queued behind the event lock charge after it: 12 DELETEs + 12 PUTs let exactly 12 through", async () => {
+    const ev = await seed();
+    const other = await seed();
+    let release!: () => void;
+    let ready!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      ready();
+      await held;
+    });
+    await acquired;
+    const dels = Array.from({ length: 12 }, () => call("DELETE", ev.key, "dq"));
+    let puts: ReturnType<typeof put>[] = [];
+    try {
+      // Lock-acquire wait: at least one DELETE blocks on the held event row before the PUT burst starts.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the DELETE burst queue before the PUT burst; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 300));
+      puts = Array.from({ length: 12 }, () => put(other.key, "dq"));
+      // Time-passage stimulus: let both bursts queue behind the holder before release; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      release();
+      await holder;
+      await Promise.all([...dels, ...puts].map((p) => p.catch(() => undefined)));
+    }
+    const codes = (await Promise.all([...dels, ...puts])).map((r) => r.status);
+    expect(codes.filter((c) => c === 429)).toHaveLength(12);
+    const [nr] =
+      await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:dq'`;
+    const n = nr!.n;
+    expect(n).toBe(12);
+  });
+
   it("expiry is judged after the RSVP-row wait: an existing answer queued behind a stamp writer is refused once the event ends", async () => {
     const ev = await seed();
     const who = "expire-rowlock";
@@ -689,18 +895,28 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
     await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
     let release!: () => void;
+    let ready!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
     const holder = client.begin(async (tx) => {
       await tx`update rsvps set synced_to_discord_at = clock_timestamp() where event_id = ${ev.id} and user_id = ${who}`;
+      ready();
       await held;
     });
-    await new Promise((r) => setTimeout(r, 200));
+    // Holder-acquired signal: the UPDATE above owns the RSVP row before the contender starts.
+    await acquired;
     const pending = put(ev.key, who, "maybe");
-    expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
-    // Let the event end while the write is still queued behind the row lock.
-    await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held RSVP row.
+      expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
+      // Expiry-parking stimulus: sleep in the DB until the event ends while the
+      // write stays queued; not a lock-acquire wait.
+      await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going"]);
     const [{ n }] =
@@ -709,47 +925,81 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       ];
     expect(n).toBe(0);
   });
-  it("the global prune runs before the hit is stamped: a write queued behind prune keeps a fresh budget", async () => {
+  it("the global prune runs before the hit is stamped: a write skips a locked unrelated row and keeps a fresh budget", async () => {
     const ev = await seed();
     const who = "prune-rowlock";
     await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-bucket', clock_timestamp() - interval '10 minutes')`;
     let release!: () => void;
+    let ready!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
     const holder = client.begin(async (tx) => {
       await tx`select * from web_throttle_hits where bucket = 'unrelated-expired-bucket' for update`;
+      ready();
       await held;
     });
-    await new Promise((r) => setTimeout(r, 200));
+    // Holder-acquired wait, not a contender wait: the prune below uses
+    // FOR UPDATE SKIP LOCKED (src/events/rsvp.ts pruneThrottle) so it never
+    // blocks on the held row and pg_stat_activity never shows a Lock wait;
+    // waitForLock can never become true here. Awaiting the holder's own
+    // acquisition is the deterministic replacement for the fixed sleep.
+    await acquired;
+    const [tb] = await client`select clock_timestamp() as t`;
     const pending = put(ev.key, who, "going");
-    expect(await waitForLock("%delete from web_throttle_hits%")).toBe(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    const [tr] = await client`select clock_timestamp() as t`;
-    release();
-    await holder;
-    expect((await pending).status).toBe(201);
-    const [hit] =
-      await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
-    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+    // Bounded race, not an open wait: a prune that blocked on the held row
+    // could never settle before release() below. Bound: 15s guard fails the
+    // test instead of hanging if the write ever blocks on the held prune row.
+    try {
+      const res = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("write did not skip the held prune row")), 15_000),
+        ),
+      ]);
+      expect(res.status).toBe(201);
+      // The locked row was skipped, not deleted from under its holder.
+      const [{ n: locked }] =
+        (await client`select count(*)::int as n from web_throttle_hits where bucket = 'unrelated-expired-bucket'`) as unknown as [
+          { n: number },
+        ];
+      expect(locked).toBe(1);
+      const [hit] =
+        await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tb!.t).getTime());
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-bucket'`;
   });
-  it("expiry is judged after the prune wait: a PUT queued behind prune is refused once the event ends", async () => {
+  it("expiry is judged after the event-lock wait: a PUT queued behind the event row is refused once the event ends", async () => {
     const ev = await seed();
     const who = "expire-prunelock";
-    await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-hold', clock_timestamp() - interval '10 minutes')`;
     await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
     let release!: () => void;
+    let ready!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
     const holder = client.begin(async (tx) => {
-      await tx`select * from web_throttle_hits where bucket = 'unrelated-expired-hold' for update`;
+      await tx`select id from events where id = ${ev.id} for update`;
+      ready();
       await held;
     });
-    await new Promise((r) => setTimeout(r, 200));
+    // Holder-acquired signal: the SELECT owns the event row before the contender starts.
+    await acquired;
     const pending = put(ev.key, who, "going");
-    expect(await waitForLock("%delete from web_throttle_hits%")).toBe(true);
-    // Let the event end while the write is still queued behind the prune.
-    await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Expiry-parking stimulus: sleep in the DB until the event ends while the
+      // write stays queued; not a lock-acquire wait.
+      await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
     const [{ n }] =
@@ -757,7 +1007,6 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
         { n: number },
       ];
     expect(n).toBe(0);
-    await client`delete from web_throttle_hits where bucket = 'unrelated-expired-hold'`;
   });
   it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
     for (const verb of ["DELETE", "PUT"] as const) {

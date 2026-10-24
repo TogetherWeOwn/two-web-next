@@ -11,6 +11,7 @@ import { safeNext, sanitizeSource } from "./service";
 import {
   JOIN_NEXT_COOKIE,
   JOIN_SOURCE_COOKIE,
+  JOIN_START_FAILED_NOTICE,
   JOIN_STATE_COOKIE,
   JOURNEY_TTL_SECONDS,
   joinRedirectUri,
@@ -25,6 +26,27 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     if (limited) return limited;
     const source = sanitizeSource(c.req.query("source"));
     const next = safeNext(c.req.query("next"));
+    // The fallback target is the only place the retry intent survives: safe
+    // next/source values ride back onto /join. The query encoding matches the
+    // callback retry href; the path is the journey page, which puts both
+    // values back on the one-click link. Hostile or absent values keep the
+    // bare notice target. Both already passed their sanitizers above.
+    // The degrade target also carries the fixed start-failed notice (E1): the
+    // journey page renders it as a visible explanation of the failed start,
+    // so the bounce is never silent. The value is fixed server-side and the
+    // landing renders (never redirects), so the chain always terminates.
+    const intent =
+      next && source
+        ? `next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
+        : next
+          ? `next=${encodeURIComponent(next)}`
+          : source
+            ? `source=${encodeURIComponent(source)}`
+            : "";
+    const fallback =
+      intent === ""
+        ? `/join?notice=${JOIN_START_FAILED_NOTICE}`
+        : `/join?notice=${JOIN_START_FAILED_NOTICE}&${intent}`;
     const state = crypto.randomUUID();
     const store = await hooks.storeFor(c);
     // A transient journey-store failure degrades to /join, never a 500 —
@@ -33,11 +55,11 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
       await store.journeys.sweepExpired();
       if (!(await store.journeys.issue(await hashToken(state), "join"))) {
         c.header("cache-control", "no-store");
-        return c.redirect("/join", 302);
+        return c.redirect(fallback, 302);
       }
     } catch {
       c.header("cache-control", "no-store");
-      return c.redirect("/join", 302);
+      return c.redirect(fallback, 302);
     }
     // Each admitted journey owns its optional intent: a missing or rejected
     // value expires a stale cookie from an abandoned earlier start (same

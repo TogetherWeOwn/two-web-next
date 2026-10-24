@@ -232,3 +232,130 @@ describe("cutover gates snapshot freshness", () => {
     expect(gateRow(4)).toContain("unverified (operator)");
   });
 });
+
+const watchRecord = readFileSync(new URL("../docs/watch-run-record.md", import.meta.url), "utf8");
+const watchSpec = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+const smokeSource = readFileSync(new URL("../bin/smoke.mjs", import.meta.url), "utf8");
+const smokeFixtureTests = readFileSync(new URL("./smoke.test.mjs", import.meta.url), "utf8");
+
+function productionName(kind: "app" | "tail"): string {
+  const production = wrangler.split('"production"')[1]!;
+  if (kind === "app") {
+    const match = production.match(/"name":\s*"([^"]+)"/);
+    expect(match, "wrangler.jsonc env.production declares the app name").not.toBeNull();
+    return match![1]!;
+  }
+  const match = production.match(/"tail_consumers":\s*\[\s*\{\s*"service":\s*"([^"]+)"/);
+  expect(match, "wrangler.jsonc env.production declares the Tail service").not.toBeNull();
+  return match![1]!;
+}
+
+describe("watch companions reconcile the withdrawn freeze", () => {
+  it("no reusable instruction asserts the withdrawn freeze is in force or auto-lifted", () => {
+    for (const [name, text] of [
+      ["watch-run-record.md", watchRecord],
+      ["48h-watch-spec.md", watchSpec],
+      ["cutover-rollback.md", rollback],
+    ] as const) {
+      expect(text, `${name} still imposes the freeze`).not.toContain("stays in force");
+      expect(text, `${name} still auto-lifts`).not.toContain("lifts the freeze there");
+      expect(text, `${name} still auto-lifts`).not.toContain("freeze lifted by B4 primary");
+      expect(text, `${name} still auto-lifts`).not.toContain("exit + freeze lift");
+    }
+    expect(watchRecord).toContain("archived withdrawn");
+    expect(watchSpec).toContain("withdrawn proposal, not a live instruction");
+    expect(rollback).toContain("proposal is withdrawn");
+  });
+
+  it("requires a separate freeze declaration and denies watch-exit auto-lift", () => {
+    for (const [name, text] of [
+      ["watch-run-record.md", watchRecord],
+      ["48h-watch-spec.md", watchSpec],
+      ["cutover-rollback.md", rollback],
+      ["runbook.md", runbook],
+    ] as const) {
+      expect(text, `${name} misses the declaration rule`).toMatch(
+        /any future\s+freeze needs a\s+separate declaration/i,
+      );
+      expect(text, `${name} misses no-auto-lift`).toMatch(
+        /watch exit alone does not lift a freeze|never by watch exit alone/i,
+      );
+    }
+    expect(rollback).toMatch(/dates, (an )?owner and (explicit |lift )terms/i);
+    expect(watchRecord).toMatch(/new dates, an owner and explicit\s+lift terms/i);
+  });
+
+  it("preserves independent writer holds while withdrawing the freeze", () => {
+    expect(rollback).toMatch(/legacy\/destination writer holds[\s\S]*identified before import/i);
+    expect(watchRecord).toMatch(/OAuth start\/callback/i);
+  });
+});
+
+describe("watch companions match current production probes", () => {
+  it("names the config-derived production app and Tail workers", () => {
+    const app = productionName("app");
+    const tail = productionName("tail");
+    expect(app).toBe("two-web-next-production");
+    expect(tail).toBe("two-web-next-alerts-production");
+    expect(watchSpec).toContain(`\`${app}\``);
+    expect(watchSpec).toContain(`\`${tail}\``);
+    expect(watchSpec).toContain(`npx wrangler tail ${app}`);
+    expect(watchSpec).toContain(`npx wrangler tail ${tail}`);
+    expect(watchRecord).toContain(`\`${app}\``);
+    expect(watchRecord).toContain(`\`${tail}\``);
+    expect(watchSpec).toMatch(/Staging comparison only.*`two-web-next`/s);
+    expect(runbook).toContain(`\`${app}\``);
+  });
+
+  it("invokes the apex smoke with --allow-indexable over the 24-route set", () => {
+    expect(watchSpec).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(watchSpec).toMatch(/Twenty-four public routes/s);
+    for (const route of [
+      "/events.rss",
+      "/events.ics",
+      "/sitemap_index.xml",
+      "/.well-known/security.txt",
+      "/e/<key>",
+      "/__smoke_unknown_route__",
+    ]) {
+      expect(watchSpec, `apex route set misses ${route}`).toContain(route);
+    }
+    expect(watchSpec).toContain("node bin/smoke.mjs https://next.togetherweown.com");
+    expect(watchSpec).toMatch(/Without `--allow-indexable` the apex probe fails/s);
+    expect(smokeFixtureTests).toContain("24 routes, 0 failed assertions");
+    expect(runbook).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(smokeSource).toContain("--allow-indexable");
+  });
+
+  it("pins the loopback apex fixture proof that dropping the flag fails", () => {
+    expect(smokeFixtureTests).toContain(
+      "allowIndexable passes apex HTML without the staging noindex",
+    );
+    expect(smokeFixtureTests).toContain(
+      "allowIndexable rejects a staging noindex leaked onto apex HTML",
+    );
+    expect(smokeFixtureTests).toContain(
+      "expected no universal X-Robots-Tag noindex on indexable apex HTML",
+    );
+    expect(smokeFixtureTests).toContain("CLI --allow-indexable reaches the apex posture");
+  });
+
+  it("records production revision separately from Tail version without the obsolete claim", () => {
+    expect(watchRecord).toContain("revision.version_id");
+    expect(watchRecord).toContain("revision.commit");
+    expect(watchRecord).toMatch(/separately from the Tail Worker version/s);
+    expect(watchRecord).not.toContain("carries no");
+    expect(watchRecord).not.toContain("until a cutover PR declares the binding");
+    expect(runbook.replace(/\s+/g, " ")).toContain(
+      "Record the production app `revision.version_id`",
+    );
+    expect(runbook).not.toMatch(/Production `\/up` has no\s+`revision`/);
+    expect(runbook.replace(/\s+/g, " ")).toContain(
+      "On staging the deploy job logs it in `Record live revision (rollback pointer)`",
+    );
+    expect(runbook).toContain("--name two-web-next-production");
+    expect(runbook).toContain("rollback-version-id");
+    expect(runbook).not.toMatch(/Both staging.*live Workers report their own Version ID/s);
+  });
+});

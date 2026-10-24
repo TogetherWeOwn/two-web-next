@@ -12,6 +12,7 @@
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { RSVP_COPY, throttleWaitCopy } from "../islands/contracts-rsvp-button";
 import type { HtmlOutcome, HtmlOutcomeRenderer } from "../html-outcome";
+import { rsvpPageReturnPath } from "./attendee-paths";
 
 export interface RsvpRefusalModel {
   title: string;
@@ -31,6 +32,8 @@ export interface RsvpRefusalInput {
   retryAfter: string | null;
   /** Raw :key param, exactly as routed. */
   eventKey: string;
+  /** Normalized native attendee page (1 stays bare). */
+  attendeePage?: number;
 }
 
 /**
@@ -46,10 +49,11 @@ export function rsvpRefusalModelFor(input: RsvpRefusalInput): RsvpRefusalModel {
     input.status === 429
       ? throttleWaitCopy(input.retryAfter ? Number(input.retryAfter) : null)
       : RSVP_REFUSAL_GENERIC_MESSAGE;
+  const page = input.attendeePage ?? 1;
   return {
     title: RSVP_COPY.failedTitle,
     message,
-    returnPath: `/e/${encodeURIComponent(input.eventKey)}`,
+    returnPath: rsvpPageReturnPath(input.eventKey, page),
   };
 }
 

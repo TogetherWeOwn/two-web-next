@@ -4,7 +4,9 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +14,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { acceptBaselines } from "./visual-accept.mjs";
+import { CODES, parseInvocation } from "./visual-accept-cli.mjs";
+import { acceptBaselines as acceptKitBaselines } from "./kit-visual-accept.mjs";
 
 const SCRIPT = new URL("./visual-accept.mjs", import.meta.url);
 
@@ -226,4 +230,646 @@ test("acceptBaselines reports counts and throws a diagnostic on collision", () =
 
   writeBytes(join(artifact, "other", "home-actual.png"), "different-bytes");
   assert.throws(() => acceptBaselines(artifact, join(root, "dest2")), /home\.png/);
+});
+
+// Shared behavioral contract: an artifact copy is not a reviewed replacement,
+// and only suite segments *inside* the artifact establish image ownership.
+// Keep this matrix in the already CI-routed suite; neither helper is mocked.
+const ACCEPTANCE_SUITES = [
+  {
+    name: "Hono",
+    script: SCRIPT,
+    snapshots: "e2e/visual/__screenshots__",
+    otherSnapshots: "e2e/visual/__screenshots-kit__",
+    actuals: "test-results-visual",
+    accept: (artifact, workspace) => {
+      acceptBaselines(artifact, join(workspace, "e2e/visual/__screenshots__"));
+      return { ok: true };
+    },
+    mixedExpected: { "hono-home.png": "hono-home", "new-hono.png": "new-hono" },
+  },
+  {
+    name: "Kit",
+    script: new URL("./kit-visual-accept.mjs", import.meta.url),
+    snapshots: "e2e/visual/__screenshots-kit__",
+    otherSnapshots: "e2e/visual/__screenshots__",
+    actuals: "test-results-kit-visual",
+    accept: (artifact, workspace) => acceptKitBaselines(artifact, { cwd: workspace }),
+    mixedExpected: {
+      "kit-events.png": "kit-events",
+      "kit-past.png": "kit-past",
+      "new-kit.png": "new-kit",
+    },
+  },
+];
+
+function acceptanceFixture(t, suite, artifactName = "artifact") {
+  const root = scratchRoot("baseline-contract-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, artifactName);
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(artifact, { recursive: true });
+  return {
+    workspace,
+    artifact,
+    dest: join(workspace, suite.snapshots),
+    otherDest: join(workspace, suite.otherSnapshots),
+  };
+}
+
+function baselineBytes(dir) {
+  return Object.fromEntries(
+    listFilesRecursive(dir).map((name) => [name, readFileSync(join(dir, name), "utf8")]),
+  );
+}
+
+function attemptAcceptance(suite, artifact, workspace) {
+  try {
+    return suite.accept(artifact, workspace);
+  } catch (error) {
+    return { ok: false, message: String(error) };
+  }
+}
+
+function writeMixedArtifact(artifact) {
+  writeBytes(join(artifact, "test-results-visual/home/hono-home-actual.png"), "hono-home");
+  writeBytes(join(artifact, "test-results-kit-visual/events/kit-events-actual.png"), "kit-events");
+  writeBytes(join(artifact, "test-results-kit-parity/past/kit-past-actual.png"), "kit-past");
+  writeBytes(join(artifact, "e2e/visual/__screenshots__/new-hono.png"), "new-hono");
+  writeBytes(join(artifact, "e2e/visual/__screenshots-kit__/new-kit.png"), "new-kit");
+  writeBytes(join(artifact, "test-results-visual/home/hono-home-expected.png"), "not-reviewed");
+  writeBytes(join(artifact, "test-results-kit-visual/events/kit-events-diff.png"), "not-reviewed");
+}
+
+// Permission bits do not make files unreadable when CI runs as root. Inject
+// EACCES at the real fs read/copy boundary in a child; retain real discovery,
+// planning and writes, so a write-before-read regression leaves visible bytes.
+const UNREADABLE_CANDIDATE_RUNNER = `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
+const [script, suite, artifact, workspace, unreadable] = process.argv.slice(1);
+for (const method of ["readFileSync", "copyFileSync"]) {
+  const original = fs[method];
+  fs[method] = function (path, ...args) {
+    if (String(path) === unreadable) {
+      const error = new Error("EACCES: unreadable candidate " + path);
+      error.code = "EACCES";
+      throw error;
+    }
+    return original.call(this, path, ...args);
+  };
+}
+syncBuiltinESMExports();
+const { acceptBaselines } = await import(script);
+try {
+  const result = suite === "Kit"
+    ? acceptBaselines(artifact, { cwd: workspace })
+    : acceptBaselines(artifact, join(workspace, "e2e/visual/__screenshots__"));
+  if (result.ok === false) {
+    console.error(result.message);
+    process.exitCode = 1;
+  }
+} catch (error) {
+  console.error(String(error));
+  process.exitCode = 1;
+}
+`;
+
+for (const suite of ACCEPTANCE_SUITES) {
+  test(`${suite.name}: an unrelated newer checkout baseline is never reverted by an artifact copy`, (t) => {
+    const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+    writeBytes(join(dest, "a-page.png"), "checkout-page");
+    writeBytes(join(dest, "z-unrelated.png"), "newer-checkout-unrelated");
+    writeBytes(join(artifact, suite.actuals, "a-page-actual.png"), "reviewed-page");
+    writeBytes(join(artifact, suite.snapshots, "z-unrelated.png"), "older-artifact-unrelated");
+    writeBytes(join(artifact, suite.snapshots, "b-new.png"), "new-baseline");
+    const before = baselineBytes(dest);
+
+    const result = attemptAcceptance(suite, artifact, workspace);
+
+    if (result.ok) {
+      assert.deepEqual(
+        baselineBytes(dest),
+        {
+          "a-page.png": "reviewed-page",
+          "b-new.png": "new-baseline",
+          "z-unrelated.png": "newer-checkout-unrelated",
+        },
+        "accepting a reviewed page must preserve a newer unrelated checkout baseline",
+      );
+    } else {
+      assert.match(
+        result.message,
+        /z-unrelated\.png/,
+        "preflight conflict must identify the unrelated destination",
+      );
+      assert.match(result.message, /conflict|refus|differ|stale|overwrite/i);
+      assert.deepEqual(
+        baselineBytes(dest),
+        before,
+        "a stale-copy conflict must abort the entire plan",
+      );
+    }
+  });
+
+  test(`${suite.name}: identical artifact copies are no-ops while absent baselines are added`, (t) => {
+    const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+    const unchanged = join(dest, "unchanged.png");
+    writeBytes(unchanged, "unchanged-bytes");
+    utimesSync(unchanged, 946684800, 946684800);
+    const before = statSync(unchanged).mtimeMs;
+    writeBytes(join(artifact, suite.snapshots, "unchanged.png"), "unchanged-bytes");
+    writeBytes(join(artifact, suite.snapshots, "new.png"), "new-bytes");
+    writeBytes(join(artifact, suite.actuals, "page-actual.png"), "reviewed-bytes");
+
+    const result = attemptAcceptance(suite, artifact, workspace);
+
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(baselineBytes(dest), {
+      "new.png": "new-bytes",
+      "page.png": "reviewed-bytes",
+      "unchanged.png": "unchanged-bytes",
+    });
+    assert.equal(
+      statSync(unchanged).mtimeMs,
+      before,
+      "an identical artifact copy must not rewrite the local file",
+    );
+  });
+
+  test(`${suite.name}: reviewed actuals replace checkout bytes and outrank stale copies`, (t) => {
+    const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+    writeBytes(join(dest, "page.png"), "newer-checkout-page");
+    writeBytes(join(artifact, suite.snapshots, "page.png"), "older-artifact-page");
+    writeBytes(join(artifact, suite.actuals, "a/page-actual.png"), "reviewed-page");
+    writeBytes(join(artifact, suite.actuals, "b/page-actual.png"), "reviewed-page");
+
+    const result = attemptAcceptance(suite, artifact, workspace);
+
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(baselineBytes(dest), { "page.png": "reviewed-page" });
+  });
+
+  test(`${suite.name}: actual-looking files in baseline dirs remain copies`, (t) => {
+    const absent = acceptanceFixture(t, suite);
+    writeBytes(join(absent.artifact, suite.snapshots, "page-actual.png"), "copy-bytes");
+
+    const absentResult = attemptAcceptance(suite, absent.artifact, absent.workspace);
+
+    assert.equal(absentResult.ok, true, absentResult.message);
+    assert.deepEqual(baselineBytes(absent.dest), { "page-actual.png": "copy-bytes" });
+    assert.equal(
+      baselineBytes(absent.dest)["page.png"],
+      undefined,
+      "a baseline-directory filename must not grant reviewed-actual authority",
+    );
+
+    const differing = acceptanceFixture(t, suite);
+    writeBytes(join(differing.dest, "page-actual.png"), "checkout-bytes");
+    writeBytes(join(differing.artifact, suite.snapshots, "page-actual.png"), "copy-bytes");
+    writeBytes(join(differing.artifact, suite.actuals, "other-actual.png"), "reviewed-other");
+    const before = baselineBytes(differing.dest);
+
+    const differingResult = attemptAcceptance(suite, differing.artifact, differing.workspace);
+
+    assert.equal(differingResult.ok, false, "a differing checkout target must be refused");
+    assert.match(differingResult.message, /page-actual\.png/);
+    assert.deepEqual(
+      baselineBytes(differing.dest),
+      before,
+      "the stale-copy refusal must not apply the unrelated reviewed actual",
+    );
+  });
+
+  test(`${suite.name}: conflicting actuals abort unrelated additions and replacements`, (t) => {
+    const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+    writeBytes(join(dest, "a-replace.png"), "checkout-page");
+    writeBytes(join(dest, "sentinel.png"), "untouched");
+    writeBytes(join(artifact, suite.actuals, "a/a-replace-actual.png"), "reviewed-page");
+    writeBytes(join(artifact, suite.snapshots, "b-new.png"), "new-baseline");
+    writeBytes(join(artifact, suite.actuals, "y/z-conflict-actual.png"), "candidate-one");
+    writeBytes(join(artifact, suite.actuals, "z/z-conflict-actual.png"), "candidate-two");
+    const before = baselineBytes(dest);
+
+    const result = attemptAcceptance(suite, artifact, workspace);
+
+    assert.equal(result.ok, false, "different actuals for one destination must be refused");
+    assert.match(result.message, /z-conflict\.png/);
+    assert.deepEqual(baselineBytes(dest), before);
+  });
+
+  for (const artifactName of [
+    "artifact",
+    "test-results-kit-visual",
+    "test-results-kit-parity",
+    "__screenshots-kit__",
+    "export-test-results-kit-visual-backup",
+  ]) {
+    test(`${suite.name}: mixed suite plan is correct under extraction root ${artifactName}`, (t) => {
+      const { workspace, artifact, dest, otherDest } = acceptanceFixture(t, suite, artifactName);
+      writeMixedArtifact(artifact);
+      writeBytes(join(otherDest, "sentinel.png"), "other-suite-untouched");
+
+      const result = attemptAcceptance(suite, artifact, workspace);
+
+      assert.equal(result.ok, true, result.message);
+      assert.deepEqual(baselineBytes(dest), suite.mixedExpected);
+      assert.deepEqual(baselineBytes(otherDest), { "sentinel.png": "other-suite-untouched" });
+    });
+  }
+
+  for (const wrapper of [
+    "test-results-kit-visual-backup",
+    "prefix-test-results-kit-parity",
+    "__screenshots-kit__-backup",
+  ]) {
+    test(`${suite.name}: lookalike wrapper ${wrapper} does not classify nested suite paths`, (t) => {
+      const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+      writeMixedArtifact(join(artifact, wrapper));
+
+      const result = attemptAcceptance(suite, artifact, workspace);
+
+      assert.equal(result.ok, true, result.message);
+      assert.deepEqual(baselineBytes(dest), suite.mixedExpected);
+    });
+  }
+
+  for (const kind of ["actual", "baseline copy"]) {
+    test(`${suite.name}: an unreadable ${kind} aborts before any other write`, (t) => {
+      const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+      writeBytes(join(dest, "a-replace.png"), "checkout-page");
+      writeBytes(join(dest, "sentinel.png"), "untouched");
+      writeBytes(join(artifact, suite.actuals, "a/a-replace-actual.png"), "reviewed-page");
+      writeBytes(join(artifact, suite.actuals, "b/b-new-actual.png"), "new-baseline");
+      const unreadable =
+        kind === "actual"
+          ? join(artifact, suite.actuals, "z/z-unreadable-actual.png")
+          : join(artifact, suite.snapshots, "z-unreadable.png");
+      writeBytes(unreadable, "cannot-read-these-bytes");
+      const before = baselineBytes(dest);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          UNREADABLE_CANDIDATE_RUNNER,
+          suite.script.href,
+          suite.name,
+          artifact,
+          workspace,
+          unreadable,
+        ],
+        { encoding: "utf8", timeout: 30_000, cwd: workspace },
+      );
+
+      assert.equal(result.error, undefined);
+      assert.notEqual(
+        result.status,
+        0,
+        "unreadable candidates must refuse rather than silently disappear",
+      );
+      assert.match(result.stderr, /EACCES|unreadable/i);
+      assert.match(result.stderr, /z-unreadable/);
+      assert.deepEqual(
+        baselineBytes(dest),
+        before,
+        "source-read failure must not partially apply the plan",
+      );
+    });
+  }
+}
+
+test("Kit: lookalike-only suite directories do not admit Hono actuals", (t) => {
+  const suite = ACCEPTANCE_SUITES[1];
+  const { workspace, artifact, dest } = acceptanceFixture(t, suite);
+  for (const lookalike of [
+    "test-results-kit-visual-backup",
+    "prefix-test-results-kit-parity",
+    "__screenshots-kit__-backup",
+  ]) {
+    writeBytes(join(artifact, lookalike, "test-results-visual/home-actual.png"), "hono-not-kit");
+  }
+  writeBytes(join(artifact, suite.actuals, "kit-actual.png"), "reviewed-kit");
+
+  const result = attemptAcceptance(suite, artifact, workspace);
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(baselineBytes(dest), { "kit.png": "reviewed-kit" });
+});
+
+// CLI contract (flags, dry run, stable codes). Black-box coverage of both
+// scripts lives in test/visual-accept-cli-safety-acceptance.test.ts; these
+// selftests pin the parser and the properties that file does not: the dry-run
+// plan equals what a real run writes, and I/O failures never echo paths.
+const CLI_SUITES = [
+  {
+    name: "Hono",
+    script: SCRIPT,
+    actuals: "test-results-visual",
+    dest: "e2e/visual/__screenshots__",
+  },
+  {
+    name: "Kit",
+    script: new URL("./kit-visual-accept.mjs", import.meta.url),
+    actuals: "test-results-kit-visual",
+    dest: "e2e/visual/__screenshots-kit__",
+  },
+];
+
+function runScript(suite, args, cwd) {
+  const result = spawnSync(process.execPath, [suite.script.pathname, ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    cwd,
+  });
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+test("parseInvocation accepts flags on either side and refuses everything else first", () => {
+  const ok = (argv) => parseInvocation(argv);
+  assert.deepEqual(ok(["dir"]), { dryRun: false, json: false, error: null, artifact: "dir" });
+  assert.deepEqual(ok(["--dry-run", "--format", "json", "dir"]), {
+    dryRun: true,
+    json: true,
+    error: null,
+    artifact: "dir",
+  });
+  assert.equal(ok(["dir", "--format", "json", "--dry-run"]).error, null);
+  for (const argv of [
+    ["dir", "-x"],
+    ["dir", "--bogus"],
+    ["dir", "--DRY-RUN"],
+    ["dir", "--format=json"],
+    ["dir", "--format"],
+    ["dir", "--format", "xml"],
+    ["dir", "--format", ""],
+    ["dir", "--format", "--dry-run"],
+    ["extra", "dir", "--bogus"],
+    ["--bogus"],
+  ]) {
+    assert.equal(parseInvocation(argv).error, CODES.UNKNOWN_FLAG, argv.join(" "));
+  }
+  assert.equal(parseInvocation([]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["--dry-run"]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["a", "b"]).error, CODES.EXTRA_ARGS);
+});
+
+for (const suite of CLI_SUITES) {
+  test(`${suite.name}: the dry-run plan names exactly what the real run writes`, (t) => {
+    const root = scratchRoot("visual-accept-plan-");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const workspace = join(root, "checkout");
+    const artifact = join(root, "artifact");
+    mkdirSync(workspace, { recursive: true });
+    writeBytes(join(artifact, suite.actuals, "a", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "b", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "home-actual.png"), "home-bytes");
+    writeBytes(join(artifact, suite.dest, "home.png"), "stale-home-bytes");
+    writeBytes(join(artifact, suite.dest, "same.png"), "same-bytes");
+    writeBytes(join(workspace, suite.dest, "same.png"), "same-bytes");
+
+    const plan = JSON.parse(
+      runScript(suite, ["--dry-run", "--format", "json", artifact], workspace).stdout,
+    ).plan;
+    assert.deepEqual(plan.destinations, ["about.png", "home.png"]);
+    assert.deepEqual(
+      plan.skipped.map(({ item, reason }) => [item.replaceAll("\\", "/"), reason]),
+      [
+        [
+          `test-results-${suite.name === "Kit" ? "kit-" : ""}visual/b/about-actual.png`,
+          "byte-identical duplicate",
+        ],
+        [`${suite.dest}/home.png`, "superseded by reviewed actual"],
+        [`${suite.dest}/same.png`, "identical to checkout baseline"],
+      ],
+    );
+    assert.deepEqual(listFilesRecursive(workspace), [`${suite.dest}/same.png`]);
+
+    assert.equal(runScript(suite, [artifact], workspace).status, 0);
+    assert.deepEqual(listFilesRecursive(join(workspace, suite.dest)), [
+      "about.png",
+      "home.png",
+      "same.png",
+    ]);
+  });
+}
+
+test("I/O failures print a fixed code and errno, never a path or raw message", (t) => {
+  const root = scratchRoot("visual-accept-io-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifact = join(root, "artifact");
+  const unreadable = join(artifact, "test-results-visual", "z-actual.png");
+  writeBytes(unreadable, "secret-bytes");
+  const runner = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const [script, unreadable, artifact] = process.argv.slice(1);
+    const original = fs.readFileSync;
+    fs.readFileSync = function (path, ...rest) {
+      if (String(path) === unreadable) {
+        const error = new Error("EACCES: raw message " + path);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(this, path, ...rest);
+    };
+    syncBuiltinESMExports();
+    const { runCli, HONO_ADAPTER } = await import(script).then(async (m) => ({
+      runCli: (await import(new URL("./visual-accept-cli.mjs", script).href)).runCli,
+      HONO_ADAPTER: m.HONO_ADAPTER,
+    }));
+    const { status, stdout, stderr } = runCli(HONO_ADAPTER, ["--format", "json", artifact]);
+    process.stdout.write(JSON.stringify({ status, stdout, stderr }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", runner, SCRIPT.href, unreadable, artifact],
+    { encoding: "utf8", timeout: 30_000, cwd: root },
+  );
+  assert.equal(result.error, undefined);
+  const { status, stdout, stderr } = JSON.parse(result.stdout);
+  assert.equal(status, 1);
+  assert.equal(stderr, "");
+  const verdict = JSON.parse(stdout);
+  assert.equal(verdict.code, CODES.IO_ERROR);
+  assert.equal(verdict.ok, false);
+  assert.ok(!stdout.includes(root) && !stdout.includes("raw message"), stdout);
+});
+
+test("Human I/O failures print the fixed line with the errno, never a path or raw message", (t) => {
+  const root = scratchRoot("visual-accept-io-human-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifact = join(root, "artifact");
+  const unreadable = join(artifact, "test-results-visual", "z-actual.png");
+  writeBytes(unreadable, "secret-bytes");
+  const runner = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const [script, unreadable, artifact] = process.argv.slice(1);
+    const original = fs.readFileSync;
+    fs.readFileSync = function (path, ...rest) {
+      if (String(path) === unreadable) {
+        const error = new Error("EACCES: raw message " + path);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(this, path, ...rest);
+    };
+    syncBuiltinESMExports();
+    const { runCli, HONO_ADAPTER } = await import(script).then(async (m) => ({
+      runCli: (await import(new URL("./visual-accept-cli.mjs", script).href)).runCli,
+      HONO_ADAPTER: m.HONO_ADAPTER,
+    }));
+    const { status, stdout, stderr } = runCli(HONO_ADAPTER, [artifact]);
+    process.stdout.write(JSON.stringify({ status, stdout, stderr }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", runner, SCRIPT.href, unreadable, artifact],
+    { encoding: "utf8", timeout: 30_000, cwd: root },
+  );
+  assert.equal(result.error, undefined);
+  const { status, stdout, stderr } = JSON.parse(result.stdout);
+  assert.equal(status, 1);
+  assert.equal(stdout, "");
+  assert.match(stderr, /could not read or write baseline files \(EACCES\)/);
+  assert.match(stderr, /code=IO_ERROR/);
+  assert.match(stderr, /next_action=.+/);
+  assert.ok(!stderr.includes(root), stderr);
+  assert.ok(!stderr.includes(artifact), stderr);
+  assert.ok(!stderr.includes("raw message"), stderr);
+  assert.ok(!stderr.includes("secret-bytes"), stderr);
+});
+
+test("Hono: all-matching candidates exit 1 NO_CHANGES in every mode", (t) => {
+  const suite = CLI_SUITES[0];
+  const root = scratchRoot("visual-accept-no-changes-hono-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(join(workspace, suite.dest), { recursive: true });
+  mkdirSync(join(artifact, suite.actuals), { recursive: true });
+  writeBytes(join(workspace, suite.dest, "home.png"), "same-bytes");
+  writeBytes(join(artifact, suite.actuals, "home-actual.png"), "same-bytes");
+  const before = readFileSync(join(workspace, suite.dest, "home.png"), "utf8");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 1);
+  assert.match(human.stdout, /accepted 0 baseline\(s\)/);
+  assert.match(human.stderr, /code=NO_CHANGES/);
+  assert.match(human.stderr, /next_action=.+/);
+  assert.ok(!human.stderr.includes(workspace), human.stderr);
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 1);
+  assert.equal(json.stderr, "");
+  const verdict = JSON.parse(json.stdout);
+  assert.equal(verdict.code, CODES.NO_CHANGES);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.mode, "accept");
+  assert.equal(verdict.destinations, 1);
+  assert.equal(verdict.sources, 1);
+  assert.ok(!json.stdout.includes(workspace), json.stdout);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 1);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /dry run: nothing written/);
+  assert.match(dry.stdout, /no-op \(every candidate matches the checkout/);
+  assert.match(dry.stdout, /test-results-visual\/home-actual\.png: identical to checkout baseline/);
+  assert.match(dry.stdout, /code=NO_CHANGES/);
+  assert.ok(!dry.stdout.includes(artifact), dry.stdout);
+  assert.ok(!dry.stdout.includes(workspace), dry.stdout);
+
+  const dryJson = runScript(suite, ["--dry-run", "--format", "json", artifact], workspace);
+  assert.equal(dryJson.status, 1);
+  assert.equal(dryJson.stderr, "");
+  const dryVerdict = JSON.parse(dryJson.stdout);
+  assert.equal(dryVerdict.code, CODES.NO_CHANGES);
+  assert.equal(dryVerdict.ok, false);
+  assert.equal(dryVerdict.mode, "dry-run");
+  assert.equal(dryVerdict.plan.verdict, "no-op");
+  assert.equal(dryVerdict.plan.skipped.length, 1);
+  assert.ok(!dryJson.stdout.includes(workspace), dryJson.stdout);
+
+  assert.equal(readFileSync(join(workspace, suite.dest, "home.png"), "utf8"), before);
+});
+
+test("Kit: all-matching candidates exit 0 OK in every mode", (t) => {
+  const suite = CLI_SUITES[1];
+  const root = scratchRoot("visual-accept-no-changes-kit-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(join(workspace, suite.dest), { recursive: true });
+  mkdirSync(join(artifact, suite.actuals), { recursive: true });
+  writeBytes(join(workspace, suite.dest, "home.png"), "same-bytes");
+  writeBytes(join(artifact, suite.actuals, "home-actual.png"), "same-bytes");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 0);
+  assert.match(human.stdout, /accepted 0 Kit baselines/);
+  assert.equal(human.stderr, "");
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 0);
+  assert.equal(json.stderr, "");
+  const verdict = JSON.parse(json.stdout);
+  assert.equal(verdict.code, CODES.OK);
+  assert.equal(verdict.ok, true);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 0);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /would write 0 baseline\(s\)/);
+  assert.match(dry.stdout, /code=OK/);
+
+  const dryJson = runScript(suite, ["--dry-run", "--format", "json", artifact], workspace);
+  assert.equal(dryJson.status, 0);
+  assert.equal(dryJson.stderr, "");
+  const dryVerdict = JSON.parse(dryJson.stdout);
+  assert.equal(dryVerdict.code, CODES.OK);
+  assert.equal(dryVerdict.ok, true);
+  assert.equal(dryVerdict.mode, "dry-run");
+});
+
+test("Hono collision diagnostics print artifact-relative sources, never absolute paths", (t) => {
+  const suite = CLI_SUITES[0];
+  const root = scratchRoot("visual-accept-collision-paths-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(workspace, { recursive: true });
+  writeBytes(join(artifact, "a", "home-actual.png"), "bytes-A");
+  writeBytes(join(artifact, "b", "home-actual.png"), "bytes-B");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 1);
+  assert.equal(human.stdout, "");
+  assert.match(human.stderr, /home\.png/);
+  assert.match(human.stderr, /a\/home-actual\.png/);
+  assert.match(human.stderr, /b\/home-actual\.png/);
+  assert.match(human.stderr, /code=COLLISION/);
+  assert.ok(!human.stderr.includes(artifact), human.stderr);
+  assert.ok(!human.stderr.includes(workspace), human.stderr);
+  assert.ok(!human.stderr.includes(root), human.stderr);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 1);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /a\/home-actual\.png/);
+  assert.match(dry.stdout, /b\/home-actual\.png/);
+  assert.match(dry.stdout, /code=COLLISION/);
+  assert.ok(!dry.stdout.includes(artifact), dry.stdout);
+  assert.ok(!dry.stdout.includes(workspace), dry.stdout);
+  assert.ok(!dry.stdout.includes(root), dry.stdout);
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 1);
+  assert.ok(!json.stdout.includes(artifact), json.stdout);
+  assert.ok(!json.stdout.includes(root), json.stdout);
 });

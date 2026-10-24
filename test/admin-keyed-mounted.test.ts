@@ -22,6 +22,7 @@ import {
   seed,
   SUBJECT,
 } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 // Every injection below runs through an EXISTING mounted admin handler. The
@@ -41,7 +42,6 @@ describe.skipIf(!process.env.DATABASE_URL)(
           ...env,
           ADMIN_DB: db,
           SESSION_STORE: sessions,
-          MEMBER_ACCESS_LOG_ENFORCE: "false",
         },
       );
     const denial = async (response: Response, checkRows = true) => {
@@ -80,13 +80,16 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["roster", "dashboard"])(
       "refuses an added unwrapped sensitive query in the existing %s handler",
       async (surface) => {
+        let sabotage: unknown;
         if (surface === "roster") {
           const original = reads.listRoster;
           vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
             const rows = await original(db, key);
             try {
               await db.select().from(users);
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
             return rows;
           });
         } else {
@@ -95,17 +98,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
             const counts = await original(db, now);
             try {
               await db.select().from(users);
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
             return counts;
           });
         }
         await denial(await request(surface === "roster" ? `/events/${EVENT_KEY}` : "/"));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
     it.each(["comment", "mutation", "builder"])(
       "a %s statement cannot evade the read prefix inside an existing roster handler",
       async (mode) => {
+        let sabotage: unknown;
         const original = reads.listRoster;
         vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
           const rows = await original(db, key);
@@ -119,10 +126,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
                       : sql`update users set username = 'mutated-private-name' returning id, username`,
                   ),
             );
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return rows;
         });
         await denial(await request(`/events/${EVENT_KEY}`));
+        await assertDenialThrows(Promise.reject(sabotage));
         expect(
           (await fixture.db.select().from(users).where(eq(users.id, SUBJECT.userId)))[0]!.username,
         ).toBe(SUBJECT.username);
@@ -140,15 +150,19 @@ describe.skipIf(!process.env.DATABASE_URL)(
     ] as const)(
       "%s classification cannot authorize a sensitive projection",
       async (classification) => {
+        let sabotage: unknown;
         const original = reads.listRoster;
         vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
           const rows = await original(db, key);
           try {
             await memberReads.nonSensitiveRead(classification, () => db.select().from(users));
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return rows;
         });
         await denial(await request(`/events/${EVENT_KEY}`));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
@@ -272,6 +286,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["literal", "member"])(
       "precision classification cannot authorize an added %s SQL projection in the existing featured handler",
       async (mode) => {
+        let sabotage: unknown;
         const [featured] = await fixture.db
           .insert(featuredContents)
           .values({ title: "Public editorial card" })
@@ -292,10 +307,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 .from(featuredContents)
                 .where(eq(featuredContents.id, id)),
             );
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return row;
         });
         await denial(await request(`/featured/${featured!.id}`));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
@@ -339,18 +357,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
     );
 
     it("a controlled not-found shell cannot erase a prior unwrapped sensitive read", async () => {
+      let sabotage: unknown;
       const original = reads.listRoster;
       vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
         const rows = await original(db, key);
         try {
           await db.select().from(users);
-        } catch {}
+        } catch (error) {
+          sabotage = error;
+        }
         return rows;
       });
       vi.spyOn(memberReads, "bufferedMemberHtml").mockImplementationOnce(async (c) =>
         notFoundResponse(c),
       );
       await denial(await request(`/events/${EVENT_KEY}`));
+      await assertDenialThrows(Promise.reject(sabotage));
     });
 
     it("an arbitrary 404 replacement cannot inherit buffered approval", async () => {
@@ -571,24 +593,147 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it("concurrent roster/join reads and sequential empty screens never share receipts", async () => {
-      const memberCookie = await cookieFor(sessions, { ...MEMBER, moderator: true });
-      const bindings = { ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions };
-      const responses = await Promise.all([
-        app.request(`/admin/events/${EVENT_KEY}`, { headers: { cookie } }, bindings),
-        app.request("/admin/join-attempts", { headers: { cookie: memberCookie } }, bindings),
-      ]);
-      expect(responses.map((response) => response.status)).toEqual([200, 200]);
-      for (const path of ["/", "/events/new", "/featured/new"])
-        expect((await request(path)).status).toBe(200);
-      expect(
-        (await logs()).map((row) => [row.viewerDiscordId, row.route, row.subjectUserIds]).sort(),
-      ).toEqual(
-        [
-          [MODERATOR.userId, "admin.events.edit", [SUBJECT.userId]],
-          [MEMBER.userId, "admin.join-attempts.index", [SUBJECT.userId]],
-        ].sort(),
-      );
-    });
+    it("forced-overlap roster/join reads rendezvous after distinct sensitive reads", async () => {
+      const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), ms);
+        });
+        return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+      };
+      const deferred = () => {
+        let resolve!: () => void;
+        const promise = new Promise<void>((res) => {
+          resolve = res;
+        });
+        return { promise, resolve };
+      };
+
+      for (const first of ["join", "roster"] as const) {
+        await fixture.reset();
+        await seed(fixture.db);
+        const memberCookie = await cookieFor(sessions, { ...MEMBER, moderator: true });
+        const bindings = { ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions };
+        const gateRoster = { arrived: deferred(), release: deferred() };
+        const gateJoin = { arrived: deferred(), release: deferred() };
+        // Park each handler after its distinct sensitive read, while its
+        // capture is still open and before its buffered response releases.
+        const originalRoster = reads.listRoster;
+        const originalJoin = reads.listJoinAttempts;
+        const rosterSpy = vi
+          .spyOn(reads, "listRoster")
+          .mockImplementationOnce(async (...args: Parameters<typeof originalRoster>) => {
+            const result = await originalRoster(...args);
+            gateRoster.arrived.resolve();
+            await withTimeout(gateRoster.release.promise, 5000, "release roster");
+            return result;
+          });
+        const joinSpy = vi
+          .spyOn(reads, "listJoinAttempts")
+          .mockImplementationOnce(async (...args: Parameters<typeof originalJoin>) => {
+            const result = await originalJoin(...args);
+            gateJoin.arrived.resolve();
+            await withTimeout(gateJoin.release.promise, 5000, "release join");
+            return result;
+          });
+        let settledRoster = false;
+        let settledJoin = false;
+        const promiseRoster: Promise<Response> = Promise.resolve(
+          app.request(`/admin/events/${EVENT_KEY}`, { headers: { cookie } }, bindings),
+        );
+        const promiseJoin: Promise<Response> = Promise.resolve(
+          app.request("/admin/join-attempts", { headers: { cookie: memberCookie } }, bindings),
+        );
+        promiseRoster.then(
+          () => {
+            settledRoster = true;
+          },
+          () => {
+            settledRoster = true;
+          },
+        );
+        promiseJoin.then(
+          () => {
+            settledJoin = true;
+          },
+          () => {
+            settledJoin = true;
+          },
+        );
+        try {
+          // Both sensitive reads completed and both handlers are parked:
+          // neither buffered response has been released yet.
+          await withTimeout(
+            Promise.all([gateRoster.arrived.promise, gateJoin.arrived.promise]),
+            5000,
+            `rendezvous (first=${first})`,
+          );
+          expect(settledRoster, `roster must stay parked until release (first=${first})`).toBe(
+            false,
+          );
+          expect(settledJoin, `join must stay parked until release (first=${first})`).toBe(false);
+          if (first === "join") {
+            gateJoin.release.resolve();
+            const resJoin = await withTimeout(promiseJoin, 5000, `join response (first=${first})`);
+            expect(resJoin.status).toBe(200);
+            const joinBody = await resJoin.text();
+            expect(joinBody).toContain("w15-request");
+            expect(joinBody).toContain(SUBJECT.userId);
+            expect(
+              settledRoster,
+              `roster must stay parked while join completes (first=${first})`,
+            ).toBe(false);
+            gateRoster.release.resolve();
+            const resRoster = await withTimeout(
+              promiseRoster,
+              5000,
+              `roster response (first=${first})`,
+            );
+            expect(resRoster.status).toBe(200);
+            expect(await resRoster.text()).toContain(SUBJECT.username);
+          } else {
+            gateRoster.release.resolve();
+            const resRoster = await withTimeout(
+              promiseRoster,
+              5000,
+              `roster response (first=${first})`,
+            );
+            expect(resRoster.status).toBe(200);
+            expect(await resRoster.text()).toContain(SUBJECT.username);
+            expect(
+              settledJoin,
+              `join must stay parked while roster completes (first=${first})`,
+            ).toBe(false);
+            gateJoin.release.resolve();
+            const resJoin = await withTimeout(promiseJoin, 5000, `join response (first=${first})`);
+            expect(resJoin.status).toBe(200);
+            const joinBody = await resJoin.text();
+            expect(joinBody).toContain("w15-request");
+            expect(joinBody).toContain(SUBJECT.userId);
+          }
+          expect(
+            (await logs())
+              .map((row) => [row.viewerDiscordId, row.route, row.subjectUserIds])
+              .sort(),
+          ).toEqual(
+            [
+              [MODERATOR.userId, "admin.events.edit", [SUBJECT.userId]],
+              [MEMBER.userId, "admin.join-attempts.index", [SUBJECT.userId]],
+            ].sort(),
+          );
+          // No leftover receipt: sequential empty screens serve without
+          // writing another audit row.
+          for (const path of ["/", "/events/new", "/featured/new"])
+            expect((await request(path)).status, `${path} (first=${first})`).toBe(200);
+          expect(await logs()).toHaveLength(2);
+        } finally {
+          gateRoster.release.resolve();
+          gateJoin.release.resolve();
+          await Promise.allSettled([promiseRoster, promiseJoin]);
+          rosterSpy.mockRestore();
+          joinSpy.mockRestore();
+        }
+      }
+    }, 15000);
   },
 );

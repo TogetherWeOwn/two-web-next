@@ -15,6 +15,28 @@ This document maps community-goal measures to aggregate evidence already describ
 
 The bot-owned `web_v1.rank_counts` view is also aggregate-only and supports the homepage rank display; it is not a substitute for any community-goal measure. Its narrow column and null semantics are defined in the [web-v1 contract](web-v1-contract.md#web_v1rank_counts).
 
+## Before a weekly value can be reported
+
+No entry below approves a source, query, audience, retention period, or access. Each entry lists what a future proposal would have to establish, from documented interfaces only, before the corresponding value can leave `Not reported`. Each weekly measure gets its own entry in the same shape, so further measures can be added the same way. Any proposal must supply the review inputs listed under [Escalation](#escalation) — proposed purpose, minimum fields and aggregation, audience, retention, source, and deletion/access controls — and this document selects none of them.
+
+### Joins/week
+
+- **What must be counted:** successful **new** guild-member additions in the reporting week. The approved `/hotzones` joins grid combines `added` with `already_member` (`JOIN_SUCCESS_OUTCOMES` in `src/hotzones/aggregates.ts:50`), so it counts recorded successful join-attempt outcomes, not new joins.
+- **Weekly window:** the goal's weekly reporting period, with exact start/end timestamps and timezone stated on every reported value. The grid is reachable only through `?season=`, which accepts only absent/`all`, `YYYY`, `YYYY-MM`, or `YYYY-Qn` UTC windows (`src/hotzones/season.ts:12-14`); its smallest window is a calendar month, so it cannot select a week. The week-boundary and timezone convention is not selected here.
+- **Bot exclusion:** bot traffic must not count. The `join_attempts` columns are outcome, source, request ID, Discord ID, and timestamp (`src/db/schema.ts:69-87`; `recordAttempt` in `src/join/service.ts:284-307`); there is no bot flag or bot-account predicate, so the current interface cannot prove a human-only join count.
+- **Opt-out commitment:** the published promise that opting out removes a member from every board and every count (`content/privacy-policy-v6.md:86`) must hold. The current grid keeps it by dropping attempts linked to `leaderboard_opt_out = true` profiles (`src/hotzones/aggregates.ts:90-94`).
+- **Coverage gap:** `join_attempts` records website join-flow outcomes only; joins through Discord invites or other paths are not recorded, some sign-ins/joins are not recorded, and attempts are pruned after 90 days (`src/hotzones/aggregates.ts:130-139`). A weekly new-join value needs guild-wide coverage the current interface does not establish.
+- **Review:** a proposal must supply the purpose, minimum fields and aggregation, audience, retention, source, and deletion/access controls listed under [Escalation](#escalation) before any new source, query, or access is used.
+
+### Weekly active humans (voice minutes)
+
+- **What must be counted:** per-member voice minutes in the reporting week, tested against the goal's at-least-10-voice-minutes threshold; a member who also sent a human-authored message still counts once. See the goal wording in [community human participation metrics](community-participation-metrics.md#goal-wording-and-reporting-rule).
+- **Weekly window:** the same weekly reporting period requirement as Joins/week above: exact start/end timestamps and timezone on every value, with the boundary and timezone convention not selected here.
+- **Bot exclusion:** bot traffic must not count. The consumed `web_v1` contract exposes only `live_counts` snapshot columns and `rank_counts` ladder columns ([contract](web-v1-contract.md#web_v1live_counts)), with no weekly message or voice-activity fields; `/hotzones/voice` is a deterministic seeded estimate (`priorGrid` in `src/hotzones/aggregates.ts:171-189`), not observed activity, and must never be reported as measured voice minutes. No bot exclusion for activity data is evidenced in this repository.
+- **Opt-out commitment:** the same every-board-and-every-count promise (`content/privacy-policy-v6.md:86`) must hold for any voice-derived weekly count.
+- **Coverage gap:** the website database never stores voice audio (`content/privacy-policy-v6.md:58`); per-member voice minutes, if they exist anywhere, are held only by the bot system, and no bot voice source is part of the website interface reviewed here.
+- **Review:** as for Joins/week: purpose, minimum fields and aggregation, audience, retention, source, and deletion/access controls under [Escalation](#escalation), with none of them selected here.
+
 ## Default access boundary
 
 - Prefer an existing, documented aggregate/read model whose fields and purpose are explicit. Use only its aggregate output for that stated purpose. Do not select, export, retain, or publish member-level rows, identifiers, profiles, RSVP lists, join-attempt details, or message/voice content for community scorecards.
@@ -34,6 +56,7 @@ Stop and request CISO review before any proposal or work that would access/expor
 
 - `README.md` — disposable test database and production/staging prohibition.
 - `docs/web-v1-contract.md` — bot-owned aggregate views, homepage consumer boundary, fixture rules.
+- `docs/community-participation-metrics.md` — goal-metric operational definitions and the weekly reporting rule.
 - `docs/troubleshooting-join.md` — bounded moderator diagnostics and join-funnel limitations.
 - `docs/member-erasure.md` and `src/privacy-content.ts` — member data, retention, and published privacy commitments.
 - `src/hotzones/aggregates.ts` — aggregate joins semantics and estimated voice/games priors.

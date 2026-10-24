@@ -128,7 +128,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
     const before = await snapshot();
     const res = await post({ title: "Forged key proof", ...SCHEDULE, ...forged });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { event_key: KEY_ERROR } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { event_key: KEY_ERROR },
+      request_id: res.headers.get("x-request-id"),
+    });
     await expectUnchanged(before);
   });
 
@@ -141,7 +145,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
       const before = await snapshot();
       const res = await patch(EVENT_KEY, forged);
       expect(res.status).toBe(422);
-      expect(await res.json()).toEqual({ error: "invalid", fields: { event_key: KEY_ERROR } });
+      expect(await res.json()).toEqual({
+        error: "invalid",
+        fields: { event_key: KEY_ERROR },
+        request_id: res.headers.get("x-request-id"),
+      });
       await expectUnchanged(before);
       const row = await stored(EVENT_KEY);
       expect(row?.eventKey).toBe(EVENT_KEY);

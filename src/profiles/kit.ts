@@ -13,13 +13,15 @@
 // manifest carries GET entries only, and the Kit view's edit form posts back
 // to the Hono write routes until the edit-parity follow-up.
 import { drizzle } from "drizzle-orm/postgres-js";
+import { generateCookie, generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
+import { safeNext } from "../join/service";
 import type { KitRequestSession } from "../kit-session";
 import { declareMemberResult } from "../member-reads";
-import type { JoinResult } from "../return-journey";
+import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE, type JoinResult } from "../return-journey";
 import { SNOWFLAKE } from "./routes-shared";
 import {
   MEMBER_STATS_BUDGET_MS,
@@ -37,16 +39,20 @@ export type KitProfileRequest = {
   /** /profile passes the viewer's own id; /members/:user passes the param. */
   requestedId: string | null;
   joinResult: JoinResult | null;
+  /** Full load-event URL; optional only for legacy model callers. */
+  url?: string;
 };
 
 export type KitProfileDeps = {
   store: ProfileStore | null;
-  /** Absent (or resolving null) hides the stats block; a read failure refuses. */
+  sessionSecret?: string;
+  /** Absent (or resolving null) hides the stats block; a read failure resolves
+   * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
 };
 
 export type KitProfileOutcome =
-  | { kind: "redirect"; location: string }
+  | { kind: "redirect"; location: string; intendedCookie?: string }
   | { kind: "unavailable" }
   | { kind: "forbidden" }
   | { kind: "notFound" }
@@ -83,7 +89,7 @@ export function kitProfileDeps(env: Env) {
       });
       return readOwnedMemberStats(drizzle(client), id, signal);
     }, memberId);
-  return { storeFor, statsFor };
+  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET };
 }
 
 export async function resolveKitProfile(
@@ -96,8 +102,22 @@ export async function resolveKitProfile(
   if (session.status === "unknown") return { kind: "unavailable" };
   // Guest (missing/tampered cookie, unknown row): the Hono intended-page
   // bounce. No store read, no declaration, no audit row.
-  if (session.status !== "authenticated" || !session.session)
-    return { kind: "redirect", location: KIT_PROFILE_LOGIN_LOCATION };
+  if (session.status !== "authenticated" || !session.session) {
+    // Legacy model callers have no request to remember. Real loads always
+    // supply both inputs; a rejected destination clears abandoned state.
+    if (!req.url || !deps.sessionSecret)
+      return { kind: "redirect", location: KIT_PROFILE_LOGIN_LOCATION };
+    const url = new URL(req.url);
+    const dest = safeNext(url.pathname + url.search);
+    const options = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
+    const intendedCookie = dest
+      ? await generateSignedCookie(LOGIN_INTENDED_COOKIE, dest, deps.sessionSecret, {
+          ...options,
+          maxAge: JOURNEY_TTL_SECONDS,
+        })
+      : generateCookie(LOGIN_INTENDED_COOKIE, "", { ...options, maxAge: 0 });
+    return { kind: "redirect", location: KIT_PROFILE_LOGIN_LOCATION, intendedCookie };
+  }
   const viewer = session.session;
   // Signed in but outside the guild: the Hono 403. Nothing rendered, nothing logged.
   if (!viewer.member) return { kind: "forbidden" };

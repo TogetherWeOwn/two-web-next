@@ -126,7 +126,7 @@ describe("recoveryLanding", () => {
   const app = new Hono();
   app.get("/auth/recover", (c) => recoveryLanding(c));
 
-  it("carries a safe destination into signed cookies and the login link", async () => {
+  it("carries a safe destination into the intended cookie and the login link, arming no pending notice", async () => {
     const res = await app.request("/auth/recover?next=%2Fprofile%3Fedit%3D1", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store, private");
@@ -136,7 +136,9 @@ describe("recoveryLanding", () => {
     expect(html).not.toContain("Unsaved");
     const set = res.headers.getSetCookie();
     expect(set.some((c) => c.startsWith("__Host-two_login_intended="))).toBe(true);
-    expect(set.some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toBe(true);
+    // A bare landing visit never mints pending|: only a genuine
+    // expired-write bounce arms the notice (expiredWriteBounce).
+    expect(set.some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toBe(false);
   });
 
   it.each(["https://evil.example/", "//evil.example/", ""])(
@@ -321,8 +323,17 @@ describe("expiredWriteBanner", () => {
       env,
     );
     const html = await res.text();
-    expect(html).toContain('data-testid="auth-error"');
-    expect(html).toContain('href="/auth/recover?next=%2Fprofile%3Fedit%3D1"');
+    expect(html).toContain('role="status" tabindex="-1" data-testid="auth-error"');
+    expect(html).toContain(
+      "You signed in again. Your earlier changes were not saved. Review and submit them again.",
+    );
+    // A signed-in member must never be sent back to the expired-session page:
+    // the restored banner keeps its copy with no recovery link.
+    expect(html).not.toContain("/auth/recover");
+    expect(html).not.toContain("Try signing in again");
+    const banner = html.match(/<div[^>]*data-testid="auth-error"[^>]*>.*?<\/div>/s)?.[0];
+    expect(banner).toBeDefined();
+    expect(banner).not.toContain("<a ");
     expect(html).toContain("<main>");
     expect(cleared(res)).toBe(true);
     expect(res.headers.get("cache-control")).toBe("no-store, private");

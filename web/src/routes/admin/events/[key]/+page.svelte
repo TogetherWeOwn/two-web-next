@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
 // Markup contract of EventFormPage mode="edit"
@@ -12,7 +13,8 @@ import type { PageProps } from "./$types";
 // Hono eventValues shape (retained input, per-field messages, empty on a
 // fresh GET). No island and no event handlers of its own: the edit, status
 // and status-change forms post to the Hono-owned POST /admin/events/:key,
-// .../publish, .../cancel, .../rsvp-pause and .../rsvp-reopen endpoints, so
+// .../publish, .../cancel, .../duplicate, .../rsvp-pause and .../rsvp-reopen
+// endpoints, so
 // the page works with JavaScript disabled, exactly like the Hono panel. The
 // text-limit and editor islands enhance it when JavaScript runs. There is
 // deliberately no removal affordance anywhere on this resource, and this
@@ -36,9 +38,20 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 <section>
   <h1>Edit {view.title}</h1>
   {#if hasErrors}
-    <p class="notice" role="alert" data-testid="form-errors">
-      Check the highlighted fields and try again.
-    </p>
+    <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
+      <p>Check the highlighted fields and try again.</p>
+      <ul>
+        {#each eventValidationSummary(errors, "edit") as entry (entry.key)}
+          <li>
+            {#if entry.target}
+              <a href={`#${entry.target}`}>{entry.label}: {entry.message}</a>
+            {:else}
+              {entry.message}
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
   <form
     method="post"
@@ -83,6 +96,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         id="f-description"
         name="description"
         rows={4}
+        data-event-text-limit={1000}
         aria-invalid={errors.description ? "true" : undefined}
         aria-describedby={errors.description ? "f-description-error" : undefined}
       >{val("description")}</textarea>
@@ -187,6 +201,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
+  {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
     <div class="actions">
@@ -198,6 +213,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
+        </form>
+      {/if}
+      {#if view.status === "draft" || view.status === "published" || view.status === "cancelled"}
+        <form method="post" action={`/admin/events/${view.key}/duplicate`}>
+          <button type="submit" class="link" data-testid="duplicate-event">Duplicate as draft</button>
         </form>
       {/if}
       {#if view.rsvpAction}
@@ -213,11 +233,19 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
     <p data-testid="roster-range">
-      Showing {roster.rangeStart}-{roster.rangeEnd} of {roster.total}
+      {roster.rangeText}
     </p>
     <form method="get" action={roster.searchAction} class="filters">
       <input type="hidden" name="roster_sort" value={roster.query.sort} />
       <input type="hidden" name="roster_order" value={roster.query.order} />
+      <div class="field">
+        <label for="roster-status">Answer status</label>
+        <select id="roster-status" name="roster_status">
+          {#each roster.statusOptions as o (o.value)}
+            <option value={o.value} selected={o.selected}>{o.label}</option>
+          {/each}
+        </select>
+      </div>
       <div class="field">
         <label for="roster-q">Search members</label>
         <input id="roster-q" name="roster_q" type="search" value={roster.query.q} />
@@ -268,6 +296,12 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </tbody>
       </table>
     </div>
+    {#if roster.firstUrl || roster.clearUrl}
+      <p class="actions">
+        {#if roster.firstUrl}<a href={roster.firstUrl}>First page of these responses</a>{/if}
+        {#if roster.clearUrl}<a href={roster.clearUrl}>Clear roster filters</a>{/if}
+      </p>
+    {/if}
     <nav aria-label="RSVP roster pages" class="actions">
       {#if roster.hasPrev}
         <a rel="prev" href={roster.prevUrl}>Previous</a>

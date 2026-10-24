@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import type { Env } from "../src/env";
+import { QA_HEADER } from "../src/qa";
 import { isThrottleMiddleware, throttle, type EnvWithThrottle } from "../src/throttle";
 import { Hono } from "hono";
 
@@ -22,13 +23,13 @@ const EXEMPT: Record<string, string> = {
   "PATCH /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "PUT /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "PATCH /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "DELETE /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "POST /mcp":
     "public MCP; in-handler shared 60/min public-read budget, same 429 envelope as the public API (B2)",
 };
@@ -77,6 +78,9 @@ function fakeStore() {
   (
     sql as unknown as { begin: (run: (tx: unknown) => Promise<unknown>) => Promise<unknown> }
   ).begin = (run) => run(sql);
+  // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before the
+  // advisory lock (as in test/join.test.ts); the double passes it through.
+  (sql as unknown as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
   return { sql, hits };
 }
 
@@ -126,7 +130,7 @@ describe("budgets on the legacy paths", () => {
       APP_URL: "https://next.example.test",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
-    const actions = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"];
+    const actions = ["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"];
     const init = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) {
       expect(
@@ -150,8 +154,20 @@ describe("budgets on the legacy paths", () => {
     const json = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) expect((await app.request("/logout", json, e)).status).toBe(303);
     expect((await app.request("/logout", json, e)).status).toBe(429);
+    // Only gated QA logins spend the shared qa-login bucket (S4): the pin
+    // uses a valid identity + token, and an unauthenticated probe stays a 404
+    // even once the bucket is exhausted.
+    const qa = {
+      method: "POST",
+      headers: {
+        origin: e.APP_URL,
+        accept: "application/json",
+        [QA_HEADER]: "test-only-qa-token",
+      },
+    };
     for (let i = 0; i < 10; i++)
-      expect((await app.request("/auth/qa/x", json, e)).status).not.toBe(429);
-    expect((await app.request("/auth/qa/x", json, e)).status).toBe(429);
+      expect((await app.request("/auth/qa/qa-member", qa, e)).status).toBe(204);
+    expect((await app.request("/auth/qa/qa-member", qa, e)).status).toBe(429);
+    expect((await app.request("/auth/qa/x", json, e)).status).toBe(404);
   });
 });

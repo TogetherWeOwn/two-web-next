@@ -203,12 +203,22 @@ assert.notEqual(r.status, 0);
 // Publishing against a fake gh that models the tag's release: absent, present,
 // or a failed lookup. A failed lookup must stop before anything is created.
 const ghBin = fs.mkdtempSync(path.join(os.tmpdir(), "release-gh-"));
+// Reuse the paired provider boundary for new-tag proof, while the older fake
+// below keeps exercising release-lookup/create failures independently.
+const { fixture, REPO, RUN, ATTEMPT } = require("./release-promotion-proof.fixture.cjs");
+const proof = fixture({ after() {} });
+proof.state.receipt.sha = later;
+proof.state.runs[0].head_sha = later;
+proof.state.artifacts[0].workflow_run.head_sha = later;
+fs.writeFileSync(path.join(proof.root, "provider.json"), JSON.stringify(proof.state));
+const proofHandler = path.join(__dirname, "release-promotion-proof.fixture.cjs");
 fs.writeFileSync(
   path.join(ghBin, "gh"),
   [
     "#!/bin/sh",
     'echo "$*" >> "$FAKE_GH_LOG"',
     'case "$*" in',
+    `  "api --method GET repos/o/r/actions/"*) exec "${process.execPath}" "${proofHandler}" --fake-gh "$@" ;;`,
     '  "api repos/o/r/releases/tags/v1.0.1"*)',
     '    case "$FAKE_GH_MODE" in',
     '      absent|create-fails) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
@@ -244,6 +254,11 @@ const publish = (mode) => {
       PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
       FAKE_GH_MODE: mode,
       FAKE_GH_LOG: log,
+      PROOF_FIXTURE: proof.root,
+      GITHUB_REPOSITORY: REPO,
+      GITHUB_REPOSITORY_ID: "100",
+      PROMOTION_RUN_ID: String(RUN),
+      PROMOTION_RUN_ATTEMPT: String(ATTEMPT),
       RELEASE_SHA: later,
       GH_REPO: "o/r",
       DRY_RUN: "false",
@@ -308,6 +323,16 @@ assert.match(tagged.gh, /^release create v1\.0\.1 /m, "present tag reuses v1.0.1
 assert.match(tagged.gh, new RegExp(`--target ${later}\\b`), "present tag targets the promoted SHA");
 assert.equal(g("tag", "--list", "v1.0.2"), "", "present-tag repair must not bump to v1.0.2");
 g("tag", "-d", "v1.0.1");
+// A range whose log is larger than Node's 1 MiB default buffer still renders.
+const bodyFile = path.join(dir, "big-body.txt");
+fs.writeFileSync(bodyFile, `fix(voice): long body (#5)\n\n${"x".repeat(2 * 1024 * 1024)}\n`);
+g("commit", "-q", "--allow-empty", "-F", bodyFile);
+const big = g("rev-parse", "HEAD");
+g("update-ref", "refs/remotes/origin/main", big);
+r = run(big);
+assert.equal(r.status, 0, r.stderr);
+assert.match(r.stdout, /long body/, "a range log over 1 MiB still renders its notes");
+fs.rmSync(proof.root, { recursive: true, force: true });
 fs.rmSync(ghBin, { recursive: true, force: true });
 fs.rmSync(dir, { recursive: true, force: true });
 

@@ -5,9 +5,11 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
+import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
+import { PREVIOUS_PUBLISHED_POLICIES } from "../privacy-history";
 import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
 import { RULES } from "../rules-content";
@@ -32,11 +34,44 @@ export interface MdEvent {
   capacity: number | null;
   /** Null on collection rows (feed scope carries no counts — same as RSS). */
   goingCount: number | null;
+  /** Seat occupancy for the full signal; null where the count is unknown
+   * (collection rows) or the rollup is unavailable. */
+  goingOccupancy: number | null;
   /** Published or past: drafts/cancelled never reach the detail builder. */
   status: "published" | "past";
+  /** Public host + joining details, when the row carries them (same column
+   * names as the public event row so the route mapper's spread carries them).
+   * Optional for older row fixtures; builders treat absent/blank as "render
+   * nothing extra". */
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
 }
 
-/** Keep author-written text inline-safe: links can never form, blocks can never start. */
+/** Lineup line with an occupancy-based full signal. The attributable count
+ * can read a free seat a nameless row already holds, so `full` comes from
+ * occupancy — the same aggregate the write path enforces. */
+function lineupLine(e: Pick<MdEvent, "goingCount" | "goingOccupancy" | "capacity">): string | null {
+  if (e.goingCount === null) return null;
+  const seats = e.capacity !== null ? ` of ${e.capacity}` : "";
+  const full = e.goingOccupancy !== null && e.capacity !== null && e.goingOccupancy >= e.capacity;
+  return `- Lineup: ${e.goingCount} going${seats}${full ? " (full)" : ""}`;
+}
+
+/**
+ * Keep event-authored text inert in machine Markdown: no author-controlled
+ * HTML, link (including autolink) or image nodes can form when a CommonMark
+ * reader parses the output. Backslashes first (so later escapes stay literal),
+ * then brackets (link/image labels), then `<` (tags, comments, autolinks —
+ * every inline HTML/autolink node opens with `<`). Line-leading block openers
+ * still take a `\` prefix so blocks can never start. `&` is deliberately left
+ * alone: entities expand after tag parsing, so `&lt;` stays text while prose
+ * like `AT&T` stays byte-identical. Emphasis, code spans and Unicode pass
+ * through — they form no HTML/link/image nodes.
+ *
+ * Markup only: a hostile sentence that reads as an instruction stays a
+ * sentence. Escaping says nothing about natural-language prompt injection.
+ */
 const MD_BLOCK_START =
   /^\s{0,3}(#{1,6}\s|>\s?|\d+[.)]\s|[-*+]\s|```|~~~|={1,}\s*$|-{1,}\s*$|\*{3,}\s*$|_{3,}\s*$|<)/;
 const MD_INDENTED_CODE = /^( {4}|\t)/;
@@ -46,6 +81,7 @@ export function mdText(value: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]")
+    .replace(/</g, "\\<")
     .replace(/\r\n|\r/g, "\n")
     .split("\n")
     .map((line) => (MD_BLOCK_START.test(line) || MD_INDENTED_CODE.test(line) ? `\\${line}` : line))
@@ -53,6 +89,39 @@ export function mdText(value: string): string {
 }
 
 const mdInlineText = (value: string): string => mdText(value.replace(/\r\n|\r|\n/g, " "));
+
+/** Blank = null, missing, empty, or whitespace-only: those render no line. */
+const nonBlank = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const hostLine = (e: Pick<MdEvent, "organizer_name">): string | null => {
+  const host = nonBlank(e.organizer_name);
+  return host ? `- Host: ${mdInlineText(host)}` : null;
+};
+
+/**
+ * Public joining details as inert text: the URL rides inside
+ * `\[url\](url)`-shaped text whose escaped label brackets stop any
+ * CommonMark reader forming a link node (an author URL never becomes a
+ * followed link), while agents still read the URL after the stable
+ * `/^- Join: /` label. Both copies run through the inline escaper — the
+ * stored URL is admin-validated, not trusted: a hostile `<tag>` or newline
+ * must stay inert here exactly as in every other author field.
+ * Byte-identical to the stored URL on well-formed links. Instructions ride
+ * the same line as escaped text.
+ */
+const joinLine = (e: Pick<MdEvent, "join_url" | "join_instructions">): string | null => {
+  const url = nonBlank(e.join_url);
+  const text = nonBlank(e.join_instructions);
+  if (!url && !text) return null;
+  const parts = [
+    url ? `\\[${mdInlineText(url)}\\](${mdInlineText(url)})` : null,
+    text ? mdInlineText(text) : null,
+  ].filter((part): part is string => part !== null);
+  return `- Join: ${parts.join(" ")}`;
+};
 
 const sourceLine = (appUrl: string, path: string): string =>
   `> Canonical page: ${canonicalUrl(appUrl, path)} · Markdown alternate: ${canonicalUrl(appUrl, `${path}.md`)}`;
@@ -100,7 +169,10 @@ export function mdFaq(appUrl: string): string {
   ];
   for (const group of FAQS) {
     out.push(`## ${mdText(group.section)}`, "");
-    for (const [q, a] of group.items) out.push(`### ${mdText(q)}`, "", mdText(a), "");
+    for (const [q, a, link] of group.items) {
+      const answer = mdText(a) + (link ? ` [${mdInlineText(link.label)}](${link.href})` : "");
+      out.push(`### ${mdText(q)}`, "", answer, "");
+    }
   }
   out.push(leafFooter(appUrl), "");
   return out.join("\n");
@@ -132,6 +204,14 @@ export function mdPrivacy(appUrl: string): string {
     `Version ${POLICY_VERSION}`,
     "",
     POLICY_MARKDOWN.trimEnd(),
+    "",
+    "## Previous published versions",
+    "",
+    "Historical snapshots kept in the site's public history. These are not the current policy.",
+    "",
+    ...PREVIOUS_PUBLISHED_POLICIES.map(
+      (entry) => `- [Version ${entry.version} on GitHub (public repository)](${entry.href})`,
+    ),
     "",
     leafFooter(appUrl),
     "",
@@ -165,6 +245,8 @@ function mdEventWhen(e: MdEvent): string {
   return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
 }
 
+const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
+
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
     `## [${mdInlineText(e.title)}](${canonicalUrl(appUrl, `/e/${e.eventKey}`)})`,
@@ -173,8 +255,10 @@ function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   ];
   if (e.game) out.push(`- Game: ${mdInlineText(e.game)}`);
   if (e.location) out.push(`- Where: ${mdInlineText(e.location)}`);
-  if (e.goingCount !== null)
-    out.push(`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`);
+  const host = hostLine(e);
+  if (host) out.push(host);
+  const lineup = lineupLine(e);
+  if (lineup) out.push(lineup);
   out.push(`- Markdown: ${canonicalUrl(appUrl, `/e/${e.eventKey}.md`)}`);
   if (e.description) out.push("", mdText(e.description));
   out.push("");
@@ -196,25 +280,32 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
     for (const e of rows) out.push(...mdEventBlock(appUrl, e));
   }
   out.push(
-    `Per-event Markdown: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page.`,
+    `Per-event Markdown template: ${canonicalUrl(appUrl, "/e/:key")}.md next to each event page (replace :key with the event key).`,
     "",
   );
   return out.join("\n");
 }
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
+  const lineup = lineupLine(e);
+  const host = hostLine(e);
+  // The HTML detail gates "How to join" to published/draft rows; past events
+  // show no joining section, so neither does their Markdown alternate. The
+  // Host line is ungated on both sides.
+  const join = e.status === "past" ? null : joinLine(e);
   return [
     `# ${mdInlineText(e.title)}`,
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
     `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
-    `- When: ${mdEventWhen(e)}`,
+    `- Starts: ${mdDetailInstant(e.startsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
+    `- Ends: ${mdDetailInstant(e.endsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
-    ...(e.goingCount !== null
-      ? [`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`]
-      : []),
+    ...(host ? [host] : []),
+    ...(join ? [join] : []),
+    ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",
     `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,
@@ -287,13 +378,20 @@ export function llmsTxt(appUrl: string): string {
     "## Events",
     "",
     `- [Upcoming events](${canonicalUrl(appUrl, "/events")}): published events only. Machine list: ${canonicalUrl(appUrl, "/events.md")}`,
-    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
+    `- Event pages live at ${canonicalUrl(appUrl, "/e/:key")} (template: replace :key with an event key) with a Markdown alternate at ${canonicalUrl(appUrl, "/e/:key")}.md next to each page. Cancelled events answer 410; drafts are never listed.`,
+    "",
+    "## Machine access",
+    "",
+    `- Read-only remote tools over MCP at ${canonicalUrl(appUrl, "/mcp")}: \`list_events\`, \`get_event\`, \`get_community\`, \`get_join\`. Typed results, published content only, at most 20 rows and 32 KiB per response.`,
+    `- REST discovery: ${canonicalUrl(appUrl, "/openapi.json")} (OpenAPI 3.1 for the same four reads).`,
+    "- Agent guide: [docs/machine-interface.md](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/machine-interface.md) — error codes, limits, next actions and the offline contract check.",
     "",
     "## Notes",
     "",
     "- There is no public listing of members: profiles are members-only and never appear here.",
-    "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser, there are no remote tools.",
-    "- Event times below render in each event's own timezone next to the UTC instant on the page.",
+    "- Joining happens only through the Discord handoff on the join page; sign-in stays in the browser.",
+    "- Poll these documents cheaply: send If-None-Match with the ETag you last saw and an unchanged document answers 304 with no body.",
+    "- Event pages show Starts and Ends in the event timezone with the UTC offset; invalid stored timezones fall back to ISO UTC.",
     "",
   );
   return out.join("\n");

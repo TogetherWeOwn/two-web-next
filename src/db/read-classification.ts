@@ -15,20 +15,40 @@ const fixedStatements = {
     "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
 };
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
-const goingCounts =
+// Two pinned shapes: the legacy all-rows occupancy count (admin Fill column
+// and fill filter, matching write-path seat enforcement; `withGoing` reuses
+// this exact shape for its public `goingOccupancy`, which drives full,
+// spots-left and the Going/waitlist CTA) and the public attributable count
+// (`withGoing` joins users and counts only named rows, so the badge label
+// agrees with the roster; the join qualifies "rsvps"."event_id"). Both return
+// a single cardinality, never identities.
+const goingCountsLegacy =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
+const goingCountsNamed =
+  /^select "rsvps"\."event_id", count\(\*\) from "rsvps" inner join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+ and "users"\."username" <> \$\d+\) group by "rsvps"\."event_id"$/;
 // Roster totals return a single cardinality, never member identifiers. The
-// username filter is a bound parameter; only these two join/where shapes may
-// run under the roster-count classification.
+// username filter and the allowlisted answer facet are bound parameters;
+// only these four join/where shapes may run under the roster-count
+// classification. The facet keeps the pinned condition order event, status,
+// member search; anything else (extra projections, dropped event predicate,
+// OR/UNION/GROUP BY, id equality, stacked statements) still refuses.
 const rosterCountUnfiltered =
   /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where "events"\."event_key" = \$\d+$/;
 const rosterCountFiltered =
   /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
+const rosterCountStatus =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where \("events"\."event_key" = \$\d+ and "rsvps"\."status" = \$\d+\)$/;
+const rosterCountStatusFiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "rsvps"\."status" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
 const fillCount =
   /select count\(\*\) from "rsvps" where \("rsvps"\."event_id" = "events"\."id" and "rsvps"\."status" = \$\d+\)/g;
 // The edit form needs PostgreSQL timestamp text, not lossy JS Dates. Only this
 // complete bound-ID query permits its computed projections, never arbitrary SQL.
 const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at", CASE WHEN isfinite("starts_at") THEN to_char("starts_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "starts_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "starts_at"::text END, CASE WHEN isfinite("ends_at") THEN to_char("ends_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "ends_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "ends_at"::text END from "featured_contents" where "featured_contents"."id" = $1`;
+
+// The series reader bounds public text before transport. Admit only this complete
+// projection and bound-root query, never arbitrary computed event expressions.
+const seriesContextRead = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $6 from "events" where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10)) order by "events"."recurrence_index" asc, "events"."id" asc limit $11`;
 
 export function validateNonSensitiveRead(
   classification: NonSensitiveRead,
@@ -37,11 +57,17 @@ export function validateNonSensitiveRead(
 ): void {
   const query = normalizedStatement(statement);
   if (classification === "going-counts") {
-    if (!goingCounts.test(query)) refuseMemberRead();
+    if (!goingCountsLegacy.test(query) && !goingCountsNamed.test(query)) refuseMemberRead();
     return;
   }
   if (classification === "roster-count") {
-    if (!rosterCountUnfiltered.test(query) && !rosterCountFiltered.test(query)) refuseMemberRead();
+    if (
+      !rosterCountUnfiltered.test(query) &&
+      !rosterCountFiltered.test(query) &&
+      !rosterCountStatus.test(query) &&
+      !rosterCountStatusFiltered.test(query)
+    )
+      refuseMemberRead();
     return;
   }
   if (
@@ -53,6 +79,7 @@ export function validateNonSensitiveRead(
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
+  if (classification === "events" && fields?.length && query === seriesContextRead) return;
   const table =
     classification === "events"
       ? "events"
@@ -83,12 +110,44 @@ export function rawMemberOwner(statement: string): string | undefined {
       "member_id",
     ],
     [
-      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc",
+      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101",
       "member_id",
     ],
   ]);
   if (
     /^select event_id, user_id, position from \( select event_id, user_id, row_number\(\) over \(partition by event_id order by created_at, coalesce\(legacy_id, id\), id\)::int as position from rsvps where event_id in \(\$\d+(?:, \$\d+)*\) and status = 'waitlisted' \) line where user_id = \$\d+$/.test(
+      query,
+    )
+  )
+    return "user_id";
+  // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
+  // row per ranked member with the owner's id alongside, never per-RSVP
+  // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with
+  // optional season-window bounds, an optional lower(trim(game)) filter, and
+  // an optional literal top-100 cap. Bound params are dates/game only; the
+  // cap is the literal OVERALL_CAP, never a bound limit.
+  if (
+    /^select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username order by count\(\*\) desc, rsvps\.user_id asc( limit 100)?$/.test(
+      query,
+    )
+  )
+    return "user_id";
+  // Relative-scope member board (src/leaderboards/members.ts): the same
+  // grouped aggregate nested in derived tables (never a WITH prefix, which
+  // the read classifier refuses), ranked by the same
+  // `count DESC, user_id ASC` key via row_number(). The rank lookup returns
+  // the viewer's single ranked row; the window read returns at most
+  // 2 * RELATIVE_NEIGHBORS + 1 rows around the bound viewer rank. Bound
+  // params are dates/game/viewer-id/viewer-rank only; the neighbor bounds
+  // are the literal RELATIVE_NEIGHBORS, never a bound limit.
+  if (
+    /^select ranked\.user_id as user_id, ranked\.rank as rank from \( select grouped\.user_id as user_id, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id \) grouped \) ranked where ranked\.user_id = \$\d+$/.test(
+      query,
+    )
+  )
+    return "user_id";
+  if (
+    /^select ranked\.user_id as user_id, ranked\.username as username, ranked\.count as count, ranked\.rank as rank from \( select grouped\.user_id as user_id, grouped\.username as username, grouped\.count as count, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username \) grouped \) ranked where ranked\.rank between \$\d+ - 5 and \$\d+ \+ 5 order by ranked\.rank asc$/.test(
       query,
     )
   )

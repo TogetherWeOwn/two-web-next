@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { main } from "./lighthouse-origin-run.mjs";
+import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 
 // Offline selftest for the watch Lighthouse runner. No network and no browser:
 // discovery runs against stub fetches and lhci against a stub launcher.
@@ -437,6 +438,7 @@ test("an origin that errors, redirects or is not allowlisted fails discovery ins
 });
 
 const lhr = (path, values, finalPath = path) => ({
+  ...navigationMetadata("mobile"),
   requestedUrl: `${APEX}${path}`,
   finalUrl: `${APEX}${finalPath}`,
   categories: { performance: { score: 1 } },
@@ -687,4 +689,187 @@ test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned",
   assert.match(code, /npm run lighthouse:origin -- "\$ORIGIN"/);
   // The choice is passed through the environment, never interpolated into the script.
   assert.doesNotMatch(code, /run:[^\n]*\$\{\{/);
+});
+
+// The marginal band derives from ci/lighthouserc.cjs (single source): the
+// budget itself is never copied into the retry logic.
+test("the marginal band is (budget, budget * 1.1) from ci/lighthouserc.cjs", () => {
+  assert.equal(lib.lcpBudget(), 2000);
+  assert.equal(lib.marginalBandMax(), 2200);
+  assert.equal(lib.MARGINAL_AUDIT, "largest-contentful-paint");
+  assert.equal(lib.MARGINAL_PATH, "/");
+  assert.equal(lib.MARGINAL_BAND_RATIO, 0.1);
+});
+
+function marginalFixture({
+  lcpRuns = [1940, 2060, 2065],
+  assertions = "marginal",
+  skip = true,
+} = {}) {
+  const paths = skip ? lib.plannedPaths(undefined) : lib.plannedPaths(EVENT_PATH);
+  const lhrs = [];
+  for (const path of paths) {
+    const values = path === "/" ? lcpRuns : [1000, 1100, 1050];
+    for (const lcp of values) lhrs.push(lhr(path, [lcp, 0, 100, 50, 900]));
+  }
+  const marginal = [
+    {
+      url: `${APEX}/`,
+      auditId: "largest-contentful-paint",
+      level: "error",
+      actual: 2060,
+      expected: 2000,
+    },
+    {
+      url: `${APEX}/`,
+      auditId: "first-contentful-paint",
+      level: "warn",
+      actual: 1850,
+      expected: 1800,
+    },
+    {
+      url: `${APEX}/events`,
+      auditId: "first-contentful-paint",
+      level: "warn",
+      actual: 1820,
+      expected: 1800,
+    },
+  ];
+  return {
+    rows: lib.summarizeRoutes({
+      origin: APEX,
+      eventPath: skip ? undefined : EVENT_PATH,
+      skipReason: skip ? "no published event is listed" : undefined,
+      lhrs,
+      assertions: assertions === "marginal" ? marginal : assertions,
+    }),
+    assertions: assertions === "marginal" ? marginal : assertions,
+  };
+}
+
+test("rows carry every per-run sample for every route, including passes", () => {
+  const { rows } = marginalFixture();
+  const home = rows.find((row) => row.path === "/");
+  assert.deepEqual(home.samples["largest-contentful-paint"], [1940, 2060, 2065]);
+  assert.deepEqual(home.samples["server-response-time"], [100, 100, 100]);
+  const pass = rows.find((row) => row.path === "/faq");
+  assert.equal(pass.verdict, "pass");
+  assert.deepEqual(pass.samples["largest-contentful-paint"], [1000, 1100, 1050]);
+  const skipped = rows.find((row) => row.path === "/e/<key>");
+  assert.equal(skipped.verdict, "skipped");
+  assert.deepEqual(skipped.samples, {});
+});
+
+test("the summary renders per-sample values for all routes and an optional notice", () => {
+  const { rows } = marginalFixture();
+  const text = lib.renderSummary({ origin: APEX, eventPath: undefined, rows });
+  assert.match(text, /### Per-sample values \(all routes, collection order\)/);
+  assert.match(text, /\| \/ \| 1940, 2060, 2065 \|/);
+  assert.match(text, /\| \/faq \| 1000, 1100, 1050 \|/);
+  assert.match(text, /\| \/e\/<key> \| - \| - \| - \| - \| - \|/);
+  assert.doesNotMatch(text, /gates on attempt 2/);
+  const noticed = lib.renderSummary({
+    origin: APEX,
+    eventPath: undefined,
+    rows,
+    notice: "> Attempt 1 breached marginally; gates on attempt 2.",
+  });
+  assert.match(noticed, /> Attempt 1 breached marginally; gates on attempt 2\./);
+});
+
+test("a marginal / LCP breach with everything else pass/warn-only retries", () => {
+  const { rows, assertions } = marginalFixture();
+  assert.equal(rows.find((row) => row.path === "/").verdict, "fail");
+  assert.equal(rows.find((row) => row.path === "/events").verdict, "warn");
+  const marginal = lib.isMarginalLcpBreach({ rows, assertions });
+  assert.equal(marginal.marginal, true);
+  assert.equal(marginal.actual, 2060);
+  assert.equal(marginal.budget, 2000);
+  assert.equal(marginal.bandMax, 2200);
+  assert.match(marginal.reason, /only error is \/ LCP 2060 within \(2000, 2200\)/);
+});
+
+test("anything outside the marginal shape fails closed to no retry", () => {
+  const check = (assertions, mutateRows, pattern) => {
+    const { rows } = marginalFixture({ assertions });
+    const result = lib.isMarginalLcpBreach({
+      rows: mutateRows ? mutateRows(rows) : rows,
+      assertions,
+    });
+    assert.equal(result.marginal, false);
+    assert.match(result.reason, pattern);
+  };
+  const lcpError = (actual, url = `${APEX}/`) => ({
+    url,
+    auditId: "largest-contentful-paint",
+    level: "error",
+    actual,
+    expected: 2000,
+  });
+  // Band edges: strictly inside (budget, bandMax), exclusive both ends.
+  check([lcpError(2500)], null, /outside the marginal band/);
+  check([lcpError(2200)], null, /outside the marginal band/);
+  check([lcpError(2000)], null, /outside the marginal band/);
+  check([lcpError(Number.NaN)], null, /outside the marginal band/);
+  // A non-LCP error on `/` (e.g. a dragged-down performance category) vetoes.
+  check(
+    [
+      lcpError(2060),
+      {
+        url: `${APEX}/`,
+        auditId: "server-response-time",
+        level: "error",
+        actual: 900,
+        expected: 600,
+      },
+    ],
+    null,
+    /non-LCP error/,
+  );
+  // An error on any other route vetoes.
+  check(
+    [
+      lcpError(2060),
+      {
+        url: `${APEX}/events`,
+        auditId: "server-response-time",
+        level: "error",
+        actual: 900,
+        expected: 600,
+      },
+    ],
+    null,
+    /\/events is fail, not pass\/warn-only/,
+  );
+  // Unreadable assertion evidence vetoes.
+  check(
+    [{ level: "error", auditId: "unreadable-assertion-results", readError: true }],
+    null,
+    /unreadable/,
+  );
+  // No error at all is not a breach to retry.
+  check([], null, /no error-level/);
+  // An error attributed to no planned row hides from the table: veto.
+  check([lcpError(2060), lcpError(2500, `${APEX}/ghost`)], null, /unattributed/);
+  // Incomplete runs veto, even with the LCP error in the band.
+  check(
+    [lcpError(2060)],
+    (rows) => {
+      const short = structuredClone(rows);
+      short.find((row) => row.path === "/about").verdict = "fail";
+      short.find((row) => row.path === "/about").note = "0/3 runs (incomplete collection)";
+      return short;
+    },
+    /\/about is fail, not pass\/warn-only/,
+  );
+  // A skipped row anywhere but the event slot vetoes.
+  check(
+    [lcpError(2060)],
+    (rows) => {
+      const skipped = structuredClone(rows);
+      skipped.find((row) => row.path === "/faq").verdict = "skipped";
+      return skipped;
+    },
+    /unexpected skipped row/,
+  );
 });

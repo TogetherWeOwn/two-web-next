@@ -118,6 +118,11 @@ jobs:
         with:
           node-version: 24
       - run: npm run docs:links
+      # Parse the Vitest sources on every change, including ledger-only edits.
+      # No install hooks or browser/database fixtures are needed by this gate.
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Timeout ledger ratchet (HARD)
+        run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
   a11y:
     name: a11y
@@ -180,7 +185,10 @@ jobs:
           npx vitest run ci/audit-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/audit-lifecycle.json
           node ci/a11y-require-executed.mjs artifacts/a11y/audit-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
-        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
+        run: |
+          mkdir -p artifacts/a11y
+          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap ci/rsvp-focus-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/rsvp-focus.tap "RSVP outcome focus in Chromium" 16
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
       # The suite has no opt-out: it always runs, so missing evidence on the
@@ -197,6 +205,25 @@ jobs:
           path: artifacts/session-recovery/
           if-no-files-found: error
           retention-days: 14
+      - name: OAuth sign-in CTA (loopback Miniflare + Chromium, mocked Discord)
+        env:
+          AUTH_BROWSER_OUTPUT_DIR: artifacts/auth-browser
+        run: timeout 120s npm run test:auth-signin-browser
+      # Same shape as the session-recovery gate above: the suite always runs,
+      # so missing evidence on the green path means it executed nothing.
+      # Default conditions on purpose: when the suite itself fails this step
+      # skips and the upload below (if: always()) still ships the partial
+      # evidence for debugging.
+      - name: OAuth sign-in CTA evidence must exist
+        run: node ci/require-auth-browser-evidence.mjs artifacts/auth-browser
+      - name: OAuth sign-in CTA evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auth-browser-evidence
+          path: artifacts/auth-browser/
+          if-no-files-found: error
+          retention-days: 14
       # Each browser-gated suite skips unless its opt-in is "true"; the verifier
       # fails the step when any of its cases skipped or went missing.
       - name: Profile native and island Unicode regressions (memory fixtures)
@@ -205,12 +232,21 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
+      - name: Install Kit workspace dependencies (profile, error shell, device timezone and member auth render)
+        # Every browser fixture below SSR-compiles Svelte from the Kit workspace.
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Profile native 422 baseline regressions (memory fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/member-profile-native-422-baseline.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/member-profile-native-422-baseline.json
           node ci/a11y-require-executed.mjs artifacts/a11y/member-profile-native-422-baseline.json "native 422 baseline in a real browser" 4
+      - name: Profile composition feedback regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
@@ -229,14 +265,54 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
-      - name: Install Kit workspace dependencies (Kit error shell render)
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Calendar game subscription follows the committed schedule (intercepted fixtures, no network or DB)
+        env:
+          CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
+      - name: Event start device timezone (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone.json "event device timezone browser acceptance" 30
+      - name: Event end device timezone (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Kit member auth (real Chromium, local HTTPS fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+          node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "admin failed-read retry: native keyboard/no-JS recovery" 12
+      - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
+        run: |
+          npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json
+          for surface in hono-calendar hono-archive kit-calendar kit-archive; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
+          done
+      - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
+        env:
+          PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-device-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-device-timezone.json "profile device timezone in Chromium" 49
+      - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
+        env:
+          ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/admin-editor-expiry-departure.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/admin-editor-expiry-departure.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/admin-editor-expiry-departure.json "admin editor expiry departure in Chromium" 4
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser
@@ -265,9 +341,11 @@ jobs:
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
-    # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
-    # seeded property suite retains its hard 10s limit.
-    timeout-minutes: 40
+    # runners, so 20m cancelled green runs (TOG-12177). The full suite now
+    # runs 29-38m on main; 40m left no headroom for runner noise, so the
+    # ceiling moves to 60m (worst observed 37m51s keeps a ~37% margin).
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
+    timeout-minutes: 60
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -320,6 +398,12 @@ jobs:
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
+      - name: Kit public payload enumeration and checker selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
+      - name: Security-pin contracts selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -328,6 +412,17 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      # The toolchain suite pins the declared browser-helper peer metadata;
+      # this pins the installed half: the root proxy-agent pin must exist and
+      # be the copy that resolves from the helper's context (the LHCI-nested
+      # 6.x copy is outside that path and never satisfies it). Bare
+      # `npm ls --all` exits 0 on an unmet optional peer, so it cannot gate this.
+      - name: Proxy-peer installed resolution (browsers context)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/check-proxy-peer.mjs --selftest && node ci/check-proxy-peer.mjs
+      - name: Migration runtime-rights guard
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run migration:rights && npm run migration:rights:selftest
       - name: Seeded admin properties (10s budget, local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Skip npm's extra process startup; keep the same suite and hard budget.
@@ -367,13 +462,11 @@ jobs:
       - name: Floor guard (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run floor-guard:selftest && npm run floor-guard
-      # Test-inventory WARN gate (quality-gates.md): every test file runs
-      # somewhere. Filesystem-only; continue-on-error so it reports without
-      # ever failing the job or skipping the steps after it (WARN).
-      - name: Test inventory (WARN)
+      # Test-inventory HARD gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; --strict fails the job on any orphan.
+      - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
-        run: npm run test:inventory:selftest && npm run test:inventory
+        run: npm run test:inventory:selftest && npm run test:inventory -- --strict
       # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
       # .svelte through web's svelte/compiler, so install before Check. Runs
       # whenever Check runs (docs/draft gate only): coverage runs every test
@@ -381,12 +474,35 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Kit public payload contract (hostile fixtures, no network or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads
+      - name: Security-pin contracts (Host admission + CSP inline styles)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # UTC-contract pin (hotzone period picker): the acceptance suite's
+      # shortcut expectations are UTC-derived, but the coverage run above
+      # executes under the runner's UTC zone, so a local-getter regression
+      # in src/hotzones/season.ts stays green there. Re-run just this
+      # hermetic suite (~4s) under a non-UTC TZ so the merge gate kills
+      # that mutant (32 fail with local getters, 162/162 pass with UTC
+      # getters). The node assertion fails closed if the image ever loses
+      # tzdata and TZ stops applying.
+      - name: Hotzone period suite under non-UTC TZ
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node -e "if (new Date('2026-04-01T00:00:00Z').getMonth() !== 2) throw new Error('TZ pin vacuous: expected March under America/Los_Angeles')"
+          npx vitest run test/hotzone-period-picker-acceptance.test.ts --pool=forks
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          TZ: America/Los_Angeles
       # Tier-0 check: validator properties, the role x route authz matrix and
       # the default-planner EXPLAIN seq-scan check. This existing check is
       # required; the trap keeps a failure before the report visible in logs.
@@ -395,7 +511,8 @@ jobs:
       # config) because every test/** file runs inside the blocking coverage
       # step above.
       - name: Tier-0 check (validators + authz + EXPLAIN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        # Do not invoke installed tools after an audit/install failure skipped npm ci.
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -416,7 +533,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs
+        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
@@ -449,12 +566,31 @@ jobs:
       - name: Kit adapter build
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run build --prefix web
+      - name: Kit admin contrast (built runtime, intercepted fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_ADMIN_CONTRAST_EVIDENCE_DIR: artifacts/kit-admin-contrast
+        run: |
+          mkdir -p artifacts/kit-admin-contrast
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
+      - name: Kit admin contrast evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-admin-contrast
+          path: artifacts/kit-admin-contrast/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+      - name: Kit staging Worker config dry run (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
       - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-worker-e2e.mjs
@@ -472,12 +608,21 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      - name: Inert rights inventory negative and leak selftests (no sockets or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/staging-rights-inventory.test.mjs
+      - name: Catalog-preflight selftest (disposable service Postgres only)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run test:catalog-preflight
+        env:
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
-      # report fails the step (fail closed). Docs-only and draft PRs skip via
-      # the scope guard in `if:`, never a file-presence check.
+      # report after successful coverage fails the step (fail closed). Earlier
+      # failures keep their own verdict without a secondary missing-input error.
+      # Docs-only and draft PRs skip via scope, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
       # literals. The planted-finding selftest and strict scan both fail closed.
@@ -520,6 +665,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
+      - name: Backup branch-target selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-branch-target-selftest.sh
       - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: bash ci/db-backup-argv-selftest.sh
@@ -529,6 +677,9 @@ jobs:
       - name: Backup restore-proof selftest (no network, no database)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-restore-proof/selftest.py
+      - name: Backup retention-plan selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-retention-plan-selftest.sh
       - name: Scrub QA token selftest (offline fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/scrub-qa-token-selftest
@@ -552,6 +703,12 @@ jobs:
           GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
+      - name: Migration snapshot chain (local files, no credentials)
+        shell: bash
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
+        run: |
+          node ci/check-snapshot-chain.mjs
+          node --test ci/check-snapshot-chain-selftest.mjs
       - name: Pre-flip probe selftests (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
@@ -596,9 +753,14 @@ jobs:
       - name: Jobs secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-jobs-secrets.test.mjs
+      - name: Production trigger probe selftest (stubbed fetch, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-production-triggers.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lighthouse:origin:selftest
+        run: |
+          npm run lighthouse:origin:selftest
+          npm run lighthouse:evidence:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --outdir dist
@@ -614,6 +776,12 @@ jobs:
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+      - name: Main Worker bundle budget selftest (offline fixtures, no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs --selftest
+      - name: Main Worker bundle budget (dry-run output vs ceiling)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs
 
   # Node 22 compatibility leg: package.json `engines` declares a 22 range
   # beside `>=24`, but every other job runs Node 24, so the 22 range shipped
@@ -637,7 +805,11 @@ jobs:
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 30
+    # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
+    # green runs on runner noise (worst observed pass 29m32s, 28s of
+    # margin). 45m keeps a ~34% margin; the progress sidecar samples the
+    # first 43m (MAX_SAMPLES in ci/node22-progress.mjs tracks this ceiling).
+    timeout-minutes: 45
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.
@@ -701,9 +873,16 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Node 22 progress diagnostics selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/node22-progress.test.mjs
       - name: Lint + typecheck + unit tests on Node 22.23.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm test
+        run: |
+          node ci/node22-progress.mjs "$$" &
+          diagnostics_pid=$!
+          trap 'kill "$diagnostics_pid" 2>/dev/null || :; wait "$diagnostics_pid" 2>/dev/null || :' EXIT
+          npm run lint && npm run typecheck && npm test
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -721,7 +900,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.

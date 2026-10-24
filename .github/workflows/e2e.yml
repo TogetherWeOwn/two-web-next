@@ -9,8 +9,10 @@ name: e2e
 # from ci.yml) skip the smoke below: prose that no gate, test or build reads,
 # and unit tests the journeys never execute, prove nothing about browser
 # journeys. The pull_request trigger stays unfiltered so this workflow always
-# reports, and browser-smoke is not a required check, so a skip never blocks a
-# merge.
+# reports. The required check is the `e2e-ok` aggregator below, not
+# `browser-smoke`: the live required set is `ci-ok`, `gitleaks`, `e2e-ok`,
+# `pr-lint`, plus the Paperclip Review app check. A scope-verdict skip passes
+# through the aggregator instead of blocking a merge.
 
 on:
   pull_request:
@@ -141,14 +143,24 @@ jobs:
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
+      # Throttle pacing: POST /auth/qa/:identity shares the 10/min rolling
+      # `qa-login` window across the whole job, and the browser suite just
+      # spent 9 logins. Sleep past the 60 s window (70 s for clock margin)
+      # so the parity step below starts with an empty bucket instead of
+      # racing the suite's tail. This is workflow pacing between steps, not
+      # an in-test Retry-After wait: no test timeout covers it.
+      - name: Let the QA-login throttle window expire
+        if: ${{ !cancelled() }}
+        run: sleep 70
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
       # run against Hono and the built Kit Worker on the same seeded disposable
       # Postgres after the browser suite. The Kit workspace is rebuilt here
-      # for the parity run. Read-only apart from the
-      # member-board journey's single shared QA login and its one going RSVP
-      # (withdrawn in afterAll) and the archive journey's 24 seeded rows
-      # (swept in afterAll), so they neither contaminate either visual suite
-      # nor skew the teardown sweep. The visual spec above stays pinned to its
+      # for the parity run. Read-only apart from the parity step's one QA
+      # login (the shared member — renewal is DB-minted, pinned by
+      # e2e/qa-login-budget.test.mjs) and its one going RSVP (withdrawn in
+      # afterAll) and the archive journey's 24 seeded rows (swept in afterAll),
+      # so they neither contaminate either visual suite nor skew the teardown
+      # sweep. The visual spec above stays pinned to its
       # file: the parity run below must not re-run it after the mutating
       # journeys.
       - name: Install Kit workspace dependencies
@@ -165,13 +177,18 @@ jobs:
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
+      # Throttle pacing: the parity step just spent 1 QA login. Sleep past
+      # the 60 s window so the perf gate below starts with an empty bucket.
+      - name: Let the QA-login throttle window expire before auth-perf
+        if: ${{ !cancelled() }}
+        run: sleep 70
       # Authenticated perf budgets (docs/performance-budgets.md): the guest
       # Lighthouse gate refuses authenticated requests, so the member-RSVP
       # detail read and the moderator-admin list read get their own
       # server-response gate with a real session cookie. Read-only (no RSVP
       # writes, no fixtures to cancel) and exactly two QA logins, placed
-      # after the browser suite so the shared qa-login throttle window holds
-      # at most this step's pair plus the parity journey's one. The ledger
+      # behind the throttle pacing sleep so the shared qa-login window holds
+      # only this step's pair. The ledger
       # lands in test-results/ and rides the failure-traces upload below.
       - name: Authenticated perf budgets (session-cookie journeys)
         if: ${{ !cancelled() }}

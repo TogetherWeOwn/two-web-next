@@ -166,6 +166,7 @@ function eventFixture(): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 2,
+    goingOccupancy: 2,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
@@ -259,7 +260,7 @@ describe("avatar load-failure fallback render", () => {
       ],
       appUrl: APP_URL,
       jsonLd: "{}",
-    })!.toString();
+    })!.toString() as string;
     expect(html).toContain('data-testid="event-attendees"');
     expect(html).toContain('<ul class="event-attendee-grid">');
     expect(html).toContain('<span class="event-attendee-mark" aria-hidden="true">a</span>');

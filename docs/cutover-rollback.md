@@ -37,7 +37,7 @@ steps against `togetherweown.com`, `www`, or
    plus the chosen known-good N version ID. Prefer the newest N
    whose sources differ on a public route; adjacent versions are
    often code-identical after workflow-only merges.
-3. Baseline: run the staging smoke (17 routes)
+3. Baseline: run the staging smoke (24 routes)
    (`node bin/smoke.mjs https://next.togetherweown.com`) and record
    the result. The rehearsal compares against this baseline.
 4. Roll back with `wrangler rollback <N_VERSION> --name two-web-next
@@ -137,16 +137,16 @@ changes. This record does not establish fully rehearsed cutover readiness.
 | 3 | DNS/public traffic to Next: the apex stays attached and untouched by the row-2 promotion (pre-attached custom domain, never re-synced); www needs separate provisioning | Remove Next custom-domain attachments for the affected hosts and restore saved legacy apex/www record sets, including proxy/TTL settings. Do not re-attach Next or use the unqualified staging `wrangler triggers deploy` fallback. Executable production DNS recovery remains a reviewed operator prerequisite, not a procedure supplied here | Pass for staging flip/restoration only, 2026-10-03 18:25: `next.togetherweown.com` moved to legacy and back; legacy answered 522. Production DNS reverse not tested |
 | 4 | Member-data import under paused legacy writes and a quiescent destination, verified before traffic-bearing deployment | Same-key corrections only where importer update rules permit. Wrong identities/keys, extra rows or lost overwritten state need separately approved backup/repair recovery under writer holds. Idempotent upsert is not an inverse; never perform ad hoc deletion or hand-edit the ledger | Not run: dry run failed closed; no staging import receipts. Idempotency has fixture coverage only (see result table) |
 | 5 | Queue/cron activity reconciled separately from code promotion (runbook), not installed by the version promote itself | Reviewed holds must cover producers, cron and shared-database writers; delivery pause alone does not stop them. Pause delivery to `two-web-next-production-sync-event` and `two-web-next-production-internal-action` with the authorized production principal and verify containment. Production containment/resume procedure and hold mechanism remain missing prerequisites; do not copy staging targets. Never purge, delete/recreate queues or remove consumers; resume only after implementation, holds, receiver/adapter and replay gates clear | Not run: read-only staging queue info, not production pause/resume, was recorded (see result table) |
-| 6 | 48h post-flip watch ([cutover-freeze.md](cutover-freeze.md) in force) | On Sev-1: contain, then use the applicable approved code/DNS/data recovery above. The 48h clock restarts after the re-flip | Not run: no post-flip watch or watch-triggered rollback was rehearsed (see result table) |
+| 6 | 48h post-flip watch (the [cutover-freeze.md](cutover-freeze.md) proposal is withdrawn; no freeze is implied — any future freeze needs a separate declaration with new dates, an owner and explicit lift terms) | On Sev-1: contain, then use the applicable approved code/DNS/data recovery above. The 48h clock restarts after the re-flip | Not run: no post-flip watch or watch-triggered rollback was rehearsed (see result table) |
 
 ## Pre-apply snapshot (record all six before migration or traffic changes)
 
-1. Release SHA with exact-head green CI (`check`, `gitleaks`, `pr-lint`, `ci-ok`) plus same-SHA reviewer approval.
+1. Release SHA with exact-head green CI (`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`) plus same-SHA reviewer approval.
 2. Production migration **plan** receipt identifying the target database/branch, validated journal prefix and pending web migration list. Pending migrations are expected before apply; do not require zero pending here. Independently verify history retention/PITR eligibility for the actual production provider and the approved recovery procedure before writes; a timestamp alone does not prove recoverability.
 3. Worker rollback pointer: current production Worker version ID (not deployment ID), if one exists. An initial deployment needs the approved legacy recovery path rather than an invented previous version.
 4. DNS inputs: saved pre-change apex/www record sets with TTL/proxy settings and custom-domain attachment inventory, plus planned targets. Observed post-change records are captured after the change, not required in this pre-change snapshot.
-5. Watch roster: named primary/secondary per 12h block, pager + `/up` + after-gate cadence owners, freeze lifter.
-6. Freeze posted: window from [cutover-freeze.md](cutover-freeze.md) announced on the cutover card; legacy/destination writer holds identified before import.
+5. Watch roster: named primary/secondary per 12h block, pager + `/up` + after-gate cadence owners, and the exit recorder. A freeze lifter is named only when a freeze is separately declared for this window.
+6. Freeze status: the [cutover-freeze.md](cutover-freeze.md) proposal is withdrawn and implies no freeze. When a freeze is separately declared, record its dates, owner and lift terms on the cutover card; otherwise record explicitly that no freeze is in force. Watch exit alone does not lift a freeze. Independently of any freeze, legacy/destination writer holds are identified before import and preserved through verification.
 
 ### Migration completion gate (after apply, before traffic-bearing deployment)
 

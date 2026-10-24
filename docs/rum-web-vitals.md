@@ -20,6 +20,54 @@ as a query failure with its HTTP status. Only a structurally valid empty or
 low-sample result counts as insufficient data. Budgets only go down; raising
 one is its own reviewed PR.
 
+## Transport bounds
+
+`ci/rum-check.mjs` uses one **10,000 ms total deadline**
+(`RUM_TRANSPORT_TIMEOUT_MS`) from fetch start through response-body completion.
+Headers and each body chunk share the same deadline; a dripping body cannot
+extend it. The deadline settles independently even if fetch or a body read
+ignores abort. It is separate from the workflow's whole-job timeout.
+
+The response is read as bytes with a **65,536-byte (64 KiB) ceiling**
+(`RUM_MAX_RESPONSE_BYTES`) before JSON parsing. These are the bytes exposed by
+fetch after HTTP content decoding, not JavaScript string lengths or compressed
+wire bytes. Exactly the ceiling is allowed; the first chunk exceeding it is
+refused without waiting for EOF. UTF-8 characters split across chunks are decoded
+only after the complete bounded body arrives.
+
+A timeout or oversized response exits nonzero as `timeout` or
+`response-too-large`, with a fixed summary stating **Budgets not evaluated.**
+Neither outcome means insufficient samples or a metric-budget pass. Both abort
+the request and attempt response-body cancellation without awaiting disposal;
+throwing, rejecting or stalled cleanup and late transport completion cannot
+replace the result or emit another summary. Provider payloads and credentials
+are omitted. Synthetic tests may override `timeoutMs` and `maxResponseBytes`
+through `runRumCheck`; the CLI uses the constants above. No Analytics query,
+credentials, schedule or metric thresholds change with these bounds.
+
+## Bounded rate-limit recovery
+
+`runRumCheck` remains a single attempt. The CLI uses
+`runRumCheckWithRateLimitRetry`: at most two requests, retrying only after a
+completed HTTP 429 response (JSON or non-JSON). Stalled requests, failed body
+reads and oversized responses never qualify. Neither do network errors,
+401/403, 5xx, HTTP 200 GraphQL errors, malformed data or metric-budget failures.
+
+A valid `Retry-After` integer-seconds value or future HTTP-date (IMF-fixdate,
+RFC850 or asctime) sets the cooldown, with a one-second minimum. A wait above **300 seconds** returns the original
+failure without retrying; it is never clamped downward. Absent, malformed,
+negative, current or past values use the default **300,000 ms** cooldown
+(`RUM_RATE_LIMIT_COOLDOWN_MS`); `RUM_MAX_RATE_LIMIT_WAIT_MS` caps the allowed wait.
+Cloudflare documents a [five-minute GraphQL rate window](https://developers.cloudflare.com/analytics/graphql-api/limits/).
+
+Both attempts use the same captured 24-hour query window and credentials. Each
+keeps its own 10-second total deadline and 64 KiB response ceiling. The second
+result is evaluated normally: repeated 429s and genuine budget breaches still
+exit nonzero. Summaries report the safe numeric cooldown, never provider payloads,
+header text or identity. The workflow's **eight-minute** whole-job timeout fits
+300 seconds of cooldown, two 10-second attempts and setup allowance; the query,
+schedule, read-only token scope and metric thresholds stay unchanged.
+
 **Loop:** a failed run on `main` is re-run once by the host flake ledger. If it
 fails again, a private main-red card goes to the Web Engineer, whose fix goes
 through the normal PR gates (Lighthouse, visual regression, journeys).

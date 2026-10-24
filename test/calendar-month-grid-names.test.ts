@@ -37,6 +37,7 @@ function persisted(overrides: Partial<PublicEvent> = {}): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 0,
+    goingOccupancy: 0,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
@@ -72,7 +73,14 @@ function transient(overrides: Partial<DiscordTransient> = {}): DiscordTransient 
 }
 
 async function renderGrid(upcoming: (PublicEvent | DiscordTransient)[]): Promise<string> {
-  const state: CalendarState = { view: "calendar", month: "2030-01", q: "", past: false, page: 1 };
+  const state: CalendarState = {
+    view: "calendar",
+    month: "2030-01",
+    q: "",
+    game: "",
+    past: false,
+    page: 1,
+  };
   return jsx(EventsCalendarPage, {
     state,
     upcoming,
@@ -82,6 +90,8 @@ async function renderGrid(upcoming: (PublicEvent | DiscordTransient)[]): Promise
     totalPages: 1,
     emptyState: null as CalendarEmptyState,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
     inviteUrl: "https://discord.gg/fixture",
     appUrl: APP_URL,
@@ -227,6 +237,7 @@ describe("month grid accessible names", () => {
       view: "calendar",
       month: "2030-02",
       q: "",
+      game: "",
       past: false,
       page: 1,
     };
@@ -239,6 +250,8 @@ describe("month grid accessible names", () => {
       totalPages: 1,
       emptyState: null as CalendarEmptyState,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
       member: false,
       inviteUrl: "https://discord.gg/fixture",
       appUrl: APP_URL,
@@ -271,6 +284,9 @@ describe("month grid accessible names", () => {
       title: "NY raid night",
       timezone: "America/New_York",
       startsAt: new Date("2030-01-15T01:00:00Z"),
+      // One NY wall day: multi-day intervals intentionally occupy every
+      // touched day, so the zone-naming assertion needs a same-day end.
+      endsAt: new Date("2030-01-15T02:00:00Z"),
     });
     const html = await renderGrid([ny]);
     const links = gridLinks(html);

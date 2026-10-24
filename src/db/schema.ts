@@ -81,6 +81,8 @@ export const joinAttempts = pgTable(
   (t) => [
     index("join_attempts_created_at_idx").on(t.createdAt),
     index("join_attempts_outcome_index").on(t.outcome),
+    index("join_attempts_request_id_idx").on(t.requestId),
+    index("join_attempts_discord_id_idx").on(t.discordId),
   ],
 );
 
@@ -285,5 +287,32 @@ export const webOAuthJourneys = pgTable(
   (t) => [
     check("web_oauth_journeys_flow_check", sql`${t.flow} IN ('auth', 'join')`),
     index("web_oauth_journeys_expires_at_idx").on(t.expiresAt),
+  ],
+);
+
+// Immediate-predecessor grace (10s from winning rotation, bounded by original
+// expiry): lets two overlapping tab requests both authenticate. One row per
+// rotation, pruned to the immediate predecessor only; separate from
+// web_sessions so live/revoked counts and status probing stay unchanged.
+export const webSessionGrace = pgTable(
+  "web_session_grace",
+  {
+    predecessorHash: text("predecessor_hash").primaryKey(),
+    successorHash: text("successor_hash").notNull(),
+    statusHash: text("status_hash").notNull(),
+    userId: text("user_id").notNull(),
+    username: text("username").notNull(),
+    avatar: text("avatar"),
+    member: boolean("member").notNull(),
+    moderator: boolean("moderator").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    graceExpiresAt: timestamp("grace_expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("web_session_grace_successor_hash_idx").on(t.successorHash),
+    index("web_session_grace_status_hash_idx").on(t.statusHash),
+    index("web_session_grace_user_id_idx").on(t.userId),
+    index("web_session_grace_grace_expires_at_idx").on(t.graceExpiresAt),
   ],
 );

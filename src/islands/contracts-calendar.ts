@@ -6,7 +6,9 @@
 
 export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 export {
+  calendarDayLongLabel,
   calendarZone,
+  canonicalIntervalDays,
   cardDayLabel,
   cardTimeLabel,
   isValidZone,
@@ -16,7 +18,8 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
+import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
  * One rowset rendered twice — list + month grid — in a single SSR pass.
@@ -63,6 +66,37 @@ export const EVENTS_SEARCH_LABEL = "Search events";
 export const eventsSearchHitCopy = (query: string): string => `Results for “${query}”`;
 export const eventsSearchMissCopy = (query: string): string => `Nothing matches “${query}”.`;
 
+/* Game facet. A bounded select over the distinct published games, matching
+ * trim + case-insensitive exact like the leaderboard `?activity=` facet. The
+ * raw input rides in `state.game` (like `q`) so a filtered URL stays
+ * shareable; blank or unknown degrades to unfiltered, never a 400. */
+export const EVENTS_GAME_FILTER_TESTID = "events-game-filter";
+export const EVENTS_GAME_FILTER_LABEL = "Filter by game";
+export const EVENTS_GAME_ALL_COPY = "All games";
+export const EVENTS_GAME_PARAM = "game";
+/** Distinct-games list cap: one LIMIT-bound read per schedule render. */
+export const EVENTS_DISTINCT_GAMES_LIMIT = 100;
+export const eventsGameFilterCopy = (game: string): string => `Showing events for “${game}”.`;
+export const eventsSearchGameHitCopy = (query: string, game: string): string =>
+  `Results for “${query}” in “${game}”.`;
+export const eventsSearchGameMissCopy = (query: string, game: string): string =>
+  `Nothing matches “${query}” in “${game}”.`;
+
+/**
+ * Resolve the raw `game` input against the distinct published list. Trim +
+ * case-insensitive exact; the canonical stored form wins so `?game=chess`
+ * selects and announces "Chess". Blank or unknown degrades to null
+ * (unfiltered), never an error.
+ */
+export function resolveGameFilter(
+  games: readonly string[],
+  raw: string | null | undefined,
+): string | null {
+  const want = (raw ?? "").trim().toLowerCase();
+  if (want === "") return null;
+  return games.find((game) => game.trim().toLowerCase() === want) ?? null;
+}
+
 /** Logger normalization (legacy EventSearchLogger::normalize): collapse
  * whitespace, lowercase, cap at the column width, blank means "not a search". */
 export function normalizeEventSearch(raw: string | null | undefined): string | null {
@@ -78,15 +112,29 @@ export function escapeLikeTerm(raw: string): string {
 
 /** One structured line per rendered search: normalized query + visible count.
  * No user id, no session, no IP, no raw input. Fail-open — logging never
- * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape. */
+ * breaks the page. The durable table (TOG-10105) swaps the sink, not this shape.
+ * The optional `request_id` joins the line to `http.request`: it travels only
+ * when it validates, and is omitted — never raw — otherwise. */
 export interface EventSearchLogEntry {
   event: "event_search";
   query: string;
   results: number;
+  request_id?: string;
 }
-export function eventSearchLogEntry(raw: string, results: number): EventSearchLogEntry | null {
+export function eventSearchLogEntry(
+  raw: string,
+  results: number,
+  requestId?: string | null,
+): EventSearchLogEntry | null {
   const query = normalizeEventSearch(raw);
-  return query === null ? null : { event: "event_search", query, results: Math.max(0, results) };
+  if (query === null) return null;
+  const validated = safeRequestId(requestId);
+  return {
+    event: "event_search",
+    query,
+    results: Math.max(0, results),
+    ...(validated !== undefined ? { request_id: validated } : {}),
+  };
 }
 
 /* Past drawer (legacy showPast): opens one way, stays open; searching reveals
@@ -142,6 +190,18 @@ export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try
  * the owned fetch, restores the last good zones and releases loading. */
 export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
+/* Failed-read recovery: a failed search/month/view read keeps the last good
+ * zones and names the missed destination beside them, with an explicit retry
+ * of the last failed GET intent and a safe return. The host renders hidden
+ * and inert outside the swapped zones; the binder shows it only on failure. */
+export const EVENTS_READ_RETRY_TESTID = "events-read-retry";
+export const EVENTS_READ_CLEAR_TESTID = "events-read-clear";
+export const EVENTS_READ_STATUS_TESTID = "events-read-status";
+export const EVENTS_READ_RETRY_COPY = "Try again";
+export const EVENTS_READ_CLEAR_COPY = "Dismiss";
+/** A 429 Retry-After is honored up to 60 seconds; anything larger caps here. */
+export const EVENTS_READ_RETRY_AFTER_CAP_MS = 60_000;
+
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
  * "no events". */
@@ -173,6 +233,19 @@ export const EVENTS_EMPTY_COPY = {
   signIn: "Sign in with Discord",
 } as const;
 
+/* Partial source: healthy local rows stay visible while the Discord source
+ * reports failure, with an accessible notice that the schedule may be
+ * incomplete. Renders inside the swapped content zone beside the list/grid,
+ * never with an empty state (a failed read with nothing anywhere keeps the
+ * full error instead). The copy claims no rows: it also covers an empty
+ * month of a non-empty schedule and an out-of-range page. Retry re-issues
+ * the same URL; the join link is the human fallback. No source URLs, tokens
+ * or error details in the copy. */
+export const EVENTS_PARTIAL_TESTID = "events-partial-source";
+export const EVENTS_PARTIAL_COPY = {
+  notice: "Some Discord events may be missing from this schedule right now.",
+} as const;
+
 /* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;
  * "today" is evaluated in the hosts' zone, not the server's or the viewer's. */
 export const EVENTS_CALENDAR_SCROLL_TESTID = "events-calendar-scroll";
@@ -185,6 +258,27 @@ export const WEEKDAY_HEADINGS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
 export const CALENDAR_PREV_LABEL = "Previous month";
 export const CALENDAR_NEXT_LABEL = "Next month";
 export const GRID_TITLE_MAX = 18;
+
+/* Month jump: a server-derived This month anchor plus a native GET form, so a
+ * chosen month is one step away with or without JavaScript. The form carries
+ * only the island's month vocabulary (month/view/past) — never the search
+ * query — and its bounds mirror the addCalendarMonth saturation below. */
+export const CALENDAR_THIS_MONTH_TESTID = "calendar-this-month";
+export const CALENDAR_THIS_MONTH_COPY = "This month";
+export const CALENDAR_MONTH_JUMP_TESTID = "calendar-month-jump";
+export const CALENDAR_MONTH_JUMP_SUBMIT_TESTID = "calendar-month-jump-submit";
+export const CALENDAR_MONTH_JUMP_INPUT_ID = "calendar-month-jump-input";
+export const CALENDAR_MONTH_JUMP_LABEL = "Jump to month";
+export const CALENDAR_MONTH_JUMP_SUBMIT_COPY = "Go";
+export const CALENDAR_MONTH_MIN = "0001-01";
+export const CALENDAR_MONTH_MAX = "9999-12";
+
+/* Month-local empty guidance: a successfully read selected month with no
+ * in-month events keeps its grid and names the month, with a recovery link
+ * back to the upcoming list. Spillover-day rows never count as in-month, and
+ * the block never claims the whole schedule is empty. */
+export const CALENDAR_MONTH_EMPTY_TESTID = "calendar-month-empty";
+export const CALENDAR_MONTH_EMPTY_RECOVERY_COPY = "Upcoming events";
 
 export const EVENT_CARD_TESTID = "event-card";
 export const EVENT_DRAFT_TESTID = "event-draft";
@@ -227,6 +321,10 @@ export function calendarMonthLabel(month: string): string {
     timeZone: "UTC",
   }).format(calendarDate(y!, m! - 1, 1));
 }
+
+/** Month-local empty guidance names the selected month, never the schedule. */
+export const calendarMonthEmptyCopy = (month: string): string =>
+  `No events in ${calendarMonthLabel(month)}.`;
 
 export interface CalendarDay<E = unknown> {
   /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */
@@ -288,9 +386,54 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
-export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
-  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
+/** Badge word shared by cancelled list cards and month-grid entries. */
+export const GRID_CANCELLED_COPY = "Cancelled";
+
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3),
+ * then the day. Long titles keep the truncated visible form first so axe
+ * label-content-name-mismatch passes, then the full title; short titles are
+ * not duplicated. Cancelled entries lead with the same visible words plus
+ * the badge, retaining the full title and day. */
+export function gridAccessibleName(
+  title: string,
+  startsAt: Date,
+  zone: string,
+  cancelled = false,
+): string {
+  const truncated = gridTitle(title);
+  const time = wallTimeHm(startsAt, zone);
+  const day = cardDayLabel(startsAt, zone);
+  if (cancelled) {
+    // The badge follows the truncated title, so keep that exact visible prefix
+    // before restoring the full title for same-prefix event disambiguation.
+    const fullTitle = truncated === title ? "" : `, ${title}`;
+    return `${time} ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
+  }
+  return truncated === title ? `${time} ${title}, ${day}` : `${time} ${truncated} ${title}, ${day}`;
+}
+
+/** Continuation link name starts with the visible "Continues title" (WCAG
+ * 2.5.3), then the displayed day — never the original start. Long titles keep
+ * the truncated visible form first so axe label-content-name-mismatch passes,
+ * then the full title; short titles are not duplicated. Cancelled entries
+ * add the badge after the visible words. */
+export function gridContinuationAccessibleName(
+  title: string,
+  dayIso: string,
+  cancelled = false,
+): string {
+  const truncated = gridTitle(title);
+  const day = calendarDayLongLabel(dayIso);
+  if (cancelled) {
+    // Same visible-prefix rule as gridAccessibleName: the badge follows the
+    // truncated title, so keep that exact prefix before restoring the full
+    // title for same-prefix event disambiguation.
+    const fullTitle = truncated === title ? "" : `, ${title}`;
+    return `Continues ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
+  }
+  return truncated === title
+    ? `Continues ${title}, ${day}`
+    : `Continues ${truncated} ${title}, ${day}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the
@@ -334,6 +477,8 @@ export function dedupeTransients(
 }
 
 /* Resolved island state. `q` is the raw input; searching = trimmed non-blank.
+ * `game` is the raw facet input (the effective game resolves against the
+ * distinct list at read time); blank/unknown degrades to unfiltered.
  * `month` is always resolved (the grid is one render away via the toggle).
  * `page` is the upcoming-list page; the month grid is month-scoped, so it
  * always reads as page 1. */
@@ -341,6 +486,7 @@ export interface CalendarState {
   view: CalendarView;
   month: string;
   q: string;
+  game?: string;
   past: boolean;
   page: number;
 }
@@ -354,12 +500,16 @@ export const calendarShowingPast = (s: CalendarState): boolean => s.past || cale
 /**
  * The island's shareable URL. `view`/`month` are emitted only for the calendar
  * view (the list is the default and a search forces it); `q` only when
- * non-blank; `past` only when open; `page` only past the first list page (the
- * month grid is month-scoped, so it never carries a page).
+ * non-blank; `game` only when non-blank (trimmed — padding never survives
+ * into a shared link, and matching trims anyway); `past` only when open;
+ * `page` only past the first list page (the month grid is month-scoped, so it
+ * never carries a page).
  */
 export function calendarUrl(s: CalendarState): string {
   const params = new URLSearchParams();
   if (s.q.trim() !== "") params.set("q", s.q);
+  const game = (s.game ?? "").trim();
+  if (game !== "") params.set(EVENTS_GAME_PARAM, game);
   if (s.past) params.set("past", "1");
   if (s.view === "calendar") {
     params.set("view", "calendar");
@@ -372,12 +522,16 @@ export function calendarUrl(s: CalendarState): string {
 }
 
 /** Grid day-jump into the list: names the card so the route renders the list
- * page holding it, plus the card anchor. `past` rides along; a search never
+ * page holding it, plus the card anchor. `past` rides along, and the game
+ * facet too (the rank is computed inside the filtered order); a search never
  * co-occurs with the grid (it forces the list view). */
-export function calendarJumpUrl(past: boolean, key: string): string {
+export function calendarJumpUrl(past: boolean, key: string, game?: string | null): string {
   const params = new URLSearchParams();
   params.set("event", key);
   if (past) params.set("past", "1");
+  if (game !== undefined && game !== null && game.trim() !== "") {
+    params.set(EVENTS_GAME_PARAM, game.trim());
+  }
   return `/events?${params.toString()}#event-${key}`;
 }
 

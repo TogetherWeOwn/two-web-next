@@ -76,6 +76,21 @@ async function expectFunnel(res: Response) {
   expect(res.headers.get("retry-after")).toBeNull();
 }
 
+// Shed lines carry a fixed key and a drop count only: no URIs, no markers,
+// no request-controlled content. Counts stay loose (positive integer) because
+// the suppressed-drop carryover depends on earlier tests in this file.
+function expectShedLines(warn: { mock: { calls: unknown[][] } }, count: number) {
+  const sheds = warn.mock.calls.filter((call) => call[0] === "csp.report.shed");
+  expect(sheds).toHaveLength(count);
+  for (const shed of sheds) {
+    expect(shed).toEqual(["csp.report.shed", { dropped: expect.any(Number) }]);
+    const dropped = (shed[1] as { dropped: unknown }).dropped;
+    expect(Number.isInteger(dropped)).toBe(true);
+    expect(dropped as number).toBeGreaterThanOrEqual(1);
+  }
+  expect(JSON.stringify(sheds)).not.toContain(MARKER);
+}
+
 let now = Date.now();
 beforeEach(() => {
   // Refill the isolate budget between independent cases, never within a flood.
@@ -129,8 +144,10 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     for (let i = 0; i < 80; i += 1) {
       await expectFunnel(await post(validBody()));
     }
-    expect(warn).toHaveBeenCalledTimes(20);
-    for (const call of warn.mock.calls) {
+    expect(warn).toHaveBeenCalledTimes(21);
+    const violations = warn.mock.calls.filter((call) => call[0] === "csp.report.violation");
+    expect(violations).toHaveLength(20);
+    for (const call of violations) {
       expect(call).toEqual([
         "csp.report.violation",
         {
@@ -142,6 +159,7 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
         },
       ]);
     }
+    expectShedLines(warn, 1);
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).not.toContain(MARKER);
     expect(JSON.stringify(log.mock.calls)).not.toContain(MARKER);
@@ -178,10 +196,13 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     for (let i = 0; i < 80; i += 1) {
       await expectFunnel(await post(body));
     }
-    expect(warn).toHaveBeenCalledTimes(20);
-    for (const call of warn.mock.calls) {
+    expect(warn).toHaveBeenCalledTimes(21);
+    const oversize = warn.mock.calls.filter((call) => call[0] === "csp.report.dropped_oversize");
+    expect(oversize).toHaveLength(20);
+    for (const call of oversize) {
       expect(call).toEqual(["csp.report.dropped_oversize", { bytes: CAP + 1 }]);
     }
+    expectShedLines(warn, 1);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
   });
 
@@ -212,7 +233,8 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       ),
     );
     for (const res of responses) await expectFunnel(res);
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
+    expectShedLines(warn, 1);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.violation")).toBe(true);
     expect(warn.mock.calls.some((call) => call[0] === "csp.report.dropped_oversize")).toBe(true);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
@@ -222,19 +244,20 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
     now += 2_999;
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
     now += 1;
     await expectFunnel(await post(validBody()));
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(21);
+    expect(warn).toHaveBeenCalledTimes(23);
     now += 3_000;
     await expectFunnel(await post(oversizeBodyWithMarker()));
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(22);
-    expect(warn.mock.calls[21]?.[0]).toBe("csp.report.dropped_oversize");
+    expect(warn).toHaveBeenCalledTimes(25);
+    expect(warn.mock.calls[23]?.[0]).toBe("csp.report.dropped_oversize");
+    expectShedLines(warn, 3);
   });
 
   it("caps stored tokens at a twenty-warning burst after a long idle", async () => {
@@ -242,10 +265,11 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
     now += 600_000;
     for (let i = 0; i < 80; i += 1) await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(40);
+    expect(warn).toHaveBeenCalledTimes(41);
+    expectShedLines(warn, 1);
   });
 
-  it("does not spend tokens on malformed or sampled-out reports", async () => {
+  it("spends the shared budget on sampled-in malformed reports, never on sampled-out", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(Math, "random").mockReturnValue(0.9);
     for (let i = 0; i < 80; i += 1) {
@@ -253,9 +277,19 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       await expectFunnel(await post(validBody(), makeEnv("0")));
       await expectFunnel(await post(validBody(), makeEnv("0.5")));
     }
-    expect(warn).not.toHaveBeenCalled();
+    // Malformed at rate 1 is sampled in and bucket-bounded like a violation:
+    // 20 malformed rows plus one shed for the 60 dropped, never the bytes.
+    const malformed = warn.mock.calls.filter((call) => call[0] === "csp.report.malformed");
+    expect(malformed).toHaveLength(20);
+    for (const call of malformed) {
+      expect(call).toEqual(["csp.report.malformed", { bytes: 8 }]);
+    }
+    expectShedLines(warn, 1);
+    expect(warn).toHaveBeenCalledTimes(21);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("not-json");
+    // Budget spent: further valid reports shed silently within the window.
     for (let i = 0; i < 21; i += 1) await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
   });
 
   it("does not mint extra tokens if the clock moves backwards", async () => {
@@ -268,11 +302,12 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     await expectFunnel(await post(validBody()));
     now = spentAt + 2_999;
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
     now += 1;
     await expectFunnel(await post(validBody()));
     await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(21);
+    expect(warn).toHaveBeenCalledTimes(22);
+    expectShedLines(warn, 1);
   });
 
   it("keeps logger failures always-204 without restoring spent tokens", async () => {
@@ -280,7 +315,20 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
       throw new Error("synthetic logger failure");
     });
     for (let i = 0; i < 80; i += 1) await expectFunnel(await post(validBody()));
-    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn).toHaveBeenCalledTimes(21);
+    // A failed shed emit stays rate-bounded but must not discard its count:
+    // once the logger recovers the next shed still carries those drops.
+    warn.mockImplementation(() => {});
+    now += 60_000;
+    for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
+    await expectFunnel(await post(validBody()));
+    const sheds = warn.mock.calls.filter((call) => call[0] === "csp.report.shed");
+    const last = sheds[sheds.length - 1]?.[1] as { dropped: unknown };
+    expect(Number.isInteger(last.dropped)).toBe(true);
+    // 60 drops from the throwing flood plus the triggering drop; preserved
+    // carryover from earlier tests can only raise this.
+    expect(last.dropped as number).toBeGreaterThanOrEqual(61);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
   });
 
   it("touches no persistence seam across a mixed abuse burst", async () => {
@@ -296,8 +344,15 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     for (const body of burst) {
       await expectFunnel(await post(body, env));
     }
+    // Valid, oversize, malformed string, silent empty, and a non-CSP typed
+    // envelope (malformed: never logged as a violation).
     expect(warn.mock.calls.map((call) => call[0]).sort()).toEqual(
-      ["csp.report.dropped_oversize", "csp.report.violation"].sort(),
+      [
+        "csp.report.dropped_oversize",
+        "csp.report.malformed",
+        "csp.report.malformed",
+        "csp.report.violation",
+      ].sort(),
     );
     expect(bindingAccess).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();

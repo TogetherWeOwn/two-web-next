@@ -31,6 +31,14 @@ export const JoinAttemptsPage: FC<{
                 {o === "" ? "All" : o}
               </option>
             ))}
+            {/* An unrecognized outcome is still the active exact filter, so it
+                gets its own selected option instead of misleadingly showing
+                All. Hono escapes the value and label. */}
+            {query.outcome !== "" && !(outcomes as readonly string[]).includes(query.outcome) ? (
+              <option value={query.outcome} selected>
+                {query.outcome}
+              </option>
+            ) : null}
           </select>
         </div>
         <div class="field">

@@ -18,7 +18,7 @@ import { OAUTH_JOURNEY_TTL_SECONDS } from "../src/oauth-journeys";
 import { MEMBER_STATS_BUDGET_MS } from "../src/profiles/stats";
 import { POLICY_FILE, POLICY_VERSION } from "../src/privacy";
 import { POLICY_MARKDOWN } from "../src/privacy-content";
-import { SESSION_TTL_SECONDS } from "../src/sessions";
+import { SESSION_ABSOLUTE_MAX_AGE_SECONDS, SESSION_TTL_SECONDS } from "../src/sessions";
 import { STATE_TTL_SECONDS as OAUTH_STATE_TTL_SECONDS } from "../src/index";
 import { JOURNEY_TTL_SECONDS as RETURN_JOURNEY_TTL_SECONDS } from "../src/return-journey";
 import { WRITE_RECOVERY_TTL_SECONDS } from "../src/write-recovery";
@@ -156,6 +156,18 @@ const CLAIMS: Claim[] = [
     pin: "SESSION_TTL_SECONDS, src/sessions.ts",
   },
   {
+    label: "Absolute session age cap",
+    anchor: "`__Host-two_session` keeps you signed in",
+    phrase: `${SESSION_ABSOLUTE_MAX_AGE_SECONDS / 3600} hours`,
+    pin: "SESSION_ABSOLUTE_MAX_AGE_SECONDS, src/sessions.ts",
+  },
+  {
+    label: "Absolute cap changelog",
+    anchor: "Version 6 caps every sign-in",
+    phrase: `${SESSION_ABSOLUTE_MAX_AGE_SECONDS / 3600} hours`,
+    pin: "SESSION_ABSOLUTE_MAX_AGE_SECONDS, src/sessions.ts",
+  },
+  {
     label: "Journey cookies",
     anchor: "`__Host-two_oauth_state`",
     phrase: `at most ${OAUTH_STATE_TTL_SECONDS / 60} minutes`,
@@ -217,18 +229,18 @@ const PINNED_COOKIE_LIFETIMES = [
 
 // Each call to a cookie writer, from its name to its closing parenthesis.
 function cookieCalls(text: string): string[] {
-  return [...text.matchAll(/\b(?:setSignedCookie|generateSignedCookie|setCookie)\(/g)].map(
-    (call) => {
-      const start = call.index ?? 0;
-      let depth = 0;
-      let end = start + call[0].length - 1;
-      for (; end < text.length; end++) {
-        if (text[end] === "(") depth++;
-        else if (text[end] === ")" && --depth === 0) break;
-      }
-      return text.slice(start, end + 1);
-    },
-  );
+  return [
+    ...text.matchAll(/\b(?:setSignedCookie|generateSignedCookie|setCookie|generateCookie)\(/g),
+  ].map((call) => {
+    const start = call.index ?? 0;
+    let depth = 0;
+    let end = start + call[0].length - 1;
+    for (; end < text.length; end++) {
+      if (text[end] === "(") depth++;
+      else if (text[end] === ")" && --depth === 0) break;
+    }
+    return text.slice(start, end + 1);
+  });
 }
 
 // The only modules that may define each lifetime; every other file must import
@@ -294,7 +306,27 @@ function unpinnedCookieCalls(file: string, text: string): string[] {
   });
 }
 
+// An empty unsigned cookie with a literal zero expiry deletes state, not a
+// live lifetime. Recognize only this simple form: no nested calls, duplicate
+// expiry, or trailing spread that could override the zero.
+function withoutCookieDeletions(text: string): string {
+  if (
+    !importEntries(text).some(
+      (entry) =>
+        entry.local === "generateCookie" &&
+        entry.imported === "generateCookie" &&
+        entry.source === "hono/cookie",
+    )
+  )
+    return text;
+  return text.replace(
+    /\bgenerateCookie\(\s*\w+\s*,\s*(?:""|'')\s*,\s*\{\s*(?:\.\.\.\w+\s*,\s*)?maxAge:\s*0\s*,?\s*\}\s*\)/g,
+    "",
+  );
+}
+
 function cookieLifetimeOffenders(file: string, text: string): string[] {
+  text = withoutCookieDeletions(text);
   const where = relative(root, file);
   const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) => match[1]!.trim());
   return [
@@ -391,6 +423,52 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     );
     expect(offenders, "every cookie lifetime in src must be one of the pinned constants").toEqual(
       [],
+    );
+  });
+
+  it("recognizes an explicit empty-cookie deletion rather than a live lifetime", () => {
+    const source = [
+      'import { generateCookie } from "hono/cookie";',
+      'generateCookie(LOGIN_INTENDED_COOKIE, "", { ...options, maxAge: 0 });',
+    ].join("\n");
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source)).toEqual([]);
+  });
+
+  it.each([
+    { label: "no import", declaration: "" },
+    {
+      label: "a local-module writer",
+      declaration: 'import { generateCookie } from "./cookie";',
+    },
+    {
+      label: "a different local binding",
+      declaration: 'import { generateCookie as otherCookie } from "hono/cookie";',
+    },
+    {
+      label: "a different imported writer",
+      declaration: 'import { generateSignedCookie as generateCookie } from "hono/cookie";',
+    },
+  ])("rejects a deletion-shaped call with $label", ({ declaration }) => {
+    const source = `${declaration}\ngenerateCookie(name, "", { maxAge: 0 });`;
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it.each([
+    'generateCookie(name, "live", { maxAge: 0 });',
+    'generateCookie(name, "", { maxAge: 1 });',
+    'generateCookie(name, "", { maxAge: 0, ...options });',
+    'generateCookie(name, "", { maxAge: 0, maxAge: 31536000 });',
+    'generateSignedCookie(name, "", secret, { maxAge: 0 });',
+    'setCookie(c, name, "", { maxAge: 0 });',
+    'generateCookie(name, "live", options);',
+    'generateCookie(name, "", { ...generateCookie(other, "live", { maxAge: 31536000 }), maxAge: 0 });',
+    'generateCookie(name, "", { maxAge: 0 }); generateCookie(other, "live", { maxAge: 31536000 });',
+  ])("still rejects an unpinned writer: %s", (call) => {
+    const source = `import { generateCookie } from "hono/cookie";\n${call}`;
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source).length).toBeGreaterThan(
+      0,
     );
   });
 

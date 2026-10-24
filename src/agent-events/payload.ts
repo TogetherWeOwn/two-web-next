@@ -14,22 +14,56 @@ export const isPlainObject = (v: unknown): v is Record<string, unknown> =>
 
 // Keep explicit keys safe for PostgreSQL text/varchar(26), including denied
 // audits and lock names. Never truncate or repair a key into another identity.
+// Every Unicode Cc control (C0 U+0000-U+001F, DEL and C1 U+007F-U+009F)
+// resolves to null so control-bearing keys take the existing null-key paths.
 export const storedEventKey = (key: unknown): string | null =>
-  typeof key === "string" && key !== "" && key.length <= 26 && !/[\u0000\uD800-\uDFFF]/u.test(key)
+  typeof key === "string" &&
+  key !== "" &&
+  key.length <= 26 &&
+  !/[\u0000-\u001F\u007F-\u009F\uD800-\uDFFF]/u.test(key)
     ? key
     : null;
+
+// Machine-envelope guard for `op` and `idempotency_key`: PostgreSQL `text`
+// rejects NUL (SQLSTATE 22021), so a hostile key offered to the audit INSERT
+// turns a denial into a 500. The shared human-field predicate stays the rule
+// here too — Tab/LF/CR stay accepted, every other C0 control plus DEL (and
+// the wider Cc/invisible set) is refused at admission, before any store touch.
+export function hasIngressControlBytes(value: unknown): boolean {
+  return typeof value === "string" && containsControlCharacters(value);
+}
+
+// PostgreSQL `integer` (int4) bounds for the optimistic-version column. An
+// out-of-range JSON integer admitted past validation would reach the driver
+// as a range error (500) instead of the existing validation refusal, so the
+// update path refuses such versions before any event SQL runs.
+export const INT4_MIN = -2147483648;
+export const INT4_MAX = 2147483647;
+export function isAgentVersion(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isInteger(value) && value >= INT4_MIN && value <= INT4_MAX
+  );
+}
 
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;
+// Static API contract for the 422 `payload_too_deep` refusal: the ingress
+// answers this text verbatim and never echoes the caught error's message, so
+// internal error-text edits cannot silently move the API contract. The digest
+// below deliberately throws a distinct internal diagnostic (never this
+// constant) so the decoupling is observable: echoing `err.message` would
+// answer different text and fail the contract pin.
+export const PAYLOAD_TOO_DEEP_MESSAGE = "The request body nests deeper than 100 levels.";
 export class PayloadTooDeepError extends Error {}
 
 function sortRecursive(v: unknown, depth = 0): unknown {
   // Untrusted nesting is bounded: without this, an admitted deeply nested
   // body recurses until the worker throws RangeError (answered 500). Past the
   // bound the digest refuses with a typed error the caller answers 422.
+  // The internal message stays distinct from PAYLOAD_TOO_DEEP_MESSAGE.
   if (depth > MAX_DIGEST_DEPTH)
-    throw new PayloadTooDeepError(`The request body nests deeper than ${MAX_DIGEST_DEPTH} levels.`);
+    throw new PayloadTooDeepError("payload digest exceeded maximum depth");
   if (Array.isArray(v)) return v.map((e) => sortRecursive(e, depth + 1));
   if (isPlainObject(v))
     return Object.fromEntries(
@@ -80,10 +114,11 @@ export type Fields = {
 };
 
 // Same rules as the human event form (parseEventForm in src/admin/validation):
-// trimmed before the required/length checks, and title/description/location
+// trimmed before the required/length checks, and title/game/description/location
 // refuse control and invisible/bidi characters via the shared predicate.
 export function validateFields(
   raw: unknown,
+  mode: "create" | "update" = "create",
 ): { ok: true; fields: Fields } | { ok: false; errors: Record<string, string[]> } {
   const e: Record<string, string[]> = {};
   const bad = (k: string, m: string) => (e[k] ??= []).push(m);
@@ -119,7 +154,7 @@ export function validateFields(
   const timezone = str("timezone", 64, true);
   // Like the human form, check the raw submitted text (trim removes BOM): tab,
   // LF and CR and genuine emoji ZWJ sequences stay accepted.
-  for (const k of ["title", "description", "location"] as const) {
+  for (const k of ["title", "game", "description", "location"] as const) {
     const v = raw[k];
     if (typeof v === "string" && v !== "" && containsControlCharacters(v))
       bad(k, `The ${k} field must not contain control or invisible characters.`);
@@ -145,7 +180,10 @@ export function validateFields(
   };
   const startsAt = wall("starts_at");
   const endsAt = wall("ends_at");
-  if (startsAt && endsAt && endsAt <= startsAt)
+  // Updates recover unchanged stored instants before comparing duration in
+  // dispatch: minute-only walls can look reversed at a fold or equal within
+  // one minute even when the stored interval is positive. Create stays strict.
+  if (mode === "create" && startsAt && endsAt && endsAt <= startsAt)
     bad("ends_at", "The ends_at field must be a date after starts_at.");
   let capacity: number | null = null;
   if (raw.capacity !== undefined && raw.capacity !== null) {

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
 import { createPostgresSessionStore, type Sql } from "../src/sessions";
 import { countActiveMemberSessions, revokeMemberSessions } from "../src/session-revocation";
@@ -33,7 +33,6 @@ describe("revoke-sessions CLI safety", () => {
       ["--discord-id=bad"],
       [`--discord-id=${MEMBER_A}`, "--apply", "--dry-run"],
       ["--discord-id=", `--discord-id=${MEMBER_A}`],
-      [`--discord-id=${MEMBER_A}`, "--target=staging"],
       [`--discord-id=${MEMBER_A}`, "--target", "production", "--target=production"],
     ])
       expect(() => parseRevokeArgs(args)).toThrow();
@@ -86,7 +85,12 @@ describe("revoke-sessions CLI safety", () => {
     expect(options).toMatchObject({ host: ["::1"], port: [5432], ssl: false });
     createRevokeClient(capture, "postgres://fixture@localhost/test?sslrootcert=system");
     expect(options).toMatchObject({ host: ["localhost"], port: [5432], ssl: "verify-full" });
-    createRevokeClient(capture, "postgres://fixture@db.example.test/neondb");
+    // The shared floor throws for remote URLs without verify-full instead of
+    // silently defaulting them; the verify-full twin below still builds.
+    expect(() => createRevokeClient(capture, "postgres://fixture@db.example.test/neondb")).toThrow(
+      "verify-full",
+    );
+    createRevokeClient(capture, "postgres://fixture@db.example.test/neondb?sslmode=verify-full");
     expect(options).toMatchObject({ host: ["db.example.test"], port: [5432], ssl: "verify-full" });
     // The raw URL must never reach postgres.js: its query string would be
     // forwarded as server startup parameters (sslrootcert -> Postgres 42704).
@@ -143,7 +147,8 @@ describe("revoke-sessions CLI safety", () => {
   });
 
   it("refuses production-looking URLs unless explicitly targeted and never prints URLs", () => {
-    const production = "postgres://fixture:synthetic-password@db.production.test/neondb";
+    const production =
+      "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
     expect(isProductionDatabaseUrl(production)).toBe(true);
     expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, undefined)).toThrow(
       "--target production",
@@ -151,16 +156,134 @@ describe("revoke-sessions CLI safety", () => {
     expect(validateRevokeEnvironment({ DATABASE_URL: production }, "production").databaseUrl).toBe(
       production,
     );
-    expect(() =>
-      validateRevokeEnvironment(
-        { DATABASE_URL: "postgres://fixture@ep-staging.example.neon.tech/neondb" },
-        undefined,
-      ),
-    ).toThrow("--target production");
     const result = run([`--discord-id=${MEMBER_A}`], { DATABASE_URL: production });
     expect(result.status).toBe(2);
     expect(result.stdout + result.stderr).not.toContain("synthetic-password");
     expect(result.stdout + result.stderr).not.toContain("postgres://");
+  });
+
+  it("accepts --target staging in argv and still refuses unknown or repeated targets", () => {
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--target=staging"])).toEqual({
+      discordId: MEMBER_A,
+      mode: "dry-run",
+      target: "staging",
+    });
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--apply", "--target", "staging"])).toEqual(
+      {
+        discordId: MEMBER_A,
+        mode: "apply",
+        target: "staging",
+      },
+    );
+    expect(parseRevokeArgs([`--discord-id=${MEMBER_A}`, "--target", "production"]).target).toBe(
+      "production",
+    );
+    for (const args of [
+      [`--discord-id=${MEMBER_A}`, "--target", "sideways"],
+      [`--discord-id=${MEMBER_A}`, "--target=dev"],
+      [`--discord-id=${MEMBER_A}`, "--target=STAGING"],
+      [`--discord-id=${MEMBER_A}`, "--target="],
+      [`--discord-id=${MEMBER_A}`, "--target"],
+      [`--discord-id=${MEMBER_A}`, "--target=staging", "--target=staging"],
+      [`--discord-id=${MEMBER_A}`, "--target", "staging", "--target=production"],
+    ])
+      expect(() => parseRevokeArgs(args), JSON.stringify(args)).toThrow();
+    const refused = run([`--discord-id=${MEMBER_A}`, "--target", "sideways"], {
+      DATABASE_URL: "postgres://agent_test@127.0.0.1:1/test",
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("accepts --target staging on remote non-production URLs and requires a target there", () => {
+    const stagingRemote =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb?sslmode=verify-full";
+    const genericRemote =
+      "postgres://fixture:synthetic-password@db.example.test/neondb?sslmode=verify-full";
+    for (const remote of [stagingRemote, genericRemote]) {
+      expect(
+        validateRevokeEnvironment({ DATABASE_URL: remote }, "staging").databaseUrl,
+        remote,
+      ).toBe(remote);
+      expect(
+        validateRevokeEnvironment({ DATABASE_URL: remote }, "production").databaseUrl,
+        remote,
+      ).toBe(remote);
+      // No target on a remote database: the refusal must offer staging too,
+      // not train the production assertion as the only incantation.
+      expect(() => validateRevokeEnvironment({ DATABASE_URL: remote }, undefined), remote).toThrow(
+        "--target staging",
+      );
+      for (const bad of ["sideways", "dev", "STAGING", ""])
+        expect(
+          () => validateRevokeEnvironment({ DATABASE_URL: remote }, bad),
+          `${remote} target=${bad}`,
+        ).toThrow();
+    }
+    const refused = run([`--discord-id=${MEMBER_A}`], { DATABASE_URL: stagingRemote });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("--target staging");
+    expect(refused.stdout + refused.stderr).not.toContain("synthetic-password");
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("refuses --target staging on production-looking URLs", () => {
+    const production =
+      "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
+    expect(isProductionDatabaseUrl(production)).toBe(true);
+    expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, "staging")).toThrow(
+      "--target production",
+    );
+    expect(() => validateRevokeEnvironment({ DATABASE_URL: production }, undefined)).toThrow(
+      "--target production",
+    );
+    expect(validateRevokeEnvironment({ DATABASE_URL: production }, "production").databaseUrl).toBe(
+      production,
+    );
+    const refused = run([`--discord-id=${MEMBER_A}`, "--target", "staging"], {
+      DATABASE_URL: production,
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("--target production");
+    // A target refusal, not an argv usage error: --target staging is valid
+    // argv that this URL class rejects.
+    expect(refused.stderr).not.toContain("Usage:");
+    expect(refused.stdout + refused.stderr).not.toContain("synthetic-password");
+    expect(refused.stdout + refused.stderr).not.toContain("postgres://");
+  });
+
+  it("keeps local URLs exempt from the target requirement", () => {
+    for (const local of [
+      "postgres://agent_test@agent-testdb:5432/test",
+      "postgres://fixture@localhost:5432/test",
+      "postgres://fixture@127.0.0.1:5432/test",
+      "postgres://fixture@[::1]:5432/test",
+    ]) {
+      expect(validateRevokeEnvironment({ DATABASE_URL: local }, undefined).databaseUrl, local).toBe(
+        local,
+      );
+      expect(validateRevokeEnvironment({ DATABASE_URL: local }, "staging").databaseUrl, local).toBe(
+        local,
+      );
+    }
+  });
+
+  it("checks the live process environment for the TLS override, not only the env argument", () => {
+    // The port is closed: if the gate is missing, the run fails with exit 1, never a live connection.
+    const code = `import(${JSON.stringify(pathToFileURL(script).href)}).then((m) => m.main(["--discord-id=${MEMBER_A}"], { DATABASE_URL: "postgres://fixture@127.0.0.1:1/neondb" })).then((code) => { process.exitCode = code; });`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./bin/ts-hook.mjs", "--input-type=module", "-e", code],
+      {
+        env: { PATH: process.env.PATH ?? "", NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        cwd: fileURLToPath(new URL("..", import.meta.url).href),
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("NODE_TLS_REJECT_UNAUTHORIZED=0");
+    expect(result.stdout + result.stderr).not.toContain("127.0.0.1:1");
   });
 });
 
@@ -197,6 +320,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     expect(await countActiveMemberSessions(sql, MEMBER_A)).toEqual({ web_sessions: 1 });
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: true })).toEqual({
       web_sessions: 1,
+      passes: 0,
+      stampsPerPass: [],
     });
     expect(await counts(MEMBER_A)).toBe(1);
     expect(await counts(MEMBER_B)).toBe(1);
@@ -206,6 +331,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     const sql = fixture.client as unknown as Parameters<typeof revokeMemberSessions>[0];
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: false })).toEqual({
       web_sessions: 1,
+      passes: 1,
+      stampsPerPass: [1],
     });
     const [rows] = await fixture.client<{ n: number }[]>`select count(*)::int as n from web_sessions
       where user_id = ${MEMBER_A} and revoked_at is not null`;
@@ -214,6 +341,8 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
     expect(await counts(MEMBER_B)).toBe(1);
     expect(await revokeMemberSessions(sql, MEMBER_A, { dryRun: false })).toEqual({
       web_sessions: 0,
+      passes: 1,
+      stampsPerPass: [0],
     });
   });
 
@@ -275,7 +404,14 @@ describe.skipIf(!url)("session revocation against isolated test Postgres", () =>
         await waitForBlocked("update web_sessions");
       });
       expect(await rotation).toBe(true);
-      expect(await revocation).toEqual({ web_sessions: 1 });
+      // Pass count depends on the race interleaving, so pin the count plus
+      // the pass invariants rather than an exact pass array.
+      const revoked = await revocation;
+      expect(revoked).toMatchObject({ web_sessions: 1 });
+      expect(revoked!.passes).toBe(revoked!.stampsPerPass.length);
+      expect(revoked!.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        revoked!.web_sessions,
+      );
       expect(await counts(MEMBER_A)).toBe(0);
       expect(await counts(MEMBER_B)).toBe(1);
     } finally {

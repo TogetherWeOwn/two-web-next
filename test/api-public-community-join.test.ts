@@ -117,7 +117,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
         if (statement.includes("DELETE FROM web_throttle_hits")) return [];
         throw new Error("Unexpected throttle statement");
       },
-      { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+      {
+        begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     const throttled = {
       ...env,
@@ -132,7 +137,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("60");
     expect(await res.json()).toEqual({
-      error: { code: "rate_limited", message: "Too many requests. Try again in 60 seconds." },
+      error: {
+        code: "rate_limited",
+        message: "Too many requests. Try again in 60 seconds.",
+        request_id: expect.any(String),
+        next: "Wait for Retry-After, then retry.",
+      },
     });
   });
 });

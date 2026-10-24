@@ -3,8 +3,11 @@
 // memory store only, no DB. Guest → bounceToLogin with url.intended
 // preserved; signed non-moderator → 403 (never a login loop); resolve
 // failure → 503 fail-closed; moderator → handler with `private, no-store`.
+import { Hono } from "hono";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { adminGuard } from "../src/admin/guard";
+import type { QueuePreviewVars } from "../src/admin/queue-preview";
 import { adminApp } from "../src/admin/routes";
 import { LOGIN_INTENDED_COOKIE } from "../src/return-journey";
 import type { Env } from "../src/env";
@@ -97,7 +100,9 @@ describe("admin guard matrix (override seams, no DB)", () => {
     const cookie = await cookieFor(store, MEMBER);
     const res = await adminApp(store).request("/events", { headers: { cookie } }, env);
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain("Forbidden");
+    const body = await res.text();
+    expect(body).toContain("You do not have access to this");
+    expect(body).toContain('data-testid="error-home"');
     expect(res.headers.get("location")).toBeNull();
     expect(intendedPair(res)).toBeNull();
   });
@@ -126,5 +131,33 @@ describe("admin guard matrix (override seams, no DB)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(await res.text()).toContain("mod");
+  });
+
+  it("overwrites a downstream cacheable value with private, no-store", async () => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store, MOD);
+    const inner = new Hono<QueuePreviewVars>();
+    inner.use("/*", adminGuard({ sessionStore: store }));
+    inner.post("/write", (c) => {
+      c.header("cache-control", "public, max-age=3600");
+      return c.text("wrote", 200);
+    });
+    const res = await inner.request("/write", { method: "POST", headers: { cookie } }, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("keeps a downstream no-store refusal spelling", async () => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store, MOD);
+    const inner = new Hono<QueuePreviewVars>();
+    inner.use("/*", adminGuard({ sessionStore: store }));
+    inner.post("/write", (c) => {
+      c.header("cache-control", "no-store, private");
+      return c.text("Slow down", 429);
+    });
+    const res = await inner.request("/write", { method: "POST", headers: { cookie } }, env);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
   });
 });

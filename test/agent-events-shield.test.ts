@@ -45,13 +45,16 @@ const FIELDS = {
 };
 
 describe("throttle envelope (pure, two-web TOG-6788)", () => {
-  it("answers one 429 shape: reason, message, retry_after, Retry-After, no stack", () => {
-    const a = throttleEnvelope(42);
+  it("answers one 429 shape: reason, message, request_id, retry_after, Retry-After, no stack", () => {
+    const a = throttleEnvelope(42, "req-429-pin-001");
     expect(a.status).toBe(429);
     expect(a.body).toEqual({
+      code: "rate_limited",
       reason: "rate_limited",
       message: "Too many requests. Try again in 42 seconds.",
+      request_id: "req-429-pin-001",
       retry_after: 42,
+      next: "Wait for Retry-After, then retry with the same key.",
     });
     expect(a.headers).toEqual({ "Retry-After": "42" });
     expect(a.body).not.toHaveProperty("exception");
@@ -59,8 +62,9 @@ describe("throttle envelope (pure, two-web TOG-6788)", () => {
   });
 
   it("floors the wait at one second", () => {
-    expect(throttleEnvelope(0).body.retry_after).toBe(1);
-    expect(throttleEnvelope(0).headers).toEqual({ "Retry-After": "1" });
+    expect(throttleEnvelope(0, "req-429-pin-002").body.retry_after).toBe(1);
+    expect(throttleEnvelope(0, "req-429-pin-002").headers).toEqual({ "Retry-After": "1" });
+    expect(throttleEnvelope(0, "req-429-pin-002").body.request_id).toBe("req-429-pin-002");
   });
 });
 
@@ -179,10 +183,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect(third.body.reason).toBe("rate_limited");
     expect(third.headers?.["Retry-After"]).toBeTruthy();
 
-    // No grant rows touched; only the two shield-passed hits wrote
-    // `unauthenticated` audit rows. The refused hit wrote nothing.
+    // No grant rows touched; pre-auth refusals write zero audit rows, so
+    // neither the shield-passed hits nor the refused hit wrote anything.
     expect((await sql`SELECT count(*)::int AS n FROM agent_event_grants`)[0]!.n).toBe(0);
-    expect(await audits("unauthenticated")).toBe(2);
+    expect(await audits("unauthenticated")).toBe(0);
   });
 
   it("throttles rapid invalid-grant probes without leaking grant-existence oracles", async () => {
@@ -206,8 +210,20 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect(near.body.reason).toBe("unauthenticated");
     expect(far.body.reason).toBe("unauthenticated");
     expect(near.body.message).toBe(far.body.message);
-    expect(Object.keys(near.body).sort()).toEqual(["message", "reason", "request_id"]);
-    expect(Object.keys(far.body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(near.body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
+    expect(Object.keys(far.body).sort()).toEqual([
+      "code",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
 
     // Two more near-miss hits spend that credential's shield of 3; the fourth
     // and fifth are refused by the outer layer with the shared envelope.
@@ -233,8 +249,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     );
     expect(valid.status).toBe(201);
 
-    // Only the unthrottled misses wrote rows (3 near + 2 far).
-    expect((await audits("unauthenticated")) - unauthBefore).toBe(5);
+    // Pre-auth refusals write zero audit rows: none of the misses (3 near
+    // + 2 far) wrote anything, throttled or not.
+    expect((await audits("unauthenticated")) - unauthBefore).toBe(0);
   });
 
   // Exact-head review regressions (TOG-10475 CHANGES): the shield admits
@@ -266,9 +283,16 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
   });
 
   it("refuses an admitted over-deep body with 422 payload_too_deep, never 500", async () => {
-    const r = await call(deepBody(), null, 60, "127.0.0.32");
+    // Grant-first ingress refuses grantless deep bodies 401 before the
+    // digest, so this regression pins the admitted (granted) path instead.
+    const token = `sh-deep-${schemaName}`;
+    await grant(token);
+    const r = await call(deepBody(), token, 60, "127.0.0.32");
     expect(r.status).toBe(422);
     expect(r.body.reason).toBe("payload_too_deep");
+    // Pinned API contract: the ingress answers a static message, never the
+    // caught error's text, so internal error-text edits cannot move the API.
+    expect(r.body.message).toBe("The request body nests deeper than 100 levels.");
   });
 
   it("prunes stale shield counters on denied-only traffic", async () => {

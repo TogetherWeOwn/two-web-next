@@ -10,12 +10,12 @@ production Workers, any database, or any custom domain.
 
 | Thing | Value |
 | --- | --- |
-| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7` (unchanged; invoked once from the proof workflow) |
+| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06` (unchanged; invoked once from the proof workflow) |
 | Caller workflow | `.github/workflows/gradual-promote-proof.yml` (`workflow_dispatch` only, `main` only) |
 | Synthetic Worker | `two-gradual-promote-proof` on workers.dev |
 | Fixture | `ci/gradual-promote-proof/fixture.mjs` (no imports, no data bindings) |
 | Config | generated at run time by `ci/gradual-promote-proof/proof-lib.mjs` and saved in the evidence artifact as `config-original.json` / `config-candidate.json` |
-| Smoke checker | the real `bin/smoke.mjs` (17 GETs per attempt, 6 attempts per stage gate) |
+| Smoke checker | the real `bin/smoke.mjs` (20 GETs per attempt, 6 attempts per stage gate) |
 | Credentials | the staging `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets under the `staging` GitHub Environment. The production secret names are never referenced |
 
 The action hardcodes `--env production` for its deployment list and
@@ -51,8 +51,9 @@ other environment.
 5. Pre-promote attribution: the probe requires the
    `x-proof-version-id` header (from the version-metadata binding) to
    equal the candidate id under the version-override header, and the
-   real smoke checker must agree with the run mode (pass for `success`,
-   fail for `rollback`). A healthy rollback candidate stops the run
+   real smoke checker requires `/up` `revision.version_id` to equal
+   the same candidate id. The smoke checker must agree with the run
+   mode (pass for `success`, fail for `rollback`). A healthy rollback candidate stops the run
    before the action, because its forced failure would be fake. Every
    live probe in the workflow retries 6 times, 5s apart, and records
    each attempt, because a deployment change can take a couple of
@@ -64,7 +65,8 @@ other environment.
    only redeploy; after the action runs, only its own rollback may move
    traffic.
 7. The pinned action promotes 5% -> 50% -> 100%, running the real smoke
-   checker (pinned to the candidate by version override) at every stage.
+   checker (pinned to the candidate by version override) plus the
+   per-stage error-rate gate and soak at every stage.
 8. Independent readback (always): the final deployment must be the
    candidate at 100% after a successful action, or the captured original
    at 100% after a failed one; the live probe must be served by that same
@@ -158,9 +160,13 @@ report the gap instead of broadening access.
    Cloudflare account, or is already this proof's Worker from an
    earlier run (never some other workload).
 2. The staging `CLOUDFLARE_API_TOKEN` can edit Workers scripts and read
-   the account's workers.dev subdomain. The workflow fails closed if
+   the account's workers.dev subdomain plus Account Analytics read (the
+   new pin runs its per-stage error-rate gate by default, which queries
+   analytics and fails closed). The workflow fails closed if
    the credentials are absent; a token scoped to other scripts only
-   will fail at the first wrangler call, before any traffic moves.
+   will fail at the first wrangler call, before any traffic moves, and
+   a token without analytics read fails at the 5% gate with automatic
+   rollback of the synthetic Worker only.
 3. The `staging` GitHub Environment admits this workflow (its
    protection rules apply to the dispatch as they do to staging
    deploys). Version overrides themselves are documented Cloudflare

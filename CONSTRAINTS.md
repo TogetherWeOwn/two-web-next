@@ -44,8 +44,9 @@ while lowering it, or deleting the row, fails the gate.
 | Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
 | Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts:40`) | `npm run test:coverage` | every PR (`check` job) |
 | Security: code | No sink or secret-literal findings; scanner and partial-parse errors fail closed | Semgrep HARD step in `.github/workflows/ci.yml` (`--strict --error`, planted-finding selftest) | every PR (`check` job) |
-| Test inventory | Every test file reachable from CI | `npm run test:inventory` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
+| Test inventory | Every test file reachable from CI | `npm run test:inventory -- --strict` | every PR (`check` job, HARD) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
+| Worker bundle | Main Worker dry-run bundle within budget | `npm run worker-budget` | every PR (`check` job) |
 | Page quality | Lighthouse categories within `ci/quality-budget.json`; security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |
 | Accessibility | Zero critical or serious violations on fixtures | `npm run a11y` | `a11y` job, blocks merge |
 

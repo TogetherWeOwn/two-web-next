@@ -9,7 +9,7 @@
 // guest — the gate bounces through expiredWriteBounce, so JSON callers keep
 // 401 with a recovery link (TOG-10357 profile / TOG-12399 admin precedent).
 // No-cookie guests keep the bare refusal, live non-moderators keep 403, and
-// the OAuth round trip restores a working session with the one-shot banner.
+// the OAuth round trip restores a working session without a pre-armed banner.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
@@ -128,7 +128,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({
         error: "Unauthorized",
-        recovery: "/auth/recover?next=%2Fevents",
+        recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
       });
       expect(res.headers.getSetCookie()).toEqual([]);
       expect(await titles()).toEqual(before);
@@ -143,11 +143,18 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     // JSON-only routes never negotiate: a header-less fetch must not follow a
     // 303 to a 200 page and read a dropped write as success.
-    const recoveryBody = { error: "Unauthorized", recovery: "/auth/recover?next=%2Fevents" };
-    const expectJsonRecovery = async (res: Response) => {
+    const keyedRecoveryBody = {
+      error: "Unauthorized",
+      recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
+    };
+    const unkeyedRecoveryBody = {
+      error: "Unauthorized",
+      recovery: "/auth/recover?next=%2Fevents",
+    };
+    const expectJsonRecovery = async (res: Response, expected = keyedRecoveryBody) => {
       expect(res.status).toBe(401);
       expect(res.headers.get("location")).toBeNull();
-      expect(await res.json()).toEqual(recoveryBody);
+      expect(await res.json()).toEqual(expected);
     };
     const rows = async () =>
       (await fixture.db.select().from(events)).map(({ title, status, rsvpOpen }) => ({
@@ -156,7 +163,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         rsvpOpen,
       }));
 
-    it.each(["publish", "cancel", "rsvp-pause", "rsvp-reopen"])(
+    it.each(["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"])(
       "an expired bearer on bodiless %s with no Accept gets the JSON 401",
       async (action) => {
         const before = await rows();
@@ -186,7 +193,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         },
         body: new URLSearchParams({ title: "Unsaved edit" }).toString(),
       });
-      await expectJsonRecovery(res);
+      // Unkeyed POST keeps the listing fallback; keyed PATCH returns to the event.
+      await expectJsonRecovery(res, path === "/events" ? unkeyedRecoveryBody : keyedRecoveryBody);
       expect(await rows()).toEqual(before);
       expect(sent).toEqual([]);
     });
@@ -197,7 +205,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await titles()).toEqual(["Game night"]);
     });
 
-    it("recovery landing, moderator OAuth login, fresh write, banner exactly once", async () => {
+    it("recovery landing, moderator OAuth login, fresh write, no pre-armed banner", async () => {
       vi.stubGlobal(
         "fetch",
         async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -220,7 +228,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
         let jar = mergeCookies("", await req(recovery.recovery));
         expect(jar).not.toContain("Unsaved");
-        const start = await req(`/auth/discord?next=${encodeURIComponent("/events")}`, {
+        const start = await req(`/auth/discord?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`, {
           headers: { cookie: jar },
         });
         jar = mergeCookies(jar, start);
@@ -228,11 +236,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const callback = await req(`/auth/discord/callback?state=${state}&code=fixture`, {
           headers: { cookie: jar },
         });
-        expect(callback.headers.get("location")).toBe("/events");
+        expect(callback.headers.get("location")).toBe(`/e/${EVENT_KEY}`);
         jar = mergeCookies(jar, callback);
-        expect(jar.split("; ").find((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="))).toContain(
-          "restored",
-        );
+        // A JSON bounce arms no pending notice and the landing never mints
+        // one, so the login restores nothing to flash.
+        expect(
+          jar.split("; ").find((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=")),
+        ).toBeUndefined();
 
         // A fresh session after recovery edits successfully.
         const sessionCookie = jar.split("; ").find((c) => c.startsWith("__Host-two_session="))!;
@@ -240,14 +250,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(retry.status).toBe(200);
         expect(await titles()).toEqual(["Recovered edit"]);
 
-        // The one-shot banner lands on the return page, then is gone.
-        const page = await req("/events", { headers: { cookie: jar } });
+        // No banner on the return page: nothing was armed.
+        const page = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
         expect(page.status).toBe(200);
-        expect(await page.text()).toContain('data-testid="auth-error"');
+        expect(await page.text()).not.toContain('data-testid="auth-error"');
         jar = mergeCookies(jar, page);
-        expect(await (await req("/events", { headers: { cookie: jar } })).text()).not.toContain(
-          'data-testid="auth-error"',
-        );
+        const reload = await req(`/e/${EVENT_KEY}`, { headers: { cookie: jar } });
+        expect(reload.status).toBe(200);
+        expect(await reload.text()).not.toContain('data-testid="auth-error"');
       } finally {
         vi.unstubAllGlobals();
       }

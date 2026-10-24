@@ -17,8 +17,9 @@ import { dbFor } from "../admin/db";
 import { alertRequestError } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import type { Env } from "../env";
+import { MCP_TRANSPORT_ERROR_CODE } from "../errors";
 import { safeRequestId } from "../request-log";
-import { admitted } from "../public-data/routes";
+import { admissionRetryAfter } from "../public-data/routes";
 import { createPublicMcpServer } from "./server";
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -26,16 +27,12 @@ type Ctx = Context<{ Bindings: Env }>;
 /**
  * JSON-RPC batches (an array at the top level) would let one admitted POST
  * run hundreds of DB-backed tool calls for a single budget hit. The
- * 2025-06-18 protocol removed batching, so refuse arrays with -32600/400
- * before admission burns or the handler runs. Returns the refusal, if any.
+ * 2025-06-18 protocol removed batching, so refuse arrays with -32600/400.
+ * Takes the already-materialized body text: the caller reads the stream once
+ * and reuses it for the handler, so there is exactly one materialization and
+ * no clone().text().
  */
-async function refuseMcpBatch(c: Ctx): Promise<Response | null> {
-  let text: string;
-  try {
-    text = await c.req.raw.clone().text();
-  } catch {
-    return null;
-  }
+function refuseMcpBatchText(text: string, c: Ctx): Response | null {
   if (!text) return null;
   let parsed: unknown;
   try {
@@ -48,9 +45,43 @@ async function refuseMcpBatch(c: Ctx): Promise<Response | null> {
     {
       jsonrpc: "2.0",
       id: null,
-      error: { code: -32600, message: "Invalid Request: batched requests are not supported." },
+      error: {
+        code: MCP_TRANSPORT_ERROR_CODE,
+        message: "Invalid Request: batched requests are not supported.",
+        data: { next: "Send one request per POST and retry.", request_id: c.get("requestId") },
+      },
     },
     400,
+  );
+}
+
+/**
+ * Over-budget MCP POSTs answer a JSON-RPC error, not the REST envelope: the
+ * transport speaks one shape whatever the failure. Same shared budget and the
+ * same validated Retry-After as the REST 429; the id is null because the
+ * refusal happens before any id is trusted.
+ */
+async function mcpRefused(c: Ctx): Promise<Response | null> {
+  const retryAfterSeconds = await admissionRetryAfter(c);
+  if (retryAfterSeconds === null) return null;
+  return c.json(
+    {
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: MCP_TRANSPORT_ERROR_CODE,
+        message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
+        data: {
+          next: "Wait for Retry-After, then retry.",
+          request_id: c.get("requestId"),
+        },
+      },
+    },
+    429,
+    {
+      "retry-after": String(retryAfterSeconds),
+      "cache-control": "no-store, private",
+    },
   );
 }
 
@@ -103,13 +134,23 @@ export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
   // admission burn: the handler answers with its CORS headers.
   app.options("/mcp", (c) => serveMcp(c));
   app.post("/mcp", requestBodyLimit("mcp"), async (c) => {
-    // Batch refusal first: no budget burn, no DB read, no handler run.
-    const batch = await refuseMcpBatch(c);
-    if (batch) return batch;
-    // The shared public-read budget, before any database read. A 429 keeps
-    // the shared Retry-After with the public error envelope.
-    const refused = await admitted(c);
+    // The shared public-read budget first, before any body parse or database
+    // read. A 429 keeps the shared Retry-After with the JSON-RPC error shape,
+    // even for batch-shaped bodies.
+    const refused = await mcpRefused(c);
     if (refused) return refused;
+    // Single body materialization: read once, refuse batches on the cached
+    // text, then replay it for the handler with no second network read and
+    // no clone().text().
+    let text: string;
+    try {
+      text = await c.req.raw.text();
+    } catch {
+      return serveMcp(c);
+    }
+    const batch = refuseMcpBatchText(text, c);
+    if (batch) return batch;
+    c.req.raw = new Request(c.req.raw, { body: text, duplex: "half" } as RequestInit);
     return serveMcp(c);
   });
 }

@@ -1,16 +1,32 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
+  AUTOMATIC_PROMOTION_EVENTS,
+  PRODUCTION_HOLD_MAX_MS,
+  PRODUCTION_ORIGIN,
   assertProductionCredentials,
+  assertProductionHold,
   assertProductionProtection,
+  assertProductionRequest,
   assertProductionTarget,
   assertRollbackVersionId,
   checkProductionGate,
+  isAlreadyLive,
+  pendingLedgerTags,
+  pendingMigrationTags,
+  pendingProductionMigrations,
+  readLedgerState,
+  readLiveProductionCommit,
+  readLiveProductionLedger,
   stagingQualityJob,
   stagingQualitySteps,
+  targetWebEndUnknown,
+  targetWebEntries,
 } from "./production-deploy-gate.mjs";
 
 const enabled = {
@@ -357,7 +373,7 @@ for (const config of [
   });
 }
 
-function assertIsolatedBindings(config) {
+function assertIsolatedBindings(config, jobsConfig) {
   const production = config.env.production;
   assert.notEqual(production.name, config.name);
   assert.equal(production.workers_dev, false);
@@ -366,26 +382,34 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
-  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
-  // on the web Worker until its own handoff, so assert each side explicitly.
-  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  // Production handoff: the web production env only produces (no crons, no
+  // consumers); both schedules and both consumers live on
+  // two-web-jobs-production (wrangler.jobs.jsonc env.production), mirroring
+  // the staging split. Values must match RECONCILE_CRON/PRUNE_CRON in
+  // src/jobs/constants.ts.
+  const jobsProduction = jobsConfig.env.production;
   assert.deepEqual(config.triggers, { crons: [] });
-  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
+  assert.deepEqual(production.triggers, { crons: [] });
+  assert.deepEqual(production.queues.consumers ?? [], []);
+  assert.deepEqual(jobsProduction.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
-    assert.ok(production.queues.consumers.some((consumer) => consumer.queue === producer.queue));
+    assert.ok(
+      jobsProduction.queues.consumers.some((consumer) => consumer.queue === producer.queue),
+    );
   }
 }
 
 test("actual production config retains isolated bindings before and after sentinel replacement", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = readWranglerConfig(text);
-  assertIsolatedBindings(config);
+  const jobsText = readFileSync(new URL("../wrangler.jobs.jsonc", import.meta.url), "utf8");
+  const jobsConfig = readWranglerConfig(jobsText);
+  assertIsolatedBindings(config, jobsConfig);
   const provisioned = structuredClone(config);
   provisioned.env.production.hyperdrive[0].id = "11111111111111111111111111111111";
-  assertIsolatedBindings(provisioned);
+  assertIsolatedBindings(provisioned, jobsConfig);
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
 });
 
@@ -557,6 +581,36 @@ test("credential CLI fails closed without printing credentials or accessing the 
   assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_ACCOUNT_ID));
 });
 
+test("help CLI prints usage without running the gate or touching GITHUB_OUTPUT", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-help-"));
+  const output = join(dir, "github-output");
+  const result = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", "--help"], {
+    env: { GITHUB_OUTPUT: output },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Usage: node ci\/production-deploy-gate\.mjs/);
+  for (const flag of ["--credentials", "--version-id", "--already-live", "--check-migrations"]) {
+    assert.ok(result.stdout.includes(flag), flag);
+  }
+  assert.equal(result.stderr, "");
+  assert.ok(!existsSync(output));
+});
+
+for (const flag of ["--bogus", "--check-migration"]) {
+  test(`unknown flag ${flag} refuses with usage instead of running the gate`, () => {
+    const result = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", flag], {
+      env: {},
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Usage: node ci\/production-deploy-gate\.mjs/);
+    assert.equal(result.stdout, "");
+    assert.ok(!result.stderr.includes("::error::"));
+    assert.ok(!result.stderr.match(/deployment disabled/));
+  });
+}
+
 test("both Environment gate jobs inherit contents and Actions read permissions", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
@@ -564,9 +618,24 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
   // The post-deploy `release` call (release.yml) is the only job override: it
-  // runs after both gate jobs and needs only contents: write to tag the commit.
+  // needs only Actions read for promotion proof and contents write to tag/release.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
-  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
+  const releaseLines = release
+    .split("\n")
+    .map((line) => line.replace(/#.*$/, "").trimEnd())
+    .filter((line) => line.trim());
+  const permissionsAt = releaseLines.indexOf("    permissions:");
+  assert.notEqual(permissionsAt, -1, "release caller must declare its permissions");
+  const permissions = releaseLines.slice(permissionsAt + 1);
+  const nextField = permissions.findIndex((line) => /^ {0,4}\S/.test(line));
+  assert.deepEqual(
+    permissions
+      .slice(0, nextField === -1 ? undefined : nextField)
+      .map((line) => line.trim())
+      .sort(),
+    ["actions: read", "contents: write"],
+    "release caller must grant exactly Actions read and contents write",
+  );
   assert.ok(
     !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
@@ -829,7 +898,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  rollback-production:/m);
-  // Production Environment approval with required reviewers; never cancelled.
+  // Production Environment gate in either approval mode; never cancelled.
   assert.match(workflow, /environment:\n      name: production\n/);
   assert.match(workflow, /cancel-in-progress: false/);
   // Same request gate as a deploy, in both jobs.
@@ -1282,6 +1351,24 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
   }
 });
 
+for (const job of ["preflight", "rollback-production"]) {
+  test(`rollback ${job} gate receives the repository approval mode and dispatch SHA`, () => {
+    const workflow = readFileSync(
+      new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+      "utf8",
+    );
+    const block = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
+    assert.ok(block, `${job} job must exist`);
+    const gates = block.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    assert.equal(gates.length, 1, `${job} must run the shared gate`);
+    const gate = gates[0].split("\n      - ")[0];
+    assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
+    assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  });
+}
+
 test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
   // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
   const result = await checkGreen(ciEvidence());
@@ -1435,4 +1522,655 @@ test("the staging rehearsal requires the elevated-rate verdict, not any non-zero
     rehearsal.includes('grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail"'),
     "rehearsal must require the elevated-rate fail verdict line",
   );
+});
+
+// Native automatic production promotion: triggers, live equality, soak/red,
+// pending migrations and hold with expiry. Each rule below is pinned in this
+// workflow-structure suite (with test/probe-workflows.test.ts) per the card.
+test("automatic promotion accepts dispatch, workflow_run and schedule on main only", () => {
+  assert.deepEqual([...AUTOMATIC_PROMOTION_EVENTS].sort(), [
+    "schedule",
+    "workflow_dispatch",
+    "workflow_run",
+  ]);
+  const base = {
+    PRODUCTION_DEPLOY_ENABLED: "true",
+    GITHUB_REF: "refs/heads/main",
+    PRODUCTION_AUTO_APPROVE: "true",
+  };
+  for (const event of ["workflow_dispatch", "workflow_run", "schedule"]) {
+    assert.doesNotThrow(
+      () =>
+        assertProductionRequest({
+          ...base,
+          GITHUB_EVENT_NAME: event,
+          PRODUCTION_AUTO_APPROVE: event === "workflow_dispatch" ? undefined : "true",
+        }),
+      event,
+    );
+  }
+  // Automatic triggers without auto-approve have no reviewer to approve the
+  // Environment, so they must refuse before any deploy.
+  for (const event of ["workflow_run", "schedule"]) {
+    assert.throws(
+      () =>
+        assertProductionRequest({
+          ...base,
+          GITHUB_EVENT_NAME: event,
+          PRODUCTION_AUTO_APPROVE: "false",
+        }),
+      /PRODUCTION_AUTO_APPROVE/,
+      event,
+    );
+  }
+  for (const env of [
+    { ...base, GITHUB_EVENT_NAME: "push" },
+    { ...base, GITHUB_EVENT_NAME: "pull_request" },
+    { ...base, GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/feature" },
+  ]) {
+    assert.throws(() => assertProductionRequest(env), /workflow_dispatch on main/);
+  }
+});
+
+test("production hold: empty passes, active holds, expired passes, far-future and malformed refuse", () => {
+  const now = Date.parse("2026-10-19T14:00:00Z");
+  assert.equal(PRODUCTION_HOLD_MAX_MS, 24 * 60 * 60 * 1000);
+  for (const empty of [undefined, "", "   "]) {
+    assert.doesNotThrow(() =>
+      assertProductionHold({ PRODUCTION_HOLD_UNTIL: empty }, { nowMs: now }),
+    );
+  }
+  // Active hold (now < value, within 24h) refuses.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T15:00:00Z" }, { nowMs: now }),
+    /held until 2026-10-19T15:00:00Z/,
+  );
+  // Expired hold (now >= value) passes.
+  assert.doesNotThrow(() =>
+    assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T13:59:59Z" }, { nowMs: now }),
+  );
+  assert.doesNotThrow(() =>
+    assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-19T14:00:00Z" }, { nowMs: now }),
+  );
+  // More than 24h ahead refuses even though it is a future hold.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-20T14:00:01Z" }, { nowMs: now }),
+    /more than 24h ahead/,
+  );
+  // Exactly 24h ahead is the boundary and passes the far-future check
+  // (but still holds, since now < value).
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-10-20T14:00:00Z" }, { nowMs: now }),
+    /held until/,
+  );
+  for (const bad of ["tomorrow", "2026-10-19 15:00:00", "2026-10-19T15:00:00", "not-a-date"]) {
+    assert.throws(
+      () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: bad }, { nowMs: now }),
+      /ISO-8601 UTC/,
+    );
+  }
+  // Impossible calendar dates match the shape but never parse: still refuse.
+  assert.throws(
+    () => assertProductionHold({ PRODUCTION_HOLD_UNTIL: "2026-13-01T00:00:00Z" }, { nowMs: now }),
+    /valid UTC timestamp/,
+  );
+});
+
+test("production hold blocks the gate before any API call", async () => {
+  const held = {
+    ...enabled,
+    PRODUCTION_HOLD_UNTIL: new Date(Date.now() + 60 * 60 * 1000)
+      .toISOString()
+      .replace(/\.\d+Z$/, "Z"),
+  };
+  await assert.rejects(checkProductionGate(held, noNetwork), /held until/);
+});
+
+test("both production gate steps receive the hold variable", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const gates = workflow.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    assert.match(
+      gate.split("\n      - ")[0],
+      /PRODUCTION_HOLD_UNTIL: \$\{\{ vars\.PRODUCTION_HOLD_UNTIL \}\}/,
+    );
+  }
+});
+
+test("live equality: same commit is already live, different or unknown is not", () => {
+  const deploy = "a".repeat(40);
+  assert.equal(isAlreadyLive(deploy, deploy), true);
+  assert.equal(isAlreadyLive(deploy.toUpperCase(), deploy), true);
+  assert.equal(isAlreadyLive(deploy, "b".repeat(40)), false);
+  assert.equal(isAlreadyLive(deploy, null), false);
+  assert.equal(isAlreadyLive(deploy, ""), false);
+  assert.equal(isAlreadyLive("", deploy), false);
+  assert.equal(PRODUCTION_ORIGIN, "https://togetherweown.com");
+});
+
+test("live commit reads the /up revision marker and fails open to null", async () => {
+  const sha = "c".repeat(40);
+  const ok = await readLiveProductionCommit({
+    fetchImpl: async () => ({ json: async () => ({ revision: { commit: sha } }) }),
+  });
+  assert.equal(ok, sha);
+  for (const body of [
+    {},
+    { revision: null },
+    { revision: {} },
+    { revision: { commit: "not-a-sha" } },
+  ]) {
+    assert.equal(
+      await readLiveProductionCommit({ fetchImpl: async () => ({ json: async () => body }) }),
+      null,
+    );
+  }
+  assert.equal(
+    await readLiveProductionCommit({
+      fetchImpl: async () => {
+        throw new Error("down");
+      },
+    }),
+    null,
+  );
+});
+
+test("pending migrations are target tags the live journal lacks", () => {
+  assert.deepEqual(pendingMigrationTags(["a", "b", "c"], ["a", "b"]), ["c"]);
+  assert.deepEqual(pendingMigrationTags(["a", "b"], ["a", "b"]), []);
+  assert.deepEqual(pendingMigrationTags([], ["a"]), []);
+  assert.deepEqual(pendingMigrationTags(["a"], []), ["a"]);
+});
+
+test("pending migration lookup compares journals at both commits and passes on unknown live", async () => {
+  const journal = (tags) => ({
+    content: Buffer.from(JSON.stringify({ entries: tags.map((tag) => ({ tag })) })).toString(
+      "base64",
+    ),
+    encoding: "base64",
+  });
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const fetchImpl = async (url) => {
+    const ref = new URL(url).searchParams.get("ref");
+    const tags = ref === targetSha ? ["0000_a", "0001_b"] : ["0000_a"];
+    return { ok: true, json: async () => journal(tags) };
+  };
+  assert.deepEqual(
+    await pendingProductionMigrations({
+      repository: "o/r",
+      targetSha,
+      liveSha,
+      token: "t",
+      fetchImpl,
+    }),
+    ["0001_b"],
+  );
+  assert.deepEqual(
+    await pendingProductionMigrations({
+      repository: "o/r",
+      targetSha,
+      liveSha: null,
+      token: "t",
+      fetchImpl,
+    }),
+    [],
+  );
+  await assert.rejects(
+    pendingProductionMigrations({
+      repository: "o/r",
+      targetSha: "short",
+      liveSha,
+      token: "t",
+      fetchImpl,
+    }),
+    /40-hex/,
+  );
+});
+
+test("target web entries are the 1000-series journal entries", () => {
+  const entries = [
+    { tag: "0000_init", when: 1 },
+    { tag: "1000_a", when: 1000 },
+    { tag: "1001_b", when: 1001 },
+  ];
+  assert.deepEqual(
+    targetWebEntries(entries).map((entry) => entry.tag),
+    ["1000_a", "1001_b"],
+  );
+  assert.deepEqual(targetWebEntries([]), []);
+  assert.deepEqual(targetWebEntries(null), []);
+});
+
+test("unknown target web end fails closed on timestamp-less web entries", () => {
+  assert.equal(
+    targetWebEndUnknown([
+      { tag: "1000_a", when: 1000 },
+      { tag: "1001_b", when: 1001 },
+    ]),
+    false,
+  );
+  assert.equal(targetWebEndUnknown([]), false);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a" }]), true);
+  assert.equal(targetWebEndUnknown([{ tag: "1000_a", when: "1000" }]), true);
+  // Grandfathered non-web entries stay outside the proof.
+  assert.equal(targetWebEndUnknown([{ tag: "0000_init" }]), false);
+});
+
+test("ledger-pending tags are target web entries missing from the applied set", () => {
+  const target = [
+    { tag: "0000_init", when: 1 },
+    { tag: "1000_a", when: 1000 },
+    { tag: "1001_b", when: 1001 },
+    { tag: "1002_c", when: 1002 },
+  ];
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 1001, 1002, 9999999999999]), []);
+  assert.deepEqual(pendingLedgerTags(target, [1, 1000, 9999999999999]), ["1001_b", "1002_c"]);
+  // A newer foreign row cannot hide a missing web migration: inclusion, not a max.
+  assert.deepEqual(pendingLedgerTags(target, [9999999999999]), ["1000_a", "1001_b", "1002_c"]);
+  assert.deepEqual(pendingLedgerTags(target, []), ["1000_a", "1001_b", "1002_c"]);
+  assert.throws(() => pendingLedgerTags(target, null), /migration_ledger/);
+  assert.throws(() => pendingLedgerTags(target, [1000, "1001"]), /migration_ledger/);
+});
+
+test("ledger state requires a current database and the applied set", () => {
+  assert.deepEqual(
+    readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [1000, 1001] }),
+    [1000, 1001],
+  );
+  assert.deepEqual(readLedgerState({ db: "ok", pending_migrations: 0, migration_ledger: [] }), []);
+  for (const body of [
+    { db: "error", pending_migrations: null, migration_ledger: null },
+    // Isolated db arm: pending and ledger are valid, only db is bad. Deleting
+    // the body?.db !== "ok" disjunct in readLedgerState must turn this red.
+    { db: "error", pending_migrations: 0, migration_ledger: [1000, 1001] },
+    { db: "ok", pending_migrations: 1, migration_ledger: [1000, 1001] },
+    { db: "ok", pending_migrations: 0, migration_ledger: null },
+    { db: "ok", pending_migrations: 0, migration_ledger: [1000, "1001"] },
+    { db: "ok", pending_migrations: 0 },
+    {},
+  ]) {
+    assert.throws(() => readLedgerState(body), /ledger/i);
+  }
+});
+
+test("live ledger read fails closed with a ledger reason on transport errors", async () => {
+  const applied = await readLiveProductionLedger({
+    fetchImpl: async () => ({
+      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
+    }),
+  });
+  assert.deepEqual(applied, [40, 41, 42]);
+  await assert.rejects(
+    readLiveProductionLedger({
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed");
+      },
+    }),
+    /ledger read failed/,
+  );
+  await assert.rejects(
+    readLiveProductionLedger({
+      fetchImpl: async () => ({
+        json: async () => ({ db: "error", pending_migrations: null, migration_ledger: null }),
+      }),
+    }),
+    /ledger/i,
+  );
+});
+
+test("pending migrations stop the promotion with a migrator-blocked error (CLI)", () => {
+  // The workflow step message must name db-migrate.yml and the blocker.
+  const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
+  assert.match(gate, /run db-migrate\.yml \(target production\) first/);
+  assert.match(gate, /least-privilege migrator/);
+});
+
+// Spawned CLI branch tests: behavior pins, not source greps. Neutralizing the
+// pending-stop, inverting the already_live output, dropping the live retry, or
+// collapsing the auto/manual split must fail here.
+function spawnGateCli(args, env, stub) {
+  const dir = mkdtempSync(join(tmpdir(), "gate-cli-"));
+  const output = join(dir, "output");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
+    {
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        FETCH_STUB_JSON: JSON.stringify(stub),
+        ...env,
+      },
+      encoding: "utf8",
+    },
+  );
+  let written = "";
+  try {
+    written = readFileSync(output, "utf8");
+  } catch {
+    written = "";
+  }
+  return { ...result, written };
+}
+
+const journalBody = (tags) => ({
+  content: Buffer.from(JSON.stringify({ entries: tags.map((tag) => ({ tag })) })).toString(
+    "base64",
+  ),
+  encoding: "base64",
+});
+
+test("already-live CLI reports exact GITHUB_OUTPUT for live, stale and unreadable production", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const origin = "http://stub.invalid";
+  const served = spawnGateCli(
+    ["--already-live"],
+    { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },
+    [{ match: "/up", body: { revision: { commit: target } } }],
+  );
+  assert.equal(served.status, 0);
+  assert.equal(served.written, `already_live=true\nlive_sha=${target}\n`);
+  assert.match(served.stdout, /skipping deploy/);
+  const stale = spawnGateCli(
+    ["--already-live"],
+    { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },
+    [{ match: "/up", body: { revision: { commit: live } } }],
+  );
+  assert.equal(stale.status, 0);
+  assert.equal(stale.written, `already_live=false\nlive_sha=${live}\n`);
+  assert.match(stale.stdout, /promoting/);
+  // An unreadable /up never counts as live: fail open toward deploying.
+  const down = spawnGateCli(["--already-live"], { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin }, [
+    { match: "/up", fail: true },
+  ]);
+  assert.equal(down.status, 0);
+  assert.equal(down.written, "already_live=false\nlive_sha=\n");
+  assert.match(down.stdout, /unreadable/);
+});
+
+test("check-migrations CLI passes a clean journal comparison", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const result = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      LIVE_SHA: live,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    },
+    [
+      { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+      { match: `ref=${live}`, body: journalBody(["0000_a", "0001_b"]) },
+    ],
+  );
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /No pending production migrations/);
+});
+
+test("check-migrations CLI stops manual dispatch until db-migrate plus audited confirmation", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  const base = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: live,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+  };
+  const stopped = spawnGateCli(["--check-migrations"], base, journals);
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /0001_b/);
+  assert.match(stopped.stderr, /run db-migrate\.yml \(target production\) first/);
+  assert.match(stopped.stderr, /migrations_applied=true/);
+  // The workflow renders the boolean input default as the string "false",
+  // so only the exact "true" confirmation releases the stop.
+  const defaulted = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "false" },
+    journals,
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /run db-migrate\.yml \(target production\) first/);
+  // After db-migrate applied the entries, the operator-confirmed re-dispatch
+  // continues with an audited log line naming the pending tags.
+  const continued = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "true" },
+    journals,
+  );
+  assert.equal(continued.status, 0);
+  assert.match(continued.stdout, /Manual continuation/);
+  assert.match(continued.stdout, /0001_b/);
+});
+
+test("check-migrations CLI keeps automatic promotion blocked on pending entries", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  // An operator confirmation must never release an automatic run.
+  for (const event of ["workflow_run", "schedule"]) {
+    const result = spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        LIVE_SHA: live,
+        GITHUB_REPOSITORY: "o/r",
+        GITHUB_TOKEN: "t",
+        GITHUB_EVENT_NAME: event,
+        MIGRATIONS_APPLIED: "true",
+      },
+      journals,
+    );
+    assert.equal(result.status, 1, event);
+    assert.match(result.stderr, /least-privilege migrator/);
+  }
+});
+
+test("check-migrations CLI refuses unknown-live manual promotion without audited continuation", () => {
+  const target = "a".repeat(40);
+  const down = [{ match: "/up", fail: true }];
+  const base = {
+    DEPLOY_SHA: target,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+    MIGRATIONS_APPLIED: "",
+  };
+  // The live commit stays unreadable after every retry: a manual dispatch
+  // must not promote past an unknown live state on a warning alone. The
+  // refusal names the audited continuation that releases it.
+  const refused = spawnGateCli(["--check-migrations"], base, down);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /unknown/i);
+  assert.match(refused.stderr, /migrations_applied=true/);
+  // The workflow renders the boolean input default as the string "false",
+  // so only the exact "true" confirmation releases the refusal.
+  const defaulted = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "false" },
+    down,
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /migrations_applied=true/);
+});
+
+test("check-migrations CLI continues unknown-live manual promotion only with audited confirmation", () => {
+  const target = "a".repeat(40);
+  const continued = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+      MIGRATIONS_APPLIED: "true",
+    },
+    [{ match: "/up", fail: true }],
+  );
+  assert.equal(continued.status, 0);
+  // The continuation is auditable from the log alone: it is a manual
+  // continuation, against an unknown live commit, for this target, on the
+  // operator's named confirmation.
+  assert.match(continued.stdout, /Manual continuation/);
+  assert.match(continued.stdout, /unknown/i);
+  assert.ok(continued.stdout.includes(target));
+  assert.match(continued.stdout, /migrations_applied=true/);
+});
+
+test("check-migrations CLI keeps automatic promotion halted on unknown live", () => {
+  const target = "a".repeat(40);
+  const down = [{ match: "/up", fail: true }];
+  const halted = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "schedule",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    down,
+  );
+  assert.equal(halted.status, 1);
+  assert.match(halted.stderr, /halting automatic promotion for a later retry/);
+  // An operator confirmation must never release an automatic run: the
+  // audited continuation is manual-only, automatic runs wait for a retry.
+  for (const event of ["workflow_run", "schedule"]) {
+    const confirmed = spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        GITHUB_REPOSITORY: "o/r",
+        GITHUB_TOKEN: "t",
+        GITHUB_EVENT_NAME: event,
+        PRODUCTION_ORIGIN: "http://stub.invalid",
+        MIGRATIONS_APPLIED: "true",
+      },
+      down,
+    );
+    assert.equal(confirmed.status, 1, event);
+    assert.match(confirmed.stderr, /halting automatic promotion for a later retry/);
+  }
+});
+
+test("check-migrations CLI recovers when an unreadable live commit succeeds on retry", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const journals = [
+    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  // A flapping /up that recovers on the third read proceeds to the journal
+  // comparison: a single-read implementation would treat live as unknown
+  // and refuse here instead.
+  const recovered = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [
+      {
+        match: "/up",
+        sequence: [{ fail: true }, { fail: true }, { body: { revision: { commit: live } } }],
+      },
+      ...journals,
+    ],
+  );
+  assert.equal(recovered.status, 0);
+  assert.match(recovered.stdout, /No pending production migrations/);
+});
+
+test("check-migrations CLI halts closed with a ledger reason when the ledger is unreachable", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const stub = [
+    { match: `ref=${target}`, body: journalBody(["0000_a", "0001_b"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+    { match: "/up", fail: true },
+  ];
+  const base = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: live,
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "t",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+  };
+  // Automatic: stays stopped, keeps the migrator-blocked reason, names the ledger failure.
+  const automatic = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, GITHUB_EVENT_NAME: "schedule" },
+    stub,
+  );
+  assert.equal(automatic.status, 1);
+  assert.match(automatic.stderr, /ledger/i);
+  assert.match(automatic.stderr, /0001_b/);
+  assert.match(automatic.stderr, /least-privilege migrator/);
+  // Manual: keeps the db-migrate guidance and the audited continuation.
+  const manual = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, GITHUB_EVENT_NAME: "workflow_dispatch" },
+    stub,
+  );
+  assert.equal(manual.status, 1);
+  assert.match(manual.stderr, /ledger/i);
+  assert.match(manual.stderr, /run db-migrate\.yml \(target production\) first/);
+  assert.match(manual.stderr, /migrations_applied=true/);
+});
+
+test("check-migrations CLI halts closed when the live Worker predates the ledger signal", () => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const dated = (entries) => ({
+    content: Buffer.from(JSON.stringify({ entries })).toString("base64"),
+    encoding: "base64",
+  });
+  const result = spawnGateCli(
+    ["--check-migrations"],
+    {
+      DEPLOY_SHA: target,
+      LIVE_SHA: live,
+      GITHUB_REPOSITORY: "o/r",
+      GITHUB_TOKEN: "t",
+      GITHUB_EVENT_NAME: "schedule",
+      PRODUCTION_ORIGIN: "http://stub.invalid",
+    },
+    [
+      {
+        match: `ref=${target}`,
+        body: dated([
+          { tag: "1000_a", when: 1000 },
+          { tag: "1001_b", when: 1001 },
+        ]),
+      },
+      { match: `ref=${live}`, body: dated([{ tag: "1000_a", when: 1000 }]) },
+      {
+        match: "/up",
+        body: { revision: { commit: live }, db: "ok", pending_migrations: 0 },
+      },
+    ],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /migration_ledger/);
 });

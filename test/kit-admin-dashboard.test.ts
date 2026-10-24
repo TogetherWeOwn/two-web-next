@@ -4,6 +4,7 @@
 // and GET /admin renders the dashboard from the same bounded, optional
 // analytics reads. Children reuse the layout guard; no child rotates or
 // re-audits.
+import { build } from "esbuild";
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,55 @@ describe("Kit admin guard: one contract, no rotation, no audit of its own", () =
       kind: "guest",
       location: "/auth/discord?next=%2Fadmin%2Fevents%3Fstatus%3Ddraft",
     });
+  });
+
+  it("real layout load marks its guest redirect private without writing cookies", async () => {
+    const { outputFiles } = await build({
+      entryPoints: [join(root, "web/src/routes/admin/+layout.server.ts")],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      tsconfigRaw: { compilerOptions: {} },
+      plugins: [
+        {
+          name: "kit-admin-load-fixture",
+          setup(builder) {
+            builder.onResolve({ filter: /^@sveltejs\/kit$/ }, () => ({
+              path: "kit",
+              namespace: "fixture",
+            }));
+            builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({
+              contents: `export const redirect = (status, location) => { throw { status, location }; };
+                export const error = (status, message) => { throw { status, message }; };`,
+              loader: "js",
+            }));
+          },
+        },
+      ],
+    });
+    const { load } = await import(
+      `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`
+    );
+    const setHeaders = vi.fn();
+    const cookies = { set: vi.fn(), delete: vi.fn() };
+    await expect(
+      load({
+        locals: guest(),
+        url: new URL("https://next.example.test/admin/events?status=draft"),
+        setHeaders,
+        cookies,
+      }),
+    ).rejects.toEqual({
+      status: 302,
+      location: "/auth/discord?next=%2Fadmin%2Fevents%3Fstatus%3Ddraft",
+    });
+    expect(setHeaders).toHaveBeenCalledExactlyOnceWith({
+      "cache-control": "no-store, private",
+      vary: "Cookie",
+    });
+    expect(cookies.set).not.toHaveBeenCalled();
+    expect(cookies.delete).not.toHaveBeenCalled();
   });
 
   it("guest with a hostile current path falls back to the dashboard", () => {
@@ -162,6 +212,16 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     expect(read("web/src/lib/AdminShell.svelte")).toContain('href="/"');
   });
 
+  it("keeps the scroll-region focus outline visible on the dark canvas", () => {
+    // Without this rule the new tabindex regions fall back to the shared
+    // sheet's dark outline on the Kit dark root canvas — nearly invisible
+    // for the keyboard users the regions were added for. Deleting the style
+    // block must fail this test.
+    const page = read("web/src/routes/admin/+page.svelte");
+    expect(page).toContain(".admin-table-scroll:focus-visible");
+    expect(page).toContain("outline-color: currentColor");
+  });
+
   it("admin chrome is responsive, labelled, skippable and never indexed", () => {
     const shell = read("web/src/lib/AdminShell.svelte");
     for (const needle of [
@@ -217,6 +277,19 @@ describe("Kit admin dashboard outage mapping: 503 like Hono, never a 500", () =>
         { status: "fulfilled", value: zeroValue },
       ),
     ).toEqual({ outage: false, funnel: undefined, zeroSearches: zeroValue });
+  });
+
+  it("a query cancellation degrades to an omitted section, not an outage", () => {
+    const cancellation = Object.assign(new Error("statement timeout"), {
+      name: "PostgresError",
+      code: "57014",
+    });
+    expect(
+      resolveDashboardWidgets(
+        { status: "fulfilled", value: funnelValue },
+        { status: "rejected", reason: cancellation },
+      ),
+    ).toEqual({ outage: false, funnel: funnelValue, zeroSearches: undefined });
   });
 
   it("healthy widgets pass their values through", () => {

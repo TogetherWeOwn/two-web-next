@@ -129,6 +129,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     expect(await res.json()).toEqual({
       error: "invalid",
       fields: { ends_at: "When does it end?" },
+      request_id: res.headers.get("x-request-id"),
     });
     await expectUnchanged(before);
   });
@@ -148,6 +149,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     expect(await res.json()).toEqual({
       error: "invalid",
       fields: { ends_at: "The end is after the start." },
+      request_id: res.headers.get("x-request-id"),
     });
     await expectUnchanged(before);
   });
@@ -162,6 +164,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     expect(await res.json()).toEqual({
       error: "invalid",
       fields: { ends_at: "The end is after the start." },
+      request_id: res.headers.get("x-request-id"),
     });
     await expectUnchanged(before);
   });
@@ -173,6 +176,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     expect(await res.json()).toEqual({
       error: "invalid",
       fields: { ends_at: "The end is after the start." },
+      request_id: res.headers.get("x-request-id"),
     });
     await expectUnchanged(before);
     expect((await stored())?.endsAt.toISOString()).toBe(ENDS_ISO);

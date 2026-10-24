@@ -102,7 +102,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [parent] = await db
         .insert(events)
         .values({
-          eventKey: "series-window-parent",
+          eventKey: "01K00000000000000000000022",
           title: FORM.title,
           game: FORM.game,
           description: FORM.description,
@@ -218,6 +218,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await res.json()).toEqual({
         error: "invalid",
         fields: { ends_at: END_AFTER_START },
+        request_id: res.headers.get("x-request-id"),
       });
       expect(await snapshot()).toEqual(before);
       expect(sent).toEqual([]);

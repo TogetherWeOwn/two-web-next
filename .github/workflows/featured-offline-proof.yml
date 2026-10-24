@@ -58,9 +58,14 @@ jobs:
             "ci/featured-proof/**" \
             "src/admin/pages.tsx" \
             "src/admin/pages/**" \
+            "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
+            "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
@@ -69,6 +74,8 @@ jobs:
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:
@@ -157,13 +164,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Credential-free guard selftests (no browser)
-        run: node --test ci/featured-proof/run-capture.test.cjs
+        run: node --test ci/featured-proof/run-capture.test.cjs ci/featured-proof/capture-current.test.cjs
       - name: Generate fictional SSR from the exact PR source
         run: |
           test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"
           # The pinned image bundles npm <= 11.6, which resolves optional peers
           # (@puppeteer/browsers -> proxy-agent >=8) that npm >= 11.8 leaves
-          # alone, so it reports a lockfile the required `check` job accepts as
+          # alone, so it reports a lockfile the `check` job accepts as
           # out of sync. --legacy-peer-deps skips that resolution; the install
           # still comes from the lockfile, with scripts disabled.
           npm ci --ignore-scripts --include=dev --no-audit --no-fund --legacy-peer-deps

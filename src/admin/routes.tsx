@@ -11,6 +11,7 @@
 // - POST /admin/events/:key          update
 // - POST /admin/events/:key/publish  draft → published (write-back due)
 // - POST /admin/events/:key/cancel   draft|published → cancelled
+// - POST /admin/events/:key/duplicate  draft|published|cancelled → new draft copy (never mirrored)
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/activity-log         read-only activity-log viewer (R11)
@@ -34,11 +35,13 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
-import { queueRedispatchHandler } from "./queue-redispatch";
+import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
+import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   FEATURED_PAGE_SIZE,
@@ -56,6 +59,7 @@ import {
   createEvent,
   createFeatured,
   deleteFeatured,
+  duplicateEvent,
   getEvent,
   getFeatured,
   getFeaturedIdByLegacyId,
@@ -70,12 +74,19 @@ import {
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
-import { isDatabaseUnavailable } from "../db/errors";
+import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
+import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
-import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
+import {
+  isKnownTimezone,
+  parseEventForm,
+  parseFeaturedForm,
+  utcToWall,
+  ValidationError,
+} from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
   ActivityLogPage,
@@ -138,6 +149,13 @@ function errorPage(
   return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
 }
 
+function writeUnavailable(c: Context<Vars>) {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  if (prefersHtmlError(c)) return errorPage(c, 503, "Admin temporarily unavailable");
+  return c.text("Admin temporarily unavailable", 503);
+}
+
 /** Validation errors re-render the form (422). */
 function formError(
   c: Context<Vars>,
@@ -181,15 +199,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
-  // Same write envelope as every other admin POST: throttle admits before
-  // buffering (oversized attempts count against the bucket), the wire cap
-  // refuses before parsing, and the handler itself never parses a payload
-  // (dispatch always starts from the reconciled source). Only the dedicated
+  // Action-class admin write: the wire cap runs before the shared throttle
+  // (oversized attempts 413 without spending the bucket), the cap refuses
+  // before parsing, and the handler itself never parses a payload
+  // (dispatch always starts from the reconciled source). The two I/O-free
+  // refusals (non-operator 403, malformed id/query 422) run between the cap
+  // and the throttle with zero spend, even under an exhausted budget; the
+  // handler keeps the same checks as idempotent defense. Only the dedicated
   // staging operator principal can reach the handler.
   admin.post(
     "/queue/failed/:id/redispatch",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
+    queueRedispatchPreThrottleRefusal,
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     queueRedispatchHandler,
   );
 
@@ -250,12 +272,41 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // than stacking their deadlines; they still share one pooled connection, so
     // the budget covers both transactions. Failed/blocked widgets are omitted;
     // authorization and the guard's critical access-log write stay fail-closed.
-    const [funnel, zeroSearches] = db
-      ? await Promise.all([
-          dashboardJoinFunnel(db, identity),
-          topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
-        ])
-      : [undefined, undefined];
+    let funnel: Awaited<ReturnType<typeof dashboardJoinFunnel>>;
+    let zeroSearches: Awaited<ReturnType<typeof topZeroResultSearches>>;
+    if (db) {
+      const [funnelResult, zeroSearchesResult] = await Promise.allSettled([
+        dashboardJoinFunnel(db, identity),
+        topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
+      ]);
+      for (const result of [funnelResult, zeroSearchesResult]) {
+        if (result.status === "rejected" && !isDatabaseQueryCancellation(result.reason)) {
+          throw result.reason;
+        }
+      }
+      // One correlated line per degraded widget: with a db present, a settled
+      // value of undefined is exactly the degraded signal for both helpers
+      // (they resolve undefined on cancellations, ordinary failures and
+      // deadline timeouts), so the log distinguishes degraded from healthy.
+      // Outages threw above; rejected cancellations fall through to the same
+      // line.
+      const requestId = safeRequestId(c.get("requestId"));
+      if (funnelResult.status !== "fulfilled" || funnelResult.value === undefined) {
+        console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
+      }
+      if (zeroSearchesResult.status !== "fulfilled" || zeroSearchesResult.value === undefined) {
+        console.warn("dashboard widget degraded", {
+          widget: "zero_searches",
+          request_id: requestId,
+        });
+      }
+      funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
+      zeroSearches =
+        zeroSearchesResult.status === "fulfilled" ? zeroSearchesResult.value : undefined;
+    } else {
+      funnel = undefined;
+      zeroSearches = undefined;
+    }
     return bufferedMemberHtml(
       c,
       <AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />,
@@ -344,13 +395,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       let recurrence;
       try {
@@ -390,7 +443,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit" });
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const row = await getEvent(db, c.req.param("key"));
+    const key = c.req.param("key");
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+    const row = await getEvent(db, key);
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
     const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
@@ -410,21 +465,28 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events/:key",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
-      // instant (TOG-6805 — see validation.preservedOrParsed).
+      // instant. A nonfinite stored date has no hint; parse its replacement.
       const carriers = {
-        startsAtUtc: existing.startsAt.toISOString(),
-        endsAtUtc: existing.endsAt.toISOString(),
+        startsAtUtc: Number.isFinite(existing.startsAt.getTime())
+          ? existing.startsAt.toISOString()
+          : undefined,
+        endsAtUtc: Number.isFinite(existing.endsAt.getTime())
+          ? existing.endsAt.toISOString()
+          : undefined,
       };
       let input;
       try {
@@ -468,16 +530,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   );
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+    // Action-class lifecycle write: wire cap before the shared throttle, so an
+    // oversized moderator body 413s without spending admin-write budget.
     admin.post(
       `/events/:key/${action}`,
-      throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       requestBodyLimit("action"),
+      throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       async (c) => {
         const db = await dbOr503(c);
-        if (!db) return c.text("Admin temporarily unavailable", 503);
+        if (!db) return writeUnavailable(c);
+        const key = c.req.param("key");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
         try {
           const actor = c.get("adminActor");
-          const key = c.req.param("key");
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
@@ -520,6 +585,44 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   }
 
+  // Duplicate-as-draft (S4): same action-class stack as publish/cancel (cap,
+  // then throttle, then the moderator guard's admission), but the redirect
+  // lands on the fresh copy and there is never a write-back: a draft is
+  // never mirrored, so no queue row and no fan-out leave this handler.
+  admin.post(
+    "/events/:key/duplicate",
+    requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const db = await dbOr503(c);
+      if (!db) return writeUnavailable(c);
+      const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+      try {
+        const { row } = await duplicateEvent(db, c.get("adminActor"), key);
+        return c.redirect(`/admin/events/${row.eventKey}`, 303);
+      } catch (err) {
+        if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof ValidationError) {
+          // The source's stored fields fail the current form rules: re-render
+          // the source editor so the no-JS moderator sees the error next to
+          // the flagged control and can fix it, like the publish-location
+          // refusal in the action loop above.
+          const row = await getEvent(db, key);
+          if (!row) return errorPage(c, 404, "Event not found");
+          return formError(
+            c,
+            err,
+            (errors, v) =>
+              c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+            eventValues(row),
+          );
+        }
+        throw err;
+      }
+    },
+  );
+
   admin.get("/featured", async (c) => {
     declareAccess(c, {
       resource: "featured_contents",
@@ -560,13 +663,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized editorial body before spending admin-write throttle.
     requestBodyLimit("featured"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -622,17 +726,18 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured/:id",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized editorial body before spending admin-write throttle.
     requestBodyLimit("featured"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
       const values = await parsedForm(c);
-      if (!values) return c.text("Bad request", 400);
+      if (!values) return badRequest(c);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -669,13 +774,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured/:id/delete",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized body before spending admin-write throttle.
     requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return writeUnavailable(c);
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);
@@ -690,15 +796,28 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 }
 
 function eventValues(row: EventRow): Record<string, unknown> {
+  // A validation refusal can retain a corrupt stored zone or instant. Keep the
+  // bad zone visible for correction, but never format it or invent wall times.
+  const knownTimezone = isKnownTimezone(row.timezone);
   return {
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
+    accessibility_notes: row.accessibilityNotes ?? "",
     // Wall text in the row's zone — what the moderator typed is what they see.
-    starts_at: utcToWall(row.startsAt, row.timezone),
-    ends_at: utcToWall(row.endsAt, row.timezone),
+    starts_at:
+      knownTimezone && Number.isFinite(row.startsAt.getTime())
+        ? utcToWall(row.startsAt, row.timezone)
+        : "",
+    ends_at:
+      knownTimezone && Number.isFinite(row.endsAt.getTime())
+        ? utcToWall(row.endsAt, row.timezone)
+        : "",
     timezone: row.timezone,
     location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
     capacity: row.capacity === null ? "" : String(row.capacity),
   };
 }

@@ -15,15 +15,21 @@
 // retry enabled and focus restored to that control (disabling it in flight
 // drops focus to BODY). Response-less transport requires SSR
 // recovery with mutations disabled; 401/419/302-to-login shows
-// the session-expired notice with the SSR login link (`?next=` return path,
-// never the update endpoint, board-8135, board-9254) — never the native confirm
-// (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
+// the session-expired notice with the recovery link (or SSR guest login link).
+// Both carry a page return path, never the update endpoint (board-8135, board-9254)
+// or the native confirm (board-9354). Closed/paused SSR states carry no controls; a 403 from a stale
 // page reloads into the fresh SSR (board-7419 clock-ended hole stays shut).
 // Sync notes mirror the contract copy: a fresh write answers
 // `synced_to_discord_at: null`, so success shows "Saved. Syncing to
 // Discord." beside the enabled control; a stamped row renders "Synced to
 // Discord." on the next SSR pass. The click island carries no trap: a bare
 // click never sends a honeypot field (board-8715).
+// Honest DELETE: a withdraw that deletes no caller row answers 404
+// {error: not_found}. The member's wanted end state is already "no row",
+// so a 404 on withdraw converges like a 204 — paint withdrawn and broadcast
+// none — covering a second DELETE, a cross-tab double-withdraw, and a retry
+// after a lost 204. Any other 404 (a PUT for an unknown key) keeps the
+// failure alert.
 //
 // Budget: one request per click; no polling; no GETs.
 
@@ -62,6 +68,8 @@
     going: "rsvp-going",
     withdraw: "rsvp-withdraw",
     confirmed: "rsvp-confirmed",
+    maybe: "rsvp-maybe",
+    notGoing: "rsvp-not-going",
     check: "rsvp-check",
     closed: "rsvp-closed",
     paused: "rsvp-paused",
@@ -129,11 +137,89 @@
     }
     return "/join/discord?next=" + encodeURIComponent(next);
   }
+  // Only the shared recovery landing may replace the guest sign-in link.
+  // Rebuild its query so response data cannot become an executable href.
+  function safeRecoveryUrl(raw) {
+    var prefix = "/auth/recover?next=";
+    if (typeof raw !== "string" || raw.indexOf(prefix) !== 0) return null;
+    try {
+      return prefix + encodeURIComponent(decodeURIComponent(raw.slice(prefix.length)));
+    } catch {
+      return null;
+    }
+  }
   var loginUrl = safeLoginUrl(
     root.getAttribute("data-login-url"),
     "/join/discord?next=" +
       encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/"),
   );
+  // Unknown-outcome recovery keeps the member on the attendee page they
+  // were already on (?attendees=N), never dropping to page 1. The live
+  // page URL is preferred when its path is this event; otherwise the SSR
+  // sign-in `next` path is used only if it is the same event. Mount data
+  // is untrusted: the href is always rebuilt from eventKey, and only a
+  // positive-integer attendees value (>1) is carried over. Anything else
+  // falls back to the bare event.
+  function isSameEventPath(pathname) {
+    if (typeof pathname !== "string") return false;
+    try {
+      if (decodeURIComponent(pathname) === "/e/" + eventKey) return true;
+    } catch {
+      return false;
+    }
+    return pathname === "/e/" + encodeURIComponent(eventKey);
+  }
+  function attendeesSuffix(search) {
+    if (typeof search !== "string" || search === "") return "";
+    var raw = null;
+    try {
+      var q = search.charAt(0) === "?" ? search.slice(1) : search;
+      raw = new URLSearchParams(q).get("attendees");
+    } catch {
+      return "";
+    }
+    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw) || raw === "1") return "";
+    return "?attendees=" + raw;
+  }
+  function safeRefreshHref() {
+    var base = "/e/" + encodeURIComponent(eventKey);
+    try {
+      var loc =
+        typeof location !== "undefined" && location
+          ? location
+          : typeof document !== "undefined" && document.location
+            ? document.location
+            : null;
+      if (loc && isSameEventPath(loc.pathname)) return base + attendeesSuffix(loc.search || "");
+    } catch {
+      // fall through to the validated returnTo below, then the bare event
+    }
+    // Validated SSR returnTo fallback (the sign-in next param): same event only.
+    try {
+      var rawLogin = root.getAttribute("data-login-url");
+      if (typeof rawLogin === "string") {
+        var marker = "?next=";
+        var at = rawLogin.indexOf(marker);
+        if (at !== -1) {
+          var next = null;
+          try {
+            next = decodeURIComponent(rawLogin.slice(at + marker.length));
+          } catch {
+            next = null;
+          }
+          if (typeof next === "string" && next.charAt(0) === "/" && next.charAt(1) !== "/") {
+            var qAt = next.indexOf("?");
+            var nPath = qAt === -1 ? next : next.slice(0, qAt);
+            var nSearch = qAt === -1 ? "" : next.slice(qAt);
+            if (isSameEventPath(nPath)) return base + attendeesSuffix(nSearch);
+          }
+        }
+      }
+    } catch {
+      // fall through to the bare event
+    }
+    return base;
+  }
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
   var controls = root.querySelector("[data-rsvp-form]") || root;
@@ -168,7 +254,7 @@
     });
   }
 
-  function notice(testid, role, text, withLogin, shouldFocus) {
+  function notice(testid, role, text, withLogin, shouldFocus, recoveryHref) {
     clearOutcome();
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) {
@@ -183,7 +269,7 @@
     if (withLogin) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = loginUrl;
+      a.href = recoveryHref || loginUrl;
       a.textContent = COPY.guestCta;
       el.appendChild(a);
     }
@@ -281,7 +367,19 @@
     controls.appendChild(el);
   }
 
+  function removeSoft() {
+    // A settled write supersedes the stored soft answer: the neutral line
+    // goes with the source controls so a stale answer can never survive
+    // beside the new state.
+    [TESTID.maybe, TESTID.notGoing].forEach(function (t) {
+      var n = root.querySelector('[data-testid="' + t + '"]');
+      if (n && n.parentNode) n.parentNode.removeChild(n);
+      else if (n && n.remove) n.remove();
+    });
+  }
+
   function paintConfirmed() {
+    removeSoft();
     // Claim path: a going PUT from the waitlist position swaps the position
     // line for the confirmation and removes the claim/leave controls.
     var claimed = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
@@ -360,6 +458,7 @@
     // Join path: a waitlisted PUT swaps the join CTA(s) for the position
     // line; confirmed/withdraw leftovers from a re-answer are dropped too.
     // A settled place in line supersedes the full-event join invitation.
+    removeSoft();
     [TESTID.going, TESTID.waitlistJoin, TESTID.confirmed, TESTID.withdraw, TESTID.full].forEach(
       function (t) {
         var n = root.querySelector('[data-testid="' + t + '"]');
@@ -425,7 +524,7 @@
     el.appendChild(document.createTextNode(" "));
     var link = document.createElement("a");
     link.setAttribute("data-testid", TESTID.refresh);
-    link.href = "/e/" + encodeURIComponent(eventKey);
+    link.href = safeRefreshHref();
     link.textContent = COPY.refresh;
     el.appendChild(link);
   }
@@ -435,9 +534,14 @@
   function reconcileCapacity(detail) {
     if (detail.eventKey !== eventKey || root.getAttribute("data-outcome-unknown") === "true")
       return;
+    // Seat-accurate verdict: occupancy counts every going row like the write
+    // path; absent on older snapshots, where the attributable count stands in.
+    var occupancy = detail.goingOccupancy === undefined ? detail.goingCount : detail.goingOccupancy;
     if (
       !Number.isSafeInteger(detail.goingCount) ||
       detail.goingCount < 0 ||
+      !Number.isSafeInteger(occupancy) ||
+      occupancy < 0 ||
       (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))
     )
       return;
@@ -447,12 +551,13 @@
       pendingCapacity = {
         eventKey: eventKey,
         goingCount: detail.goingCount,
+        goingOccupancy: occupancy,
         capacity: detail.capacity,
       };
       return;
     }
     pendingCapacity = null;
-    var full = detail.capacity !== null && detail.goingCount >= detail.capacity;
+    var full = detail.capacity !== null && occupancy >= detail.capacity;
     root.setAttribute("data-full", full ? "true" : "false");
     if (detail.capacity === null) root.removeAttribute("data-capacity");
     else root.setAttribute("data-capacity", detail.capacity);
@@ -483,7 +588,13 @@
       });
     }
     var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
-    if (full && join) {
+    // The soft branch deliberately omits the full notice at SSR (a soft
+    // answer holds no seat); a capacity refresh must not paint what SSR
+    // omits. The change control above still tracks capacity either way.
+    var soft = root.querySelector(
+      '[data-testid="' + TESTID.maybe + '"],[data-testid="' + TESTID.notGoing + '"]',
+    );
+    if (full && join && !soft) {
       if (!message) {
         message = document.createElement("p");
         message.setAttribute("role", "status");
@@ -499,10 +610,23 @@
   });
 
   function paintWithdrawn() {
+    // The soft line anchors the join-CTA replacement exactly like the
+    // confirmed/position lines; the soft change control (a going- or
+    // waitlist-testidd button) goes with the other source controls.
     var conf = root.querySelector(
-      '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]',
+      '[data-testid="' +
+        TESTID.confirmed +
+        '"],[data-testid="' +
+        TESTID.waitlistPosition +
+        '"],[data-testid="' +
+        TESTID.maybe +
+        '"],[data-testid="' +
+        TESTID.notGoing +
+        '"]',
     );
     [
+      TESTID.going,
+      TESTID.waitlistJoin,
       TESTID.waitlistClaim,
       TESTID.waitlistLeave,
       TESTID.withdraw,
@@ -689,10 +813,41 @@
               return unknownOutcome(button);
             }
           }
+          if (isWithdraw && res.status === 404) {
+            // Converged withdraw: the row is already gone (second DELETE,
+            // cross-tab double-withdraw, retry after a lost 204). Paint the
+            // withdrawn end state like a 204, never the failure alert.
+            setBusy(false, button);
+            paintWithdrawn();
+            broadcast(viewerState("withdraw"));
+            return;
+          }
           if (sessionExpiredResponse(res)) {
             controller.refused = true;
-            setBusy(false, button);
-            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, focusOwned);
+            var showExpired = function (data) {
+              if (inflight !== controller) return;
+              setBusy(false, button);
+              notice(
+                TESTID.sessionExpired,
+                "alert",
+                COPY.sessionExpired,
+                true,
+                focusOwned,
+                safeRecoveryUrl(data && data.recovery),
+              );
+            };
+            // Keep the same feedback deadline and ownership while reading the
+            // refusal. Missing/unreadable bodies retain the guest join link.
+            try {
+              if (typeof res.json === "function")
+                return res.json().then(showExpired, function () {
+                  showExpired(null);
+                });
+            } catch {
+              showExpired(null);
+              return;
+            }
+            showExpired(null);
             return;
           }
           if (res.status === 429) {
@@ -758,9 +913,16 @@
               if (controller && inflight !== controller) return;
               setBusy(false, button);
               var position = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
+              // A soft answer holds no seat, so a raced fill flips its change
+              // control without painting the full notice SSR omits — the same
+              // rule as the capacity refresh.
+              var soft = root.querySelector(
+                '[data-testid="' + TESTID.maybe + '"],[data-testid="' + TESTID.notGoing + '"]',
+              );
               var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
-              if (position) {
+              if (position || soft) {
                 if (old) old.remove();
+                old = null;
               } else {
                 if (!old) {
                   old = document.createElement("p");
@@ -787,7 +949,12 @@
                   going || root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]'),
                 );
               if (position) focusTestid([TESTID.waitlistPosition]);
-              else if (focusOwned && old && old.focus) old.focus();
+              else if (soft) {
+                // No notice exists to take focus; the flipped change control
+                // announces the fill itself when focused.
+                var changed = root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]');
+                if (focusOwned && changed && changed.focus) changed.focus();
+              } else if (focusOwned && old && old.focus) old.focus();
             };
             var domRaw = root.getAttribute("data-capacity");
             var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);

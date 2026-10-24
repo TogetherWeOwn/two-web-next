@@ -6,11 +6,20 @@
 // down. One register function behind the same barrel pattern as the event
 // routes; `src/index.tsx` only calls it.
 import type { Hono } from "hono";
+import { AlertRateLimit, alertRequestError } from "./alerts";
 import type { Env } from "./env";
-import { inviteDestination } from "./invite";
+import { InviteConfigError, inviteDestination, isInviteConfigUsable } from "./invite";
 import { safeNext } from "./join/service";
 import { About, Faq, Rules } from "./pages";
+import { requestRoute } from "./request-log";
+import { faqLastReviewed } from "./faq-last-reviewed";
 import { rulesLastUpdated } from "./rules-last-updated";
+
+// Dedicated per-fingerprint mute for the broken-invite page (one alert per
+// five minutes for InviteConfigError@/discord). A dedicated limiter keeps a
+// broken deploy's page from competing with unrelated request-error mutes,
+// and the dynamic clock keeps the window honest under time control.
+const inviteAlerts = new AlertRateLimit(undefined, () => Date.now());
 
 export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // `/discord` — the front door, and the only web-to-Discord conversion path (ports two-web
@@ -20,7 +29,24 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // forever. `no-store` for the same reason at the edge.
   app.get("/discord", (c) => {
     c.header("cache-control", "no-store, private");
-    return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
+    const configured = c.env.DISCORD_INVITE_URL;
+    const destination = inviteDestination(configured);
+    // A broken invite config pages once per window instead of spamming: the
+    // warn above stays rate-limited in inviteDestination, and this alert
+    // mutes per InviteConfigError@/discord for five minutes. Fallback serving
+    // is unchanged; a usable config stays silent on both lines.
+    if (!isInviteConfigUsable(configured)) {
+      alertRequestError(
+        new InviteConfigError(),
+        {
+          method: c.req.method,
+          route: requestRoute(c),
+          requestId: c.get("requestId"),
+        },
+        { limiter: inviteAlerts },
+      );
+    }
+    return c.redirect(destination, 302);
   });
 
   // Vanity aliases (post-cutover): `/login` is the sign-in entry, `/community`
@@ -33,7 +59,7 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
   // `/community` drops every query.
   app.get("/login", (c) => {
     const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store");
+    c.header("cache-control", "no-store, private");
     return c.redirect(
       next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
       302,
@@ -45,17 +71,22 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
     return c.redirect("/", 302);
   });
 
-  // Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-  // no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
+  // Static funnel leaf (ports two-web routes/funnel.php's `/about`): dependency-free,
+  // no controller, no session, no database — it stays 200 during an app-DB outage. No cookies are
   // read or set here on purpose, for the same reason.
-  for (const path of ["/about", "/faq"] as const) {
-    app.get(path, (c) => {
-      c.header("cache-control", "public, max-age=3600");
-      return c.html(
-        path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
-      );
-    });
-  }
+  app.get("/about", (c) => {
+    c.header("cache-control", "public, max-age=3600");
+    return c.html(<About appUrl={c.env.APP_URL} />);
+  });
+
+  // Static FAQ (ports two-web routes/funnel.php's `/faq`): dependency-free like
+  // `/about`, plus the config-driven "Last reviewed" stamp. An empty or
+  // unparseable value hides the stamp instead of 500ing, mirroring /rules.
+  app.get("/faq", (c) => {
+    const stamp = faqLastReviewed(c.env.FAQ_LAST_REVIEWED);
+    c.header("cache-control", "public, max-age=3600");
+    return c.html(<Faq appUrl={c.env.APP_URL} lastReviewed={stamp} />);
+  });
 
   // Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
   // even when the bot's database is down. The last-updated stamp comes from config, and an empty

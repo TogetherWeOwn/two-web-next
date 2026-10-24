@@ -6,8 +6,10 @@ import type { Env } from "../src/env";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import { discardFailedJob, listFailedJobs } from "../src/jobs/redrive";
 import {
+  appliedMigrationTimestamps,
   configReadiness,
   databaseReadiness,
+  migrationLedger,
   missingSecrets,
   pendingWebMigrations,
   QUEUE_CRITICAL_AT,
@@ -44,6 +46,7 @@ const depthRow = (over: Record<string, unknown> = {}) => ({
 });
 const withStore = (sql: unknown) => ({ ...env, QUEUE_DEPTH_STORE: sql }) as Env;
 const applied = WEB_MIGRATIONS.map((entry) => ({ created_at: String(entry.when) }));
+const ledgerAll = WEB_MIGRATIONS.map((entry) => entry.when).sort((a, b) => a - b);
 const never = () => new Promise<Record<string, unknown>[]>(() => {});
 
 const healthyQueue = {
@@ -96,6 +99,20 @@ describe("web migration journal comparison", () => {
       expect(() => pendingWebMigrations([{ created_at }])).toThrow();
     },
   );
+  it("reports the sorted applied set for set-inclusion proofs, empty when the ledger is empty", () => {
+    expect(appliedMigrationTimestamps(applied)).toEqual(WEB_MIGRATIONS.map((entry) => entry.when));
+    expect(migrationLedger(applied)).toEqual(ledgerAll);
+    expect(migrationLedger([{ created_at: "3" }, { created_at: 1 }, { created_at: "2" }])).toEqual([
+      1, 2, 3,
+    ]);
+    expect(migrationLedger([])).toEqual([]);
+  });
+  it.each([null, "", "bad", -1, 1.5, Infinity, "9007199254740993"])(
+    "fails the applied set together with the pending count on malformed timestamps (%s)",
+    (created_at) => {
+      expect(() => migrationLedger([{ created_at }])).toThrow();
+    },
+  );
 });
 
 describe("upBody queue compatibility", () => {
@@ -117,17 +134,17 @@ describe("upBody queue compatibility", () => {
       expect(body.queue.status).toBe(body.status);
     }
   });
-  it("a throwing measure reports unknown without making a ready DB fail", async () => {
+  it("a throwing measure reports degraded unknown without failing DB readiness", async () => {
     const body = await upBody(async () => {
       throw new Error("private SQL/credential");
     }, healthSql());
-    expect(body.status).toBe("healthy");
+    expect(body.status).toBe("degraded");
     expect(body.queue).toEqual(unknownQueue);
     expect(body).toMatchObject({ db: "ok", pending_migrations: 0 });
   });
   it("an unconfigured queue backend retains its detail", async () => {
     const body = await upBody(null, healthSql());
-    expect(body.status).toBe("healthy");
+    expect(body.status).toBe("degraded");
     expect(body.queue).toEqual({ ...unknownQueue, detail: "queue ledger is not configured." });
   });
 });
@@ -211,7 +228,7 @@ describe("/up additive ready-wait signal", () => {
     });
   });
 
-  it("a hung queue alone reports unknown on a ready HTTP 200", async () => {
+  it("a hung queue alone reports degraded unknown on a ready HTTP 200", async () => {
     vi.useFakeTimers();
     try {
       const pending = Promise.resolve(
@@ -221,7 +238,7 @@ describe("/up additive ready-wait signal", () => {
       const res = await pending;
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        status: "healthy",
+        status: "degraded",
         db: "ok",
         pending_migrations: 0,
         queue: unknownQueue,
@@ -241,6 +258,7 @@ describe("GET /up", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
     });
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -261,7 +279,7 @@ describe("GET /up", () => {
       queue: { status: "degraded", warn_at: QUEUE_WARN_AT, critical_at: QUEUE_CRITICAL_AT },
     });
   });
-  it("stays 200 when only the queue ledger fails", async () => {
+  it("stays 200 with degraded top-level when only the queue ledger fails", async () => {
     const res = await app.request(
       "/up",
       {},
@@ -270,9 +288,10 @@ describe("GET /up", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({
-      status: "healthy",
+      status: "degraded",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger: ledgerAll,
       queue: unknownQueue,
     });
   });
@@ -284,6 +303,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "error",
       pending_migrations: null,
+      migration_ledger: null,
       queue: { ...unknownQueue, detail: "queue ledger is not configured." },
     });
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -301,6 +321,10 @@ describe("GET /up", () => {
       status: "degraded",
       db: "ok",
       pending_migrations: 1,
+      migration_ledger: [
+        ...applied.filter((_, i) => i !== 1).map(({ created_at }) => Number(created_at)),
+        9999999999999,
+      ].sort((a, b) => a - b),
       queue: healthyQueue,
     });
   });
@@ -315,6 +339,7 @@ describe("GET /up", () => {
       status: "degraded",
       db: "ok",
       pending_migrations: null,
+      migration_ledger: null,
       queue: healthyQueue,
     });
   });
@@ -336,8 +361,15 @@ describe("GET /up", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger: null,
         queue: unknownQueue,
       });
+      // Emission proof: the redaction assert below is vacuous when nothing is
+      // logged, so pin the expected warn first (silencing the logger fails here).
+      expect(warning).toHaveBeenCalledWith(
+        "Health check could not establish database/schema readiness.",
+        { exception: "Error" },
+      );
       expect(JSON.stringify(warning.mock.calls)).not.toContain("private credential");
     } finally {
       warning.mockRestore();
@@ -373,15 +405,22 @@ describe("/up required Worker secrets", () => {
       "DISCORD_BOT_TOKEN",
     ]);
   });
-  it("answers 200 with the unchanged body shape when every secret is present", async () => {
+  it("answers 200 with the pinned body shape when every secret is present", async () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["db", "pending_migrations", "queue", "status"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "db",
+      "migration_ledger",
+      "pending_migrations",
+      "queue",
+      "status",
+    ]);
     expect(body).toEqual({
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
     });
   });
@@ -407,6 +446,7 @@ describe("/up required Worker secrets", () => {
           status: "degraded",
           db: "ok",
           pending_migrations: 0,
+          migration_ledger: ledgerAll,
           config: "missing",
           queue: healthyQueue,
         });
@@ -437,6 +477,7 @@ describe("/up required Worker secrets", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger: null,
         queue: healthyQueue,
       });
     } finally {
@@ -454,6 +495,7 @@ describe("/up required Worker secrets", () => {
         status: "degraded",
         db: "error",
         pending_migrations: null,
+        migration_ledger: null,
         config: "missing",
         queue: { ...unknownQueue, detail: "queue ledger is not configured." },
       });
@@ -500,6 +542,7 @@ describe("/up revision marker", () => {
     const res = await app.request("/up", {}, ready());
     expect(Object.keys((await res.json()) as object).sort()).toEqual([
       "db",
+      "migration_ledger",
       "pending_migrations",
       "queue",
       "status",
@@ -514,6 +557,7 @@ describe("/up revision marker", () => {
       status: "healthy",
       db: "ok",
       pending_migrations: 0,
+      migration_ledger: ledgerAll,
       queue: healthyQueue,
       revision: { version_id: versionId, commit: sha },
     });
@@ -703,6 +747,7 @@ describe("/up bounded reads", () => {
           status: "degraded",
           db: stage === "ping" ? "error" : "ok",
           pending_migrations: null,
+          migration_ledger: null,
           queue: unknownQueue,
         });
         expect(vi.getTimerCount()).toBe(0);
@@ -724,7 +769,11 @@ describe("/up bounded reads", () => {
         }),
       );
       await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
-      expect(await p).toEqual({ db: "error", pending_migrations: null });
+      expect(await p).toEqual({
+        db: "error",
+        pending_migrations: null,
+        migration_ledger: null,
+      });
       reject(new Error("late failure"));
       await vi.advanceTimersByTimeAsync(0);
     } finally {
@@ -943,20 +992,20 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
     expect((await pgQueueDepth(sql)).failed).toBe(1);
   });
 
-  it("an unreadable ledger reports unknown with failed null on a 200, never a 500", async () => {
+  it("an unreadable ledger reports degraded unknown with failed null on a 200, never a 500", async () => {
     await fail("sync-event", "sync-event:x", "transport error");
     expect((await pgQueueDepth(sql)).failed).toBe(1);
     await sql`drop table queue_failed_jobs`;
     try {
       const body = await upBody(() => pgQueueDepth(sql), healthSql());
-      expect(body.status).toBe("healthy");
+      expect(body.status).toBe("degraded");
       expect(body.queue).toMatchObject({ status: "unknown", failed: null });
 
       // Real SQL end to end: the DB gate stays ok, so the route stays 200.
       const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        status: "healthy",
+        status: "degraded",
         db: "ok",
         pending_migrations: 0,
         queue: { status: "unknown", failed: null },

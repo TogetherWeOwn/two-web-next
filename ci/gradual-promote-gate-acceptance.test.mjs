@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
+import { SMOKE_PROBE_KEY } from "../bin/smoke.mjs";
 
 const WORKER = "two-web-next-production";
 const NEW_VERSION = "22345678-1234-1234-1234-123456789abc";
@@ -29,10 +30,13 @@ const QUOTED_OVERRIDE = `${WORKER}="${NEW_VERSION}"`;
 const GATE_IDS = ["smoke-5", "smoke-50", "smoke-100-override"];
 
 const fixtures = {
+  // The /up fixture carries the candidate revision the gates pin
+  // (NEW_VERSION): the real checker requires revision.version_id to equal
+  // the override UUID, so an ignored override serving the old version fails.
   "/up": [
     200,
     "application/json",
-    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}',
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100},"revision":{"version_id":"22345678-1234-1234-1234-123456789abc","commit":null}}',
   ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
@@ -59,9 +63,52 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
+  // RFC 9116 publication: the loopback stub has no TLS, so like the real Worker
+  // on an http origin the body carries no Canonical line (bin/smoke.mjs
+  // asserts its absence on http and requires the same-origin value on https).
+  "/.well-known/security.txt": [
+    200,
+    "text/plain",
+    "Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n",
+  ],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
+  "/api/public/events": [
+    200,
+    "application/json",
+    '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+  ],
+  // The fixed probe key exists in no database: 404 not_found like the
+  // real handler (src/public-data/routes.ts).
+  [`/api/public/events/${SMOKE_PROBE_KEY}`]: [
+    404,
+    "application/json",
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+  ],
+  "/openapi.json": [
+    200,
+    "application/json",
+    '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
+  // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
+  // no database, so like the real handler's notFound() the stub answers the
+  // branded missing-event page.
+  [`/e/${SMOKE_PROBE_KEY}`]: [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
@@ -69,7 +116,7 @@ const fixtures = {
   ],
 };
 
-async function stub(t) {
+async function stub(t, change = () => {}) {
   const requests = [];
   const server = createServer((request, response) => {
     requests.push({
@@ -83,17 +130,27 @@ async function stub(t) {
     }
     const [status, type, body, location] = fixture;
     const origin = `http://${request.headers.host}`;
-    response.writeHead(status, {
+    const resolved = typeof body === "function" ? body(origin) : body;
+    const result = {
+      status,
+      body: resolved,
+      location,
+      type,
+    };
+    change(request.url, result);
+    response.writeHead(result.status, {
       "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
       "x-content-type-options": "nosniff",
-      ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
-      ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+      "referrer-policy": "strict-origin-when-cross-origin",
+      "x-frame-options": "DENY",
+      ...(result.type ? { "content-type": `${result.type}; charset=UTF-8` } : {}),
+      ...(result.type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
       ...(request.url === "/up"
         ? { "x-two-origin": "two-web-next", "cache-control": "no-store" }
         : {}),
-      ...(location ? { location } : {}),
+      ...(result.location ? { location: result.location } : {}),
     });
-    response.end(typeof body === "function" ? body(origin) : body);
+    response.end(result.body);
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -194,7 +251,7 @@ for (const id of GATE_IDS) {
     const result = await runGate(gateBlock(action, id), host);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /smoke ok \(attempt 1\)/);
-    assert.equal(requests.length, 17, "the real checker probed every route once");
+    assert.equal(requests.length, 24, "the real checker probed every route once");
     assert.ok(
       requests.every((r) => r.override === QUOTED_OVERRIDE),
       `every probe must carry ${QUOTED_OVERRIDE}`,
@@ -235,7 +292,34 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.equal(requests.length, 0);
   const quoted = await cli(QUOTED_OVERRIDE);
   assert.equal(quoted.status, 0, quoted.stdout + quoted.stderr);
-  assert.match(quoted.stdout, /17 routes, 0 failed assertions/);
-  assert.equal(requests.length, 17);
+  assert.match(quoted.stdout, /24 routes, 0 failed assertions/);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
+});
+
+test("gate smoke-5 fails when the override is ignored and the old version answers healthy", async (t) => {
+  // Response attribution, not readiness: the stub answers every readiness
+  // assertion healthy but identifies the old version, so the extracted gate
+  // block probing the candidate UUID must fail closed.
+  const action = readAction();
+  const { host, requests } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: {
+          version_id: "11111111-2222-3333-4444-555555555555",
+          commit: null,
+        },
+      });
+  });
+  const result = await runGate(gateBlock(action, "smoke-5"), host);
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /revision\.version_id/);
+  assert.ok(
+    requests.every((r) => r.override === QUOTED_OVERRIDE),
+    "the gate still pins every probe to the candidate version",
+  );
 });

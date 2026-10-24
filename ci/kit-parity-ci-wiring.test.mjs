@@ -83,6 +83,37 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("both loopback parity workers inject the same healthy-empty Discord seam", () => {
+  // The cross-target events-calendar comparison renders the partial-source
+  // notice only when a target reports a Discord failure, so both loopback
+  // workers must simulate the same healthy-empty state or the sections
+  // diverge. The Kit wrapper MUST assign onto the incoming env object: Kit
+  // reads the ambient `cloudflare:workers` env (the entrypoint's original
+  // object), so a spread copy passed to worker.fetch is invisible to it and
+  // Kit falls back to a live read the fixture fetch stub refuses.
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(
+    worker,
+    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
+  );
+  assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
+  assert.match(
+    hono,
+    /DISCORD_EVENTS: \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \}/,
+  );
+});
+
+test("both loopback parity workers share the raised read budget", () => {
+  // The Kit fixture enforces the same `events-read:anon` bucket as the Hono
+  // loopback worker (same disposable Postgres, no forwarded client headers),
+  // so its generated vars carry the same override (docs/event-read-admission.md).
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /E2E_PUBLIC_READ_BUDGET: "600"/);
+  const hono = readFileSync(new URL("../e2e/wrangler.jsonc", import.meta.url), "utf8");
+  assert.match(hono, /"E2E_PUBLIC_READ_BUDGET": "600"/);
+});
+
 test("Kit snapshot updates are pinned and generated Kit baselines fail the CI guard", () => {
   const config = readFileSync(
     new URL("../playwright.kit-parity.config.ts", import.meta.url),
@@ -168,6 +199,27 @@ test("the member RSVP cleanup flag is armed before parsing the response", () => 
   );
 });
 
+test("the ranked RSVP is established before the first cache-settling /events GET", () => {
+  // The cross-target events-calendar comparison races the documented
+  // isolate-local anon-cache convergence window (src/events/anon-cache.ts:
+  // other isolates converge only on expiry, 60 s on /events) unless every
+  // settled guest entry already carries the ranked count. The RSVP PUT
+  // retires only the Hono worker's isolate, so the ranked RSVP must be
+  // established before the first anonymous GET /events settles an entry on
+  // either isolate; otherwise the Kit entry holds count=0 and the
+  // comparison passes only when over 60 s elapsed since that GET.
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const lines = spec.split("\n");
+  const rsvpLine = lines.findIndex((line) => /^\s*await memberGoingRsvp\(\);/.test(line)) + 1;
+  const getLine = lines.findIndex((line) => /\.get\("\/events"\)/.test(line)) + 1;
+  assert(rsvpLine > 0, "memberGoingRsvp must be called at least once");
+  assert(getLine > 0, "an anonymous GET /events must exist");
+  assert(
+    rsvpLine < getLine,
+    `ranked RSVP established at line ${rsvpLine}, after the first cache-settling GET /events at line ${getLine}`,
+  );
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)
@@ -183,6 +235,6 @@ test("the required check runs the parity selftests in their own fail-closed step
   assert.doesNotMatch(step, /continue-on-error:/);
   assert.equal(
     step.match(/^        run: (.+)$/m)?.[1],
-    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs",
+    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs",
   );
 });

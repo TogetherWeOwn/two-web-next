@@ -73,7 +73,8 @@ const malformedEnvelopes: [string, unknown][] = [
 describe("moderator recompute contains malformed successful Discord responses", () => {
   it.each(malformedEnvelopes)("settles false for HTTP-200 %s", async (_name, body) => {
     const fetch = stubResponse(Response.json(body));
-    // In particular, the helper's null-body throw is contained by this boundary.
+    // In particular, a null body degrades to empty roles at the shape guard:
+    // no throw, no transport line, still denied.
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([]);
@@ -84,7 +85,10 @@ describe("moderator recompute contains malformed successful Discord responses", 
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([
-      { level: "warn", args: ["moderator recompute lookup returned non-JSON"] },
+      {
+        level: "warn",
+        args: ["moderator recompute lookup returned non-JSON", { guild_id: opts.guildId }],
+      },
     ]);
   });
 
@@ -105,11 +109,14 @@ describe("moderator recompute contains malformed successful Discord responses", 
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([
-      { level: "warn", args: ["moderator recompute lookup returned non-JSON"] },
+      {
+        level: "warn",
+        args: ["moderator recompute lookup returned non-JSON", { guild_id: opts.guildId }],
+      },
     ]);
   });
 
-  it("settles false when the provider fetch rejects without logging the exception", async () => {
+  it("settles false when the provider fetch rejects, logging only the exception class", async () => {
     const fetch = vi.fn().mockRejectedValue(
       new TypeError(`request ${BOT_TOKEN}`, {
         cause: new Error(PAYLOAD),
@@ -118,7 +125,18 @@ describe("moderator recompute contains malformed successful Discord responses", 
     vi.stubGlobal("fetch", fetch);
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
-    expect(diagnostics).toEqual([]);
+    // Transport degrade warns once, guild scope only: the token-bearing
+    // message and cause stay out of the line (the afterEach leak check pins
+    // that across every level, not just this warn).
+    expect(diagnostics).toEqual([
+      {
+        level: "warn",
+        args: [
+          "moderator recompute lookup transport failed",
+          { exception: "TypeError", guild_id: opts.guildId },
+        ],
+      },
+    ]);
   });
 
   it.each([401, 403, 404, 429, 500, 503])(
@@ -136,7 +154,12 @@ describe("moderator recompute contains malformed successful Discord responses", 
       expect(diagnostics).toEqual(
         status === 404
           ? []
-          : [{ level: "warn", args: ["moderator recompute lookup failed", { status }] }],
+          : [
+              {
+                level: "warn",
+                args: ["moderator recompute lookup failed", { status, guild_id: opts.guildId }],
+              },
+            ],
       );
     },
   );

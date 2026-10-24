@@ -1,43 +1,35 @@
 #!/usr/bin/env node
-// Accept Kit redesign baselines from a kit-parity failure artifact:
-//   node ci/kit-visual-accept.mjs <unzipped kit-parity-failure artifact dir>
-// Copies every Kit `*-actual.png` under test-results-kit-visual/ or
-// test-results-kit-parity/ (a changed Kit page) over the matching baseline in
-// e2e/visual/__screenshots-kit__/, and every new baseline the run wrote under
-// a `__screenshots-kit__` path, into place. An intentional redesign is a reviewed artifact committed in the same
-// PR; reviewers treat a baseline change like code.
-//
-// Hard boundary: this script writes ONLY under e2e/visual/__screenshots-kit__/
-// and NEVER into e2e/visual/__screenshots__/ (the 16 attributable Hono
-// baselines) — the destination directory is fixed, not derived from artifact
-// paths, so a Kit redesign can never silently regenerate a Hono baseline.
-// Source boundary too: the shared e2e-failure artifact carries both suites,
-// so Hono `*-actual.png` files are ignored, never copied into the Kit
-// baselines. Same file names in the two directories are independent suites,
-// not a collision. Use node ci/visual-accept.mjs for Hono.
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+// Accept reviewed Kit baselines from an unzipped failure artifact:
+//   node ci/kit-visual-accept.mjs <unzipped artifact dir>
+// Only Kit suite directories relative to that root establish ownership; root
+// names and substring-lookalike folders never admit Hono images into Kit.
+// Reviewed actuals can replace checkout bytes. Artifact baseline copies can
+// only add absent files or match existing bytes; stale copies refuse the full
+// plan before any write. Inspect the failure images before accepting them.
+// Flags (all optional, either side of the positional): --dry-run prints the
+// plan and writes nothing; --format json prints one versioned verdict. Any
+// other flag exits 2 with a stable code before the artifact is read. See
+// ci/visual-accept-cli.mjs for the codes.
+import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { applyPlan, planBaselines } from "./visual-accept.mjs";
+import { runCli } from "./visual-accept-cli.mjs";
 
 export const KIT_SCREENSHOT_DIR = "e2e/visual/__screenshots-kit__";
 export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
 
-// Source-scoped: the shared e2e-failure artifact carries both suites, so an
-// admitted candidate must come from the Kit suite's own folders —
-// `test-results-kit-visual/` or `test-results-kit-parity/` (reviewed actuals),
-// or a `__screenshots-kit__` path (new baselines). A Hono `*-actual.png` at any other path is ignored,
-// never copied into the Kit baselines.
-export function destinationName(entry, fullPath) {
-  const fromKitSuite =
-    fullPath.includes("test-results-kit-visual") ||
-    fullPath.includes("test-results-kit-parity") ||
-    fullPath.includes("__screenshots-kit__");
-  if (entry.endsWith("-actual.png")) {
-    if (!fromKitSuite) return null;
-    return basename(entry).replace(/-actual\.png$/, ".png");
-  }
-  if (entry.endsWith(".png") && fullPath.includes("__screenshots-kit__")) {
+// Only exact directory segments inside the artifact establish suite ownership.
+export function destinationName(entry, relativePath) {
+  const directories = dirname(relativePath).split(sep);
+  if (entry.endsWith(".png") && directories.includes("__screenshots-kit__")) {
     return basename(entry);
+  }
+  const fromKitSuite =
+    directories.includes("test-results-kit-visual") ||
+    directories.includes("test-results-kit-parity");
+  if (entry.endsWith("-actual.png") && fromKitSuite) {
+    return basename(entry).replace(/-actual\.png$/, ".png");
   }
   return null;
 }
@@ -50,8 +42,14 @@ export function collectCandidates(root) {
       if (statSync(full).isDirectory()) {
         walk(full);
       } else {
-        const dest = destinationName(entry, full);
-        if (dest !== null) candidates.push({ src: full, dest });
+        const relativePath = relative(root, full);
+        const dest = destinationName(entry, relativePath);
+        if (dest !== null) {
+          const actual =
+            entry.endsWith("-actual.png") &&
+            !dirname(relativePath).split(sep).includes("__screenshots-kit__");
+          candidates.push({ src: full, dest, actual });
+        }
       }
     }
   };
@@ -62,64 +60,65 @@ export function collectCandidates(root) {
   return candidates;
 }
 
-function distinctByBytes(sources) {
-  const seen = [];
-  for (const src of sources) {
-    const bytes = readFileSync(src);
-    if (!seen.some((entry) => entry.bytes.equals(bytes))) {
-      seen.push({ src, bytes });
-    }
-  }
-  return seen;
-}
+const MAX_NAMES_SHOWN = 20;
 
 export function acceptBaselines(
   artifactDir,
-  { cwd = process.cwd(), copy = copyFileSync, mkdir = mkdirSync } = {},
+  { cwd = process.cwd(), copy, mkdir = mkdirSync } = {},
 ) {
-  const candidates = collectCandidates(artifactDir);
-  if (candidates.length === 0) {
-    return { ok: false, message: "kit-visual-accept: no baseline candidates in artifact" };
-  }
-  const byDest = new Map();
-  for (const candidate of candidates) {
-    if (!byDest.has(candidate.dest)) byDest.set(candidate.dest, []);
-    byDest.get(candidate.dest).push(candidate.src);
-  }
-  const resolved = new Map();
-  for (const [dest, sources] of byDest) {
-    const actuals = sources.filter((src) => basename(src).endsWith("-actual.png"));
-    const distinct = distinctByBytes(actuals.length > 0 ? actuals : sources);
-    if (distinct.length > 1) {
-      return {
-        ok: false,
-        message: `kit-visual-accept: refusing: ${distinct.length} different sources map to ${dest}`,
-      };
-    }
-    resolved.set(dest, distinct[0].src);
-  }
   const destDir = join(cwd, KIT_SCREENSHOT_DIR);
-  mkdir(destDir, { recursive: true });
-  for (const [dest, src] of resolved) {
-    copy(src, join(destDir, dest));
+  const plan = planKit(artifactDir, destDir);
+  if (plan.verdict === "no_candidates") {
+    return { ok: false, message: NO_CANDIDATES_MESSAGE };
   }
-  return { ok: true, accepted: [...byDest.keys()].sort() };
+  if (plan.verdict === "collision") {
+    return {
+      ok: false,
+      message: `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`,
+    };
+  }
+  if (plan.verdict === "stale_copy_conflict") {
+    return { ok: false, message: `kit-visual-accept: ${plan.conflict.message}` };
+  }
+  if (plan.writes.length > 0) mkdir(destDir, { recursive: true });
+  for (const { src, target, bytes } of plan.writes) {
+    if (copy) copy(src, target);
+    else writeFileSync(target, bytes);
+  }
+  return { ok: true, accepted: plan.writes.map(({ dest }) => dest) };
 }
 
+const NO_CANDIDATES_MESSAGE = "kit-visual-accept: no baseline candidates in artifact";
+
+const planKit = (artifactDir, destDir) => planBaselines(artifactDir, destDir, collectCandidates);
+
+// Kit suite adapter for the shared CLI (ci/visual-accept-cli.mjs).
+export const KIT_ADAPTER = {
+  tool: "kit-visual-accept",
+  script: "ci/kit-visual-accept.mjs",
+  destLabel: KIT_SCREENSHOT_DIR,
+  // The documented run exits 0 when every candidate already matches.
+  nothingWrittenFails: false,
+  noCandidatesMessage: NO_CANDIDATES_MESSAGE,
+  plan: (artifact) => planKit(artifact, join(process.cwd(), KIT_SCREENSHOT_DIR)),
+  apply: (plan) => applyPlan(plan, join(process.cwd(), KIT_SCREENSHOT_DIR)),
+  refusalMessage: (plan) =>
+    plan.verdict === "collision"
+      ? `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`
+      : `kit-visual-accept: ${plan.conflict.message}`,
+  successLines: (plan) => {
+    const names = plan.writes.map(({ dest }) => dest);
+    const shown = names.slice(0, MAX_NAMES_SHOWN).join(", ");
+    const more = names.length > MAX_NAMES_SHOWN ? ` (+${names.length - MAX_NAMES_SHOWN} more)` : "";
+    return [
+      `kit-visual-accept: accepted ${names.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${shown}${more}`,
+    ];
+  },
+};
+
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const [, , artifactDir] = process.argv;
-  if (!artifactDir) {
-    console.error("Usage: node ci/kit-visual-accept.mjs <unzipped artifact dir>");
-    process.exitCode = 2;
-  } else {
-    const result = acceptBaselines(artifactDir);
-    if (!result.ok) {
-      console.error(result.message);
-      process.exitCode = 1;
-    } else {
-      console.log(
-        `kit-visual-accept: accepted ${result.accepted.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${result.accepted.join(", ")}`,
-      );
-    }
-  }
+  const { status, stdout, stderr } = runCli(KIT_ADAPTER, process.argv.slice(2));
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  process.exitCode = status;
 }

@@ -49,7 +49,7 @@ const CANONICAL_STATEMENTS: ReadonlyArray<{ statement: SourceReadStatement; text
   },
   {
     statement: "stale_keys",
-    text: `select event_key\${readMarker()} from events
+    text: `select event_key\${readMarker(client)} from events
       where (\${eventKey}::text is null or event_key = \${eventKey}) and (
         exists (select 1 from event_sync_attempts pending
           where pending.event_id = events.id and pending.state = 'pending'
@@ -58,6 +58,9 @@ const CANONICAL_STATEMENTS: ReadonlyArray<{ statement: SourceReadStatement; text
         or (status in ('published', 'cancelled')
           and not exists (select 1 from event_sync_attempts rejected
             where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+          and not exists (select 1 from event_sync_attempts blocking
+            where blocking.event_id = events.id and blocking.state = 'pending'
+              and (blocking.request_attempts >= \${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
           and (sync_revision > synced_revision or
             (status = 'published' and (discord_event_id is null or exists (
               select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
@@ -90,7 +93,7 @@ export async function statementSetHash(): Promise<string> {
 
 /** Pinned by `test/source-evidence-statements.test.ts`; recompute there. */
 export const STATEMENT_SET_HASH =
-  "sha256:15a07bfb471b367b09621ac2dc4e95a89a7e04cfab06b2d255dd7cef96ae1286";
+  "sha256:928edb69121ac0eaeda08ef88ca2c0c8f108e30b5c5465ad67323ab3b38e37b0";
 
 export function canonicalStatementTexts(): ReadonlyArray<{
   statement: SourceReadStatement;
@@ -222,7 +225,15 @@ export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
     return c.json({ error: "evidence_forbidden" }, 403);
   }
   const url = databaseUrl(env);
-  if (!url) return c.json({ error: "evidence_unavailable" }, 503);
+  if (!url) {
+    // No database configured: the exception class is fixed (nothing threw),
+    // plus the incident id. Never the env, a URI, or any payload.
+    console.error("source evidence database missing; refusing evidence.", {
+      exception: "MissingConfiguration",
+      incidentId: id,
+    });
+    return c.json({ error: "evidence_unavailable" }, 503);
+  }
   const sql = postgres(url, {
     ...databaseOptions,
     connect_timeout: 2,
@@ -252,7 +263,12 @@ export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
       observedAt: candidate.preview.observedAt,
       expiresAt: new Date(expiresAt).toISOString(),
     });
-  } catch {
+  } catch (err) {
+    // Exception class + incident id only: no message, SQL, bindings, URI or payload.
+    console.error("source evidence snapshot failed; refusing evidence.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      incidentId: id,
+    });
     return c.json({ error: "evidence_unavailable" }, 503);
   } finally {
     await sql.end({ timeout: 1 });

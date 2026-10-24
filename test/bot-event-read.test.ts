@@ -18,6 +18,10 @@ const observation = {
 };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
+// Bound before any vi.useFakeTimers(): fake timers replace performance.now,
+// so this keeps a real wall-clock for the zero-fake-ms signer polls below.
+const realNow = performance.now.bind(performance);
+
 // Every fetcher is a local stub, never the staging bot or a live guild.
 describe("signed bot event.read observation", () => {
   it("never calls a bot for a row that was never mirrored", async () => {
@@ -148,6 +152,229 @@ describe("signed bot event.read observation", () => {
       ...result,
       name: "123",
       location: null,
+    });
+  });
+
+  it("is unavailable without a reader and without leaking", async () => {
+    expect(await observeDiscordEvent(local)).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("a throwing reader fails closed without leaking", async () => {
+    const read = vi.fn().mockRejectedValue(new Error("fixture read detail"));
+    expect(await observeDiscordEvent(local, read)).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("an unusable endpoint fails closed without any request", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    expect(
+      await observeDiscordEvent(local, signedEventReader({ ...cfg, baseUrl: "notaurl" }, fetcher)),
+    ).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+const encoder = new TextEncoder();
+const nullBody = (text: () => Promise<string>, status = 200) =>
+  ({
+    status,
+    ok: status >= 200 && status < 300,
+    body: null,
+    text,
+  }) as unknown as Response;
+
+// Fallback paths the streaming suite never exercises: transports without a
+// byte stream, cleanup hooks that throw, and abort races that resolve late.
+describe("signed bot event.read fallback coverage", () => {
+  it("reads a null-body response via text()", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(nullBody(async () => JSON.stringify({ ok: true, result: observation })));
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual(observation);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when null-body text() rejects", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(nullBody(() => Promise.reject(new Error("fixture text failure"))));
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("refuses a null-body response over the byte ceiling before parsing", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(nullBody(async () => "x".repeat(262_145)));
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("fails closed on malformed null-body JSON", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(nullBody(async () => "not json"));
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("throws on text that outlives the budget instead of parsing late bytes", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveText!: (value: string) => void;
+      const textGate = new Promise<string>((resolve) => {
+        resolveText = resolve;
+      });
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(nullBody(() => textGate));
+      const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
+      // Signing is real async crypto on the libuv threadpool: zero-ms
+      // advances cost ~2.4 ms per 500 turns, so a turn-count bound still
+      // starves a 3 ms-late signer on Node 22 under load (main CI: fetcher
+      // never called). Poll zero fake ms until the attempt is on the wire or
+      // a 5 s wall-clock deadline passes; the fake clock stays put, so the
+      // 2,500 ms budget below still measures transport time only.
+      {
+        const end = realNow() + 5_000;
+        while (fetcher.mock.calls.length === 0 && realNow() < end) {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+      }
+      expect(fetcher).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(await pending).toEqual({
+        unavailable: "verification_unavailable",
+        reason: "bot_unreachable",
+      });
+      resolveText(JSON.stringify({ ok: true, result: observation }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tolerates a throwing cancel hook on a redirect", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue({
+      status: 302,
+      ok: false,
+      body: {
+        cancel: () => {
+          throw new Error("fixture cancel throw");
+        },
+      },
+    } as unknown as Response);
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("fails closed when the stream errors without an abort", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("fixture read failure"));
+      },
+    });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+  });
+
+  it("throws on stream data that arrives after the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveRead!: (value: ReadableStreamReadResult<Uint8Array>) => void;
+      const readGate = new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+        resolveRead = resolve;
+      });
+      let calls = 0;
+      const fakeBody = {
+        getReader: () => ({
+          read: () => {
+            calls += 1;
+            if (calls === 1)
+              return Promise.resolve({
+                done: false,
+                value: encoder.encode('{"ok":true,'),
+              });
+            return readGate;
+          },
+          cancel: () => {},
+          releaseLock: () => {},
+        }),
+      } as unknown as ReadableStream<Uint8Array>;
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue({ status: 200, ok: true, body: fakeBody } as unknown as Response);
+      const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
+      // Same wall-clock-bounded zero-fake-ms poll as above.
+      {
+        const end = realNow() + 5_000;
+        while (fetcher.mock.calls.length === 0 && realNow() < end) {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+      }
+      expect(fetcher).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(await pending).toEqual({
+        unavailable: "verification_unavailable",
+        reason: "bot_unreachable",
+      });
+      resolveRead({ done: false, value: encoder.encode("]}") });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when decoding throws", async () => {
+    const decode = vi.spyOn(TextDecoder.prototype, "decode").mockImplementationOnce(() => {
+      throw new Error("fixture decode failure");
+    });
+    try {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(reply({ ok: true, result: observation }));
+      expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+        unavailable: "verification_unavailable",
+        reason: "bot_unreachable",
+      });
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
+  it("tolerates a throwing releaseLock", async () => {
+    const fakeBody = {
+      getReader: () => ({
+        read: async () => ({ done: true, value: undefined }),
+        cancel: () => {},
+        releaseLock: () => {
+          throw new Error("fixture release failure");
+        },
+      }),
+    } as unknown as ReadableStream<Uint8Array>;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue({ status: 200, ok: true, body: fakeBody } as unknown as Response);
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
     });
   });
 });

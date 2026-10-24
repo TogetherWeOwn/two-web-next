@@ -13,6 +13,13 @@ export type EventListQuery = {
 };
 export type EventListParams = Partial<Record<keyof EventListQuery, string>>;
 
+// Free-text search is bounded before the leading-wildcard ILIKE scan and
+// before reflection into navigation links. Measured on the normalized value
+// (NULs stripped, then trimmed); overlong falls back to absent, never truncated.
+const EVENT_FREE_TEXT_MAX_LENGTH = 128;
+const boundEventFreeText = (value: string): string =>
+  value.length > EVENT_FREE_TEXT_MAX_LENGTH ? "" : value;
+
 /** Only known query values reach the store or the navigation links. */
 export function parseEventListQuery(params: EventListParams): EventListQuery {
   const status = params.status;
@@ -22,7 +29,7 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
   const page = Number(params.page);
   return {
     // PostgreSQL text cannot contain NUL; retain the rest as literal input.
-    q: (params.q ?? "").replaceAll("\u0000", "").trim(),
+    q: boundEventFreeText((params.q ?? "").replaceAll("\u0000", "").trim()),
     status:
       status === "draft" || status === "published" || status === "cancelled" || status === "past"
         ? status
@@ -55,9 +62,17 @@ export function eventListUrl(query: EventListQuery, changes: Partial<EventListQu
   return `/admin/events?${params}`;
 }
 
-/** Zero-row copy for the events table: filtered empties say so, like featured. */
+/** Query is normalized by parseEventListQuery before reaching the page. */
+export function eventListHasFilters(query: EventListQuery): boolean {
+  return Boolean(query.q || query.status || query.series || query.fill || query.rsvp_open);
+}
+
+export function eventListClearUrl(query: EventListQuery): string {
+  return eventListUrl(query, { q: "", status: "", series: "", fill: "", rsvp_open: "", page: 1 });
+}
+
+/** A successful empty later page says nothing about the inventory as a whole. */
 export function eventEmptyText(query: EventListQuery): string {
-  return query.q || query.status || query.series || query.fill || query.rsvp_open
-    ? "No events match these filters."
-    : "No events yet.";
+  if (query.page > 1) return "No results on this page.";
+  return eventListHasFilters(query) ? "No events match these filters." : "No events yet.";
 }

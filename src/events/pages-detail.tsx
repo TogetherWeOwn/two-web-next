@@ -5,38 +5,57 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl } from "./feeds";
-import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
+import type {
+  EventAttendee,
+  EventLink,
+  EventNeighbors,
+  EventSeriesContext,
+  PublicEvent,
+  ViewerRsvp,
+} from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-const fmtWithOffset = (d: Date, tz: string): string => {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-      timeZoneName: "longOffset",
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-};
+import { formatEventWhen as fmtWithOffset } from "./date-format";
+
+const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
+  <>
+    {Number.isFinite(event.startsAt.getTime()) ? (
+      <>
+        {" "}
+        <time datetime={event.startsAt.toISOString()}>
+          {fmtWithOffset(event.startsAt, event.timezone)}
+        </time>
+      </>
+    ) : null}
+    {event.location ? <span class="event-related-location">{event.location}</span> : null}
+  </>
+);
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
 // non-member) never sees it. The pitch carries this page as ?next= so the
 // journey lands the guest back here after joining. The one-shot join
 // confirmation still renders for the newly authenticated member.
+export interface EventAttendeesPaging {
+  page: number;
+  prevHref: string | null;
+  nextHref: string | null;
+}
+
 export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
   related: EventLink[];
+  /** Series run context; null (or omitted) for standalone events, which render exactly as today. */
+  series?: EventSeriesContext | null;
   attendees?: EventAttendee[];
+  /** Native attendee page window; omitted renders the legacy single page. */
+  attendeesPaging?: EventAttendeesPaging;
+  archive?: ArchiveContext | null;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -46,13 +65,18 @@ export const EventPage: FC<{
   member?: boolean;
   answer?: ViewerRsvp | null;
   returnTo?: string;
+  /** Normalized native attendee page for the RSVP form action. */
+  attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
 }> = ({
   e,
   neighbors,
   related,
+  series = null,
   attendees = [],
+  attendeesPaging = { page: 1, prevHref: null, nextHref: null },
+  archive,
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -62,10 +86,16 @@ export const EventPage: FC<{
   member = false,
   answer = null,
   returnTo,
+  attendeePage = 1,
   markdownAlternate,
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
+  // Finite but non-wire years stay a readable page: only the Google Calendar
+  // deep link (an ICS instant pair) is omitted, never the whole render.
+  const gcalUrl =
+    isWireInstant(e.startsAt) && isWireInstant(e.endsAt) ? googleCalendarUrl(e) : null;
   return (
     <EventDetailShell
       title={e.title}
@@ -76,6 +106,7 @@ export const EventPage: FC<{
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
+      backLink={archiveReturnLink(archive)}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -99,12 +130,36 @@ export const EventPage: FC<{
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
-          <dt>When</dt>
+          <dt>Starts</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
+          </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden data-testid="event-device-timezone-starts-button">
+              Show in my device timezone
+            </button>
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-device-timezone-starts-status"
+            ></p>
+          </dd>
+        </div>
+        <div>
+          <dt>Ends</dt>
+          <dd>
+            <time datetime={e.endsAt.toISOString()}>
+              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
+          </dd>
+          <dd class="event-device-timezone" data-event-device-timezone>
+            <button type="button" hidden data-testid="event-device-timezone-ends-button">
+              Show in my device timezone
+            </button>
+            <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
         {e.location ? (
@@ -112,6 +167,27 @@ export const EventPage: FC<{
             <dt>Where</dt>
             <dd>
               <p data-testid="event-venue">{e.location}</p>
+              <p>
+                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                  Get directions
+                </a>
+              </p>
+            </dd>
+          </div>
+        ) : null}
+        {e.organizer_name ? (
+          <div>
+            <dt>Hosted by</dt>
+            <dd>
+              <p data-testid="event-organizer">{e.organizer_name}</p>
+            </dd>
+          </div>
+        ) : null}
+        {series && series.hosts.length > 0 ? (
+          <div>
+            <dt>Series hosts</dt>
+            <dd>
+              <p data-testid="event-series-hosts">{series.hosts.join(", ")}</p>
             </dd>
           </div>
         ) : null}
@@ -122,6 +198,7 @@ export const EventPage: FC<{
               dangerouslySetInnerHTML={{
                 __html: renderGoingCount(e.eventKey, {
                   going: e.goingCount,
+                  occupancy: e.goingOccupancy,
                   capacity: e.capacity,
                   showSpotsLeft: true,
                   announcement: null,
@@ -138,8 +215,10 @@ export const EventPage: FC<{
           answer={answer}
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
+          attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
+        <script src="/islands/event-device-timezone.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -147,6 +226,36 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
+            </section>
+          ) : null}
+          {(e.status === "published" || e.status === "draft") &&
+          (e.join_url || e.join_instructions) ? (
+            <section
+              class="event-description event-join-details"
+              aria-labelledby="event-join-details-heading"
+              data-testid="event-join-details"
+            >
+              <h2 id="event-join-details-heading">How to join</h2>
+              {e.join_url ? (
+                e.status === "published" ? (
+                  <p>
+                    <a href={e.join_url} data-testid="event-public-join-link">
+                      Open the public joining link
+                    </a>
+                  </p>
+                ) : (
+                  <p>Public joining link: {e.join_url}</p>
+                )
+              ) : null}
+              {e.join_instructions ? (
+                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+              ) : null}
             </section>
           ) : null}
           {!session ? (
@@ -177,10 +286,14 @@ export const EventPage: FC<{
             <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
               Add to calendar (.ics)
             </a>
-            {" · "}
-            <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">
-              Google Calendar
-            </a>
+            {gcalUrl ? (
+              <>
+                {" · "}
+                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
+                  Google Calendar
+                </a>
+              </>
+            ) : null}
             {" · "}
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
@@ -189,22 +302,54 @@ export const EventPage: FC<{
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
         </section>
       </div>
-      {attendees.length > 0 ? (
-        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
-          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
-          <ul class="event-attendee-grid">
-            {attendees.map((attendee) => (
-              <li>
-                <span class="event-attendee-mark" aria-hidden="true">
-                  {Array.from(attendee.name)[0]}
-                </span>
-                <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
-              </li>
-            ))}
-          </ul>
+      {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
+        <section
+          aria-labelledby="event-attendees-heading"
+          data-testid="event-attendees"
+          data-island="attendees-live"
+        >
+          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
+            <h2 id="event-attendees-heading">Who's going</h2>
+          ) : (
+            <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          )}
+          {attendees.length > 0 ? (
+            <ul class="event-attendee-grid">
+              {attendees.map((attendee) => (
+                <li>
+                  <span class="event-attendee-mark" aria-hidden="true">
+                    {Array.from(attendee.name)[0]}
+                  </span>
+                  <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>There are no more attendees on this page.</p>
+          )}
+          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
+            <nav class="event-attendees-pagination" aria-label="Attendee pages">
+              {attendeesPaging.prevHref ? (
+                <a href={attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
+                  ← Previous attendees
+                </a>
+              ) : null}{" "}
+              <span data-testid="event-attendees-current-page" aria-current="page">
+                Page {attendeesPaging.page}
+              </span>{" "}
+              {attendeesPaging.nextHref ? (
+                <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
+                  Next attendees →
+                </a>
+              ) : null}
+            </nav>
+          ) : null}
           <p>
             Attendees shown at page load.{" "}
-            <a href={path} data-testid="event-attendees-refresh">
+            <a
+              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
+              data-testid="event-attendees-refresh"
+            >
               Refresh attendees
             </a>
             .
@@ -213,22 +358,45 @@ export const EventPage: FC<{
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
+      <script src="/islands/attendees-live.js" defer />
       <script
         type="application/ld+json"
         data-testid="event-jsonld"
         dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
       <div class="event-discovery">
+        {series && (series.previous || series.next) ? (
+          <nav class="event-pagination" aria-label="Series events" data-testid="event-series-nav">
+            {series.previous ? (
+              <a
+                href={`/e/${series.previous.eventKey}`}
+                rel="prev"
+                data-testid="event-series-previous"
+              >
+                <span>← Previous in series: {series.previous.title}</span>
+                <DestinationPreview event={series.previous} />
+              </a>
+            ) : null}{" "}
+            {series.next ? (
+              <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
+                <span>Next in series: {series.next.title} →</span>
+                <DestinationPreview event={series.next} />
+              </a>
+            ) : null}
+          </nav>
+        ) : null}
         {neighbors.previous || neighbors.next ? (
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
-                ← Previous event: {neighbors.previous.title}
+                <span>← Previous event: {neighbors.previous.title}</span>
+                <DestinationPreview event={neighbors.previous} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
-                Next event: {neighbors.next.title} →
+                <span>Next event: {neighbors.next.title} →</span>
+                <DestinationPreview event={neighbors.next} />
               </a>
             ) : null}
           </nav>

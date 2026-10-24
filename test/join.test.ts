@@ -362,10 +362,15 @@ describe("W15 join landing and recovery parity", () => {
       "utf8",
     );
     expect(binder).toContain("[data-join-widget]");
-    const frame = { setAttribute: vi.fn(), focus: vi.fn() } as {
+    const frame = {
+      setAttribute: vi.fn(),
+      focus: vi.fn(),
+      addEventListener: vi.fn(),
+    } as {
       src?: string;
       setAttribute: ReturnType<typeof vi.fn>;
       focus: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
     };
     const preview = { replaceChildren: vi.fn() };
     let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
@@ -383,6 +388,8 @@ describe("W15 join landing and recovery parity", () => {
             : null,
         createElement: () => frame,
       },
+      setTimeout: () => 0,
+      clearTimeout: () => {},
     });
     const event = { button: 0, preventDefault: vi.fn() };
     onClick(event);
@@ -421,8 +428,9 @@ describe("W15 join landing and recovery parity", () => {
       expect(res.status).toBe(200);
       expect(await res.text()).not.toContain("never-echo");
       expect(calls).toHaveLength(0);
+      const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
-        { outcome: "denied", source: "web-homepage", requestId: null, discordId: null },
+        { outcome: "denied", source: "web-homepage", requestId, discordId: null },
       ]);
       for (const name of ["state", "source", "next"]) {
         expect(res.headers.getSetCookie().join("\n")).toContain(
@@ -475,26 +483,26 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("degrades to /join (never 500) when sweeping expired journeys rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when sweeping expired journeys rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.sweepExpired = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });
 
-  it("degrades to /join (never 500) when issuing the journey rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when issuing the journey rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.issue = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });
@@ -547,10 +555,9 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(
       (await app.request("/join/callback?error=access_denied", as("198.51.100.99"), e)).status,
     ).not.toBe(429);
-    // The bucket names the client and the minute, never a site-wide key.
-    const minute = Math.floor(1_791_000_000_000 / 60000);
+    // The bucket names only the client, never a site-wide key or a minute.
     expect(new Set(fake.throttle.map((r) => r.bucket))).toEqual(
-      new Set([`join:203.0.113.7:${minute}`, `join:198.51.100.99:${minute}`]),
+      new Set(["join:203.0.113.7", "join:198.51.100.99"]),
     );
   });
 
@@ -562,11 +569,7 @@ describe("GET /join/discord (throttled OAuth start)", () => {
       e,
     );
     await app.request("/join/discord", {}, e);
-    const minute = Math.floor(1_791_000_000_000 / 60000);
-    expect(fake.throttle.map((r) => r.bucket)).toEqual([
-      `join:192.0.2.5:${minute}`,
-      `join:anon:${minute}`,
-    ]);
+    expect(fake.throttle.map((r) => r.bucket)).toEqual(["join:192.0.2.5", "join:anon"]);
   });
 });
 
@@ -626,8 +629,9 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
     expect(html).toContain("Join cancelled");
     expect(html).not.toContain("ashould-never-appear");
     expect(calls).toHaveLength(0);
+    const requestId = res.headers.get("x-request-id");
     expect(fake.attempts).toEqual([
-      { outcome: "denied", source: null, requestId: null, discordId: null },
+      { outcome: "denied", source: null, requestId, discordId: null },
     ]);
   });
 

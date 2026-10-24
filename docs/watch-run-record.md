@@ -20,8 +20,11 @@ migrations, credential changes or queue purges.
   tokens or member data.
 - After-gate contract:
   [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites).
-- Freeze: [cutover-freeze.md](cutover-freeze.md) stays in force until the
-  watch exits; the B4 primary records the exit and lifts the freeze.
+- Freeze: [cutover-freeze.md](cutover-freeze.md) is an archived withdrawn
+  proposal, not a live freeze. No freeze is implied by this watch: any future
+  freeze needs a separate declaration with new dates, an owner and explicit
+  lift terms. The B4 primary records the exit on the cutover card and lifts a
+  freeze only when that separate declaration authorizes it under its own terms.
 - Escalation: seated watcher → DevOps & Reliability Engineer → Director
   of Engineering → CEO go/no-go. Host or secret steps go on an
   `Operator:` card to the CEO. On a Sev-1, contain per the runbook queue
@@ -37,15 +40,21 @@ One row per checkpoint; a blank cell means "not yet checked", never
 
 ## 1. Flip record
 
-Staging `/up` reports `revision.version_id`; production `/up` carries no
-revision until a cutover PR declares the binding, so record both version IDs
-here at flip.
+Both staging (`two-web-next`) and production (`two-web-next-production`)
+`/up` report `revision: { version_id, commit }` from their declared
+`version_metadata` bindings (`wrangler.jsonc` top level and
+`env.production`). Record the production app `revision.version_id` and
+`revision.commit` separately from the Tail Worker version
+(`two-web-next-alerts-production` on production,
+`two-web-next-alerts` on staging); a Version uploaded before the marker
+existed reports no `revision`, so fall back to `wrangler deployments` for it.
 
 | Field | Value |
 | --- | --- |
 | T0: DNS-flip moment (UTC) | |
-| App version ID before release | |
-| Tail Worker version ID before release | |
+| Production app `revision.version_id` before release | |
+| Production app `revision.commit` before release | |
+| Production Tail Worker version ID before release | |
 | Recorded by (role + name) | |
 
 ## 2. Shift roster and handovers
@@ -55,7 +64,7 @@ here at flip.
 | B1 | T+0–12 | DevOps & Reliability Engineer | QA & Release Engineer | | | +1h (primary runs, secondary witnesses) | | | |
 | B2 | T+12–24 | QA & Release Engineer | Web Engineer | | | +24h at handoff (primary runs jointly with incoming B3 primary); Lighthouse + guest journeys (§6) | | | |
 | B3 | T+24–36 | Founding Engineer | QA & Release Engineer | | | none (steady state) | | | |
-| B4 | T+36–48 | DevOps & Reliability Engineer | Founding Engineer | | | +48h (primary runs); exit + freeze lift (§8) | | | |
+| B4 | T+36–48 | DevOps & Reliability Engineer | Founding Engineer | | | +48h (primary runs); exit (§8, freeze lift only under a separate declaration) | | | |
 
 Pager owner per block: the primary.
 
@@ -149,4 +158,4 @@ contain, roll back, clock restarts.
 | B2 | | |
 | B3 | | |
 | B4 | | |
-| Final 48h exit | | Exit recorded on the cutover card; freeze lifted by B4 primary |
+| Final 48h exit | | Exit recorded on the cutover card; a freeze is lifted by its declared owner only under that declaration's terms, never by watch exit alone |

@@ -394,23 +394,25 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     // env.production declares the production approved Owner+Moderator pair;
     // Wrangler does not inherit top-level vars, so this entry is the one
-    // production boots with. The top level is the staging deploy: it carries
-    // the staging-guild pair, never the production one (role IDs are
-    // guild-scoped).
+    // production boots with. The deployed Kit staging config carries the
+    // staging-guild pair, never the production one (role IDs are guild-scoped).
     const parsed = readWranglerConfig(read("wrangler.jsonc"));
+    const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
     expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
     expect(parsed.env?.production?.vars?.DISCORD_GUILD_ID).toBe(PRODUCTION_GUILD_ID);
     expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
     expect(parsed.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
+    expect(stagingKit.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
+    expect(stagingKit.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
   });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
     const scripts = JSON.parse(read("package.json")).scripts;
     expect(scripts["check:worker-moderators"]).toContain(
-      "--config=wrangler.jsonc --require-configured",
+      "--config=web/wrangler.staging.jsonc --require-configured",
     );
     expect(deploy).toContain(
-      'run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"\n',
+      'run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}"',
     );
     const gate = deploy.indexOf("run: npm run check:worker-moderators");
     expect(gate).toBeGreaterThan(-1);
@@ -497,6 +499,7 @@ describe("staging smoke workflow safety", () => {
           `--discord-id=${values[0]}`,
           `--role-key=${values[1]}`,
           `--channel-key=${values[2]}`,
+          "--apply",
         ]);
       }
       // announcement_only drops the user and role arguments entirely.
@@ -509,6 +512,7 @@ describe("staging smoke workflow safety", () => {
         "--",
         "--announcement-only",
         `--channel-key=${values[2]}`,
+        "--apply",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -550,6 +554,24 @@ describe("production deployment preserves configured triggers", () => {
     expect(action).not.toContain("wrangler deploy --env production");
   });
 
+  it("never attaches production jobs from the automatic promotion lane", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    // The production consumers/crons move exactly once, by the authorized
+    // Operator transfer in docs/production-jobs-handoff.md (pause, detach
+    // the web Worker, attach two-web-jobs-production, resume). An automatic
+    // jobs deploy before that transfer completes would attach a second
+    // consumer beside the still-live web one, so the promotion lane must not
+    // reference the jobs config until the transfer's follow-up wires the
+    // steady-state jobs deploy deliberately.
+    expect(workflow).not.toContain("wrangler.jobs.jsonc");
+    expect(workflow).not.toContain("two-web-jobs-production");
+    // The drift probe stays unwired from the promotion lane until the
+    // post-transfer follow-up wires it deliberately: wiring it now would fail
+    // every production promotion while triggers are still web-owned. That
+    // follow-up removes this assertion when it adds the probe step.
+    expect(workflow).not.toContain("check-production-triggers");
+  });
+
   it("pins production crons and queue consumers to the reviewed config", () => {
     type Consumer = {
       queue?: unknown;
@@ -571,6 +593,12 @@ describe("production deployment preserves configured triggers", () => {
     const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
       triggers?: unknown;
       queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
     };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
@@ -579,19 +607,25 @@ describe("production deployment preserves configured triggers", () => {
     // blocks at once — fails CI until this test is updated in the same
     // release PR, and the runbook's "Production trigger reconciliation"
     // applies it without touching the apex custom domain.
-    expect(config.env?.production?.triggers).toEqual({
-      crons: ["*/10 * * * *", "0 0 * * *"],
-    });
-    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
-    // queue keeps exactly one consumer and a cron exactly one owner. Both
-    // schedules and both staging consumers live on two-web-jobs
-    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
-    // that split. env.production keeps its own cutover template below.
+    //
+    // Production handoff: the web production env only produces, so a queue
+    // keeps exactly one consumer and a cron exactly one owner. Both
+    // production schedules and both production consumers live on
+    // two-web-jobs-production (wrangler.jobs.jsonc env.production);
+    // test/jobs-worker-config.test.ts pins that split.
+    expect(config.env?.production?.triggers).toEqual({ crons: [] });
+    expect(config.env?.production?.queues?.consumers ?? []).toEqual([]);
+    // Staging handoff: the web Worker owns no cron and consumes no queue.
+    // Both schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level).
     expect(config.triggers).toEqual({ crons: [] });
     expect(config.queues?.consumers ?? []).toEqual([]);
     expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    expect(jobsConfig.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
     const stagingConsumers = jobsConfig.queues?.consumers ?? [];
-    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    const prodConsumers = jobsConfig.env?.production?.queues?.consumers ?? [];
     expect(
       [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
     ).toEqual([
@@ -631,9 +665,10 @@ describe("production deployment preserves configured triggers", () => {
 
 describe("deployed revision marker is bound per environment", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
+  const stagingKit = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 
-  it("binds version_metadata on staging, env.production and the jobs Worker", () => {
-    expect(config.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
+  it("binds version_metadata on staging Kit, env.production and the jobs Worker", () => {
+    expect(stagingKit.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
     // Bindings are not inherited, so production declares its own copy: its
     // /up revision marker and release-tagged log lines depend on it.
     expect(config.env?.production?.version_metadata).toEqual({
@@ -653,7 +688,7 @@ describe("deployed revision marker is bound per environment", () => {
     expect(record).toBeGreaterThan(-1);
     expect(record).toBeLessThan(deploy.indexOf("npx wrangler queues create"));
     expect(verify).toBeGreaterThan(
-      deploy.indexOf("run: npx wrangler deploy --config wrangler.jsonc"),
+      deploy.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc"),
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
@@ -662,5 +697,106 @@ describe("deployed revision marker is bound per environment", () => {
     const expr =
       "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
     expect(deploy.split(expr)).toHaveLength(4);
+  });
+});
+
+describe("native automatic production promotion", () => {
+  const production = read(".github/workflows/deploy-production.yml");
+
+  it("triggers on e2e-staging completion and a daily schedule backstop, keeping dispatch", () => {
+    // Manual dispatch stays for explicit redeploys and recovery.
+    expect(production).toContain("workflow_dispatch:");
+    // Automatic promotion: post-staging completion plus a daily backstop.
+    expect(production).toContain("workflows: [e2e-staging]");
+    expect(production).toContain("types: [completed]");
+    expect(production).toContain('cron: "17 14 * * *"');
+    // Never on push or PR.
+    expect(production).not.toContain("push:");
+    expect(production).not.toContain("pull_request:");
+  });
+
+  it("only auto-starts preflight on successful main staging runs", () => {
+    const preflight = production.slice(
+      production.indexOf("\n  preflight:\n"),
+      production.indexOf("\n  deploy-production:\n"),
+    );
+    expect(preflight).toContain("github.event_name == 'workflow_dispatch'");
+    expect(preflight).toContain("github.event_name == 'schedule'");
+    expect(preflight).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(preflight).toContain("github.event.workflow_run.head_branch == 'main'");
+    // Same-repo guard: a fork's staging green must never promote this repo.
+    expect(preflight).toContain(
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+    );
+  });
+
+  it("exits cleanly with no deploy when there is nothing soaked and green to promote", () => {
+    // The resolver exits 0 with an empty sha on automatic triggers (never on
+    // manual dispatch), and every later preflight step stands down on empty.
+    const resolver = read("ci/resolve-promotion-sha.mjs");
+    expect(resolver).toContain('GITHUB_EVENT_NAME !== "workflow_dispatch"');
+    expect(resolver).toContain('appendFileSync(process.env.GITHUB_OUTPUT, "sha=\\n")');
+    expect(production).toContain("id: target");
+    expect(production).toContain("if: steps.target.outputs.sha != ''");
+    // The deploy job stands down on empty sha or an already-live target.
+    expect(production).toContain(
+      "if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'",
+    );
+  });
+
+  it("skips the deploy when production already serves the target", () => {
+    expect(production).toContain("id: live");
+    expect(production).toContain("run: node ci/production-deploy-gate.mjs --already-live");
+    expect(production).toContain("DEPLOY_SHA: ${{ steps.target.outputs.sha }}");
+    expect(production).toContain("already_live: ${{ steps.live.outputs.already_live }}");
+    expect(production).toContain("live_sha: ${{ steps.live.outputs.live_sha }}");
+    // The live check derives the commit from the Cloudflare active version
+    // (/up revision marker), like the production promoter.
+    const gate = read("ci/production-deploy-gate.mjs");
+    expect(gate).toContain('new URL("/up", origin)');
+    expect(gate).toContain("revision?.commit");
+  });
+
+  it("soaks greens 30 minutes and blocks on any newer red staging run", () => {
+    const resolver = read("ci/resolve-promotion-sha.mjs");
+    expect(resolver).toContain("PROMOTION_SOAK_MS = 30 * 60 * 1000");
+    expect(resolver).toContain("seenNewerRed");
+    expect(resolver).toContain("nowMs - completedAt < PROMOTION_SOAK_MS");
+  });
+
+  it("refuses pending production migrations with a migrator-blocked error", () => {
+    expect(production).toContain("run: node ci/production-deploy-gate.mjs --check-migrations");
+    expect(production).toContain("LIVE_SHA: ${{ steps.live.outputs.live_sha }}");
+    // Until the least-privilege migrator lands this stops instead of calling
+    // db-migrate.yml; the comment records the future workflow_call.
+    expect(production).toContain("db-migrate.yml");
+    expect(production).toContain("workflow_call");
+    expect(production).toContain("least-privilege migrator");
+    // The check runs from the tip checkout, before the target re-checkout:
+    // an older target's script could lack the flag and fall through to the
+    // full gate without its enable vars, blocking rescue redeploys.
+    const checkAt = production.indexOf(
+      "run: node ci/production-deploy-gate.mjs --check-migrations",
+    );
+    const targetCheckoutAt = production.indexOf("ref: ${{ steps.target.outputs.sha }}");
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(targetCheckoutAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeLessThan(targetCheckoutAt);
+    // Audited manual continuation: after db-migrate applied the entries out
+    // of band, a dispatch input releases the stop on manual runs only.
+    expect(production).toContain("migrations_applied:");
+    expect(production).toContain("MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}");
+  });
+
+  it("passes the hold variable to both production gate steps", () => {
+    const gates = production.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    expect(gates.length).toBe(2);
+    for (const gate of gates) {
+      const block = gate.split("\n      - ")[0];
+      expect(block).toContain("PRODUCTION_HOLD_UNTIL: ${{ vars.PRODUCTION_HOLD_UNTIL }}");
+    }
+    const gate = read("ci/production-deploy-gate.mjs");
+    expect(gate).toContain("PRODUCTION_HOLD_MAX_MS = 24 * 60 * 60 * 1000");
+    expect(gate).toContain("assertProductionHold(env)");
   });
 });

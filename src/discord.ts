@@ -1,6 +1,15 @@
 // Minimal Discord OAuth2 + guild auto-join. No SDK: three HTTP calls, all typed here.
 import { discordFetch } from "./discord-http";
+import { parseRetryAfterSeconds } from "./jobs/retry-delay";
 const API = "https://discord.com/api/v10";
+
+// Charset-bound Discord IDs: ASCII digits only, nonempty, tested as-is with
+// no trimming, coercion or decoding. Length is deliberately unpinned here;
+// digits are the contract. Terminal line breaks, spaces, fullwidth digits
+// and every other non-digit shape fail.
+export function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
 
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
 export const SCOPES = ["identify", "guilds.join"] as const;
@@ -11,6 +20,25 @@ export type DiscordUser = {
   global_name: string | null;
   avatar: string | null;
 };
+
+// Documented bounds for provider identity values carried into session and
+// roster rows. Discord user ids are decimal snowflakes (positive ASCII digits,
+// 1-20 characters, no leading zero); usernames and display names stay well
+// under 128 characters and avatar hashes under 512 in practice; anything
+// longer or non-decimal is a hostile or broken provider payload, not a
+// member. Oversized or non-snowflake values are rejected (never truncated,
+// coerced, trimmed or rewritten) in fetchUser before any session or roster
+// write, so both callbacks keep their existing generic failure outcome.
+// Only the value shape is inspected — values are never logged, echoed, or stored.
+export const DISCORD_USERNAME_MAX_LENGTH = 128;
+export const DISCORD_DISPLAY_NAME_MAX_LENGTH = 128;
+export const DISCORD_AVATAR_MAX_LENGTH = 512;
+
+// Positive ASCII-decimal snowflake admission: 1-20 digits, first digit 1-9.
+// No multiline flag; the raw provider value is tested as-is (no coerce,
+// trim, truncate or substitute), so hostile ids fail into the existing
+// provider_reject path before any guild/member/role egress or write.
+const DISCORD_USER_ID_RE = /^[1-9][0-9]{0,19}$/;
 
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
@@ -46,14 +74,20 @@ export type DiscordFailureKind =
 
 export class DiscordError extends Error {
   readonly providerCode: string | null;
+  readonly retryAfter: number | undefined;
   constructor(
     readonly step: string,
     readonly status: number,
     readonly kind: DiscordFailureKind,
     providerCode: string | null = null,
+    retryAfter?: number,
   ) {
     super(`discord ${step} failed with HTTP ${status}`);
     this.providerCode = providerCode;
+    // Bounded integer delta-seconds from a 429's `retry-after` header, for
+    // callers that surface provider backoff (join recovery). Undefined unless
+    // a usable 429 backoff was present: never a body value, never raw text.
+    this.retryAfter = retryAfter;
     this.name = "DiscordError";
   }
 }
@@ -103,9 +137,24 @@ async function errorBodyOf(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Bounded `retry-after` seconds from a 429 response, for callers that surface
+ * provider backoff as a `Retry-After` header. Thin `Response` adapter over
+ * the one shared parser in `src/jobs/retry-delay.ts` — the same mapping the
+ * events reader and the bot transport use. Anything unusable yields undefined
+ * so the caller falls back to today's headerless response.
+ */
+function providerRetryAfterSeconds(res: Response): number | undefined {
+  return parseRetryAfterSeconds(res.headers.get("retry-after"));
+}
+
 function classified(step: string, res: Response, body: string): DiscordError {
   const providerCode = providerCodeOf(res.status, body);
-  return new DiscordError(step, res.status, kindOf(res.status, providerCode), providerCode);
+  const kind = kindOf(res.status, providerCode);
+  // Only 429 backoff flows through: any other status keeps today's headerless
+  // response even when the provider sent a `retry-after` header.
+  const retryAfter = kind === "rate_limited" ? providerRetryAfterSeconds(res) : undefined;
+  return new DiscordError(step, res.status, kind, providerCode, retryAfter);
 }
 
 /** Wrap a transport throw the same way: bounded class, no raw message. */
@@ -191,8 +240,7 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     user === null ||
     typeof user !== "object" ||
     Array.isArray(user) ||
-    typeof user.id !== "string" ||
-    !user.id ||
+    !isDiscordId(user.id) ||
     typeof user.username !== "string" ||
     !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
@@ -200,36 +248,103 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
   ) {
     throw new DiscordError("fetch_user", res.status, "provider_reject");
   }
+  // Bound identity lengths before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (
+    user.username.length > DISCORD_USERNAME_MAX_LENGTH ||
+    (typeof user.global_name === "string" &&
+      user.global_name.length > DISCORD_DISPLAY_NAME_MAX_LENGTH) ||
+    (typeof user.avatar === "string" && user.avatar.length > DISCORD_AVATAR_MAX_LENGTH)
+  ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
+  // Bound the provider user id before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (!DISCORD_USER_ID_RE.test(user.id)) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
   return user as DiscordUser;
 }
 
-export type JoinResult = "joined" | "already_member" | "failed";
+export type JoinResult =
+  | "joined"
+  | "already_member"
+  | "rate_limited"
+  | "forbidden"
+  | "provider_outage"
+  | "transport_failure"
+  | "failed";
 
 // PUT /guilds/{guild}/members/{user}: 201 = added, 204 = already a member.
-// Anything else (bot missing CREATE_INSTANT_INVITE, user banned, member cap) is "failed": the
-// sign-in still succeeds and the page offers the invite link instead. A transport
-// throw is "failed" too: the caller degrades to the invite link either way.
+// Failures are classified by status alone so callers can distinguish them
+// without reading the provider body: 429 = rate_limited, 403 = forbidden
+// (Missing Access / Missing Permissions class), 5xx = provider_outage, a
+// transport throw = transport_failure, anything else = failed. The body is
+// never read and never logged here, so no token or body byte can leak through
+// the return value; every value is a fixed string. A transport throw is
+// "transport_failure" too: the caller degrades to the invite link either way.
+//
+// A 429 may carry a bounded `retryAfter` (delta-seconds from the response's
+// `retry-after` header, same admission as DiscordError.retryAfter): present
+// only when the header is usable (trimmed digits with an optional fraction,
+// rounded up, minimum 1, capped at 86400). Absent, malformed, body-only or
+// non-429 values yield no backoff. The plain `addGuildMember` wrapper keeps
+// the historical string-only contract; callers that surface provider backoff
+// use the detailed form.
+export type GuildMemberAdd = {
+  result: JoinResult;
+  retryAfter?: number;
+};
+
+export async function addGuildMemberDetailed(
+  guildId: string,
+  userId: string,
+  accessToken: string,
+  botToken: string,
+): Promise<GuildMemberAdd> {
+  // Charset admission first: a malformed guild or user id fails before any
+  // header/body construction or fetch, so zero Discord requests means no
+  // Authorization is ever emitted for it.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return { result: "failed" };
+  // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
+  // emit zero bot-credentialed calls, so the callers degrade to the invite
+  // fallback instead of sending `Bot ` with nothing after it.
+  if (!botToken || botToken.trim().length === 0) return { result: "failed" };
+  let res: Response;
+  try {
+    res = await discordFetch(
+      `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ access_token: accessToken }),
+      },
+    );
+  } catch {
+    return { result: "transport_failure" };
+  }
+  if (res.status === 201) return { result: "joined" };
+  if (res.status === 204) return { result: "already_member" };
+  if (res.status === 429) {
+    const retryAfter = providerRetryAfterSeconds(res);
+    return retryAfter === undefined
+      ? { result: "rate_limited" }
+      : { result: "rate_limited", retryAfter };
+  }
+  if (res.status === 403) return { result: "forbidden" };
+  if (res.status >= 500 && res.status <= 599) return { result: "provider_outage" };
+  return { result: "failed" };
+}
+
 export async function addGuildMember(
   guildId: string,
   userId: string,
   accessToken: string,
   botToken: string,
 ): Promise<JoinResult> {
-  // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
-  // emit zero bot-credentialed calls, so the callers degrade to the invite
-  // fallback instead of sending `Bot ` with nothing after it.
-  if (!botToken || botToken.trim().length === 0) return "failed";
-  let res: Response;
-  try {
-    res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-      method: "PUT",
-      headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    });
-  } catch {
-    return "failed";
-  }
-  if (res.status === 201) return "joined";
-  if (res.status === 204) return "already_member";
-  return "failed";
+  return (await addGuildMemberDetailed(guildId, userId, accessToken, botToken)).result;
 }

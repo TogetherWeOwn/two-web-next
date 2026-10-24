@@ -7,7 +7,7 @@
 // binding: proof-lib.mjs refuses to generate a config that adds one.
 //
 // The route table satisfies the real deploy smoke checker (bin/smoke.mjs,
-// 17 GETs) so the pinned gradual-promote action runs its genuine gates
+// 24 GETs) so the pinned gradual-promote action runs its genuine gates
 // against this fixture instead of the live site. The fail-up mode makes
 // /up answer 503 with a down envelope, which is a real health failure the
 // checker rejects on status and body shape.
@@ -34,6 +34,8 @@ function proofHeaders(env, extra = {}) {
   return {
     "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
     "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
     "x-proof-version-id": typeof metadata.id === "string" ? metadata.id : "unbound",
     "x-proof-version-tag": typeof metadata.tag === "string" ? metadata.tag : "untagged",
     "x-proof-label": typeof env?.PROOF_LABEL === "string" ? env.PROOF_LABEL : "unlabelled",
@@ -70,6 +72,13 @@ export function handleProofRequest(request, env = {}) {
     return new Response(
       JSON.stringify({
         ...body,
+        // Top-level revision mirrors src/up-revision.ts so the real smoke
+        // checker can attribute an overridden probe to this exact version.
+        // commit is null: proof tags are not deploy SHAs.
+        revision: {
+          version_id: typeof metadata.id === "string" ? metadata.id : null,
+          commit: null,
+        },
         proof: {
           version_id: typeof metadata.id === "string" ? metadata.id : null,
           version_tag: typeof metadata.tag === "string" ? metadata.tag : null,
@@ -130,6 +139,23 @@ export function handleProofRequest(request, env = {}) {
     });
   }
 
+  // RFC 9116 publication, mirroring buildSecurityTxt in src/security-txt.ts.
+  // The Expires pin must match SMOKE_SECURITY_TXT_EXPIRES in bin/smoke.mjs
+  // (currently 2027-10-01T00:00:00Z). Canonical is https-only (RFC 9116
+  // §2.5.2): the http loopback harness serves and asserts no Canonical line,
+  // while an https probe serves and asserts the same-origin value.
+  if (path === "/.well-known/security.txt") {
+    const canonical =
+      url.protocol === "https:" ? `Canonical: ${url.origin}/.well-known/security.txt\n` : "";
+    return new Response(
+      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\n${canonical}Policy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "text/plain; charset=UTF-8" }),
+      },
+    );
+  }
+
   // Shape-only redirect targets: the smoke checker uses redirect: "manual"
   // and never follows either Location, so the fixture invite need not exist.
   if (path === "/discord") {
@@ -144,6 +170,63 @@ export function handleProofRequest(request, env = {}) {
       status: 302,
       headers: proofHeaders(env, { location: "/auth/discord" }),
     });
+  }
+
+  // Session-free public read API: collection envelope, one missing event
+  // (404 not_found), community snapshot, join handoff, and discovery
+  // document, mirroring the healthy fixtures in test/smoke.test.mjs. The
+  // real checker asserts each envelope shape and the OpenAPI marker, not
+  // fixture contents.
+  if (path === "/api/public/events") {
+    return new Response(
+      '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  // The fixed probe key exists in no database: 404 not_found like the
+  // real handler (src/public-data/routes.ts).
+  if (path === "/api/public/events/00000000000000000000000001") {
+    return new Response(
+      '{"error":{"code":"not_found","message":"No published event with that key."}}',
+      {
+        status: 404,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/api/public/community") {
+    return new Response(
+      '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/api/public/join") {
+    return new Response(
+      '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/openapi.json") {
+    return new Response(
+      '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
   }
 
   return html(

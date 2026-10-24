@@ -469,13 +469,13 @@ describe("member-access-log (memory doubles)", () => {
     },
   );
 
-  it("MEMBER_ACCESS_LOG_ENFORCE=false cannot bypass the keyed read boundary", async () => {
+  it("fails closed when the access log is down", async () => {
     const { app, sessions } = harness({ logDown: true });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await app.request(
       `/members/${ALICE.userId}`,
       { headers: { cookie: await cookieFor(sessions, BOB) } },
-      { ...env, MEMBER_ACCESS_LOG_ENFORCE: "false" },
+      env,
     );
     expect(res.status).toBe(503);
     expect(await res.text()).not.toContain("alice");
@@ -661,7 +661,10 @@ describe("PATCH /members/:user (memory doubles)", () => {
         env,
       );
       expect(response.status).toBe(400);
-      expect(await response.text()).toBe("Bad request");
+      expect(response.headers.get("content-type")).toContain("text/html");
+      const html = await response.text();
+      expect(html).toContain("Check your request");
+      expect(html).not.toContain("fixture upload failure");
       expect(escaped).not.toHaveBeenCalled();
       expect(save).not.toHaveBeenCalled();
       expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");

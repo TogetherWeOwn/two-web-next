@@ -5,7 +5,9 @@ before any route, throttle, session lookup/rotation, body parsing or write.
 It applies to **POST, PUT, PATCH and DELETE**, including mounted admin/profile
 routes, login QA, logout, JSON event writes, RSVP writes and HTML form overrides.
 It does not depend on a cookie being present: unauthenticated writes must pass
-it too. GET, HEAD and OPTIONS retain their existing behavior.
+it too. GET, HEAD and OPTIONS retain their existing behavior. Methods compare
+case-insensitively: fetch normalizes every unsafe verb except PATCH, so a raw
+lowercase `patch` spelling is guarded rather than bypassing the check.
 
 For guarded requests:
 
@@ -17,9 +19,13 @@ For guarded requests:
   `same-site`, `cross-site` and `none` are not substitutes.
 - An explicit foreign, empty, malformed or `null` Origin never falls back to
   Fetch Metadata. Missing both headers and invalid `APP_URL` fail closed.
-- Refusals always return HTTP 403 with JSON `{"error":"cross_origin"}` and
-  `Cache-Control: no-store, private`, regardless of Accept. They do not set a
-  session cookie or consume a write throttle. Security headers still apply.
+- Refusals always return HTTP 403 and `Cache-Control: no-store, private`.
+  Explicit HTML-preferring browser requests receive the branded forbidden page;
+  JSON callers, absent/wildcard Accept, `/api/` paths and JSON-only event writes
+  retain exactly `{"error":"cross_origin"}`. Feed paths retain their existing
+  machine representation. The guard merges `Accept` into `Vary` without removing
+  existing dimensions. It does not set a session cookie or consume a write
+  throttle. Security headers still apply.
 
 ## Exact exemptions
 
@@ -32,8 +38,11 @@ Only these **method + path** pairs bypass this guard:
 | POST | `/mcp` | Stateless, cookie-free JSON-RPC for remote MCP clients that cannot send our Origin; the handler validates supplied Origins, while global TrustHosts pins Host before routing (`src/mcp/routes.ts:7-13`, `src/index.tsx:160-166`, `src/trust-hosts.ts:72-85`). |
 
 Other methods on these paths, trailing-slash variants and child paths are not
-exempt. No new exemptions may be added merely to accommodate a browser route
-or a test client missing headers. Non-browser callers to a guarded route must
+exempt. Exemption paths match after Hono's path decoding, so percent-encoded
+spellings of an exempt path (for example `/%6dcp`) are likewise exempt; the
+Kit twin decodes identically, and `test/same-origin-differential.test.ts`
+pins the agreement including adversarial escapes. No new exemptions may be
+added merely to accommodate a browser route or a test client missing headers. Non-browser callers to a guarded route must
 send a matching Origin; neither Origin nor Fetch Metadata is authentication.
 
 ## Regression proof
@@ -41,9 +50,12 @@ send a matching Origin; neither Origin nor Fetch Metadata is authentication.
 `test/same-origin.test.ts` enumerates `app.routes`, proves a single global guard
 precedes every unsafe/ALL route registration, and pins all three exemptions to
 real routes. A mutation case proves a handler inserted before the guard fails the
-audit. It sends a foreign-origin request to every concrete unsafe route/method
-(including the ALL RSVP fallback), with a signed moderator cookie and a filled
-honeypot; each must return the same 403 without reading or changing sessions.
+audit. It sends a JSON-preferring foreign-origin request to every concrete unsafe
+route/method (including the ALL RSVP fallback), with a signed moderator cookie and
+a filled honeypot; each must return the same 403 without reading or changing
+sessions. `test/negotiated-guard-upload-acceptance.test.ts` additionally pins
+branded browser refusals, Accept preference, unchanged machine envelopes and
+preservation of existing `Vary` dimensions.
 Unit cases cover all four methods, missing/null/malformed origins, scheme/port
 mismatch, same-site Fetch Metadata, alternate request hosts, invalid config,
 both admitted header forms, safe methods and exact exemption boundaries.

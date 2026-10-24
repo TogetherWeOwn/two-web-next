@@ -83,11 +83,19 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     updatedAt: start,
     syncRevision: 1,
     syncedRevision: 0,
+    goingOccupancy: 3,
     ...overrides,
   };
 }
 
-const listState: CalendarState = { view: "list", month: "2030-01", q: "", past: true, page: 1 };
+const listState: CalendarState = {
+  view: "list",
+  month: "2030-01",
+  q: "",
+  game: "",
+  past: true,
+  page: 1,
+};
 const pastEvent = () =>
   event({
     id: 2,
@@ -106,6 +114,8 @@ const calendarProps = (state: CalendarState) => ({
   totalPages: 1,
   emptyState: null as CalendarEmptyState,
   discordFailed: false,
+  games: [],
+  gameFilter: null,
   member: false,
   inviteUrl: "https://discord.gg/fixture",
   appUrl: APP_URL,

@@ -31,9 +31,10 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   same 410 for a guest and a member, so it needs no login.
 - **Where it runs:** the `browser-smoke` job in `.github/workflows/e2e.yml`, before
   the critical journeys, on the freshly seeded local stack (no secrets, no
-  staging or production). `browser-smoke` is a required check, so a visual diff
-  blocks the merge. Docs-only, test-only and draft PRs skip it (the job reports
-  skipped, which passes).
+  staging or production). `e2e-ok` is the required check: a visual diff
+  fails `browser-smoke`, which fails `e2e-ok` and blocks the merge. Docs-only,
+  test-only and draft PRs skip it (the aggregator passes the skip only on the
+  scope verdict or a draft).
 - **Stability:** `<time>` elements are masked (server-rendered times follow the
   wall clock), animations are disabled, and the caret is hidden. A route must
   return the status in the table above.
@@ -58,8 +59,34 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
    `*-actual.png` over its baseline and each new baseline into place. A
    reviewed actual supersedes the stale committed copy of the same baseline
-   inside the artifact; the script refuses (writing nothing) when two
-   genuinely different sources map to one baseline.
+   inside the artifact. A baseline-directory copy alone can add a genuinely
+   absent baseline or match an existing one (a byte-identical no-op); it cannot
+   replace differing checkout bytes. A stale-copy conflict names that baseline
+   and refuses the entire plan. Use a current artifact or review a matching
+   actual; do not delete the newer checkout baseline to force acceptance.
+   Conflicting actuals, differing copies without an actual, and unreadable
+   sources or existing targets also refuse before any baseline is written.
+   All source bytes and local targets are preflighted first; apply-time disk
+   failures are not rolled back.
+
+   Suite ownership uses exact directory segments relative to the unzipped
+   artifact root, not substrings or the extraction folder's name. Kit output
+   directories (`test-results-kit-visual/`, `test-results-kit-parity/`, and
+   `__screenshots-kit__/`) are excluded; use the
+   [Kit acceptance guide](kit-parity-gates.md#visual-gates) for those images.
+
+   Both accept scripts take `[--dry-run] [--format json] <artifact-dir>`.
+   `--dry-run` prints the full plan (destinations and sources, skipped sources
+   with a reason, the collision verdict), writes nothing, and exits as the real
+   run would. `--format json` prints one versioned verdict
+   (`version`, `tool`, `mode`, `ok`, `code`, `next_action`, `destinations`,
+   `sources`). Any other flag, a missing or extra positional, or a missing
+   directory exits 2 before the artifact is read or a baseline written. Refusals
+   exit 1. Output names files by baseline filename or artifact-relative path,
+   never an absolute path or file bytes. Stable `code` values: `OK`,
+   `UNKNOWN_FLAG`, `MISSING_ARG`, `EXTRA_ARGS`, `ARTIFACT_NOT_FOUND`,
+   `NO_CANDIDATES`, `NO_CHANGES` (Hono only), `COLLISION`,
+   `STALE_COPY_CONFLICT`, `IO_ERROR`; each comes with a `next_action`.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 

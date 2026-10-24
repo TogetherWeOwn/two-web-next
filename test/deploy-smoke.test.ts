@@ -49,7 +49,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
 appendFileSync(attempts, "x");
-if (process.argv.length !== 4 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://next.togetherweown.com") {
+if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://next.togetherweown.com" || process.argv[4] !== "--fail-on-ready-wait-critical") {
   console.error("unexpected checker invocation");
   process.exit(2);
 }
@@ -229,6 +229,115 @@ describe("deploy public-route smoke (offline)", () => {
     expect(result.output).not.toContain("unexpected checker invocation");
   });
 
+  it("scopes the fail-closed ready-wait gate to staging only", () => {
+    // S6: staging fails closed on critical ready-wait (shared queue_jobs age
+    // would otherwise be promotable); production promote and post-rollback
+    // smoke stay warn-only so a stuck queue cannot block its own fix.
+    const staging = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(staging).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+    for (const name of [
+      "Health and SLO gate at 5 percent",
+      "Health and SLO gate at 50 percent",
+      "Health and SLO gate at 100 percent \\(new version\\)",
+      "Health and SLO gate at 100 percent \\(live traffic\\)",
+    ]) {
+      const block = action.match(
+        new RegExp(`    - name: ${name}\\n[\\s\\S]*?      run: \\|\\n((?:        .*\\n)+)`),
+      )?.[1];
+      expect(block).toBeDefined();
+      expect(block).not.toContain("--fail-on-ready-wait-critical");
+    }
+    const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const rollbackBlock = rollback.match(
+      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(rollbackBlock).toBeDefined();
+    expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
+  });
+
+  it("hands the pre-deploy dead-letter baseline to staging smoke after capture", () => {
+    // S7: staging /up serves retained queue.failed rows today, so the smoke
+    // fails only on growth past this baseline. Dropping the env handoff
+    // silently restores the absolute failed > 0 gate and reds every deploy.
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-deploy dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test staging public routes");
+    const migrateAt = workflow.indexOf("- name: Apply staging web migrations");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(migrateAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(migrateAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-deploy dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://next.togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
+  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
+    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
+    // job, so the $GITHUB_ENV export scopes every stage gate plus the
+    // post-promotion verify to growth past the retained count.
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const jobAt = workflow.indexOf("\n  deploy-production:\n");
+    const releaseAt = workflow.indexOf("\n  release:\n");
+    expect(jobAt).toBeGreaterThan(-1);
+    expect(releaseAt).toBeGreaterThan(jobAt);
+    const job = workflow.slice(jobAt, releaseAt);
+    const captureAt = job.indexOf("- name: Capture pre-promote dead-letter baseline");
+    const gradualAt = job.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback");
+    const verifyAt = job.indexOf("- name: Verify public routes on the promoted version");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(gradualAt).toBeGreaterThan(captureAt);
+    expect(verifyAt).toBeGreaterThan(gradualAt);
+    const captureBlock = job.match(
+      /- name: Capture pre-promote dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+  });
+
+  it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {
+    // The emergency path must never go red on retained history: growth past
+    // the pre-rollback baseline fails, an unreadable capture skips the gate.
+    const workflow = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-rollback dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test production public routes");
+    const rollbackAt = workflow.indexOf(
+      "- name: Roll back to the recorded production Worker Version",
+    );
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(rollbackAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(rollbackAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-rollback dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
   it("runs the loopback selftest in required CI as well as pre-deploy check", () => {
     const ci = readFileSync(".github/workflows/ci.yml", "utf8");
     const checkJob = ci.slice(ci.indexOf("  check:\n"));
@@ -238,7 +347,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
     );
   });
 });
@@ -381,9 +490,9 @@ describe("deploy event-JSON smoke (offline)", () => {
     expect(result.summary).toContain("Skipped exposure guards: none.");
   });
 
-  it("names every skipped exposure guard without the token instead of failing the deploy", () => {
+  it("fails closed without the token while keeping the skip ledger as evidence", () => {
     const result = stagingJsonSmoke(0, false);
-    expect(result.status, result.output).toBe(0);
+    expect(result.status, result.output).toBe(1);
     expect(result.attempts).toBe(0);
     expect(result.output).toContain("json-smoke skipped: staging QA_AUTH_TOKEN is not configured");
     for (const guard of [
@@ -400,7 +509,9 @@ describe("deploy event-JSON smoke (offline)", () => {
       "::warning::staging json-smoke skipped with unverified exposure guards",
     );
     expect(result.output).toContain("Tracked follow-up: #531");
-    expect(result.output).not.toContain("::error::");
+    expect(result.output).toContain(
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
+    );
     expect(result.output).not.toContain("never-log-this");
     expect(result.ledger?.summary).toEqual({ total: 14, passed: 0, failed: 0, skipped: 14 });
     expect(result.summary).toContain("## Staging event-JSON smoke: skipped (no QA token)");
@@ -435,6 +546,7 @@ describe("deploy event-JSON smoke (offline)", () => {
       "#531",
       "ledger write failed",
       "::error::staging event-JSON smoke failed after deploy",
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
     ]) {
       expect(block).toContain(marker);
     }
@@ -545,5 +657,325 @@ describe("production deploy smoke (offline)", () => {
       expect(block).not.toMatch(/secrets\./);
       expect(block).not.toMatch(/self-hosted/);
     }
+  });
+});
+
+// Execute deploy-production.yml's post-promotion verification step with a fake
+// checker and sleep, mirroring the helpers above. The checker itself has
+// loopback-fixture coverage in smoke.test.mjs: no production requests here.
+// The step probes live traffic (no --version-override) after the gradual
+// promotion reaches 100%, so a promotion serving broken public content fails
+// the deploy-production job before the release job can tag. A failed run
+// leaves the promoted candidate live at 100% with the tag withheld and prints
+// PREV_VERSION as the recorded restoration target for the rollback-production
+// workflow; there is no automatic restore (the gradual action's rollback only
+// covers in-action failures, and an inline wrangler rollback would bypass the
+// rollback target-version secrets preflight).
+function postPromotionSmoke(
+  succeedOnAttempt: number,
+  prevVersion = "pre-promote-version-for-test",
+  promotedVersion = "22345678-1234-1234-1234-123456789abc",
+) {
+  const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+  const block = workflow.match(
+    /      - name: Verify public routes on the promoted version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  expect(block).toBeDefined();
+  const scratch = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "post-promote-smoke-",
+    ),
+  );
+  try {
+    writeFileSync(
+      join(scratch, "node"),
+      `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const attempts = join(process.env.RUNNER_TEMP, "attempts");
+// The promotion step first validates PROMOTED_VERSION_ID via ` +
+        "`node -e`" +
+        `
+// before any probe: emulate that gate so a missing/malformed id fails closed
+// without counting a smoke attempt.
+if (process.argv[2] === "-e") {
+  const v = process.env.PROMOTED_VERSION_ID ?? "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) {
+    console.error("::error::promoted-version-id missing or malformed; refusing to verify without a target identity");
+    process.exit(1);
+  }
+  process.exit(0);
+}
+appendFileSync(attempts, "x");
+if (process.argv.length !== 7 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable" || process.argv[5] !== "--expected-version-id" || process.argv[6] !== process.env.PROMOTED_VERSION_ID) {
+  console.error("unexpected checker invocation");
+  process.exit(2);
+}
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(process.argv[6] ?? "")) {
+  console.error("unexpected checker invocation");
+  process.exit(2);
+}
+const count = readFileSync(attempts, "utf8").length;
+const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
+console.log(pass ? "smoke: 24 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+process.exit(pass ? 0 : 1);
+`,
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(scratch, "sleep"),
+      '#!/bin/sh\nprintf x >> "$RUNNER_TEMP/sleeps"\nexit 0\n',
+      { mode: 0o700 },
+    );
+    writeFileSync(join(scratch, "sleeps"), "");
+    writeFileSync(join(scratch, "attempts"), "");
+    const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
+    expect(bash.status).toBe(0);
+    // Only our fakes are on PATH: no real network request or retry delay.
+    const result = spawnSync(
+      bash.stdout.trim(),
+      ["-e", "-c", block!.replace(/^          /gm, "")],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+        env: {
+          ...process.env,
+          // This container exports BASH_ENV pointing at a profile that
+          // reassigns PATH, which would drop the fakes below and send real
+          // network requests plus real 10s sleeps. Neutralize both profile
+          // hooks so only our fakes are on PATH.
+          BASH_ENV: "/dev/null",
+          ENV: "/dev/null",
+          PATH: scratch,
+          RUNNER_TEMP: scratch,
+          SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
+          PREV_VERSION: prevVersion,
+          PROMOTED_VERSION_ID: promotedVersion,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    return {
+      status: result.status,
+      output: result.stdout + result.stderr,
+      attempts: readFileSync(join(scratch, "attempts"), "utf8").length,
+      sleeps: readFileSync(join(scratch, "sleeps"), "utf8").length,
+    };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+describe("production post-promotion verification (offline)", () => {
+  it.each([1, 3, 6])("stops on successful attempt %s", (attempt) => {
+    const result = postPromotionSmoke(attempt);
+    expect(result.status, result.output).toBe(0);
+    expect(result.attempts).toBe(attempt);
+    expect(result.sleeps).toBe(attempt - 1);
+    expect(result.output).toContain(`post-promotion production smoke ok (attempt ${attempt})`);
+    expect(result.output).not.toContain("unexpected checker invocation");
+    expect(result.output).not.toContain("::error::");
+  });
+
+  it("fails closed after six failed checker runs without a final sleep", () => {
+    const result = postPromotionSmoke(0);
+    expect(result.status, result.output).toBe(1);
+    expect(result.attempts).toBe(6);
+    expect(result.sleeps).toBe(5);
+    expect(result.output).toContain("FAIL /join: expected HTTP 200; actual HTTP 503");
+    expect(result.output).toContain(
+      "::error::post-promotion public-route smoke failed; promoted candidate 22345678-1234-1234-1234-123456789abc remains live at 100%; release will not tag",
+    );
+    expect(result.output).toContain("recorded restoration target pre-promote-version-for-test");
+    expect(result.output).not.toContain("unexpected checker invocation");
+  });
+
+  it("names the live promoted candidate and the recorded restoration target on failure", () => {
+    const result = postPromotionSmoke(0, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.status, result.output).toBe(1);
+    // The gradual action's rollback only covers in-action failures, so the
+    // promoted candidate stays live at 100% with the tag withheld: the error
+    // must name the live candidate, the recorded restoration target id, and
+    // the restore path, without asserting the target is currently serving.
+    expect(result.output).toContain(
+      "promoted candidate 22345678-1234-1234-1234-123456789abc remains live at 100%",
+    );
+    expect(result.output).toContain("release will not tag");
+    expect(result.output).toContain("recorded restoration target");
+    expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.output).toContain("rollback-production");
+    expect(result.output).not.toContain("still live at 100%");
+  });
+
+  it("wires the gradual rollback target into the step and documents the manual restore", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
+    expect(stepAt).toBeGreaterThan(-1);
+    const section = workflow.slice(stepAt, workflow.indexOf("\n  release:\n"));
+    // PREV_VERSION comes from the gradual action's recorded pre-promote
+    // target, the same id its own rollback steps restore.
+    expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
+    // The promoted identity travels steps.gradual.outputs.promoted-version-id
+    // via env into the smoke's --expected-version-id on every attempt.
+    expect(section).toContain(
+      "PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}",
+    );
+    expect(section).toContain('--expected-version-id "$PROMOTED_VERSION_ID"');
+    expect(section).toContain("promoted-version-id missing or malformed");
+    expect(section).toContain("rollback-production");
+    // The failure annotation must name the promoted candidate as live and
+    // PREV_VERSION as the recorded restoration target, never the target as
+    // currently serving.
+    expect(section).toContain(
+      "promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%",
+    );
+    expect(section).toContain("recorded restoration target");
+    expect(section).not.toContain("still live at 100%");
+    // No inline restore: the rollback workflow checks the target version's
+    // secrets before moving traffic (pinned by the negative control in
+    // ci/check-production-secrets.test.mjs), so this step only blocks the tag.
+    expect(section).not.toContain("npx wrangler rollback");
+  });
+
+  it("runs after the gradual promotion inside the deploy job, before the release job can tag", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
+    expect(stepAt).toBeGreaterThan(-1);
+    expect(stepAt).toBeGreaterThan(
+      workflow.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback"),
+    );
+    // Still inside the deploy-production job: the release job keeps its
+    // `needs: [preflight, deploy-production]`, so a failed verification fails
+    // this job and the tag never publishes (pinned in release-workflow.test.ts).
+    expect(stepAt).toBeLessThan(workflow.indexOf("\n  release:\n"));
+    const block = workflow.match(
+      /      - name: Verify public routes on the promoted version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(block).toBeDefined();
+    // Same shared checker and retry contract as the gradual live gate and the
+    // rollback smoke, so the three post-deploy gates cannot drift.
+    expect(block).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(block).toContain('--expected-version-id "$PROMOTED_VERSION_ID"');
+    expect(block).toContain("for i in 1 2 3 4 5 6");
+    expect(block).not.toContain("curl ");
+    // Live-traffic probe of the promoted apex: no version override, no
+    // staging host, no secrets, no state-mutating probes.
+    expect(block).not.toContain("--version-override");
+    expect(block).not.toContain("next.togetherweown.com");
+    expect(block).not.toMatch(/secrets\./);
+    expect(block).not.toMatch(/\/auth\/discord/);
+  });
+});
+
+describe("production release-docs contract (source)", () => {
+  it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const heading = "### Production (gated automatic promotion)";
+    expect(readme).toContain(heading);
+    expect(readme).not.toContain("### Production (not live");
+    const section = readme.slice(
+      readme.indexOf(heading),
+      readme.indexOf("Whoever is authorized to provision production"),
+    );
+    expect(section.length).toBeGreaterThan(0);
+    // 5 -> 50 -> 100 with in-action automatic rollback versus post-action
+    // manual restoration, and verification before release publication.
+    expect(section).toContain("5% → 50% → 100%");
+    expect(section).toContain("automatic rollback");
+    expect(section).toContain("promoted candidate live at 100%");
+    expect(section).toContain("recorded restoration target");
+    expect(section).toContain("rollback-production");
+    expect(section).toContain("before the `release`");
+    // No unsupported static not-live/unprovisioned assertions and no claim
+    // that the restoration target is currently serving.
+    const flat = section.replace(/\s+/g, " ");
+    for (const stale of [
+      "not yet live",
+      "not live",
+      "legacy stack",
+      "cutover template",
+      "not a live deployment",
+      "unprovisioned",
+      "does not exist yet",
+      "NO-GO",
+      "still live at 100%",
+    ]) {
+      expect(flat).not.toContain(stale);
+    }
+  });
+});
+
+describe("staging readiness smoke docs contract (offline)", () => {
+  it("pins the staging invocation and posture in source", () => {
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(workflow).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    const smoke = readFileSync("bin/smoke.mjs", "utf8");
+    expect(smoke).toContain("known queue.status and ready_wait_severity (not unknown)");
+    expect(smoke).toContain("ready_wait_severity not critical");
+  });
+
+  it("states the strict staging command, DB/schema requirements and unknown/critical refusal in README", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const deployAt = readme.indexOf("## Deploy");
+    expect(deployAt).toBeGreaterThan(-1);
+    const section = readme.slice(deployAt, readme.indexOf("Full procedures live in"));
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    for (const phrase of ["`unknown`", "`critical`", "`ready_wait_severity`"]) {
+      expect(section, `README staging smoke misses ${phrase}`).toContain(phrase);
+    }
+    expect(section).toContain("staging-only");
+    expect(section).toContain("only warns");
+    // No liveness-only contradiction and no unknown-passes claim.
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).not.toContain("liveness only");
+    expect(flat).not.toContain("unknown queue health alone does not fail");
+    // Literal refusal only: never promise every malformed field is rejected.
+    expect(flat).not.toMatch(/malformed.*reject/i);
+  });
+
+  it("states the strict staging posture in the runbook deploy section without liveness-only language", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The final staging smoke runs");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(
+      at,
+      runbook.indexOf("An explicitly authorized manual deployment"),
+    );
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    expect(section).toContain("`ready_wait_severity`");
+    expect(section).toContain("fails the deploy");
+    expect(section).toContain("Queue `degraded` passes");
+    expect(section).not.toContain("public-route liveness only");
+    expect(section).not.toMatch(/not DB\/schema readiness/);
+    expect(section).not.toMatch(/`unknown` is allowed/);
+    // Staging strict versus flag-less production posture in the same passage.
+    expect(section).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(section).toContain("without the strict flag");
+    expect(section).toContain("only warns");
+  });
+
+  it("separates /up 200 behavior from the staging smoke verdict in the readiness section", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The staging deploy smoke requires");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(at, runbook.indexOf("requires a recorded, authorized staging"));
+    expect(section).toContain("--fail-on-ready-wait-critical");
+    expect(section).toContain("fails closed on a literal `unknown`");
+    expect(section).toContain("`critical` `ready_wait_severity`");
+    expect(section).toContain("only warns on `critical`");
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).toContain("still returns 200 from `/up` itself");
+    expect(flat).not.toContain("queue-only `unknown` does not");
   });
 });

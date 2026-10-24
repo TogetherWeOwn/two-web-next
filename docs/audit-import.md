@@ -1,10 +1,25 @@
 # Legacy audit import
 
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../README.md#database-and-migrations) and
+> [current database topology](db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
 `bin/import/audit.mjs` copies legacy member-data access logs, activity logs,
 agent-event grants, ingress audits and retained idempotency keys into Next.
 It is an operator cutover tool, not a scheduled job or a Workers endpoint.
 
 ## Safety contract
+
+The following historical cutover prerequisites remain safety constraints on the
+retained tool; they do not authorize live provisioning, apply or grant enablement.
 
 - Supply `LEGACY_DATABASE_URL` and `DATABASE_URL` through the operator's secret
   environment. Never put connection strings on the command line, in shell
@@ -47,6 +62,10 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
   the real cutover.
 
 ## Commands
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+These CLI examples preserve the old preview/apply and grant-admission contract;
+none authorizes a real legacy run or enabling grants today.
 
 With the two database environment variables already injected securely:
 
@@ -98,8 +117,9 @@ counted as expired. See [PostgreSQL `isfinite(timestamp)`](https://www.postgresq
 No retention rules are changed for any table.
 Older audit evidence is retained by the import; the normal retention job remains
 responsible for its policy, and that job deletes `agent_event_audits` older than
-90 days. Keep it frozen until verification is signed off
-([data-import.md](data-import.md#retention-selection)). Re-running with
+90 days. The historical cutover recipe required freezing it until verification
+was signed off ([data-import.md](data-import.md#retention-selection)); this is
+not an instruction to pause current retention jobs. Re-running with
 `--enable-grants` never changes an already-imported grant, so choose the intended
 admission policy before the first apply.
 

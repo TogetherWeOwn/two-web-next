@@ -10,6 +10,16 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      kit_route_family:
+        description: Kit staging route family; the default keeps all routes on Hono
+        type: choice
+        required: true
+        default: hono
+        options:
+          - hono
+          - archive
+          - archive-static
 
 permissions:
   contents: read
@@ -33,24 +43,16 @@ jobs:
     # back on the self-hosted fleet with no workflow change.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
-    # Production-style gate: GitHub Environment protection rules (required
-    # reviewers, etc.) apply to staging deploys the same way they would to prod.
+    # Environment secrets and the deployed staging URL. Exact-SHA CI, the
+    # staging hold and post-deploy verification are the automated release gates.
     environment:
       name: staging
       url: https://next.togetherweown.com
-    # Match CI's disposable SQL target; never run tests on the staging binding.
-    # Self-hosted runners share one Docker host, so a published 5432 (and
-    # wrangler's dev ports) collide across concurrent jobs. A job container has
-    # its own network namespace; localhost:5432 is forwarded to the service.
+    # Self-hosted runners share one Docker host, so wrangler's dev ports
+    # collide across concurrent jobs. A job container has its own network
+    # namespace.
     container:
       image: node:24-bookworm
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: ci
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,36 +79,53 @@ jobs:
         run: node ci/staging-deploy-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      - name: Job-private localhost:5432 forward to the Postgres service
-        run: |
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
-          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
-          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
-          exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      # SvelteKit parity suites SSR-compile through web's svelte/compiler at
-      # import time, and `npm run check` below runs the full root vitest, so
-      # the web workspace must exist before the check gate (same as ci.yml).
+      # The Worker bundle imports web/src modules, so wrangler needs the Kit
+      # workspace dependencies (same install as ci.yml).
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
-      - name: Apply test migrations
-        run: npm run db:migrate
+      - name: Select Kit route families
+        id: kit-route-flags
         env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - run: npm run check
-        env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
+        run: node ci/kit-route-flags.mjs
+      # No test re-run here: the exact-SHA gate above (re-checked before each
+      # mutation below) requires full CI, which already ran every `npm run
+      # check` part on this commit. A second copy outgrew this job's timeout.
       # Deploy build step: regenerate the served public/ assets from assets/
       # with esbuild --minify and refuse drift. Deterministic: a no-op when
       # CI's drift check passed, so the deployed bytes are the reviewed bytes.
       - name: Build minified public assets (esbuild, drift fails closed)
         run: npm run build:assets:check
+      - name: Build Kit staging Worker
+        run: npm run build --prefix web
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
+      - name: Capture pre-deploy dead-letter baseline
+        id: dead-letter-baseline
+        # Read-only GET before any DB or Cloudflare mutation (migrations run
+        # below can enqueue work): queue.failed counts retained rows in
+        # queue_failed_jobs, so the post-deploy smoke fails only on growth
+        # past this count. Retried, then an unreadable /up leaves the baseline
+        # empty and the smoke skips the dead-letter gate on history (warning
+        # below) instead of failing on any positive count. Never fails the
+        # deploy on its own.
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=""
+          for i in 1 2 3 4 5; do
+            candidate="$(node -e 'fetch("https://next.togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
+            if [ "$i" -lt 5 ]; then sleep 5; fi
+          done
+          if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; smoke will skip the dead-letter gate on history"; fi
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
+          echo "dead-letter baseline: ${baseline:-unknown}"
       # Staging web schema (TOG-12965). The Worker's /up gate and event queries
       # need the migrations of the SHA being deployed, so apply them after every
       # check has passed and before the first Cloudflare mutation: a failed plan,
@@ -182,13 +201,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
         # The Version is tagged with the CI-verified commit; /up reads the tag
-        # back as revision.commit (a full lowercase SHA only). The web Worker
+        # back as revision.commit (a full lowercase SHA only). The Kit Worker
         # only produces after the handoff. Deploying the consumer-free config
         # does NOT detach the existing consumers: Wrangler only adds or updates
         # the consumers listed in the deployed config, never deletes a dropped
         # one. The detach step below removes them explicitly before the jobs
-        # Worker attaches, so two consumers never exist.
-        run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"
+        # Worker attaches, so two consumers never exist. Route flags come only
+        # from the validated workflow input and default to Hono ownership.
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -250,7 +270,7 @@ jobs:
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,
-      # including those tests, already ran in this job via `npm run check`.
+      # including those tests, already passed in the exact-SHA full CI run.
       # ci/change-scope.sh fails closed: every other path runs the smoke.
       - name: Scope post-deploy smoke to web-affecting changes
         id: smoke-scope
@@ -275,10 +295,22 @@ jobs:
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
-        # bin/smoke.mjs requires /up db:ok + pending_migrations:0; queue-only degraded/unknown must not fail a deploy.
+        # bin/smoke.mjs requires /up db:ok + pending_migrations:0, fails
+        # only on new dead letters (a positive numeric queue.failed above the
+        # pre-deploy baseline fails the deploy with the count; null/missing
+        # never fails on its own; an unreadable baseline skips the gate via
+        # SMOKE_ALLOW_MISSING_BASELINE instead of failing on history), and
+        # fails closed on a stuck queue via --fail-on-ready-wait-critical
+        # (S6, staging-only: the age reflects the shared queue_jobs table,
+        # not the version under test, so production promote and post-rollback
+        # smoke omit the flag and stay warn-only). Queue-only
+        # degraded/unknown still pass.
+        env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://next.togetherweown.com; then
+            if node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical; then
               echo "staging smoke ok (attempt $i)"
               exit 0
             fi
@@ -295,12 +327,13 @@ jobs:
         # Needs the staging-environment QA_AUTH_TOKEN secret: it is never a
         # repository secret/value in this file, only a name. When the secret is
         # absent the step replays a per-check SKIP ledger (the probe's own
-        # --skip-ledger mode, same check names) and passes, so the missing
-        # token never fails a deploy. Skipped exposure guards stay loud:
-        # every skipped guard is named with its reason in the log, in a
-        # warning annotation and in the step summary, pointing at tracked
+        # --skip-ledger mode, same check names) for evidence and then fails
+        # closed, so the missing token fails the deploy instead of passing
+        # with unverified guards. Skipped exposure guards stay loud:
+        # every skipped guard is named with its reason in the log, in an
+        # error annotation and in the step summary, pointing at tracked
         # follow-up #531. A passed probe with skipped guards warns the same
-        # way. The reporting lines below must never fail the deploy themselves.
+        # way. The reporting lines below must never mask the failure themselves.
         run: |
           LEDGER="$RUNNER_TEMP/json-smoke-ledger.json"
           SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -312,7 +345,8 @@ jobs:
             else
               echo "::warning::staging json-smoke skipped with unverified exposure guards (ledger unwritten). Tracked follow-up: #531"
             fi
-            exit 0
+            echo "::error::staging event-JSON smoke missing QA token: exposure guards unverified"
+            exit 1
           fi
           for i in 1 2 3 4 5 6; do
             if node bin/json-smoke.mjs --ledger "$LEDGER" https://next.togetherweown.com; then

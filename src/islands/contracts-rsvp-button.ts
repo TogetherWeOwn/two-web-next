@@ -34,6 +34,8 @@ export const RSVP_BUTTON_ISLAND = "rsvp-button";
 export const RSVP_GOING_TESTID = "rsvp-going";
 export const RSVP_WITHDRAW_TESTID = "rsvp-withdraw";
 export const RSVP_CONFIRMED_TESTID = "rsvp-confirmed";
+export const RSVP_MAYBE_TESTID = "rsvp-maybe";
+export const RSVP_NOT_GOING_TESTID = "rsvp-not-going";
 export const RSVP_CHECK_TESTID = "rsvp-check";
 export const RSVP_CLOSED_TESTID = "rsvp-closed";
 export const RSVP_PAUSED_TESTID = "rsvp-paused";
@@ -81,21 +83,26 @@ export function rsvpWithdrawRequest(eventKey: string): RsvpWithdrawRequest {
 
 /**
  * Status-code shape (legacy controller + PR #431 abuse pins): first answer
- * creates the row (201), re-answer updates it (200), withdraw is a quiet
- * 204 — including withdraw-without-a-row and withdraw-from-cancelled.
- * Status-Past PUT refuses 403 with nothing written; off-verb hits 405.
+ * creates the row (201), re-answer updates it (200), withdrawing an existing
+ * row answers 204 — including from a cancelled event, where the service
+ * deletes regardless of status. A DELETE that deletes no caller row answers
+ * honest 404 {error: not_found}, never an implied 204: never answered, only
+ * another member answered, unknown key, or forged key all converge to the
+ * withdrawn end state. Status-Past PUT refuses 403 with nothing written;
+ * off-verb hits 405.
  */
 export const RSVP_FIRST_WRITE_STATUS = 201;
 export const RSVP_REANSWER_STATUS = 200;
 export const RSVP_WITHDRAW_STATUS = 204;
+export const RSVP_WITHDRAW_MISSING_STATUS = 404;
 export const RSVP_CLOSED_WRITE_STATUS = 403;
 export const RSVP_WRONG_METHOD_STATUS = 405;
 
 export const RSVP_ABUSE_PINS = {
   doubleSubmit: [RSVP_FIRST_WRITE_STATUS, RSVP_REANSWER_STATUS],
-  crossUserDeleteVictimRowKept: RSVP_WITHDRAW_STATUS,
+  crossUserDeleteVictimRowKept: RSVP_WITHDRAW_MISSING_STATUS,
   methodTampering: RSVP_WRONG_METHOD_STATUS,
-  withdrawWithoutRow: RSVP_WITHDRAW_STATUS,
+  withdrawWithoutRow: RSVP_WITHDRAW_MISSING_STATUS,
   statusPastPut: RSVP_CLOSED_WRITE_STATUS,
   withdrawFromCancelled: RSVP_WITHDRAW_STATUS,
 } as const;
@@ -123,29 +130,47 @@ export function rsvpBroadcast(eventKey: string, viewerState: GoingViewerState): 
   return { event: GOING_UPDATED_EVENT, eventKey, viewerState };
 }
 
+// Separate values let Kit tree-shake island-only feedback without duplicating copy.
+export const RSVP_CTA_COPY = "I'm in";
+export const RSVP_CONFIRMED_COPY = "You're in";
+export const RSVP_WITHDRAW_COPY = "Can't make it";
+export const RSVP_FULL_COPY = "This one's full.";
+export const RSVP_WAITLIST_JOIN_COPY = "Join the waitlist";
+export const RSVP_WAITLIST_FALLBACK_COPY = "You're on the waitlist";
+export const RSVP_WAITLIST_CLAIM_COPY = "A seat opened up — I'm in";
+export const RSVP_WAITLIST_LEAVE_COPY = "Leave the waitlist";
+export const RSVP_SYNCING_COPY = "Saved. Syncing to Discord.";
+export const RSVP_SYNCED_COPY = "Synced to Discord.";
+export const RSVP_PAUSED_COPY = "RSVPs are paused for this event — check back soon.";
+export const RSVP_GUEST_CTA_COPY = "Log in with Discord";
+export const RSVP_MAYBE_COPY = "You're down as a maybe for this one.";
+export const RSVP_NOT_GOING_COPY = "You can't go to this one.";
+
 /** Member-visible copy, pinned verbatim (CM-frozen rows noted). */
 export const RSVP_COPY = {
-  cta: "I'm in",
+  cta: RSVP_CTA_COPY,
   saving: "Saving…",
-  confirmed: "You're in",
-  withdraw: "Can't make it",
+  confirmed: RSVP_CONFIRMED_COPY,
+  withdraw: RSVP_WITHDRAW_COPY,
+  maybe: RSVP_MAYBE_COPY,
+  notGoing: RSVP_NOT_GOING_COPY,
   removing: "Removing…",
-  full: "This one's full.",
-  waitlistJoin: "Join the waitlist",
-  waitlistFallback: "You're on the waitlist",
-  waitlistClaim: "A seat opened up — I'm in",
-  waitlistLeave: "Leave the waitlist",
+  full: RSVP_FULL_COPY,
+  waitlistJoin: RSVP_WAITLIST_JOIN_COPY,
+  waitlistFallback: RSVP_WAITLIST_FALLBACK_COPY,
+  waitlistClaim: RSVP_WAITLIST_CLAIM_COPY,
+  waitlistLeave: RSVP_WAITLIST_LEAVE_COPY,
   waitlistSeatTaken: "Someone just took that seat.",
-  syncing: "Saved. Syncing to Discord.",
+  syncing: RSVP_SYNCING_COPY,
   syncFailed: "Saved. Discord sync didn't go through — your spot is still held.",
-  synced: "Synced to Discord.",
+  synced: RSVP_SYNCED_COPY,
   failedTitle: "That RSVP didn't save.",
   failedAction: "Try once more.",
   unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
   refresh: "Refresh the event",
-  paused: "RSVPs are paused for this event — check back soon.",
+  paused: RSVP_PAUSED_COPY,
   sessionExpired: "Your session expired.",
-  guestCta: "Log in with Discord",
+  guestCta: RSVP_GUEST_CTA_COPY,
 } as const;
 
 /** Closed-event copy by reason (legacy closed branch, role=status). */
@@ -170,7 +195,7 @@ export function rsvpFullCapCopy(capacity: number): string {
 /** One-based place in line, in words and digits, never colour alone. */
 export function waitlistPositionCopy(position: number | null): string {
   return position === null
-    ? RSVP_COPY.waitlistFallback
+    ? RSVP_WAITLIST_FALLBACK_COPY
     : `You're on the waitlist — #${position} in line`;
 }
 

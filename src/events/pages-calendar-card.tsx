@@ -6,9 +6,12 @@ import {
   EVENT_CARD_TESTID,
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
+  SPOTS_LEFT_TESTID,
   cardTimeLabel,
+  existingResponsesText,
   goingCountText,
   loginUrl,
+  spotsLeftText,
   wallTimeHm,
 } from "../islands/contracts";
 import { ScheduleDate } from "./pages-shared";
@@ -26,6 +29,9 @@ import {
  * viewer until slice 2 lands the RSVP control — guests get the sign-in link,
  * Discord-native rows get "RSVP in Discord" and no going count (there are no
  * local answers to count). `isPast` suppresses the action area entirely.
+ * Cancelled rows keep their title, schedule and badge, but never invite
+ * participation: no sign-in link, and the retained answers read as existing
+ * responses, never attendance or places.
  */
 export const CalCard: FC<{
   e: CalRow;
@@ -37,6 +43,7 @@ export const CalCard: FC<{
 }> = ({ e, zone, isPast, member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
+  const cancelled = !transient && e.status === "cancelled";
   return (
     <li>
       <article
@@ -90,14 +97,32 @@ export const CalCard: FC<{
         <div class="schedule-actions">
           {!transient ? (
             <span class="schedule-attendance" data-testid="event-going-count">
-              {goingCountText(e.goingCount, e.capacity)}
+              {cancelled
+                ? existingResponsesText(e.goingCount)
+                : goingCountText(e.goingCount, e.capacity)}
+              {/* Full marker, same node and copy as the detail lineup: one
+                  inline run, because the actions column is a grid and a
+                  sibling would stack onto its own row. The verdict reads seat
+                  occupancy, never the attributable count alone, so the card
+                  never offers a seat the write path cannot grant. Past cards
+                  stay unmarked, and cancelled cards stay unmarked too:
+                  capacity is meaningless after cancellation, so only the
+                  existing-responses line shows. */}
+              {!cancelled && !isPast && e.capacity !== null && e.goingOccupancy >= e.capacity ? (
+                <>
+                  {" · "}
+                  <span data-testid={SPOTS_LEFT_TESTID}>
+                    {spotsLeftText(e.goingOccupancy, e.capacity)}
+                  </span>
+                </>
+              ) : null}
             </span>
           ) : null}
           {isPast ? null : transient ? (
             <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>
               {EVENTS_EMPTY_COPY.discordRsvp}
             </a>
-          ) : member ? null : (
+          ) : member || cancelled ? null : (
             <a href={loginUrl(loginReturnTo)} data-testid="signin">
               {EVENTS_EMPTY_COPY.signIn}
             </a>

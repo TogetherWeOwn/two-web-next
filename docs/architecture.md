@@ -74,7 +74,9 @@ checked by `ci/check-config-docs.mjs` (run via `npm run config:check`).
 Secrets are set with `wrangler secret put` and never live in the repo; only
 secret **names** appear in docs. The three readiness secrets are
 `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, and `DISCORD_BOT_TOKEN`: when any
-is absent or empty, `GET /up` answers 503.
+is absent or empty, `GET /up` answers 503, and a `SESSION_SECRET` under 32
+characters or with leading/trailing whitespace answers 503 as well
+(`config: "weak"`; see the [configuration reference](./config.md)).
 
 ## 3. Queue and cron path
 
@@ -95,7 +97,11 @@ probe sends to the internal-action queue) with the same
 (`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) owns both
 staging consumers and both crons after the handoff; a queue has exactly one
 consumer. The handoff sequence, secrets and rollback are in
-[jobs-handoff.md](./jobs-handoff.md).
+[jobs-handoff.md](./jobs-handoff.md). Production mirrors the split:
+(`two-web-jobs-production`, `env.production` in the same file) owns both
+production consumers and both production crons after the one-time transfer,
+and the web production env only produces; see
+[production-jobs-handoff.md](./production-jobs-handoff.md).
 
 Cron triggers in [wrangler.jobs.jsonc](../wrangler.jobs.jsonc) are
 `*/10 * * * *` and `0 0 * * *`, pinned to `RECONCILE_CRON` and `PRUNE_CRON` in
@@ -116,8 +122,8 @@ Read from: [tail/worker.ts](../tail/worker.ts),
 
 The Tail Worker in [tail/](../tail/) is the pager and uptime prober. It has
 no public route, no database, and no queues of its own. It tails only the
-exact app script names `two-web-next`, `two-web-next-production` and
-`two-web-jobs`
+exact app script names `two-web-next`, `two-web-next-production`,
+`two-web-jobs` and `two-web-jobs-production`
 ([tail/worker.ts](../tail/worker.ts), `APP_SCRIPT_NAMES`), wired via
 `tail_consumers` in [wrangler.jsonc](../wrangler.jsonc) and
 [wrangler.jobs.jsonc](../wrangler.jobs.jsonc). It accepts only
@@ -175,8 +181,10 @@ request and never stored. The session cookie (`__Host-two_session`,
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
-sessions last 120 minutes with rotation on authenticated reads
-(`SESSION_TTL_SECONDS`), and logout revokes the row. Operators can revoke
+sessions have a 120-minute sliding window with rotation on authenticated reads
+(`SESSION_TTL_SECONDS`) and an absolute 24-hour lineage cap
+(`SESSION_ABSOLUTE_MAX_AGE_SECONDS`). Rotation preserves the original login's
+`created_at`; a fresh login is required at the cap. Logout revokes the row. Operators can revoke
 one member's active sessions with
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs) (dry-run count by
 default, `--apply` revokes), implemented in
@@ -226,9 +234,12 @@ Read from: [web/package.json](../web/package.json),
   JSON smoke ([bin/json-smoke.mjs](../bin/json-smoke.mjs)). Status: active;
   never production test commands.
 
-Not verified: production-environment behavior (the `env.production` block in
-[wrangler.jsonc](../wrangler.jsonc) is a disabled cutover template, not live
-evidence), any future SvelteKit cutover plan, and line-level internals of
+Not verified: production-environment behavior beyond the cited release
+receipts (the `env.production` blocks are live configuration; this page
+proves nothing about their runtime behavior — see
+[production-jobs-handoff.md](./production-jobs-handoff.md) for the jobs
+transfer evidence), any future SvelteKit cutover plan, and line-level
+internals of
 the reconcile/prune job implementations beyond the entry wiring cited above.
 
 ## 8. Module map
@@ -250,6 +261,7 @@ exactly once.
 | `src/about-content.ts` | content |
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
+| `src/admin-wayback.ts` | admin |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
@@ -284,6 +296,7 @@ exactly once.
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
+| `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
@@ -301,16 +314,19 @@ exactly once.
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
+| `src/oauth-code-state-length.ts` | auth |
 | `src/oauth-journeys.ts` | auth |
 | `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
+| `src/privacy-history.ts` | content |
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
@@ -324,6 +340,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
 | `src/faq-content.ts` | content |
+| `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |

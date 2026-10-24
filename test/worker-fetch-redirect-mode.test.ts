@@ -109,8 +109,9 @@ describe("Worker redirect-manual behavior", () => {
     const { fetchFn, seen } = botRedirectEmulator();
     const client = createBotClient({ ...BOT_OPTS, fetchFn });
     // The "not followed" message proves the explicit 3xx refusal ran: an "error"-mode revert
-    // throws "bot unreachable: Invalid redirect value ..." instead, and a default-mode revert
-    // follows to the 200 above and resolves, failing this rejection outright.
+    // throws the fixed "bot unreachable" string (raw redirect error as cause) instead,
+    // and a default-mode revert follows to the 200 above and resolves,
+    // failing this rejection outright.
     await expect(client.assignRole({ userId: SNOWFLAKE, roleKey: "rocketleague" })).rejects.toThrow(
       BotTransportError,
     );
@@ -253,23 +254,23 @@ describe("Worker redirect-manual behavior", () => {
     const gets = seen.filter((init) => init?.method === "GET");
     const posts = seen.filter((init) => init?.method === "POST");
     // Per run two failed /up probes; synthetics only on the first run (the
-    // five-minute boundary), two failed attempts per check: 6 + 6 GETs.
+    // five-minute boundary), two failed attempts per check: 8 + 6 GETs.
     // Every 302 is a failure with its status, not a throw (status 0) and
     // not a silent success. A "follow" revert would see the healthy
     // followed() response and stay silent instead.
-    expect(gets).toHaveLength(12);
+    expect(gets).toHaveLength(14);
     for (const init of seen) expect(init?.redirect).toBe("manual");
-    expect(posts).toHaveLength(4);
-    expect(lines).toHaveLength(4);
+    expect(posts).toHaveLength(5);
+    expect(lines).toHaveLength(5);
     // Synthetic pages land on the first run; the uptime page follows once
     // health has stayed red for over two minutes.
-    expect(JSON.parse(lines[3]!)).toMatchObject({
+    expect(JSON.parse(lines[4]!)).toMatchObject({
       event: "uptime.down",
       status: 302,
       delivery: "ops.alert.delivery_failed",
     });
-    const syntheticLines = lines.slice(0, 3).map((line) => JSON.parse(line));
-    expect(syntheticLines.map((line) => line.check)).toEqual(["/", "/events", "/login"]);
+    const syntheticLines = lines.slice(0, 4).map((line) => JSON.parse(line));
+    expect(syntheticLines.map((line) => line.check)).toEqual(["/", "/events", "/join", "/login"]);
     for (const line of syntheticLines) {
       expect(line).toMatchObject({
         event: "synthetic.down",

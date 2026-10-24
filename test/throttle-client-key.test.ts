@@ -15,6 +15,10 @@ function fixture() {
       hits.push(values[0] as string);
       return [];
     }
+    // The age-only expiry prune runs on every check (admitted or refused).
+    // This double stores no timestamps, so every row counts as fresh and the
+    // prune removes nothing.
+    if (query.includes("DELETE FROM web_throttle_hits")) return [];
     throw new Error("Unexpected throttle statement");
   }) as unknown as Sql);
   const app = new Hono<{ Bindings: Env }>();
@@ -104,6 +108,46 @@ describe("throttle client address keys", () => {
     expect((await request()).status).toBe(204);
     expect((await request()).status).toBe(429);
     expect(hits).toEqual(["client:anon", "client:anon"]);
+  });
+
+  it("skips empty forwarded hops to the first usable hop", async () => {
+    const { request, hits } = fixture();
+    expect((await request({ "x-forwarded-for": ", 192.0.2.1" })).status).toBe(204);
+    expect((await request({ "x-forwarded-for": " , 192.0.2.1" })).status).toBe(204);
+    expect((await request({ "x-forwarded-for": ", 192.0.2.1" })).status).toBe(429);
+    expect(hits).toEqual(["client:192.0.2.1", "client:192.0.2.1"]);
+  });
+
+  it("falls through a whitespace edge header to the forwarded hop", async () => {
+    const { request, hits } = fixture();
+    expect(
+      (await request({ "cf-connecting-ip": "  ", "x-forwarded-for": "192.0.2.99" })).status,
+    ).toBe(204);
+    expect(hits).toEqual(["client:192.0.2.99"]);
+  });
+
+  it("maps a wholly empty identity to anon, never an empty-suffix bucket", async () => {
+    const { request, hits } = fixture();
+    expect((await request({ "x-forwarded-for": " , ," })).status).toBe(204);
+    expect((await request({ "cf-connecting-ip": "  ", "x-forwarded-for": " , " })).status).toBe(
+      204,
+    );
+    expect(hits).toEqual(["client:anon", "client:anon"]);
+    expect(hits.every((bucket) => bucket !== "client:")).toBe(true);
+  });
+
+  it("caps an over-bound client segment at 64 chars while keeping in-bound values distinct", async () => {
+    const { from, hits } = fixture();
+    const longA = `${"a".repeat(70)}`;
+    const longB = `b${"a".repeat(69)}`;
+    expect((await from(longA)).status).toBe(204);
+    expect((await from(longB)).status).toBe(204);
+    expect((await from(longA)).status).toBe(204);
+    expect(hits).toEqual([
+      `client:${"a".repeat(64)}`,
+      `client:b${"a".repeat(63)}`,
+      `client:${"a".repeat(64)}`,
+    ]);
   });
 
   it.each([

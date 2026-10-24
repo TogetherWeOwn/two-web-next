@@ -7,6 +7,8 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
@@ -21,6 +23,7 @@ import {
   waitlistPositionCopy,
 } from "../islands/contracts";
 import type { PublicEvent, ViewerRsvp } from "./reads";
+import { rsvpActionHref } from "./attendee-paths";
 
 /** Only the session viewer's answer is supplied; no member answer collection. */
 export const RsvpButton: FC<{
@@ -30,7 +33,18 @@ export const RsvpButton: FC<{
   returnTo: string;
   waitlistPosition?: number | null;
   now?: Date;
-}> = ({ e, member, answer, returnTo, waitlistPosition = null, now = new Date() }) => {
+  /** Normalized native attendee page (1 stays bare); the form action carries
+   * only this validated page so malformed query values cannot leak through. */
+  attendeePage?: number;
+}> = ({
+  e,
+  member,
+  answer,
+  returnTo,
+  waitlistPosition = null,
+  now = new Date(),
+  attendeePage = 1,
+}) => {
   const closed =
     e.status === "cancelled"
       ? "cancelled"
@@ -39,9 +53,14 @@ export const RsvpButton: FC<{
         : e.status !== "published" || e.endsAt <= now
           ? "past"
           : null;
-  const full = e.capacity !== null && e.goingCount >= e.capacity;
+  // Seat-accurate verdict: occupancy counts every going row like the write
+  // path, so the CTA never offers a seat a nameless row already holds. The
+  // visible "N going" label stays on the attributable `goingCount`.
+  const occupancy = e.goingOccupancy;
+  const full = e.capacity !== null && occupancy >= e.capacity;
   const going = answer?.status === "going";
   const waitlisted = answer?.status === "waitlisted";
+  const soft = answer?.status === "maybe" || answer?.status === "not_going";
   const signIn = loginUrl(returnTo);
   const button = (id: string, action: string, copy: string) => (
     <button type="submit" name="status" value={action} data-testid={id} data-action={action}>
@@ -65,7 +84,7 @@ export const RsvpButton: FC<{
       ) : !member ? (
         <a href={signIn}>{RSVP_COPY.guestCta}</a>
       ) : (
-        <form method="post" action={`/e/${encodeURIComponent(e.eventKey)}/rsvp`} data-rsvp-form>
+        <form method="post" action={rsvpActionHref(e.eventKey, attendeePage)} data-rsvp-form>
           {!e.rsvpOpen ? (
             <p role="status" data-testid={RSVP_PAUSED_TESTID}>
               {RSVP_COPY.paused}
@@ -90,6 +109,29 @@ export const RsvpButton: FC<{
                 ? button(WAITLIST_CLAIM_TESTID, "going", RSVP_COPY.waitlistClaim)
                 : null}
               {button(WAITLIST_LEAVE_TESTID, "withdraw", RSVP_COPY.waitlistLeave)}
+            </>
+          ) : soft ? (
+            <>
+              <p
+                role="status"
+                tabindex={-1}
+                data-testid={answer?.status === "maybe" ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}
+              >
+                {answer?.status === "maybe" ? RSVP_COPY.maybe : RSVP_COPY.notGoing}
+              </p>
+              {!e.rsvpOpen ? (
+                button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)
+              ) : full ? (
+                <>
+                  {button(WAITLIST_JOIN_TESTID, "waitlisted", RSVP_COPY.waitlistJoin)}
+                  {button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)}
+                </>
+              ) : (
+                <>
+                  {button(RSVP_GOING_TESTID, "going", RSVP_COPY.cta)}
+                  {button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)}
+                </>
+              )}
             </>
           ) : !e.rsvpOpen ? null : full ? (
             <>

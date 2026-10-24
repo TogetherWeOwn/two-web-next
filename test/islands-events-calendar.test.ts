@@ -88,7 +88,7 @@ const binder = readFileSync(
 const baseEnv = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
-  DISCORD_GUILD_ID: "guild-id",
+  DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: INVITE,
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
@@ -174,6 +174,19 @@ function calendar(
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // The facet projects one trimmed game column, not a full event row.
+    if (sql.startsWith('select distinct trim("game") from "events"')) {
+      const games = [
+        ...new Set(
+          [...up, ...past]
+            .filter((r) => r.status === "published" && r.game?.trim())
+            .map((r) => r.game!.trim()),
+        ),
+      ];
+      return {
+        rows: games.slice(0, Number(params.at(-1))).map((game) => [game]),
+      };
+    }
     // Identity probes ignore search, visibility and the past drawer's limit.
     if (sql.startsWith('select "discord_event_id" from "events"')) {
       return {
@@ -337,7 +350,14 @@ describe("EventsCalendar review regressions", () => {
       const page = await src.request("/events", { headers: { cookie: auth.cookie } });
       expect(page.headers.get("cache-control")).toBe("private, no-store");
       expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-      expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+      // Rotation retires the active row but leaves its bounded predecessor grace.
+      expect(await auth.store.get(auth.hash)).toMatchObject({ member: true, moderator });
+      expect(await auth.store.statusHash(auth.hash)).toBeNull();
+      const replay = await src.request("/events", {
+        headers: { cookie: auth.cookie, ...fragmentHeaders },
+      });
+      expect(replay.headers.get("cache-control")).toBe("private, no-store");
+      expect(replay.headers.get("set-cookie")).toBeNull();
     },
   );
 
@@ -378,15 +398,16 @@ describe("EventsCalendar review regressions", () => {
       const html = await (await src.request("/events?q=" + encodeURIComponent(query))).text();
       expect(cardKeys(html)).toEqual(["discord-title", "discord-description"]);
       expect(html).not.toContain("Unrelated night");
-      expect(JSON.parse(String(spy.mock.calls.find((c) => c[0] === "event_search")![1]))).toEqual({
+      expect(spy.mock.calls.find((c) => c[0] === "event_search")![1]).toEqual({
         event: "event_search",
         query: normalizeEventSearch(query),
         results: 2,
+        request_id: expect.any(String),
       });
       const miss = await (await src.request("/events?q=no-match")).text();
       expect(miss).toContain(EVENTS_EMPTY_SEARCH_TESTID);
       expect(cardKeys(miss)).toEqual([]);
-      expect(JSON.parse(String(spy.mock.calls.at(-1)![1])).results).toBe(0);
+      expect(spy.mock.calls.at(-1)![1].results).toBe(0);
     },
   );
 
@@ -487,9 +508,9 @@ describe("EventsCalendar second-review regressions", () => {
       expect(cardKeys(html)).not.toContain("canonical");
       expect(cardKeys(html)).toHaveLength(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
       if (variant !== "past-limit") expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
-      expect(
-        JSON.parse(String(log.mock.calls.find((c) => c[0] === "event_search")![1])).results,
-      ).toBe(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+      expect(log.mock.calls.find((c) => c[0] === "event_search")![1].results).toBe(
+        variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0,
+      );
       const probe = src.queries.find((q) =>
         q.sql.startsWith('select "discord_event_id" from "events"'),
       )!;
@@ -564,6 +585,7 @@ describe("EventsCalendar contract drift", () => {
       view: "list",
       month: "2026-10",
       q: "",
+      game: "",
       past: false,
       page: 1,
       ...o,
@@ -681,18 +703,27 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).not.toContain(EVENTS_PAST_TOGGLE_TESTID); // no past rows → no toggle
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
-    // Concurrent reads start together (perf(events)): the upcoming page
-    // count and the past drawer read are issued synchronously, then one page
-    // of upcoming rows, then their grouped going aggregate (empty past page
-    // → no aggregate). Never a per-card query, never more than a page of rows.
-    expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
-      "events",
-      "events",
-      "events",
-      "rsvps",
-    ]);
-    expect(source.queries[0]!.sql).toMatch(/^select count/i);
-    expect(source.queries[3]!.sql).toContain('group by "rsvps"."event_id"');
+    // One bounded published-games projection precedes the concurrent upcoming
+    // count and past drawer reads, then one upcoming page and its two grouped
+    // going aggregates (attributable + occupancy; empty past → no aggregate).
+    // Never a per-card query, never more than a page of event rows.
+    expect(
+      source.queries.map((q) =>
+        /^select distinct/i.test(q.sql) ? "games" : q.sql.includes("rsvps") ? "rsvps" : "events",
+      ),
+    ).toEqual(["games", "events", "events", "events", "rsvps", "rsvps"]);
+    const distinct = source.queries[0]!;
+    expect(distinct.sql).toMatch(/^select distinct trim\("game"\) from "events"/i);
+    expect(distinct.sql).toContain('"events"."status" = \'published\'');
+    expect(distinct.sql).toContain('"events"."game" is not null');
+    expect(distinct.sql).toContain('trim("events"."game") <> \'\'');
+    expect(distinct.sql).toMatch(/limit \$1$/i);
+    expect(distinct.params).toHaveLength(1);
+    expect(Number.isSafeInteger(distinct.params[0])).toBe(true);
+    expect(Number(distinct.params[0])).toBeGreaterThan(0);
+    expect(source.queries[1]!.sql).toMatch(/^select count/i);
+    expect(source.queries[4]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[5]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {
@@ -700,7 +731,9 @@ describe("EventsCalendar SSR drift", () => {
     const res = await source.request("/events?q=" + encodeURIComponent("100% legit"));
     const html = await res.text();
     expect(res.status).toBe(200);
-    const up = source.queries.find((q) => q.sql.includes('from "events"'))!;
+    const up = source.queries.find(
+      (q) => /^select count/i.test(q.sql) && q.sql.includes('from "events"'),
+    )!;
     expect(up.sql).toContain("ilike");
     expect(up.params.filter((p) => p === "%100\\% legit%")).toHaveLength(2);
     expect(up.sql).toContain("'draft'"); // guests never see drafts, even in search
@@ -725,14 +758,16 @@ describe("EventsCalendar SSR drift", () => {
     const guestHtml = await (await guestSrc.request("/events")).text();
     expect(guestHtml).not.toContain("Secret draft");
     expect(guestHtml).toContain(EVENTS_EMPTY_NEVER_TESTID);
-    expect(guestSrc.queries[0]!.sql).toContain("'draft'");
+    expect(guestSrc.queries.find((q) => /^select count/i.test(q.sql))!.sql).toContain("'draft'");
+    expect(guestSrc.queries[0]!.sql).toContain('"events"."status" = \'published\'');
     // Moderator: the draft clause is absent, page is private.
     const modSrc = calendar([draft], [], okSource(), envSlots);
     const res = await app.request("/events", { headers: { cookie } }, modSrc.env);
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(modSrc.queries[0]!.sql).not.toContain("'draft'");
+    expect(modSrc.queries.find((q) => /^select count/i.test(q.sql))!.sql).not.toContain("'draft'");
+    expect(modSrc.queries[0]!.sql).toContain('"events"."status" = \'published\'');
     expect(html).toContain("Secret draft");
     expect(html).toContain(`data-testid="${EVENT_DRAFT_TESTID}"`);
   });
@@ -975,12 +1010,13 @@ describe("EventsCalendar SSR drift", () => {
     await calendar(up, [pastRow], okSource()).request("/events?q=%20%20JAM%20%20");
     const line = spy.mock.calls.find((c) => c[0] === "event_search");
     expect(line).toBeTruthy();
-    expect(JSON.parse(String(line![1]))).toEqual({
+    expect(line![1]).toEqual({
       event: "event_search",
       query: "jam",
       results: 2,
+      request_id: expect.any(String),
     });
-    expect(String(line![1])).not.toMatch(/user|session|ip/i);
+    expect(JSON.stringify(line![1])).not.toMatch(/user|session|ip/i);
     // No search, no line.
     spy.mockClear();
     await calendar(up, [], okSource()).request("/events");

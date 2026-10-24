@@ -16,7 +16,7 @@ The app writes ONE single-line JSON object on `console.error`, with
 | --- | --- | --- |
 | `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
-| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent |
+| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone. Exception: a `model:prune` line with exception `PruneBatchCapError` means the pass committed but hit the per-pass batch ceiling with rows possibly pending — a backlog, not an outage. Exception: an `events:reconcile` line with exception `ReconcilePartialFailureError` means the pass committed with isolated dispatch failures while healthy keys still dispatched — a poison key, not an outage | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent. A capped pass likewise pages once per pass, after the flight commits; only `PruneBatchCapError` pages for a committed pass, and a rolled-back pass pages only its real error. A resolved partial reconcile pass likewise pages once per pass, after the flight commits, with `ReconcilePartialFailureError`; the pass still resolves and the all-failed throw path keeps exactly its one real-class page. On a cap page, check that the next pass drains the remainder; pages on consecutive passes mean inflow above the ceiling. On a `ReconcilePartialFailureError` page, first check the same pass's `Event reconcile pass completed.` counts in the jobs Worker logs (failed > 0 with resynced/absorbed preserved); pages on consecutive passes mean a persisting poison key |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -150,6 +150,48 @@ either gate crosses, then a 15-minute cooldown applies:
 - **Crash loop:** at least 5 crash outcomes, including queue, cron and
   other non-fetch invocations that produce no `error.alert` line at all.
 
+Counts enter by event time, not by invocation or arrival time. One Tail
+invocation can carry same-script traces minutes apart (a delayed flush, a
+retry batch), and trace arrival order within that invocation is arbitrary:
+each trace is filed into its 30-second event-time bucket from its own
+`eventTimestamp`, and the buckets of one invocation are observed oldest
+first. Each script retains a monotonic window endpoint: the newest accepted
+event time seen for that script, including observations with zero counts.
+An older arrival never moves that endpoint backward. A bucket contributes
+only while its end is strictly greater than `endpoint - five minutes`;
+the bucket ending exactly at the cutoff is expired. This preserves the
+existing bucket-overlap convention (up to 30 seconds of boundary rounding).
+
+Across separate invocations, four recent crashes and one six-minute-older
+crash therefore never combine into a false five-crash spike, in either
+arrival order. Expired arrivals are ignored before insertion, attribution
+or paging: they cannot displace live counts at the bucket cap, contaminate
+build attribution or retrospectively page a window already expired by a
+newer observation. A late crash still inside the retained window can
+complete the five-crash threshold. Equal timestamps add counts; they are
+not deduplicated. The endpoint is script-local and independent of the
+uptime-health observation watermark. Alert timestamps, pending-attempt
+fencing and delivered-only cooldown timing keep their existing semantics.
+
+The endpoint is persisted with counts and restored on cold start. A
+rejected observation write rolls back the endpoint, counts and pending
+attempt together. Legacy snapshots derive an initial endpoint from the
+newest valid retained bucket start, irrespective of stored array order;
+expired buckets are pruned, compatible pending/cooldown state survives and
+legacy counts retain unknown attribution. An empty legacy snapshot starts
+its endpoint on the first accepted observation. This migration has only
+bucket-level precision; it cannot recover an old writer's exact event time
+or counts already evicted by that writer.
+
+This remains best-effort counting, not a delivery-time window or replay
+engine. The endpoint advances with source observations, not wall-clock
+passage; wholly delayed traffic with no newer observation can still form
+its own event-time spike. Earlier pages are not retracted, and arrivals
+outside the retained window are not replayed to find historical spikes.
+Independent local fallback/isolate state can still differ from durable
+state. Fixture tests prove the counting boundary, not live rollout or
+webhook delivery.
+
 Like the per-fingerprint mute, the cooldown arms only when the page is
 actually delivered; a failed Discord POST leaves the alarm ready to retry on
 the next batch.
@@ -160,9 +202,57 @@ The summary is allowlisted like the other events: `event`, `script`, optional
 `timestamp`. It is recorded with the usual `ops.alert.delivered` /
 `ops.alert.delivery_failed` receipt. Aggregation is additive: a failing
 aggregator falls back to local counts and never suppresses the per-fingerprint
-pager. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
+pager. Each malfunction fallback (non-OK, unparseable, or wrong-shape 200 on
+`/observe` and `/health`) also emits one `console.warn` JSON line naming path
+and failure class, with no payload bytes or secrets: `{"event":
+"aggregator.fallback", "path": "spike" | "health", "fallback":
+"aggregator-fallback", "reason": "non-ok-status" | "unparseable-json" |
+"wrong-shape", "status"?: number}`. Well-formed aggregator answers stay
+silent; thrown or stalled operations fall back silently. Query:
+`npx wrangler tail two-web-next-alerts --search '"event":"aggregator.fallback"'`.
+If the first storage load rejects with a transient fault, that request
+fails and the caller falls back; a later request on the same instance retries
+the load and recovers the persisted counts/cooldowns and the health window
+coherently. A failed load applies nothing and writes nothing, so the retry
+restores stored state exactly once, while a successful first load stays
+single-flight. This path is covered by hermetic tests; live recovery has not
+been observed. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
 `SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
 evidence; on a quiet site the count floor, not the rate, is what fires.
+
+Future-skew drop observability: a batch stamped beyond now plus the
+`BATCH_FUTURE_SLACK_MS` slack is dropped on the tail path and rejected with
+400 on the aggregator `/observe` wire — the slack bound and drop semantics
+are unchanged, only the accounting is new. Each `tail()` invocation that
+drops skewed traces emits one `tail.skew_drop` sink line reporting that
+invocation's dropped count; a 400 for a future-skewed but otherwise valid
+batch logs a skew-rejection line, while a 400 for a structurally invalid or
+unparseable batch logs a malformed-payload line (status stays 400 either
+way). A skew line means a poisoned clock is eating traffic; a malformed
+line means payload corruption. No threshold or slack change.
+
+The three exact rejection lines come from the Tail Worker
+`two-web-next-alerts` (`AlertAggregator.fetch` in `tail/worker.ts`). Each is
+`console.warn` only — no page, no Discord delivery — and the response status
+stays 400; the line names the reason so operators can tell clock skew from
+payload corruption. No line carries payload bytes.
+
+| Exact warn | Emitter / path | Contract and severity | First read-only check |
+| --- | --- | --- | --- |
+| `tail observe rejected malformed batch: invalid body` | `two-web-next-alerts` `AlertAggregator.fetch`, pre-dispatch: any POST to `/observe`, `/health`, `/spike-result`, or `/health-result` (`tail/worker.ts`) | 400; warn only, no page. Unparseable body is malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string (Workers Logs, or `npx wrangler tail two-web-next-alerts --search 'tail observe rejected'`), then check the sender batch shape/version and that the sender posted valid JSON. |
+| `tail observe rejected future-skewed batch: timestamp beyond slack` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Otherwise-valid batch stamped beyond now plus `BATCH_FUTURE_SLACK_MS`; a batch that is both malformed and future-stamped reads as malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then compare the sender clock against `BATCH_FUTURE_SLACK_MS` in `tail/worker.ts`. A skew line means a poisoned clock is eating traffic. |
+| `tail observe rejected malformed batch: invalid payload` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Structurally invalid batch (`script`, `at`, `requests`, `errors`, `crashes` per `validBatch` in `tail/worker.ts`). No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then check the sender batch shape/version against `validBatch` in `tail/worker.ts`. A malformed line means payload corruption. |
+
+Attribution is honest about the whole counted window. `build_sha` is present
+only on a homogeneous page: every counted bucket in the window carries the
+same validated build, through the same 40-hex version-tag and release-log
+pairing as above (a bare tag and a production-suffixed tag of one SHA count
+as one build). A mixed window — two builds in one bucket or across buckets,
+or any counted bucket with unknown attribution (an untagged or invalid batch,
+or counts restored from before provenance existed) — pages with `build_sha`
+omitted rather than assigning every failure to the latest build. Thresholds,
+counts, timing and cooldowns stay script-wide either way, and per-trace
+fingerprint summaries keep their own trace's `build_sha`.
 
 ### Scheduled `/up` prober: `uptime.down`
 
@@ -178,14 +268,37 @@ page (a failed POST re-pages on the next red run). The red window lives in the s
 Healthy means HTTP 200 with `x-two-origin: two-web-next`, not merely a
 reachable endpoint.
 
-The summary contains only `event`, `status` (the second attempt's HTTP status,
+Observation ordering: the tracker persists a monotonic source-observation
+watermark (the newest probe source time applied so far) alongside the red
+window, and an observation stamped strictly older than that watermark is a
+successful no-op — it publishes nothing and changes neither the outage start,
+the pending page attempt, nor the cooldown. A delayed older healthy sample
+therefore cannot clear a newer outage, and a delayed older red sample cannot
+resurrect a window a newer healthy sample already cleared. Equal timestamps
+are not strictly older, so a same-time retry still takes effect. The watermark
+survives snapshot/restore and Durable Object restarts; snapshots written
+before it existed load safely and establish it from the first observation
+accepted after the restore.
+
+The summary contains `event`, `status` (the second attempt's HTTP status,
 or `0` for a transport error/timeout), `down_seconds` (how long health has
-been continuously red) and `timestamp`.
+been continuously red), `timestamp`, plus optional `build_sha` (and
+`version_id`) read from the already-fetched `/up` body's public
+`revision.commit` through the exact 40-hex allowlist (`version_id` only
+through the Worker Version UUID allowlist); an unreadable or stalled body
+pages unattributed — the marker read races a 2 s independent deadline, so
+a hung body cannot stall the run — and no extra probe is made.
 The Tail Worker records `ops.alert.delivered` or `ops.alert.delivery_failed`
 for each delivery attempt, so the delivery-receipt query below also
 catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
+
+Queue-only blindness pages nowhere here: an unreadable ledger reports
+top-level `degraded` with `queue.status: unknown` on HTTP 200, so this prober
+stays green by design. That 200 does not double with the direct
+`scheduled.failing` page above, which remains the paging signal for failed
+reconcile/prune runs.
 
 ### Synthetic main-flow checks: `synthetic.down`
 
@@ -193,7 +306,9 @@ Scheduled runs landing on a five-minute boundary also probe the main flow
 on the `UPTIME_URL` origin, because a healthy `/up` does not prove members
 can load the site or start
 sign-in. Each check is an anonymous GET with manual redirects and a
-ten-second timeout; response bodies are never read. Checks run even when
+ten-second timeout; synthetic response bodies are never read (only the
+run's already-fetched `/up` body is parsed for the revision marker).
+Checks run even when
 `/up` is down, and each failing check is retried once after ten seconds
 before it can page:
 
@@ -201,24 +316,34 @@ before it can page:
 |-------|---------------|
 | `/` | HTTP 200 with an HTML content type |
 | `/events` | HTTP 200 with an HTML content type |
+| `/join` | HTTP 200 with an HTML content type |
 | `/login` | HTTP 302 redirecting to `/auth/discord` on the same host |
 
-The summary contains only `event`, `check` (the probed path), `target`
+The summary contains `event`, `check` (the probed path), `target`
 (the public host of the configured `UPTIME_URL`, which identifies the
 environment), `status` (the second attempt's HTTP status, or `0` for a
-transport error/timeout) and `timestamp`. Redirect targets are compared by
-host and path only: any Location query is discarded inside the probe and
-never appears in a page or log line.
+transport error/timeout), `timestamp`, plus the same optional `build_sha`
+(and `version_id`) from the run's already-fetched `/up` body. Redirect
+targets are compared by host and path only: any Location query is discarded
+inside the probe and never appears in a page or log line.
 Delivery uses the same five-minute, per-isolate mute, keyed by
-`synthetic.down:<check>` (the status rides in the page but does not split
-the mute, so a check flapping between failing statuses pages once per
+`synthetic.down:<check>` (the status and the build attribution ride in the
+page but do not split the mute, so a check flapping between failing
+statuses — or a deploy answering `/up` mid-incident — pages once per
 window), and the same delivery receipts as `uptime.down`.
+
+- Correlate the page to the deploy: `build_sha` is the `/up`
+  `revision.commit` observed in the paging run, so open that commit (and
+  `version_id` in Cloudflare) instead of assuming the current `main` head.
 
 No check authenticates, posts a form, injects a fault, or changes
 application data, so the production prober stays passive. The sign-in
 check stops at `/login` on purpose: the next hop, `/auth/discord`, mints
 OAuth state and would write a login-redirect throttle hit and an OAuth
-journey row on every probe attempt. Like any anonymous visitor, the
+journey row on every probe attempt. The conversion check likewise stops
+at the `/join` page: the next hops (`/join/discord`, `/join/callback`)
+mint journey state and write throttle hits, while the page itself is a
+persistence-free leaf that writes nothing. Like any anonymous visitor, the
 `/events` probe records one rate-limit counter hit (the `events-read`
 bucket) per admitted attempt; the existing throttle expiry sweep deletes
 those counters. Staging and production each probe their own configured
@@ -243,10 +368,12 @@ configuration silently drops outbound work; it is not a successful probe.
    `npx wrangler secret put OPS_ALERT_WEBHOOK_URL --config tail/wrangler.jsonc`.
    Enter it through the secure prompt, never a command argument, repo file or
    issue comment. Do not create/rotate/export credentials to run this drill.
-3. Deploy the app (`npx wrangler deploy`). `wrangler.jsonc` attaches
-   `tail_consumers: [{ service: "two-web-next-alerts" }]`. The staging deploy
-   workflow performs the same Tail-first ordering. Both bundles are dry-run
-   built by CI.
+3. Deploy the app through `.github/workflows/deploy.yml`, which builds and
+   deploys `web/wrangler.staging.jsonc` after deploying the Tail Worker. That
+   Kit staging config attaches `tail_consumers: [{ service:
+   "two-web-next-alerts" }]`; the workflow also retains the exact-SHA gate,
+   version tag and consumer handoff. Do not deploy the Kit preview config as
+   staging. CI dry-run builds both the staging Kit config and the preview config.
 4. Verify the deployed app revision, exact `next.togetherweown.com` target,
    staging Hyperdrive binding and the attachment in Cloudflare. Run the probe
    below with the already-approved staging QA token. Record the revision and
@@ -270,12 +397,12 @@ requires `X-TWO-QA-Auth` (constant-time comparison) and the existing global
 same-origin/host guards. It has **no same-origin exemption**. Valid same-origin
 requests with QA disabled (including production configuration), wrong/missing
 token, or GET return 404 without sending a job. Untrusted unsafe requests retain
-the ordinary global 403. Authenticated probes use the shared 10/minute QA
-throttle, checked only after the QA gate (so production/bad tokens cannot turn
-into 429s); an exhausted budget returns the ordinary 429 before reading an upload
-or enqueueing. After authentication/admission, the shared `action` body limit
-counts at most 4,096 bytes; oversized bodies return 413 without enqueueing.
-Disabled or unauthenticated probes never read bodies or consume throttle budget.
+the ordinary global 403. Authenticated probes run the shared `action` body cap
+(at most 4,096 bytes) after the QA gate and before the shared 10/minute QA
+throttle (so production/bad tokens cannot turn into 429s); over-cap probes
+return 413 with no throttle spend and without enqueueing, even when the budget
+is exhausted. Only under-cap probes can return the ordinary 429. Disabled or
+unauthenticated probes never read bodies or consume throttle budget.
 
 An authorized call enqueues `{ kind: "alert-probe", probeId }` on the staging internal
 queue, then throws `AlertProbeError` through the real 500 handler. **500 is the
@@ -296,6 +423,10 @@ npx wrangler tail two-web-next-alerts --format json > /path/to/private/alert-rec
 
 # Terminal 2; QA_AUTH_TOKEN must already be supplied by an approved secret binding.
 node bin/alert-probe.mjs --receipt-file /path/to/private/alert-receipts.json
+# Offline preflight (validates receipt file plus token presence, sends nothing):
+node bin/alert-probe.mjs --receipt-file /path/to/private/alert-receipts.json --dry-run
+# Discovery (usage to stdout, zero effects):
+node bin/alert-probe.mjs --help
 ```
 
 The script refuses every non-staging target, posts with the QA token in a
@@ -315,8 +446,9 @@ at the boundary and completed later; it fails closed on prefix replacement or
 truncation. Freshness does not compare the operator clock to Cloudflare's clock.
 A source critical line, old receipt, foreign-probe receipt, delivery-failed
 receipt, or only one receipt cannot pass. It never calls or reads the webhook
-secret. Failure/timeout exits
-nonzero and claims no delivery. Stop the live tail and remove the private raw
+secret. Failure/timeout exits nonzero and claims no delivery, with a stable
+`code=` reason distinguishing mis-invocation and missing inputs (exit 2) from
+delivery failure (exit 1). Stop the live tail and remove the private raw
 stream after the drill; retain only the script's redacted JSON result plus the
 tested SHA as evidence. A missing operator secret leaves this live drill
 unverified; local fixture tests still cover the chain.

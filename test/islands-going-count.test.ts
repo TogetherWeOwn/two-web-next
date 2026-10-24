@@ -144,9 +144,16 @@ describe("going-count refresh discipline: requests fired", () => {
 });
 
 describe("explicit polling contract: every island pins poll-or-not", () => {
-  it("registers all five islands", () => {
+  it("registers all six islands", () => {
     expect([...ISLANDS].sort()).toEqual(
-      ["events-calendar", "going-count", "member-profile", "past-events", "rsvp-button"].sort(),
+      [
+        "events-calendar",
+        "going-count",
+        "member-profile",
+        "past-events",
+        "rsvp-button",
+        "attendees-live",
+      ].sort(),
     );
   });
 

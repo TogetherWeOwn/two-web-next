@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { STATEMENT_SET_HASH } from "../src/admin/source-evidence";
+import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
@@ -51,11 +52,31 @@ function markerRow() {
   };
 }
 
-function fakeTag(strings: TemplateStringsArray, ..._values: unknown[]) {
+function fakeTag(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.join("?");
+  const normalized = text.replace(/\s+/g, " ").trim();
   // Cache-defeat fragments are interpolated, never executed: like the real
   // driver, build them without recording a source read.
   if (text.trim().startsWith(", clock_timestamp()")) return {};
+  if (
+    normalized ===
+      "select current_setting('lock_timeout') as lock_timeout, current_setting('statement_timeout') as statement_timeout" &&
+    values.length === 0
+  ) {
+    return [{ lock_timeout: "17s", statement_timeout: "23s" }];
+  }
+  // Timeout setup/restoration configures the transaction; it is not an
+  // evidence/source read. The fixture uses non-default caller settings.
+  if (text.includes("set_config")) {
+    const timeoutConfig =
+      normalized ===
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)";
+    const isBounded =
+      values.length === 2 && values.every((value) => value === "2000" || value === "2000ms");
+    const restoresCallerSettings = values[0] === "17s" && values[1] === "23s";
+    if (timeoutConfig && (isBounded || restoresCallerSettings)) return [];
+    throw new Error(`unexpected statement: ${text.slice(0, 80)}`);
+  }
   mocks.texts.push(text);
   if (mocks.mode === "error") throw new Error("private source failure");
   if (text.includes("queue_failed_jobs")) return mocks.mode === "missing" ? [] : [markerRow()];
@@ -81,6 +102,30 @@ function request(
   );
 }
 
+const WRITE_VERBS = ["OPTIONS", "POST", "PUT", "PATCH", "DELETE"] as const;
+const ACTION_MAX = BODY_LIMIT_BYTES.action;
+const TOO_LARGE = {
+  reason: "payload_too_large",
+  message: "Reduce the size of your request and try again.",
+};
+
+function oversizedUpload(method: string, advertised: boolean) {
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.enqueue(new Uint8Array(1024)),
+  );
+  const upload = new Request(`${STAGING_APP_URL}/admin/queue/source-evidence/7`, {
+    method,
+    body: new ReadableStream({ pull }, { highWaterMark: 0 }),
+    duplex: "half",
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+      ...(advertised ? { "content-length": String(ACTION_MAX + 1) } : {}),
+    },
+  } as RequestInit);
+  return { upload, pull };
+}
+
 describe("evidence-only source/cache verifier admission", () => {
   beforeEach(() => {
     mocks.texts.length = 0;
@@ -92,10 +137,21 @@ describe("evidence-only source/cache verifier admission", () => {
       mocks.options.push(options);
       const tag = (strings: TemplateStringsArray, ...values: unknown[]) =>
         fakeTag(strings, ...values);
+      // A postgres.js transaction tag can savepoint but cannot open another transaction.
+      function transactionClient() {
+        const tx = (strings: TemplateStringsArray, ...values: unknown[]) =>
+          fakeTag(strings, ...values);
+        return Object.assign(tx, {
+          async savepoint<T>(work: (client: unknown) => Promise<T>) {
+            return work(transactionClient());
+          },
+        });
+      }
+      const tx = transactionClient();
       return Object.assign(tag, {
         begin: (...args: unknown[]) => {
           mocks.begins.push(args);
-          return (args[args.length - 1] as (tx: unknown) => unknown)(tag);
+          return (args[args.length - 1] as (tx: unknown) => unknown)(tx);
         },
         end: mocks.end,
       });
@@ -150,6 +206,67 @@ describe("evidence-only source/cache verifier admission", () => {
       expect(await res.json()).toEqual({ error: "method_not_allowed" });
       expect(get).not.toHaveBeenCalled();
       expect(mocks.factory).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with a small body still refuses 405 DB-free (cap passes, refusal answers)",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const res = await request(
+        store,
+        { method, body: "ok", headers: { "content-type": "text/plain" } },
+        bindings,
+      );
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("GET");
+      expect(await res.json()).toEqual({ error: "method_not_allowed" });
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with an advertised oversized body refuses 413 DB-free before the method refusal",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const app = new Hono().route("/admin", adminApp(store));
+      const { upload, pull } = oversizedUpload(method, true);
+      const res = await app.request(upload, undefined, bindings);
+      expect(res.status).toBe(413);
+      expect(await res.json()).toMatchObject(TOO_LARGE);
+      expect(pull).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+      await upload.body?.cancel().catch(() => {});
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with a chunked oversized body refuses 413 DB-free before the method refusal",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const app = new Hono().route("/admin", adminApp(store));
+      const { upload, pull } = oversizedUpload(method, false);
+      const res = await app.request(upload, undefined, bindings);
+      expect(res.status).toBe(413);
+      expect(await res.json()).toMatchObject(TOO_LARGE);
+      expect(pull.mock.calls.length).toBeLessThanOrEqual(ACTION_MAX / 1024 + 2);
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+      await upload.body?.cancel().catch(() => {});
     },
   );
 
@@ -248,6 +365,47 @@ describe("evidence-only source/cache verifier admission", () => {
     expect(await res.json()).toEqual({ error: "evidence_unavailable" });
   });
 
+  it.each([
+    ["bounded timeout setup", "2000", "2000"],
+    ["bounded timeout setup with units", "2000ms", "2000ms"],
+    ["caller timeout restoration", "17s", "23s"],
+  ] as const)(
+    "%s does not count as a source read",
+    async (_label, lockTimeout, statementTimeout) => {
+      fakeTag`select set_config('lock_timeout', ${lockTimeout}, true), set_config('statement_timeout', ${statementTimeout}, true)`;
+      expect(mocks.texts).toHaveLength(0);
+      const res = await request(createMemorySessionStore());
+      expect(res.status).toBe(200);
+      expect(mocks.texts).toHaveLength(5);
+      const body = (await res.json()) as { selects: unknown[] };
+      expect(body.selects).toHaveLength(5);
+    },
+  );
+
+  it.each([
+    ["select unknown_function()", []],
+    [
+      "select set_config('lock_timeout', ?, false), set_config('statement_timeout', ?, true)",
+      ["2000", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true) from events",
+      ["2000", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)",
+      ["0", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)",
+      ["2000"],
+    ],
+  ])("unexpected SQL/configuration still refuses: %s %j", (text, values) => {
+    expect(() => fakeTag([text] as unknown as TemplateStringsArray, ...values)).toThrow(
+      "unexpected statement:",
+    );
+  });
+
   it("success returns evidence only, once, with no session and no audit write", async () => {
     const store = createMemorySessionStore();
     const get = vi.spyOn(store, "get");
@@ -310,5 +468,19 @@ describe("evidence-only source/cache verifier admission", () => {
     expect(await res.json()).toMatchObject({
       binding: { kind: "hyperdrive", databaseUrlOverride: false },
     });
+  });
+
+  it("missing database refuses with a joinable log line and no config echo", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { DATABASE_URL: _dropped, ...noDbEnv } = env;
+    const res = await request(createMemorySessionStore(), {}, noDbEnv);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "evidence_unavailable" });
+    expect(mocks.factory).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalledExactlyOnceWith(
+      "source evidence database missing; refusing evidence.",
+      { exception: "MissingConfiguration", incidentId: 7 },
+    );
+    expect(JSON.stringify(err.mock.calls)).not.toContain("evidence_unavailable");
   });
 });

@@ -17,6 +17,7 @@ import {
   seed,
   SUBJECT,
 } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 describe.skipIf(!process.env.DATABASE_URL)(
@@ -24,12 +25,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
   () => {
     let fixture: MemberDataFixture;
     let sessions = createMemorySessionStore();
-    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}, enforce?: string) =>
+    const request = (path = `/e/${EVENT_KEY}`, init: RequestInit = {}) =>
       app.request(path, init, {
         ...env,
         ADMIN_DB: fixture.db,
         SESSION_STORE: sessions,
-        MEMBER_ACCESS_LOG_ENFORCE: enforce,
       });
     const headers = async (actor = MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
     const logs = () => fixture.db.select().from(memberDataAccessLogs);
@@ -221,6 +221,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await logs()).toHaveLength(0);
     });
 
+    it("links a page far past the end back to page one, never to another empty page", async () => {
+      // The seed holds one named attendee, so pages 2..N are all empty. Page 3
+      // must return to the bare page-one URL: page N-1 (?attendees=2) is empty
+      // too and would strand the viewer on empty pages.
+      const res = await request(`/e/${EVENT_KEY}?attendees=3`, {
+        headers: await headers(MEMBER),
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("There are no more attendees on this page.");
+      expect(html).toMatch(
+        new RegExp(`href="/e/${EVENT_KEY}"[^>]*data-testid="event-attendees-prev"`),
+      );
+      expect(html).not.toContain("attendees=2");
+      expect(html).not.toContain('data-testid="event-attendees-next"');
+      expect(await logs()).toHaveLength(0);
+    });
+
     it("missing/forbidden/cancelled pages do not render or log subjects", async () => {
       expect((await request("/e/invalid")).status).toBe(404);
       expect((await request("/e/01J00000000000000000000017")).status).toBe(404);
@@ -236,12 +254,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["guest", "member"])(
       "refuses an added sensitive query inside the existing event handler for %s",
       async (role) => {
+        let sabotage: unknown;
         const original = reads.getPublicEvent;
         vi.spyOn(reads, "getPublicEvent").mockImplementationOnce(async (db, key) => {
           const event = await original(db, key);
           try {
             await db.select().from(users);
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return event;
         });
         const res = await request(undefined, {
@@ -250,22 +271,27 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(res.status).toBe(503);
         expect(await res.text()).not.toContain(SUBJECT.username);
         expect(await logs()).toHaveLength(0);
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
     it("refuses a newly added keyless projection even inside a keyed attendee helper", async () => {
+      let sabotage: unknown;
       const original = reads.listGoingAttendees;
       vi.spyOn(reads, "listGoingAttendees").mockImplementationOnce(async (db, eventId) => {
         const attendees = await original(db, eventId);
         try {
           await memberReads.keyedMemberRead(() => db.select({ name: users.username }).from(users));
-        } catch {}
+        } catch (error) {
+          sabotage = error;
+        }
         return attendees;
       });
       const res = await request(undefined, { headers: await headers(MEMBER) });
       expect(res.status).toBe(503);
       expect(await res.text()).not.toContain(SUBJECT.username);
       expect(await logs()).toHaveLength(0);
+      await assertDenialThrows(Promise.reject(sabotage));
     });
 
     it("one malformed attendee key refuses the whole partial set", async () => {
@@ -308,31 +334,28 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it.each([undefined, "false"])(
-      "failed log INSERT enforces=%s without spilling subjects",
-      async (enforce) => {
-        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    it("failed log INSERT refuses the read without spilling subjects", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      await fixture.db.execute(
+        sql`ALTER TABLE member_data_access_logs ADD CONSTRAINT reject_test_access CHECK (false)`,
+      );
+      try {
+        const res = await request(undefined, { headers: await headers(MEMBER) });
+        expect(res.status).toBe(503);
+        const html = await res.text();
+        expect(html).not.toContain(SUBJECT.username);
+        expect(res.headers.get("cache-control")).toBe("private, no-store");
+        expect(await logs()).toHaveLength(0);
+        const logged = JSON.stringify(error.mock.calls);
+        expect(logged).toContain("DrizzleQueryError");
+        expect(logged).not.toContain("insert into");
+        expect(logged).not.toContain(SUBJECT.userId);
+        expect(logged).not.toContain(SUBJECT.username);
+      } finally {
         await fixture.db.execute(
-          sql`ALTER TABLE member_data_access_logs ADD CONSTRAINT reject_test_access CHECK (false)`,
+          sql`ALTER TABLE member_data_access_logs DROP CONSTRAINT reject_test_access`,
         );
-        try {
-          const res = await request(undefined, { headers: await headers(MEMBER) }, enforce);
-          expect(res.status).toBe(503);
-          const html = await res.text();
-          expect(html).not.toContain(SUBJECT.username);
-          expect(res.headers.get("cache-control")).toBe("private, no-store");
-          expect(await logs()).toHaveLength(0);
-          const logged = JSON.stringify(error.mock.calls);
-          expect(logged).toContain("DrizzleQueryError");
-          expect(logged).not.toContain("insert into");
-          expect(logged).not.toContain(SUBJECT.userId);
-          expect(logged).not.toContain(SUBJECT.username);
-        } finally {
-          await fixture.db.execute(
-            sql`ALTER TABLE member_data_access_logs DROP CONSTRAINT reject_test_access`,
-          );
-        }
-      },
-    );
+      }
+    });
   },
 );

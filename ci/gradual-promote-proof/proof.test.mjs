@@ -62,13 +62,24 @@ async function serveFixture(t, env) {
   return { base: `http://127.0.0.1:${server.address().port}`, paths };
 }
 
-test("healthy fixture passes the real smoke checker across all 17 routes", async (t) => {
+test("healthy fixture passes the real smoke checker across all 24 routes", async (t) => {
   const { base, paths } = await serveFixture(t, fixtureEnv("ok"));
   const logs = [];
   const ok = await smoke(base, { log: (line) => logs.push(line), allowIndexable: false });
   assert.equal(ok, true, logs.join("\n"));
-  assert.equal(paths.length, 17);
-  assert.match(logs.at(-1), /^smoke: 17 routes, 0 failed assertions$/);
+  assert.equal(paths.length, 24);
+  assert.match(logs.at(-1), /^smoke: 24 routes, 0 failed assertions$/);
+});
+
+test("healthy fixture passes the real smoke checker with a matching version override", async (t) => {
+  const { base } = await serveFixture(t, fixtureEnv("ok"));
+  const logs = [];
+  const ok = await smoke(base, {
+    log: (line) => logs.push(line),
+    allowIndexable: false,
+    versionOverride: `${PROOF_WORKER_NAME}="${CANDIDATE}"`,
+  });
+  assert.equal(ok, true, logs.join("\n"));
 });
 
 test("fail-up fixture is rejected by the real smoke checker", async (t) => {
@@ -393,7 +404,7 @@ test("workflow pins the exact central action and keeps production unreachable", 
   );
   // The unchanged pinned action, invoked exactly once.
   assert.equal(workflow.split(PINNED_ACTION).length - 1, 1);
-  assert.match(PINNED_ACTION, /@1dcce452d9066c02e4ab3d99931edf75d50388d7$/);
+  assert.match(PINNED_ACTION, /@89c290be20c0044efaf6916f28341c76e75fff06$/);
   // Manual dispatch from main only: no other trigger keys in the on: block.
   const onBlock = workflow.match(/^on:\n([\s\S]*?)\n\npermissions:/m)?.[1] ?? "";
   assert.match(onBlock, /workflow_dispatch:/);
@@ -433,4 +444,68 @@ test("workflow pins the exact central action and keeps production unreachable", 
   // stale edge response must not fail the run.
   assert.equal(workflow.split("--attempts 6 --delay-ms 5000").length - 1, 3);
   assert.equal(workflow.split('probe.mjs "https://$DOMAIN"').length - 1, 3);
+});
+
+test("proof pin equals the production deploy pin so they cannot drift", () => {
+  const deploy = readFileSync(
+    new URL("../../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const extractActivePin = (source, label) => {
+    const matches = [
+      ...source.matchAll(
+        /^[ \t]*uses:[ \t]*(TogetherWeOwn\/\.github\/actions\/gradual-promote@[^\s#]+)[ \t]*(?:#.*)?$/gm,
+      ),
+    ].map((m) => m[1]);
+    assert.equal(matches.length, 1, `${label} must contain exactly one active pin`);
+    return matches[0];
+  };
+  // Per-caller inputs that must differ: deployment identity, credentials,
+  // and the proof's indexability lock. Anything else must match exactly.
+  const PER_CALLER_INPUTS = new Set([
+    "worker-name",
+    "version-tag",
+    "domain",
+    "api-token",
+    "account-id",
+    "allow-indexable",
+  ]);
+  const extractActiveWith = (source, label) => {
+    const lines = source.split("\n");
+    const usesAt = lines.findIndex((line) =>
+      /^[ \t]*uses:[ \t]*TogetherWeOwn\/\.github\/actions\/gradual-promote@[^\s#]+/.test(line),
+    );
+    assert.notEqual(usesAt, -1, `${label} must contain an active gradual-promote step`);
+    const withAt = lines.findIndex((line, idx) => idx > usesAt && /^[ \t]*with:[ \t]*$/.test(line));
+    assert.notEqual(withAt, -1, `${label} gradual-promote step must have a with-block`);
+    const stepAt = lines.findIndex((line, idx) => idx > usesAt && /^ {6}- /.test(line));
+    assert.ok(stepAt === -1 || withAt < stepAt, `${label} with-block must belong to the step`);
+    const withIndent = lines[withAt].match(/^(\s*)/)?.[1].length ?? 0;
+    const entries = {};
+    for (let idx = withAt + 1; idx < lines.length; idx += 1) {
+      const line = lines[idx];
+      if (line.trim() === "" || line.trim().startsWith("#")) continue;
+      const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (indent <= withIndent) break;
+      const input = line.match(/^\s*([A-Za-z0-9_.-]+):[ \t]*(.*?)\s*$/);
+      assert.ok(input, `${label} with-block line not understood: ${line}`);
+      entries[input[1]] = input[2];
+    }
+    assert.ok("worker-name" in entries, `${label} with-block must list worker-name`);
+    return entries;
+  };
+  const stripPerCaller = (entries) =>
+    Object.fromEntries(Object.entries(entries).filter(([key]) => !PER_CALLER_INPUTS.has(key)));
+  const productionPin = extractActivePin(deploy, "production workflow");
+  assert.equal(PINNED_ACTION, productionPin);
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/gradual-promote-proof.yml", import.meta.url),
+    "utf8",
+  );
+  const proofPin = extractActivePin(workflow, "proof workflow");
+  assert.equal(proofPin, productionPin);
+  assert.equal(proofPin, PINNED_ACTION);
+  const productionWith = extractActiveWith(deploy, "production workflow");
+  const proofWith = extractActiveWith(workflow, "proof workflow");
+  assert.deepEqual(stripPerCaller(proofWith), stripPerCaller(productionWith));
 });

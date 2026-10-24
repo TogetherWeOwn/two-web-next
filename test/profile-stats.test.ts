@@ -7,6 +7,7 @@ import type { EnvWithAdminDb } from "../src/admin/db";
 import type { AccessEntry } from "../src/access-log";
 import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
 import {
+  MEMBER_MILESTONES_CAP,
   MEMBER_STATS_BUDGET_MS,
   memberStatsWithBudget,
   readMemberStats,
@@ -72,6 +73,7 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
       tenureDays: 637,
       rankKey: "community_regular",
       isCurrentMember: true,
+      milestonesTruncated: false,
       milestones: milestones.map((row) => ({
         type: row.milestone,
         occurredAt: new Date(row.occurred_at),
@@ -84,6 +86,31 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
     expect(queries[0]!.sql).toContain("from web_v1.members where member_id = $1 limit 1");
     expect(queries[1]!.sql).toContain("where member_id = $1 order by occurred_at desc");
     expect(queries.map((query) => query.params)).toEqual([[MEMBER], [MEMBER]]);
+  });
+
+  it("caps an over-cap milestone list at the pinned cap and marks it truncated", async () => {
+    // Fixture returns rows as-is (SQL ordering happens in the real DB), so feed
+    // newest-first like the ordered query would: the probe row is the oldest.
+    const rows = Array.from({ length: MEMBER_MILESTONES_CAP + 1 }, (_, i) => {
+      const n = MEMBER_MILESTONES_CAP - i;
+      return {
+        member_id: MEMBER,
+        milestone: `m${String(n).padStart(3, "0")}`,
+        occurred_at: new Date(Date.UTC(2025, 0, 1) + n * 86_400_000).toISOString(),
+        detail: null,
+      };
+    });
+    const { db, execute } = fixture([fullMember], rows);
+    const stats = await readMemberStats(db, MEMBER);
+    expect(stats?.milestones).toHaveLength(MEMBER_MILESTONES_CAP);
+    expect(stats?.milestonesTruncated).toBe(true);
+    // The extra oldest row proves the SQL probed past the cap.
+    expect(stats?.milestones[0]?.type).toBe(`m${String(MEMBER_MILESTONES_CAP).padStart(3, "0")}`);
+    expect(stats?.milestones.at(-1)?.type).toBe("m001");
+    const queries = execute.mock.calls.map(
+      ([query]) => query as { sql: string; params: unknown[] },
+    );
+    expect(queries[1]!.sql).toContain("limit 101");
   });
 
   it("returns no block for no row, without reading milestones", async () => {
@@ -101,20 +128,36 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
         .mockReset()
         .mockRejectedValue(Object.assign(new Error(`postgres://secret@host/${MEMBER}`), { code }));
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      expect(await readMemberStats(db, MEMBER)).toBeNull();
+      const stats = await readMemberStats(db, MEMBER);
+      expect(stats).toMatchObject({
+        joinedAt: null,
+        tenureDays: null,
+        rankKey: null,
+        milestones: [],
+        membershipUnavailable: true,
+      });
       expect(warn).toHaveBeenCalledOnce();
       expect(JSON.stringify(warn.mock.calls)).not.toMatch(/secret|postgres|100000000000000001/);
     },
   );
 
-  it("hides the whole block if only the milestones view is missing", async () => {
+  it("keeps membership facts when only the milestones view is missing", async () => {
     const { db, execute } = fixture();
     execute
       .mockReset()
       .mockResolvedValueOnce([fullMember])
       .mockRejectedValueOnce(new Error("missing milestones view"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await readMemberStats(db, MEMBER)).toBeNull();
+    const stats = await readMemberStats(db, MEMBER);
+    expect(stats).toMatchObject({
+      joinedAt: new Date(fullMember.joined_at),
+      tenureDays: 637,
+      rankKey: "community_regular",
+      isCurrentMember: true,
+      milestones: [],
+      milestonesTruncated: false,
+      milestonesUnavailable: true,
+    });
   });
 
   it("does not start milestones after a member query outlives the budget", async () => {
@@ -130,7 +173,14 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
     );
     const pending = readMemberStats(db, MEMBER);
     await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS);
-    expect(await pending).toBeNull();
+    const stats = await pending;
+    expect(stats).toMatchObject({
+      joinedAt: null,
+      tenureDays: null,
+      rankKey: null,
+      milestones: [],
+      membershipUnavailable: true,
+    });
     finish([fullMember]);
     await vi.advanceTimersByTimeAsync(0);
     expect(execute).toHaveBeenCalledOnce();
@@ -163,7 +213,16 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
     expect(execute).toHaveBeenCalledTimes(2);
     expect(end).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(await pending).toBeNull();
+    const stats = await pending;
+    expect(stats).toMatchObject({
+      joinedAt: new Date(fullMember.joined_at),
+      tenureDays: 637,
+      rankKey: "community_regular",
+      isCurrentMember: true,
+      milestones: [],
+      milestonesTruncated: false,
+      milestonesUnavailable: true,
+    });
     expect(end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -183,6 +242,14 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
         controller.signal,
       );
       if (outcome === "already aborted") await expect(pending).rejects.toThrow();
+      else if (outcome === "error")
+        expect(await pending).toMatchObject({
+          joinedAt: null,
+          tenureDays: null,
+          rankKey: null,
+          milestones: [],
+          membershipUnavailable: true,
+        });
       else
         expect(await pending).toEqual(
           outcome === "success" ? expect.objectContaining({ rankKey: "community_regular" }) : null,
@@ -213,6 +280,7 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
       tenureDays: 0,
       rankKey: null,
       isCurrentMember: false,
+      milestonesTruncated: false,
       milestones: [{ type: "joined", occurredAt: new Date("2025-01-01T00:00:00Z"), detail: null }],
     });
     const missing = fixture([{ joined_at: null, tenure_days: null, rank_key: null }], []);
@@ -304,6 +372,26 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     });
   });
 
+  it("marks an over-cap milestone list as truncated instead of reporting the cap as a total", async () => {
+    const rows = Array.from({ length: MEMBER_MILESTONES_CAP + 1 }, (_, i) => ({
+      member_id: MEMBER,
+      milestone: `m${String(i).padStart(3, "0")}`,
+      occurred_at: new Date(Date.UTC(2025, 0, 1) + i * 86_400_000).toISOString(),
+      detail: null,
+    }));
+    const { db } = fixture([fullMember], rows);
+    const { app, cookieFor, bindings } = await harness(db);
+    const res = await app.request(
+      `/members/${MEMBER}`,
+      { headers: { cookie: await cookieFor() } },
+      bindings,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(`<dt>Milestones</dt><dd>${MEMBER_MILESTONES_CAP}+</dd>`);
+    expect(html).not.toContain(`<dt>Milestones</dt><dd>${MEMBER_MILESTONES_CAP}</dd>`);
+  });
+
   it.each([undefined, "invalid-owner", "123"])(
     "a missing/invalid milestone owner %s cannot hide behind the optional-stats fallback",
     async (owner) => {
@@ -386,7 +474,11 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
       const html = await res.text();
       if (unfinished) expect(html).not.toContain("Profile still here");
       else expect(html).toContain("Profile still here");
-      expect(html).not.toContain('data-testid="profile-stats"');
+      if (unfinished) expect(html).not.toContain('data-testid="profile-stats"');
+      else {
+        expect(html).toContain('data-testid="profile-stats"');
+        expect(html).toMatch(/unavailable/i);
+      }
       expect(log).toHaveLength(unfinished ? 0 : 1);
       if (!unfinished) expect(log[0]?.subjectUserIds).toEqual([MEMBER]);
       if (signalSeen) expect(signalSeen.aborted).toBe(true);
@@ -426,7 +518,11 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
       expect(html).toContain("Chess\nGo");
       expect(html).toContain('value="Invalid/Zone"');
       expect(html).toContain(outcome === "full stats" ? "1 Jan 2025" : "Joined June 2024");
-      expect(html.includes('data-testid="profile-stats"')).toBe(outcome === "full stats");
+      expect(html).toContain('data-testid="profile-stats"');
+      if (outcome === "missing view") {
+        expect(html).toMatch(/unavailable/i);
+        expect(html).toMatch(/unsaved|draft|discard/i);
+      }
       expect(log).toHaveLength(0);
     },
   );
@@ -447,8 +543,25 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(log).toHaveLength(0);
   });
 
-  it.each(["no row", "missing view", "DB error", "missing milestones"])(
-    "keeps the page 200 and hides the block for %s",
+  it("keeps the page 200 and hides the block for an absent member row", async () => {
+    const { db } = fixture([]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, log, cookieFor, bindings } = await harness(db);
+    const res = await app.request(
+      `/members/${MEMBER}`,
+      { headers: { cookie: await cookieFor() } },
+      bindings,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Profile still here");
+    expect(html).not.toContain('data-testid="profile-stats"');
+    expect(html).not.toMatch(/unavailable/i);
+    expect(log).toHaveLength(1);
+  });
+
+  it.each(["missing view", "DB error", "missing milestones"])(
+    "keeps the page 200 and shows unavailable for %s",
     async (failure) => {
       const { db, execute } = fixture([]);
       if (failure === "missing milestones")
@@ -456,7 +569,7 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
           .mockReset()
           .mockResolvedValueOnce([fullMember])
           .mockRejectedValueOnce(new Error("42P01"));
-      else if (failure !== "no row") execute.mockReset().mockRejectedValue(new Error(failure));
+      else execute.mockReset().mockRejectedValue(new Error(failure));
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const { app, log, cookieFor, bindings } = await harness(db);
       const res = await app.request(
@@ -467,7 +580,14 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("Profile still here");
-      expect(html).not.toContain('data-testid="profile-stats"');
+      expect(html).toContain('data-testid="profile-stats"');
+      expect(html).toMatch(/unavailable/i);
+      if (failure === "missing milestones") {
+        expect(html).toContain("Community Regular");
+        expect(html).toContain("1 Jan 2025");
+      } else {
+        expect(html).not.toContain("Community Regular");
+      }
       expect(log).toHaveLength(1);
     },
   );

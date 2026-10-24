@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 // applies the base branch's .gitleaks.toml / .gitleaksignore, after the offline
 // self-test .github/scripts/test-gitleaks-scan.sh has run. The behaviour itself
 // is exercised by that self-test inside the job, where the verified binary
-// exists; this file only pins that nothing is rewired around it.
+// exists; this file pins that nothing is rewired around it and that the
+// session-renewal fixture exception cannot silently widen.
+const policy = readFileSync(".gitleaks.toml", "utf8");
 const workflow = readFileSync(".github/workflows/pr-gates.yml", "utf8");
 const scanScript = readFileSync(".github/scripts/gitleaks-scan.sh", "utf8");
 const selfTestScript = readFileSync(".github/scripts/test-gitleaks-scan.sh", "utf8");
@@ -22,6 +24,198 @@ const step = (name: string): string => {
   expect(found, `gitleaks job has no step named ${name}`).toBeDefined();
   return found ?? "";
 };
+
+describe("gitleaks fixture policy", () => {
+  it("keeps the public Hono event-id exception limited to the exact rule, path and two secrets", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Two synthetic Discord event ids in the fixture-only public Hono payload"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Two synthetic Discord event ids in the fixture-only public Hono payload acceptance suite, not clients or credentials"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/hono-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']`,
+    ]);
+  });
+
+  it("keeps the session-renewal exception limited to the exact rule, path and three secrets", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Three synthetic ULID event keys in the Kit event-detail"));
+    expect(entries).toEqual([
+      String.raw`description = "Three synthetic ULID event keys in the Kit event-detail session-renewal fixture, used only by in-memory event lookup and request paths, not credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-event-detail-session-renewal\.test\.ts$''']
+regexes = [
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FBV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FCV$''',
+  '''^01ARZ3NDEKTSV4RRFFQ69G5FZV$''',
+]`,
+    ]);
+  });
+
+  it("keeps the Kit-error fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic hostile request-id fixture in the Kit error"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic hostile request-id fixture in the Kit error correlation tests, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^0123456789abcdef-IP-secret$''']
+paths = ['''^test/kit-error-request-correlation\.test\.ts$''']`,
+    ]);
+  });
+
+  it("keeps the Discord-marker fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic Discord snowflake leak-marker"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic Discord snowflake leak-marker in the queue/agent structured-fields acceptance test; patterned digits, not a real client or credential"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/queue-agent-structured-fields-acceptance\.test\.ts$''']
+regexes = ['''^777666555444333222$''']`,
+    ]);
+  });
+
+  it("keeps the unknown-event fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Synthetic unknown-event ULID in the cancelled-event alternatives"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic unknown-event ULID in the cancelled-event alternatives acceptance fixture, used only for an in-memory 404 lookup, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/event-gone-alternatives-acceptance\.test\.ts$''']
+regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FA9$''']`,
+    ]);
+  });
+
+  it("keeps the bot-settings fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Deterministic RFC example-UUID idempotency fixture in the bot settings"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Deterministic RFC example-UUID idempotency fixture in the bot settings tests, asserted literally in expected headers and bodies, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/bot-settings\.test\.ts$''']
+regexes = ['''^123e4567-e89b-12d3-a456-426614174000$''']`,
+    ]);
+  });
+
+  it("keeps the operator fixture exception limited to the exact rule, path and secret", () => {
+    // Pin the whole table: extra fields, OR (including its implicit default),
+    // unanchored patterns or additional alternatives must require a test change.
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) =>
+        entry.includes("Synthetic operator bearer fixture in the local accessibility harness"),
+      );
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic operator bearer fixture in the local accessibility harness, including its committed history; never provisioned as a live credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^ci/a11y-cases\.mjs$''']
+regexes = ['''^a11y-operator-fixture-$''']`,
+    ]);
+  });
+});
+
+describe("gitleaks public-event fixture policy", () => {
+  const entries = policy
+    .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.includes("Two synthetic offline PUBLIC Discord event fixtures"));
+
+  it("pins the entire rule/path/value conjunction, including explicit AND and secret matching", () => {
+    expect(entries).toEqual([
+      String.raw`description = "Two synthetic offline PUBLIC Discord event fixtures in the Kit public-payload contract tests, not credentials or member identities"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']`,
+    ]);
+  });
+
+  // Probe the configured regexes, not a second set of copied patterns. This is
+  // structural coverage, not scanner integration: the whole-table pin above
+  // also rejects implicit OR, other rules/targets and additional fields.
+  it.each([
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "111222333444555667", true],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "222333444555666778", true],
+    ["discord-client-id", "src/control.ts", "111222333444555667", false],
+    ["discord-client-id", "src/control.ts", "222333444555666778", false],
+    [
+      "discord-client-id",
+      "prefix/test/kit-no-member-data-contract.test.ts",
+      "111222333444555667",
+      false,
+    ],
+    [
+      "discord-client-id",
+      "test/kit-no-member-data-contract.test.ts.bak",
+      "111222333444555667",
+      false,
+    ],
+    ["discord-client-id", "test/kit-no-member-data-contractXtest.ts", "111222333444555667", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.testXts", "222333444555666778", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "333444555666777889", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "111222333444555668", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "0111222333444555667", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "2223334445556667780", false],
+    ["generic-api-key", "test/kit-no-member-data-contract.test.ts", "111222333444555667", false],
+    ["generic-api-key", "test/kit-no-member-data-contract.test.ts", "222333444555666778", false],
+  ])("matches rule=%s path=%s secret=%s only when approved=%s", (rule, path, secret, approved) => {
+    const entry = entries[0] ?? "";
+    const targetRule = entry.match(/^targetRules = \["([^"]+)"\]$/m)?.[1];
+    const patterns = [...entry.matchAll(/'''([^']+)'''/g)].map(
+      (match) => new RegExp(match[0].slice(3, -3)),
+    );
+    expect(patterns).toHaveLength(3);
+    const [pathPattern, ...secretPatterns] = patterns;
+    expect(
+      targetRule === rule &&
+        pathPattern?.test(path) &&
+        secretPatterns.some((pattern) => pattern.test(secret)),
+    ).toBe(approved);
+  });
+});
 
 describe("gitleaks job wiring", () => {
   it("verifies the pinned archive before it is extracted or run", () => {

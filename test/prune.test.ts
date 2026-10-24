@@ -61,6 +61,11 @@ function memStores(now: Date): Omit<PruneStores, "sessions"> & {
   return {
     ...tables,
     sessions: createMemorySessionStore(() => now.getTime()),
+    jobUniqueLocks: {
+      async sweepExpired(_now: Date): Promise<number> {
+        return 0;
+      },
+    },
     tables,
   };
 }
@@ -79,8 +84,8 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   it("prune deletes carry a documented fixed per-statement batch bound", () => {
     // Each statement removes at most this many rows per pruned table,
     // including the scheduled session expiry sweep; the pass drains per
-    // table up to PRUNE_DELETE_MAX_BATCHES batches and warns when the cap
-    // is hit with rows possibly pending.
+    // table up to PRUNE_DELETE_MAX_BATCHES batches and pages once per pass
+    // when the cap is hit with rows possibly pending.
     expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
     expect(PRUNE_DELETE_MAX_BATCHES).toBe(100);
   });
@@ -102,9 +107,14 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       searchLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       boardViews: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
     };
-    const stores = {
+    const stores: PruneStores = {
       ...tables,
       sessions: createMemorySessionStore(() => now.getTime()),
+      jobUniqueLocks: {
+        async sweepExpired(_at: Date): Promise<number> {
+          return 0;
+        },
+      },
     };
     const counts = await pruneModelTables(stores, now);
     expect(counts).toMatchObject({
@@ -114,12 +124,14 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: PRUNE_DELETE_BATCH_SIZE + 3,
       searchLog: PRUNE_DELETE_BATCH_SIZE + 3,
       boardViews: PRUNE_DELETE_BATCH_SIZE + 3,
+      jobUniqueLocks: 0,
     });
   });
 
-  it("stops at the per-table batch cap and warns with rows possibly pending", async () => {
+  it("stops at the per-table batch cap and pages once for the pass", async () => {
     const now = new Date("2026-09-30T00:00:00Z");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const callCounts = { n: 0 };
@@ -129,7 +141,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
           return PRUNE_DELETE_BATCH_SIZE;
         },
       };
-      const stores = {
+      const stores: PruneStores = {
         agentEventAudits: endless,
         accessLog: endless,
         joinAttempts: endless,
@@ -137,6 +149,11 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         searchLog: endless,
         boardViews: endless,
         sessions: createMemorySessionStore(() => now.getTime()),
+        jobUniqueLocks: {
+          async sweepExpired(_at: Date): Promise<number> {
+            return 0;
+          },
+        },
       };
       const counts = await pruneModelTables(stores, now);
       const perTable = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
@@ -147,23 +164,40 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         idempotencyKeys: perTable,
         searchLog: perTable,
         boardViews: perTable,
+        jobUniqueLocks: 0,
       });
       // Each of the six tables stopped after exactly the max batches.
       expect(callCounts.n).toBe(6 * PRUNE_DELETE_MAX_BATCHES);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]![0]).toContain("batch cap");
-      const payload = warn.mock.calls[0]![1] as Record<string, unknown>;
-      expect(payload.cappedTables).toEqual([
-        "agentEventAudits",
-        "accessLog",
-        "joinAttempts",
-        "idempotencyKeys",
-        "searchLog",
-        "boardViews",
+      // The capped pass pages once for the whole pass instead of warning.
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      const raw = error.mock.calls[0]![0];
+      expect(typeof raw).toBe("string");
+      expect(raw as string).not.toContain("\n");
+      const line = JSON.parse(raw as string) as Record<string, unknown>;
+      expect(Object.keys(line).sort()).toEqual([
+        "build_sha",
+        "error_class",
+        "event",
+        "exception",
+        "job",
+        "level",
+        "release",
       ]);
+      expect(line).toMatchObject({
+        level: "critical",
+        event: "scheduled.failing",
+        job: "model:prune",
+      });
+      expect(line.error_class).toBe(line.exception);
+      expect(line.release).toBe(line.build_sha);
+      // The page line carries no table or count detail.
+      expect(raw as string).not.toContain("agentEventAudits");
+      expect(raw as string).not.toContain("cappedTables");
       expect(info).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
+      error.mockRestore();
       info.mockRestore();
     }
   });
@@ -187,7 +221,10 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     });
     for (const [name, t] of Object.entries(stores.tables)) {
       expect(t.at, name).toEqual([edge, fresh]);
-      expect(t.cutoffs, name).toEqual([edge]);
+      // Two calls with the identical cutoff: the short first batch is not
+      // drained proof (a SKIP LOCKED window can hide unvisited rows), so the
+      // pass runs one empty proving batch before reporting uncapped.
+      expect(t.cutoffs, name).toEqual([edge, edge]);
     }
   });
 
@@ -235,6 +272,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -317,6 +355,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
              ('edge','2','b',true,false,${now}),
              ('live','3','c',true,false,${new Date(now.getTime() + 3600_000)})`;
 
+    await sql`delete from job_unique_locks`;
     const counts = await pruneModelTables(pgPruneStores(sql), now);
     expect(counts).toEqual({
       agentEventAudits: 1,
@@ -326,6 +365,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 1,
       boardViews: 1,
       sessions: 2,
+      jobUniqueLocks: 0,
     });
 
     // Audit cutoff-exact rows survive; newer rows remain untouched.
@@ -366,6 +406,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -413,15 +454,18 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     // so no clock skew can flip them), plus the earlier test's edge/fresh
     // leftovers. Expired backlog per table is therefore above one batch.
     // One pass drains the whole backlog: each statement stays batch-bounded
-    // while the pass repeats until a short batch. No per-pass total exceeds
+    // while the pass repeats until an empty batch. No per-pass total exceeds
     // the batch cap (batches × size); global totals are not asserted because
     // the earlier test's leftover edge rows sit exactly on the audit
     // clock-guard boundary and can flip eligibility between statements — the
     // marker-scoped checks below are the exact drain proof instead.
+    await sql`delete from job_unique_locks`;
     const first = await pruneModelTables(pgPruneStores(sql), now);
     const perPassCap = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
     for (const [name, n] of Object.entries(first)) {
-      expect(n, `single pass ${name}`).toBeLessThanOrEqual(name === "sessions" ? 0 : perPassCap);
+      expect(n, `single pass ${name}`).toBeLessThanOrEqual(
+        name === "sessions" || name === "jobUniqueLocks" ? 0 : perPassCap,
+      );
     }
     expect(first.agentEventAudits).toBeGreaterThanOrEqual(extra);
     expect(first.accessLog).toBeGreaterThanOrEqual(extra);
@@ -439,6 +483,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
 
     // Every expired `cap-` row is gone; only the cutoff-exact and fresh

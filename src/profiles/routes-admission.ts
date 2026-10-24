@@ -1,11 +1,11 @@
 // Profile write admission: the per-member write throttle and the owner-only
-// check. Split out of src/profiles/routes.tsx. Registered ahead of the body
-// limit on PATCH and form-override POST in routes-writes.tsx.
+// check. Split out of src/profiles/routes.tsx. Registered after the body
+// limit and session gate on PATCH and form-override POST in routes-writes.tsx.
 import type { Next } from "hono";
 import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
-import { rateLimitExceeded } from "../errors";
+import { nonOwnerProfileWrite, rateLimitExceeded } from "../errors";
 import { checkJoinThrottle } from "../join/service";
 import type { Sql } from "../sessions";
 import { type Ctx, type ProfileDeps, SNOWFLAKE, type Verdict } from "./routes-shared";
@@ -31,7 +31,7 @@ export function admitWrite(deps: ProfileDeps) {
     if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     const id = c.req.param("user") ?? "";
-    if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
+    if (!SNOWFLAKE.test(id) || viewer.id !== id) return nonOwnerProfileWrite(c);
     await next();
   };
 }

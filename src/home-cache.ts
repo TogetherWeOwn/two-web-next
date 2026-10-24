@@ -32,6 +32,7 @@ import { listPublishedFeatured, type PublishedFeatured, type VisibleFeatured } f
 import { currentlyVisible } from "./featured-status";
 import { loadHomeUpcomingMerged, type HomeUpcomingMerged } from "./events/reads";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
+import { safeRequestId } from "./request-log";
 
 export const HOME_GUEST_CACHE_TTL_MS = 60_000;
 
@@ -195,12 +196,26 @@ export async function cachedFeatured(
   openDb: () => Promise<Db | null>,
   now = new Date(),
   ctx?: WaitUntilCtx,
+  requestId?: string,
 ): Promise<VisibleFeatured[]> {
   void ctx;
+  // Filter the published base to the live window, then project back to the
+  // six VisibleFeatured display fields: the Kit load serializes this return
+  // value (served at __data.json even with csr=false), so the scheduling
+  // bounds must stay in the cached base and never reach the load data.
   const visibleAt = (rows: PublishedFeatured[]): VisibleFeatured[] =>
-    rows.filter((row) =>
-      currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
-    );
+    rows
+      .filter((row) =>
+        currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
+      )
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        url: row.url,
+        imageUrl: row.imageUrl,
+        imageAlt: row.imageAlt,
+      }));
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {
@@ -215,6 +230,14 @@ export async function cachedFeatured(
     const db = await openDb();
     value = db ? await listPublishedFeatured(db) : [];
   } catch {
+    // Mirror warnHomeFallback (src/events/reads.ts): the bounded exception
+    // class plus the validated request id, never driver text, SQL or
+    // identities. A null handle or a genuinely empty table stays silent;
+    // only a failed read warns, and the empty-list fallback is unchanged.
+    console.warn("Home featured unavailable; serving the fallback.", {
+      request_id: safeRequestId(requestId),
+      exception: "ReadFailure",
+    });
     return [];
   }
   try {

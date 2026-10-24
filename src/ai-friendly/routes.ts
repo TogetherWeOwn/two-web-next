@@ -8,11 +8,14 @@
 import type { Context, Hono } from "hono";
 import type { Env } from "../env";
 import { dbFor } from "../admin/db";
+import { alertRequestError } from "../alerts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
-import { publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { isDatabaseUnavailable } from "../db/errors";
-import { robotsTagFor } from "../headers";
+import { stagingRobots } from "../headers";
+import { inviteDestination } from "../invite";
+import { requestRoute } from "../request-log";
 import { rulesLastUpdated } from "../rules-last-updated";
 import {
   FEED_MD_CACHE,
@@ -36,21 +39,19 @@ type Ctx = Context<{ Bindings: Env }>;
 
 const NOINDEX = "noindex, nofollow";
 
-/** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
-function stagingRobots(c: Ctx): string | null {
-  let serving: string | undefined;
-  try {
-    serving = new URL(c.req.url).hostname;
-  } catch {
-    serving = undefined;
-  }
-  return robotsTagFor(c.env.APP_URL, serving);
-}
-
-function mdOk(c: Ctx, body: string, cache: string, robots?: string): Response {
+/**
+ * The one success path for every Markdown document: a strong ETag over the
+ * response bytes lets agents that poll these docs revalidate with
+ * If-None-Match. A match answers 304 with the same validator, cache-control
+ * and robots headers and no body; errors never come through here.
+ */
+async function mdOk(c: Ctx, body: string, cache: string, robots?: string): Promise<Response> {
   const tag = robots ?? stagingRobots(c);
   if (tag) c.header("x-robots-tag", tag);
   c.header("cache-control", cache);
+  const etag = await etagFor(body);
+  c.header("etag", etag);
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
   return c.body(body, 200, { "content-type": MARKDOWN_MIME });
 }
 
@@ -66,13 +67,30 @@ function mdUnavailable(c: Ctx): Response {
   return c.body("Events temporarily unavailable", 503, { "content-type": MARKDOWN_MIME });
 }
 
-/** Reads stay inside the markdown envelope: a dead database 503s as Markdown. Other errors rethrow. */
+/** Unexpected-fault envelope in the route's own media type: static guidance, never internals. */
+function mdInternal(c: Ctx): Response {
+  c.header("cache-control", "no-store, private");
+  return c.body("Events temporarily unavailable. Try again shortly.", 500, {
+    "content-type": MARKDOWN_MIME,
+  });
+}
+
+/**
+ * Reads stay inside the markdown envelope: a dead database 503s as Markdown,
+ * and unexpected query/serializer faults alert once (class fingerprint, the
+ * same privacy boundary as the global handler) and 500 as Markdown.
+ */
 async function mdRead<T>(c: Ctx, run: () => Promise<T>): Promise<T | Response> {
   try {
     return await run();
   } catch (err) {
     if (isDatabaseUnavailable(err)) return mdUnavailable(c);
-    throw err;
+    alertRequestError(err, {
+      method: c.req.method,
+      route: requestRoute(c),
+      requestId: c.get("requestId"),
+    });
+    return mdInternal(c);
   }
 }
 
@@ -88,9 +106,16 @@ const toMdEvent = (e: {
   capacity: number | null;
   status: string;
   goingCount?: number | null;
+  goingOccupancy?: number | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
 }): MdEvent => ({
   ...e,
   goingCount: e.goingCount ?? null,
+  // Feed rows carry no counts, so the full signal stays off there; the
+  // detail row carries both aggregates from withGoing.
+  goingOccupancy: e.goingOccupancy ?? null,
   // Callers only pass published/past rows: the collection predicate filters in
   // SQL and the detail handler returns drafts/cancelled above.
   status: e.status as MdEvent["status"],
@@ -104,8 +129,10 @@ export function registerAiFriendlyRoutes(app: App): void {
     mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
   );
   app.get("/privacy.md", (c) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE));
+  // Sanitized like /join: a bad DISCORD_INVITE_URL renders the hardcoded
+  // fallback, never a dead, relative or hostile href.
   app.get("/join.md", (c) =>
-    mdOk(c, mdJoin(c.env.APP_URL, c.env.DISCORD_INVITE_URL), STATIC_MD_CACHE),
+    mdOk(c, mdJoin(c.env.APP_URL, inviteDestination(c.env.DISCORD_INVITE_URL)), STATIC_MD_CACHE),
   );
 
   app.get("/events.md", async (c) => {
@@ -113,9 +140,13 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return mdUnavailable(c);
-    const rows = await mdRead(c, () => listFeed(db, ["published"]));
-    if (rows instanceof Response) return rows;
-    return mdOk(c, mdEvents(c.env.APP_URL, rows.map(toMdEvent)), FEED_MD_CACHE);
+    // Query and serialization stay inside the envelope together: a corrupt
+    // row faults Markdown either way.
+    const built = await mdRead(c, async () =>
+      mdEvents(c.env.APP_URL, (await listFeed(db, ["published"])).map(toMdEvent)),
+    );
+    if (built instanceof Response) return built;
+    return mdOk(c, built, FEED_MD_CACHE);
   });
 
   // Same suffix pattern as the per-event ICS export: one canonical key form
@@ -136,8 +167,14 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (e instanceof Response) return e;
     if (!e) return mdError(c, "Not found", 404);
     if (e.status === "draft") return mdError(c, "Forbidden", 403);
-    if (e.status === "cancelled") return mdError(c, mdEventGone(c.env.APP_URL, e), 410);
+    if (e.status === "cancelled") {
+      const gone = await mdRead(c, async () => mdEventGone(c.env.APP_URL, e));
+      if (gone instanceof Response) return gone;
+      return mdError(c, gone, 410);
+    }
     const robots = e.status === "past" ? NOINDEX : undefined;
-    return mdOk(c, mdEvent(c.env.APP_URL, toMdEvent(e)), FEED_MD_CACHE, robots);
+    const built = await mdRead(c, async () => mdEvent(c.env.APP_URL, toMdEvent(e)));
+    if (built instanceof Response) return built;
+    return mdOk(c, built, FEED_MD_CACHE, robots);
   });
 }

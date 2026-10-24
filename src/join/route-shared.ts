@@ -7,6 +7,7 @@
 import type { Context } from "hono";
 import postgres from "postgres";
 import { rateLimitExceeded } from "../errors";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { clientKey } from "../throttle";
@@ -24,10 +25,20 @@ export const JOIN_NEXT_COOKIE = "__Host-two_join_next";
 export const STATE_TTL_SECONDS = 600;
 export const JOURNEY_TTL_SECONDS = 600;
 
+// The fixed ?notice= value the store-down start bounce carries so the
+// journey page renders a visible explanation instead of a silent bounce
+// (E1). Fixed server-side, never member input; the page allowlists this
+// exact value and renders the plain page for anything else.
+export const JOIN_START_FAILED_NOTICE = "start-failed";
+
 /** Injectable at the call site (`{...env, JOIN_STORE: …}`), like SESSION_STORE. */
 export type JoinRouteDeps = {
   store?: () => Promise<Sql | null>;
   bot?: (botToken: string) => BotAdd;
+  // Unused since the minute-boundary fix (S1): kept so older callers and
+  // fixtures that still pass `now` keep typechecking. The bucket no longer
+  // carries a minute segment; admission is the sliding 60 s window in
+  // checkJoinThrottle.
   now?: () => number;
 };
 export type EnvWithJoin = Env & { JOIN_DEPS?: JoinRouteDeps };
@@ -59,21 +70,29 @@ export function background(c: Ctx): ((work: Promise<void>) => void) | undefined 
 
 export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 
-export function currentMinute(now: () => number): number {
-  return Math.floor(now() / 60000);
-}
-
-// The budget is per client: `join:<client>:<minute>`, the same client key every
+// The budget is per client: `join:<client>`, the same client-key shape every
 // other human-route throttle uses. /join/discord and /join/callback draw on one
-// bucket per client (legacy `throttle:10,1` keyed guests by IP), but no client
-// can spend another's budget.
+// minute-free bucket per client (legacy `throttle:10,1` keyed guests by IP), so
+// a burst straddling a wall-clock minute still spends one sliding 60 s budget.
+// No client can spend another's budget.
+//
+// A throwing store degrades to allow — the same verdict as throttleGuard
+// ("a missed count beats a 500") — unless the throw is a classified database
+// outage, which stays fail-closed: the global handler renders the branded 503
+// the outage matrix pins for both join routes. This throw-path catch stays
+// silent by scope carve-out: only the throttleGuard path warns (see the
+// `Throttle store failed` row in docs/runbook-logs.md), while the null-store
+// allow warns inside checkJoinThrottle. A class-only line here would comply
+// with the no-echo pin, but that widening is a follow-up, not this leg.
 export async function throttled(c: Ctx): Promise<Response | null> {
-  const deps = (c.env as EnvWithJoin).JOIN_DEPS;
-  const verdict = await checkJoinThrottle(
-    await joinStore(c),
-    `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}:${currentMinute(deps?.now ?? Date.now)}`,
-    JOIN_THROTTLE_PER_MINUTE,
-  );
+  const verdict = await joinStore(c)
+    .then((sql) =>
+      checkJoinThrottle(sql, `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}`, JOIN_THROTTLE_PER_MINUTE),
+    )
+    .catch((err: unknown) => {
+      if (isDatabaseUnavailable(err)) throw err;
+      return { limited: false } as const;
+    });
   if (!verdict.limited) return null;
   return rateLimitExceeded(c, verdict.retryAfter);
 }
@@ -101,7 +120,14 @@ export type JoinPageProps = {
   widgetUrl: string | null;
   widgetSnapshot?: import("../discord-widget").DiscordWidgetSnapshot | null;
   next?: string | null;
+  // Already passed sanitizeSource. Absent means the one-click link carries no
+  // attribution, the same as a request that arrived without ?source=.
+  source?: string | null;
   appUrl: string;
+  // The validated store-down notice (JOIN_START_FAILED_NOTICE) when the
+  // request carried exactly that ?notice= value; otherwise null and the
+  // page renders plain. Display-only: never echoed into the one-click href.
+  notice?: typeof JOIN_START_FAILED_NOTICE | null;
 };
 export type RecoveryProps = {
   title: string;
@@ -109,6 +135,10 @@ export type RecoveryProps = {
   retryUrl: string;
   retryLabel: string;
   inviteUrl: string;
+  // Validated request ID for the member to quote to support (the same value
+  // as the response's x-request-id). Optional so non-request callers keep
+  // working; the join render boundary always supplies it.
+  supportReference?: string;
 };
 
 // Rendering lives with the app module (it owns the JSX runtime); this module

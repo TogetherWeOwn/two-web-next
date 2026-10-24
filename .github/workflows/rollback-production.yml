@@ -39,6 +39,7 @@ jobs:
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
           # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
           DEPLOY_SHA: ${{ github.sha }}
@@ -63,8 +64,8 @@ jobs:
     concurrency:
       group: production-worker-mutation
       cancel-in-progress: false
-    # Required reviewers + prevent-self-review are live repo settings. Preflight
-    # refuses a missing/unprotected Environment before GitHub can auto-create it.
+    # Preflight verifies the configured automated-evidence or reviewer mode
+    # before GitHub can auto-create a missing/unprotected Environment.
     environment:
       name: production
       url: https://togetherweown.com
@@ -82,6 +83,7 @@ jobs:
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
           # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
           DEPLOY_SHA: ${{ github.sha }}
@@ -112,6 +114,24 @@ jobs:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Capture pre-rollback dead-letter baseline
+        id: dead-letter-baseline
+        # Read-only GET before the rollback: the post-rollback smoke fails only
+        # on growth past this retained-rows count, so the emergency path never
+        # goes red on history. Retried, then an unreadable /up leaves the
+        # baseline empty and the smoke skips the dead-letter gate on history
+        # (SMOKE_ALLOW_MISSING_BASELINE below) instead of failing on any
+        # positive count. Never blocks the rollback on its own.
+        run: |
+          baseline=""
+          for i in 1 2 3 4 5; do
+            candidate="$(node -e 'fetch("https://togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
+            if [ "$i" -lt 5 ]; then sleep 5; fi
+          done
+          if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; rollback smoke will skip the dead-letter gate on history"; fi
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
+          echo "dead-letter baseline: ${baseline:-unknown}"
       - name: Roll back to the recorded production Worker Version
         # Non-interactive CI auto-accepts wrangler's confirmation prompt with the
         # default answer. The version id was gate-validated above and is quoted.
@@ -127,10 +147,23 @@ jobs:
         # HTML omits the staging noindex (src/headers.ts); the archive and the
         # branded 404 stay meta-noindex and skip the header assertion inside
         # the checker. DB/schema readiness is mandatory via the /up envelope;
-        # queue-only degraded/unknown is allowed.
+        # queue-only degraded/unknown is allowed. Dead letters fail only on
+        # growth past the pre-rollback baseline, never on retained history;
+        # when the baseline capture could not read /up the gate is skipped
+        # instead of failing on history. Critical ready-wait warns and passes
+        # here by design (--fail-on-ready-wait-critical is staging-only): the
+        # age reflects shared queue_jobs state, not the rolled-back version,
+        # so it must not fail a good rollback. Ordinary-traffic identity is
+        # enforced below: the recorded version UUID travels inputs -> env ->
+        # quoted shell variable and the smoke proves that version serves
+        # unpinned routing (no version-override header).
+        env:
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
+            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$ROLLBACK_VERSION_ID"; then
               echo "production smoke ok (attempt $i)"
               exit 0
             fi

@@ -4,8 +4,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 
-export const STAGING_URL = "https://next.togetherweown.com";
+export const STAGING_URL = STAGING_ORIGIN;
 export const ALERT_PROBE_HEADER = "X-TWO-Alert-Probe";
 const PROBE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const PROBE_FINGERPRINT = createHash("sha256")
@@ -124,7 +125,20 @@ export async function runProbe({
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
-  await response.body?.cancel();
+  // Response disposal is inert to the verdict: attempt cleanup once without
+  // letting a sync throw, a rejection (including a late one), or a
+  // never-settling cancel alter the expected status or receipt outcome.
+  // Disposal diagnostics are never surfaced; they may carry request material.
+  try {
+    const disposal = response.body?.cancel();
+    if (disposal && typeof disposal.then === "function") {
+      disposal.then(undefined, () => {
+        // Swallow disposal rejections, including late ones.
+      });
+    }
+  } catch {
+    // Swallow synchronous disposal throws; the verdict below decides.
+  }
   if (response.status !== 500)
     throw new Error(`Probe refused or unavailable (HTTP ${response.status}); no delivery claimed`);
   while (now() - since < timeoutMs) {
@@ -146,20 +160,112 @@ export async function runProbe({
   );
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  if (args.length !== 2 || args[0] !== "--receipt-file")
-    throw new Error("Usage: node bin/alert-probe.mjs --receipt-file <connected-tail-json-file>");
-  const result = await runProbe({ token: process.env.QA_AUTH_TOKEN, receiptFile: args[1] });
-  console.log(JSON.stringify(result, null, 2));
+const USAGE = `Usage: node bin/alert-probe.mjs --receipt-file <connected-tail-json-file> [--dry-run] [--help]
+
+Post the staging alert probe and wait for both Tail receipts. --dry-run
+validates the receipt file plus QA_AUTH_TOKEN presence without sending.
+--help prints this usage to stdout and sends nothing. Flags may appear in any
+position; --help wins everywhere and is never parsed as a receipt path. A
+flag-shaped --receipt-file value is rejected. Exit 0 on success, 2 on
+mis-invocation or missing inputs, 1 on delivery failure.`;
+
+const FAILURE_LINE =
+  "Alert probe failed. Check staging QA gate, connected receipt file, Tail secret, mute window and queue; no delivery claimed.";
+
+export function parseAlertArgs(args) {
+  if (args.includes("--help")) return { help: true };
+  let receiptFile;
+  let dryRun = false;
+  let seenReceipt = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--dry-run") {
+      dryRun = true;
+      continue;
+    }
+    if (arg === "--receipt-file") {
+      const value = args[i + 1];
+      if (seenReceipt || value === undefined || value.startsWith("--")) throw new Error(USAGE);
+      seenReceipt = true;
+      receiptFile = value;
+      i++;
+      continue;
+    }
+    throw new Error(USAGE);
+  }
+  if (!receiptFile) throw new Error(USAGE);
+  return { help: false, receiptFile, dryRun };
+}
+
+export async function main({
+  args = process.argv.slice(2),
+  env = process.env,
+  probe = runProbe,
+  readImpl = readFile,
+} = {}) {
+  let parsed;
+  try {
+    parsed = parseAlertArgs(args);
+  } catch {
+    console.error(`${USAGE}\ncode=usage`);
+    process.exitCode = 2;
+    return;
+  }
+  if (parsed.help) {
+    console.log(USAGE);
+    return;
+  }
+  if (parsed.dryRun) {
+    if (!env.QA_AUTH_TOKEN) {
+      console.error(
+        "alert-probe dry-run failed: QA_AUTH_TOKEN is required; no delivery claimed. code=missing_token",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    try {
+      await readImpl(parsed.receiptFile, "utf8");
+    } catch {
+      console.error(
+        "alert-probe dry-run failed: cannot read receipt file; no delivery claimed. code=unreadable_receipt",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    console.log(
+      JSON.stringify(
+        { code: "dry_run.ok", dry_run: true, mode: "dry-run", receipt_file: parsed.receiptFile },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  if (!env.QA_AUTH_TOKEN) {
+    console.error(`${FAILURE_LINE} code=missing_token`);
+    process.exitCode = 2;
+    return;
+  }
+  try {
+    await readImpl(parsed.receiptFile, "utf8");
+  } catch {
+    console.error(`${FAILURE_LINE} code=unreadable_receipt`);
+    process.exitCode = 2;
+    return;
+  }
+  try {
+    const result = await probe({
+      token: env.QA_AUTH_TOKEN,
+      receiptFile: parsed.receiptFile,
+    });
+    console.log(JSON.stringify(result, null, 2));
+  } catch {
+    // Never print fetch exceptions: they may contain request headers or credentials.
+    console.error(`${FAILURE_LINE} code=delivery_failed`);
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => {
-    // Never print fetch exceptions: they may contain request headers or credentials.
-    console.error(
-      "Alert probe failed. Check staging QA gate, connected receipt file, Tail secret, mute window and queue; no delivery claimed.",
-    );
-    process.exitCode = 1;
-  });
+  await main();
 }

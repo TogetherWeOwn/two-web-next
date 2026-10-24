@@ -1,4 +1,4 @@
-// Branded Kit 404/403/410/429/500/503 shells, negotiated helpers
+// Branded Kit 400/404/403/410/429/500/503 shells, negotiated helpers
 // and the shared HTML outcome renderer. Hermetic: local fixtures only, no
 // live services, no session/DB reads merely to offer recovery.
 import { readFileSync } from "node:fs";
@@ -404,7 +404,7 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
     // imports it and branches per status — never duplicates the strings.
     expect(shell).toContain("kitErrorCopy");
     expect(shell).toContain("../../../src/kit-errors");
-    for (const code of ["404", "403", "410", "429", "500", "503"]) {
+    for (const code of ["400", "404", "403", "410", "429", "500", "503"]) {
       expect(shell).toContain(code);
     }
     expect(shell).toContain("noindex, nofollow");
@@ -437,10 +437,12 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
     expect(page).toContain(
       "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
     );
-    expect(page).toContain("<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />");
+    expect(page).toContain(
+      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />",
+    );
     expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
     expect(page).not.toMatch(/page\.error/);
-    for (const unknown of [400, 401, 418, 502, 999]) {
+    for (const unknown of [401, 418, 502, 999]) {
       const status = isKitErrorStatus(unknown) ? unknown : 500;
       expect(status).toBe(500);
       expect(kitErrorCopy(status)).toEqual({
@@ -449,7 +451,7 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
         lead: "It is not you. We have logged the failure and the team will take a look.",
       });
     }
-    for (const known of [404, 403, 410, 429, 500, 503] as const) {
+    for (const known of [400, 404, 403, 410, 429, 500, 503] as const) {
       expect(isKitErrorStatus(known) ? known : 500).toBe(known);
     }
   });

@@ -190,6 +190,48 @@
       "when": 1791846250491,
       "tag": "1025_leaderboard-opt-out",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792318606947,
+      "tag": "1027_join-attempts-discord-id-index",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792324473098,
+      "tag": "1028_join-attempts-request-id-index",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792375795065,
+      "tag": "1029_event-sync-terminal-intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792443696928,
+      "tag": "1030_session-predecessor-grace",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792513834153,
+      "tag": "1031_event-accessibility-notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792547478687,
+      "tag": "1032_event-public-join-details",
+      "breakpoints": true
     }
   ]
 }

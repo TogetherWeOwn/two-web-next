@@ -1,11 +1,11 @@
 // Acceptance oracle: the scheduled web_sessions expiry sweep is bounded like
 // every other model:prune adapter. Each statement deletes at most
 // PRUNE_DELETE_BATCH_SIZE rows, one scheduled pass drains at most
-// PRUNE_DELETE_MAX_BATCHES batches and reports "sessions" in cappedTables
-// when the ceiling stops it, and the next pass drains the remainder.
-// Removing the SQL bound (one statement deletes the whole backlog) or
-// restoring the unbounded single-call sweep in the scheduled pass (no drain
-// loop, no session cap report) must fail this file.
+// PRUNE_DELETE_MAX_BATCHES batches and pages once via
+// scheduled.failing@model:prune when the ceiling stops it, and the next
+// pass drains the remainder. Removing the SQL bound (one statement deletes
+// the whole backlog) or restoring the unbounded single-call sweep in the
+// scheduled pass (no drain loop, no session cap page) must fail this file.
 //
 // Memory fakes always run; live round-trips use a guarded disposable schema
 // on agent-testdb or the explicitly allowed GitHub CI Postgres service.
@@ -58,6 +58,11 @@ function emptyAgeTables(): Omit<PruneStores, "sessions"> {
     idempotencyKeys: empty,
     searchLog: empty,
     boardViews: empty,
+    jobUniqueLocks: {
+      async sweepExpired(_now: Date): Promise<number> {
+        return 0;
+      },
+    },
   };
 }
 
@@ -82,8 +87,10 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
       const counts = await pruneModelTables({ ...emptyAgeTables(), sessions }, now);
       // 1,003 expired + the exact-expiry row; only the live row survives.
       expect(counts.sessions).toBe(PRUNE_DELETE_BATCH_SIZE + 4);
-      // The pass repeated the bounded statement until a short batch.
-      expect(sessions.calls).toBe(2);
+      // The pass repeated the bounded statement until an empty batch proved
+      // the drain: the short 4-row batch is not proof (a SKIP LOCKED window
+      // can hide unvisited rows), so one proving batch follows it.
+      expect(sessions.calls).toBe(3);
       expect(sessions.remaining()).toEqual(["rawhash-live"]);
       expect(warn).not.toHaveBeenCalled();
       // Logs carry counts only: no raw session material ever appears.
@@ -95,9 +102,10 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
     }
   });
 
-  it("stops at the per-pass batch ceiling, reports the session cap, next pass drains", async () => {
+  it("stops at the per-pass batch ceiling, pages the session cap, next pass drains", async () => {
     const now = new Date("2026-09-30T00:00:00Z");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const perPassCap = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
@@ -110,20 +118,33 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
       const first = await pruneModelTables(stores, now);
       expect(first.sessions).toBe(perPassCap);
       expect(sessions.calls).toBe(PRUNE_DELETE_MAX_BATCHES);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]![0]).toContain("batch cap");
-      const payload = warn.mock.calls[0]![1] as Record<string, unknown>;
-      expect(payload.cappedTables).toEqual(["sessions"]);
-      expect(payload.sessions).toBe(perPassCap);
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("rawhash-");
+      // The capped pass pages once for the whole pass instead of warning.
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      const raw = error.mock.calls[0]![0];
+      expect(typeof raw).toBe("string");
+      const line = JSON.parse(raw as string) as Record<string, unknown>;
+      expect(line).toMatchObject({
+        level: "critical",
+        event: "scheduled.failing",
+        job: "model:prune",
+      });
+      expect(line.error_class).toBe(line.exception);
+      // The page line carries no session material or table detail.
+      expect(JSON.stringify(error.mock.calls)).not.toContain("rawhash-");
+      expect(raw as string).not.toContain("sessions");
       // The 3-row remainder and the live row are still there.
       expect(sessions.remaining()).toHaveLength(4);
       expect(sessions.remaining()).toContain("rawhash-live");
 
       const second = await pruneModelTables(stores, now);
       expect(second.sessions).toBe(3);
-      expect(sessions.calls).toBe(PRUNE_DELETE_MAX_BATCHES + 1);
-      expect(warn).toHaveBeenCalledTimes(1);
+      // The 3-row remainder batch is short but not drained proof, so the
+      // pass runs one empty proving batch before reporting uncapped.
+      expect(sessions.calls).toBe(PRUNE_DELETE_MAX_BATCHES + 2);
+      // The uncapped drain stays silent: still exactly the first pass's page.
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
       expect(sessions.remaining()).toEqual(["rawhash-live"]);
       expect(JSON.stringify([...warn.mock.calls, ...info.mock.calls])).not.toContain("rawhash-");
 
@@ -131,6 +152,7 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
       expect(sessions.remaining()).toEqual(["rawhash-live"]);
     } finally {
       warn.mockRestore();
+      error.mockRestore();
       info.mockRestore();
     }
   });

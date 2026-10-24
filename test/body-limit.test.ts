@@ -92,11 +92,13 @@ describe("every registered write route is body-limited", () => {
     ),
   )("%s accepts its cap and refuses cap+1 before parsing or writing", async (key, kind) => {
     const [method, pattern] = key.split(" ");
+    // `:identity` before `:id` (`:identity` starts with `:id`); a valid QA
+    // identity so the S4 gate admits the request to the body limiter.
     const path = pattern!
+      .replace(":identity", "qa-member")
       .replace(":key", "test-event")
       .replace(":user", "111111111111111111")
-      .replace(":id", "1")
-      .replace(":identity", "test");
+      .replace(":id", "1");
     const max = BODY_LIMIT_BYTES[kind];
     for (const bytes of [max, max + 1]) {
       const store = createMemorySessionStore();
@@ -142,14 +144,29 @@ describe("every registered write route is body-limited", () => {
             accept: "application/json",
             "content-type": "application/json",
             ...(path === "/__probe/alert" ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
+            ...(path.startsWith("/auth/qa/") ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
           },
         },
         env,
       );
       if (bytes === max) expect(response.status).not.toBe(413);
-      else {
+      else if (key === "POST /mcp") {
+        // Route-native machine failure: an /mcp overcap answers the documented
+        // JSON-RPC error (null id, static transport code), never the shared
+        // generic envelope or the branded page, whatever Accept says.
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toEqual({
+          jsonrpc: "2.0",
+          id: null,
+          error: {
+            code: -32600,
+            message: ERROR.message,
+            data: { next: expect.any(String), request_id: expect.any(String) },
+          },
+        });
+      } else {
+        expect(response.status).toBe(413);
+        expect(await response.json()).toMatchObject(ERROR);
       }
     }
   });
@@ -193,7 +210,7 @@ describe("parser and error compatibility", () => {
     const body = "private-request-marker".repeat(300);
     const json = await api.request("/api/x", { method: "POST", body });
     expect(json.status).toBe(413);
-    expect(await json.json()).toEqual(ERROR);
+    expect(await json.json()).toMatchObject(ERROR);
     const html = await fixture("action").request("/x", {
       method: "POST",
       body,
@@ -256,7 +273,7 @@ for (const kind of Object.keys(BODY_LIMIT_BYTES) as (keyof typeof BODY_LIMIT_BYT
         });
         expect(response.status).toBe(413);
         expect(response.headers.get("cache-control")).toBe("no-store, private");
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
       },
     );
 
@@ -291,7 +308,7 @@ for (const kind of Object.keys(BODY_LIMIT_BYTES) as (keyof typeof BODY_LIMIT_BYT
       // Request construction can prefetch one chunk on Node's stream proxy.
       expect(pulls).toBeLessThanOrEqual(max / 1024 + 2);
       expect(cancel).toHaveBeenCalledOnce();
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
     });
   });
 }

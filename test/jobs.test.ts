@@ -116,8 +116,8 @@ describe("retry constants match the Laravel originals (two-web @ 3965a6e8)", () 
   it("CallInternalAction", () => {
     expect(CALL_INTERNAL_ACTION).toEqual({ tries: 5, backoffSeconds: [5, 15, 60, 180] });
   });
-  it("wrangler cron triggers are the pinned expressions", () => {
-    const cfg = readFileSync("wrangler.jsonc", "utf8");
+  it("jobs Wrangler cron triggers are the pinned expressions", () => {
+    const cfg = readFileSync("wrangler.jobs.jsonc", "utf8");
     expect(cfg).toContain(`"crons": ["${RECONCILE_CRON}", "${PRUNE_CRON}"]`);
   });
 });
@@ -586,10 +586,14 @@ describe("queue ledger (N3)", () => {
       expect(first.acked && second.acked).toBe(true);
       expect(send).toHaveBeenCalledOnce();
       expect(ledger.rows.size).toBe(1);
+      // AB7 producer deadline: the 2000 ms bound releases the lease while the
+      // already-started send keeps its tracked row (row-without-message fails
+      // visible per N3).
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
       accepted();
       await vi.advanceTimersByTimeAsync(0);
       expect(ledger.rows.size).toBe(1); // acceptance is ambiguous until its consumer settles it
-      expect(lock.held.has(uniqueKey("e1"))).toBe(true);
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -796,7 +800,14 @@ describe("cron", () => {
       lock: memLock(),
     });
     expect(order).toEqual(["close", "stale"]);
-    expect(r).toEqual({ closed: 2, materialized: 0, resynced: 2 });
+    expect(r).toEqual({
+      closed: 2,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(sent).toHaveLength(2);
   });
 

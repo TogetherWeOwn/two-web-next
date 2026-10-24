@@ -18,8 +18,10 @@
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
 import { dbFor } from "../admin/db";
+import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
+import type { RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
 import type {
   EventGoneModel,
@@ -29,26 +31,36 @@ import type {
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
+import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { isValidZone } from "./date-format";
-import { googleCalendarUrl } from "./feeds";
+import { formatEventWhen, isValidZone } from "./date-format";
+import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
+  ATTENDEE_PAGE_SIZE,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  nextAttendeePage,
+  parseAttendeePageParam,
   type EventAttendee,
   type EventLink,
   type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
+  type SeriesEventRef,
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {
@@ -56,7 +68,13 @@ export interface KitEventDetailStore {
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
   neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
   relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
-  attendeesFn: (db: Db, eventId: number) => Promise<EventAttendee[]>;
+  /** Series run read. Optional so existing fakes keep compiling: the resolver
+   * falls back to the shared read, which skips standalone events with zero
+   * queries and fails open everywhere else. */
+  seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
+  /** Bounded attendee window for one native page: the page plus the first row
+   * of the next page (lookahead, never rendered) that powers Next. */
+  attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
   viewerRsvpFn: (db: Db, eventId: number, userId: string) => Promise<ViewerRsvp | null>;
   waitlistFn: (db: Db, eventId: number, userId: string | null) => Promise<number | null>;
   suggestionsFn: (env: Env, path: string) => Promise<SuggestedEvent[]>;
@@ -78,6 +96,8 @@ export interface KitEventDetailRequest {
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
   store: KitEventDetailStore;
+  /** Optional correlation ID from the caller (validated before logging, omitted otherwise). */
+  requestId?: string;
 }
 
 export interface KitEventDetailLink {
@@ -86,6 +106,15 @@ export interface KitEventDetailLink {
   whenText: string;
   datetime: string;
   location: string | null;
+}
+
+/** Series run context for the detail view: the hosts behind the run plus the
+ * adjacent published/past nights. Null for standalone or oversized imported
+ * runs, which render with no series markup on either renderer. */
+export interface KitEventDetailSeries {
+  hosts: string[];
+  previous: KitEventDetailLink | null;
+  next: KitEventDetailLink | null;
 }
 
 export interface KitEventDetailModel {
@@ -97,37 +126,59 @@ export interface KitEventDetailModel {
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
   location: string | null;
+  /** Maps search URL for the venue; null when no venue is set. The view
+   * renders this verbatim and never builds URLs from location itself. */
+  directionsUrl: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
   goingCount: number;
+  /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
+  goingOccupancy: number;
   capacity: number | null;
   rsvpOpen: boolean;
+  /** Server-decided RSVP closure at render: the RsvpButton twin's verdict
+   * (draft, or past for non-published rows and endsAt at or before the
+   * server instant), or null when the control stays open. The view renders
+   * this verbatim and never compares endsAt to the viewer clock. Cancelled
+   * rows return the gone outcome, so "cancelled" never appears here. */
+  rsvpClosed: RsvpClosedReason | null;
   /** Absolute canonical URL: the share/copy target and the JSON-LD @id. */
   canonical: string;
   /** Rooted page path, e.g. `/e/<key>`: the join return destination. */
   path: string;
+  /** Validated roster-refresh href: the bare page path on page 1,
+   * `?attendees=N` on a valid N > 1, never raw query text. */
+  attendeesRefreshHref: string;
+  /** Navigation-only archive return, absent on direct visits. */
+  archiveReturn?: { href: string; label: string } | null;
   /** Meta robots + x-robots-tag value for draft/past rows; null when indexable. */
   robots: string | null;
   /** Rooted .md alternate path; drafts have no Markdown view. */
   markdownAlternate?: string;
   icsUrl: string;
-  googleCalendarUrl: string;
+  /** Google Calendar deep link; null when the window is not ICS-wire-formattable. */
+  googleCalendarUrl: string | null;
   /** Copy-link target: identical to the canonical URL by construction. */
   copyLink: string;
   /** Server-formatted wall time in the event zone, ISO fallback. */
   whenText: string;
+  /** Server-formatted scheduled end in the event zone, ISO fallback. */
+  endsWhenText: string;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
   timeDatetime: string;
   /** Member-only projection: always [] for anonymous viewers. */
   attendees: EventAttendee[];
+  /** Native attendee page window for the rendered page, mirroring Hono. */
+  attendeesPaging: { page: number; prevHref: string | null; nextHref: string | null };
   /** The caller's own RSVP row only; null for guests and non-members. */
   answer: ViewerRsvp | null;
   waitlistPosition: number | null;
   neighbors: { previous: KitEventDetailLink | null; next: KitEventDetailLink | null };
   related: KitEventDetailLink[];
+  series: KitEventDetailSeries | null;
   /** Guests-only join pitch; signed-in viewers never see it. */
   showJoinPitch: boolean;
   joinReturnTo: string;
@@ -136,7 +187,8 @@ export interface KitEventDetailModel {
   viewerModerator: boolean;
   /** Signed-in display name for the header sign-out form; null for guests. */
   viewerUsername: string | null;
-  /** Machine end instant: the view closes RSVP for ended rows, as served. */
+  /** Machine end instant, as served. Closure no longer derives from this in
+   * the view — see rsvpClosed. */
   endsAt: string;
   jsonLd: string;
   siteJsonLd: string;
@@ -213,7 +265,21 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getEventFn: (db, key) => getPublicEvent(db, key),
     neighborsFn: (db, event) => getEventNeighbors(db, event),
     relatedFn: (db, event) => listRelatedEvents(db, event),
-    attendeesFn: (db, eventId) => listGoingAttendees(db, eventId),
+    seriesFn: (db, event) => getEventSeriesContext(db, event),
+    attendeesFn: async (db, eventId, page) => {
+      // Same bounded window as the served handler: the requested page plus
+      // the first row of the next page (lookahead, never rendered) that
+      // powers Next. The probe runs only from a full page — a partial page
+      // cannot have a successor. The resolver declares every retrieved
+      // owner, lookahead included, so the hook boundary audits exactly the
+      // disclosed subjects.
+      const rows = await listGoingAttendees(db, eventId, page);
+      const lookahead =
+        rows.length === ATTENDEE_PAGE_SIZE
+          ? await listGoingAttendees(db, eventId, nextAttendeePage(page), 1)
+          : [];
+      return [...rows, ...lookahead];
+    },
     viewerRsvpFn: (db, eventId, userId) => getViewerRsvp(db, eventId, userId),
     waitlistFn: (db, eventId, userId) =>
       // The waitlist read keys on the session user; without one there is no
@@ -223,23 +289,8 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   };
 }
 
-/** Hero wall time: the served page's long-offset format, ISO on a bad zone. */
-export function formatEventWhen(startsAt: Date, timezone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: timezone,
-      timeZoneName: "longOffset",
-    }).format(startsAt);
-  } catch {
-    return startsAt.toISOString();
-  }
-}
+// Preserve the read-model export used by existing Kit callers.
+export { formatEventWhen } from "./date-format";
 
 function toLink(link: EventLink): KitEventDetailLink {
   // Discovery instants use the served long-offset detail format (the hero
@@ -253,10 +304,23 @@ function toLink(link: EventLink): KitEventDetailLink {
   };
 }
 
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before answering the unavailable
+// outcome, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts) and the
+// event-states twin (src/kit-event-states.ts). Branded throws stay silent.
+// The unavailable outcome and headers are unchanged either way. One shared
+// helper covers both read legs, so a single branded test pins the
+// classification.
+function reportDetailLoadFailure(err: unknown, requestId: string | undefined): void {
+  if (typeof (err as { status?: unknown })?.status !== "number") {
+    alertRequestError(err, { method: "GET", route: "/e/:key", requestId });
+  }
+}
+
 export async function resolveKitEventDetail(
   req: KitEventDetailRequest,
 ): Promise<KitEventDetailOutcome> {
-  const { key, search, path, env, session, joinResult, setHeaders, store } = req;
+  const { key, search, path, env, session, joinResult, setHeaders, store, requestId } = req;
   const appUrl = env.APP_URL;
 
   // One canonical key form per event: a valid key in another letter case 301s
@@ -273,7 +337,8 @@ export async function resolveKitEventDetail(
     let db: Db | null;
     try {
       db = await store.dbForFn({ env });
-    } catch {
+    } catch (err) {
+      reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -286,7 +351,8 @@ export async function resolveKitEventDetail(
     let event: PublicEvent | null;
     try {
       event = await store.getEventFn(db, key);
-    } catch {
+    } catch (err) {
+      reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -303,7 +369,14 @@ export async function resolveKitEventDetail(
         let related: EventLink[] = [];
         try {
           related = await store.relatedFn(db, event);
-        } catch {
+        } catch (err) {
+          // The cancelled page still serves with an empty alternatives list;
+          // warn once with the exception class so the degrade is visible.
+          // Class only, never the message: it can carry SQL or wire detail.
+          console.warn("Event alternatives unavailable; serving the empty list.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
           related = [];
         }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
@@ -340,26 +413,84 @@ export async function resolveKitEventDetail(
       }
       const viewer = session.session;
       if (event.status === "draft" && !viewer?.moderator) {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { "cache-control": NO_STORE };
         setHeaders(headers);
         return { kind: "forbidden", status: 403, headers };
       }
       const member = viewer?.member === true;
+      // Native attendee page from the query (?attendees=<n>), same strict
+      // fallback as the served handler: malformed values stay on page 1.
+      const attendeePage = parseAttendeePageParam(new URLSearchParams(search).get("attendees"));
+      const archive = archiveContext(search);
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
-      const [neighbors, related, attendees, position, answer] = await Promise.all([
-        store.neighborsFn(db, event),
-        store.relatedFn(db, event),
-        member ? store.attendeesFn(db, event.id) : Promise.resolve([]),
+      // Decorative reads fail open like the served twin: a throwing
+      // neighbors/related store settles to its empty shape instead of
+      // rejecting the whole model. Both reads stay nonSensitive
+      // published-only, so no audit row is skipped; viewer reads below stay
+      // closed and their throws still reject.
+      const neighborsSettled = store.neighborsFn(db, event).then(
+        (neighbors) => neighbors,
+        (): EventNeighbors => ({ previous: null, next: null }),
+      );
+      const relatedSettled = store.relatedFn(db, event).then(
+        (related) => related,
+        (): EventLink[] => [],
+      );
+      const seriesSettled = (
+        store.seriesFn ? store.seriesFn(db, event) : getEventSeriesContext(db, event)
+      ).then(
+        (series) => series,
+        (): EventSeriesContext | null => null,
+      );
+      const [neighbors, related, series, attendeeRows, position, answer] = await Promise.all([
+        neighborsSettled,
+        relatedSettled,
+        seriesSettled,
+        member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
       ]);
       // Declare the retrieved attendee owners so the hook boundary audits
       // exactly the disclosed subjects. Non-SQL fakes declare nothing on
       // their own; the SQL reads declare through the observed adapter and
-      // this set-merge is idempotent. Guests declare nothing.
-      if (member) declareMemberResult(attendees.map((attendee) => attendee.id));
+      // this set-merge is idempotent. Guests declare nothing. The lookahead
+      // (first row of the next page) is declared but never rendered.
+      if (member) declareMemberResult(attendeeRows.map((attendee) => attendee.id));
+      // Like listPast, the render keeps one page while the lookahead powers
+      // Next; a partial page is never labeled as the total.
+      const attendees = attendeeRows.slice(0, ATTENDEE_PAGE_SIZE);
+      // An empty past-end page links back to page one (the bare URL):
+      // page N-1 may itself be empty, stranding the viewer on empty pages.
+      // Guests never render this section, so the value is inert for them.
+      const attendeesPaging = {
+        page: attendeePage,
+        prevHref:
+          attendeePage > 1
+            ? archiveEventHref(
+                event.eventKey,
+                archive,
+                attendees.length === 0 ? 1 : attendeePage - 1,
+              )
+            : null,
+        nextHref:
+          attendeeRows.length > ATTENDEE_PAGE_SIZE
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
+            : null,
+      };
+      // RSVP closure is decided once here, on the server render instant, with
+      // the RsvpButton twin's verdict (src/events/rsvp-button.tsx): draft,
+      // past for non-published rows, or past when endsAt is at or before now.
+      // Cancelled returns the gone outcome above, so it never reaches this
+      // model. The view renders this verdict verbatim.
+      const now = new Date();
+      const rsvpClosed: RsvpClosedReason | null =
+        event.status === "draft"
+          ? "draft"
+          : event.status !== "published" || event.endsAt <= now
+            ? "past"
+            : null;
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const robots = event.status === "draft" || event.status === "past" ? NOINDEX : null;
@@ -380,25 +511,38 @@ export async function resolveKitEventDetail(
           description: event.description,
           shareDescription: event.description || "An event at Together We Own.",
           location: event.location,
+          directionsUrl: event.location ? directionsUrl(event.location) : null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
           goingCount: event.goingCount,
+          goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
+          rsvpClosed,
           canonical: pageCanonical,
           path: pagePath,
+          // Keep validated roster/archive state only, never raw query text.
+          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
           // every viewer, so only link it where it answers 200.
           ...(event.status === "draft" ? {} : { markdownAlternate: `/e/${event.eventKey}.md` }),
           icsUrl: `/events/${event.eventKey}.ics`,
-          googleCalendarUrl: googleCalendarUrl(event),
+          // Finite but non-wire years stay a readable page: only the Google
+          // Calendar deep link (an ICS instant pair) is omitted, mirroring Hono.
+          googleCalendarUrl:
+            isWireInstant(event.startsAt) && isWireInstant(event.endsAt)
+              ? googleCalendarUrl(event)
+              : null,
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
+          endsWhenText: formatEventWhen(event.endsAt, event.timezone),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,
+          attendeesPaging,
           answer,
           waitlistPosition: position,
           neighbors: {
@@ -406,6 +550,13 @@ export async function resolveKitEventDetail(
             next: neighbors.next ? toLink(neighbors.next) : null,
           },
           related: related.map(toLink),
+          series: series
+            ? {
+                hosts: series.hosts,
+                previous: series.previous ? toLink(series.previous) : null,
+                next: series.next ? toLink(series.next) : null,
+              }
+            : null,
           showJoinPitch: !viewer,
           // The sign-in return keeps the query string, exactly as served;
           // the join pitch and related-join links use the bare page path.
@@ -427,7 +578,7 @@ export async function resolveKitEventDetail(
   } catch {
     suggestions = [];
   }
-  const headers = { "x-robots-tag": NOINDEX };
+  const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
   setHeaders(headers);
   return {
     kind: "missing",

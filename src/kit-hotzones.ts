@@ -11,6 +11,7 @@ import {
 } from "./hotzones/aggregates";
 import { recordBoardView } from "./hotzones/board-log";
 import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
+import { kitPublicReadGuard, type KitPublicReadGuard } from "./kit-past-events";
 
 // Framework-free core of the Kit hot-zone loads
 // (web/src/routes/hotzones/+page.server.ts and
@@ -29,6 +30,8 @@ export type LoadJoinsGrid = (db: Db | null, window: SeasonWindow) => Promise<Hot
 export type RecordBoardView = (
   db: Db | null,
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
+  deadlineMs?: number,
+  requestId?: unknown,
 ) => Promise<void>;
 
 export interface HotzonesLoadArgs {
@@ -38,10 +41,19 @@ export interface HotzonesLoadArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadJoinsGridFn?: LoadJoinsGrid;
   recordBoardViewFn?: RecordBoardView;
+  /** Optional correlation id for the board-view record; omitted when the caller has none (see the runbook's Kit-omission caveat). */
+  requestId?: string | null;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
   return Object.assign(new Error(message), { status });
+}
+
+const NO_STORE = "private, no-store";
+
+/** Fresh no-store headers per path: every error outcome carries explicit no-store like its Hono twin. */
+function noStoreHeaders(): Record<string, string> {
+  return { "cache-control": NO_STORE };
 }
 
 /** Season grammar failure: the Kit binding maps this to error(400). */
@@ -59,22 +71,32 @@ export function hotzonesUnavailable(): Error & { status: number } {
   return branded("Hot zones temporarily unavailable", 503);
 }
 
-function seasonOrThrow(seasonParam: string | null): { window: SeasonWindow; label: string } {
+function seasonOrThrow(
+  seasonParam: string | null,
+  setHeaders: (headers: Record<string, string>) => void,
+): { window: SeasonWindow; label: string } {
   const window = parseSeasonParam(seasonParam);
-  if (!window) throw hotzonesBadSeason();
+  if (!window) {
+    setHeaders(noStoreHeaders());
+    throw hotzonesBadSeason();
+  }
   return { window, label: window.kind === "all" ? "all" : window.label };
 }
 
 // A code bug (no branded status) must never look like a downstream outage:
 // emit the leak-free error.alert diagnostic before mapping to the branded
 // 503, mirroring the Hono member-read boundary (src/member-reads.ts). Branded
-// throws (400/404/503 from nested helpers) pass through untouched so the
-// binding maps them once and exactly one setHeaders call fires per path.
+// throws (400/404/503 from nested helpers) pass through with the same no-store
+// headers so the binding maps them once and exactly one setHeaders call fires
+// per path.
 function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string): never {
   const status = (err as { status?: unknown })?.status;
-  if (typeof status === "number") throw err;
+  if (typeof status === "number") {
+    args.setHeaders(noStoreHeaders());
+    throw err;
+  }
   alertRequestError(err, { method: "GET", route });
-  args.setHeaders({ "cache-control": "private, no-store" });
+  args.setHeaders(noStoreHeaders());
   throw hotzonesUnavailable();
 }
 
@@ -105,8 +127,11 @@ async function record(
   opts: { boardKey: string; scope: string; season: string; resultCount: number },
 ): Promise<void> {
   // Fail-open, exactly as on the Hono handlers: a logging failure never
-  // blocks or breaks the board.
-  await (args.recordBoardViewFn ?? recordBoardView)(db, opts).catch(() => {});
+  // blocks or breaks the board. A caller-supplied request id rides along to
+  // the record call; none supplied means none carried (no new read to mint one).
+  await (args.recordBoardViewFn ?? recordBoardView)(db, opts, undefined, args.requestId).catch(
+    () => {},
+  );
 }
 
 export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
@@ -117,7 +142,7 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   retentionNote: string | null;
   appUrl: string;
 }> {
-  const { window, label } = seasonOrThrow(args.seasonParam);
+  const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const { db } = await dbOrUnavailable(args, "/hotzones");
   const joins = await joinsOrUnavailable(args, db, window, "/hotzones");
   await record(args, db, {
@@ -126,7 +151,7 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
     season: label,
     resultCount: joins.total,
   });
-  args.setHeaders({ "cache-control": "public, max-age=300" });
+  args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
   return {
     season: label,
     joins,
@@ -149,9 +174,12 @@ export async function loadHotzoneSignalData(
   estimated: boolean;
   appUrl: string;
 }> {
-  const { window, label } = seasonOrThrow(args.seasonParam);
+  const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const signal = args.signalParam;
-  if (!isHotzoneSignal(signal)) throw hotzoneSignalNotFound();
+  if (!isHotzoneSignal(signal)) {
+    args.setHeaders(noStoreHeaders());
+    throw hotzoneSignalNotFound();
+  }
   const { db } = await dbOrUnavailable(args, "/hotzones/:signal");
   if (signal === "joins") {
     const joins = await joinsOrUnavailable(args, db, window, "/hotzones/:signal");
@@ -161,7 +189,7 @@ export async function loadHotzoneSignalData(
       season: label,
       resultCount: joins.total,
     });
-    args.setHeaders({ "cache-control": "public, max-age=300" });
+    args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
     return {
       signal,
       season: label,
@@ -180,7 +208,7 @@ export async function loadHotzoneSignalData(
     season: label,
     resultCount: prior.total,
   });
-  args.setHeaders({ "cache-control": "public, max-age=300" });
+  args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
   return {
     signal,
     season: label,
@@ -191,4 +219,20 @@ export async function loadHotzoneSignalData(
     estimated: true,
     appUrl: args.env.APP_URL,
   };
+}
+
+/** Apply the shared public-read budget around Kit hot-zone SSR. */
+export async function dispatchHotzonesRequest(
+  request: Request,
+  env: Env,
+  render: () => Promise<Response>,
+  guard: KitPublicReadGuard = kitPublicReadGuard,
+): Promise<Response> {
+  // Season grammar first, mirroring the Hono handlers: a bad season reaches
+  // the load's 400 without spending. Unknown signals never reach this
+  // wrapper: the manifest lists concrete signal paths only, so anything else
+  // falls through to the Hono 404.
+  if (!parseSeasonParam(new URL(request.url).searchParams.get("season"))) return render();
+  const limited = await guard(request, env);
+  return limited ?? render();
 }

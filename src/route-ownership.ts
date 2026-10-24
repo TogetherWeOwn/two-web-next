@@ -12,11 +12,21 @@
 // of those are ignored, and the original Request passes through untouched
 // (query preserved, body unread) to whichever renderer owns it.
 
+import { Context } from "hono";
+import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
-import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import {
+  isContentLeafPath,
+  isKitFallbackDocument,
+  robotsTagFor,
+  securityHeadersFor,
+  withKitFallbackStyleCsp,
+} from "./headers";
+import { STAGING_APP_URL } from "./qa";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
+import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
 import { isTrustedHost } from "./trust-hosts";
 
@@ -284,6 +294,44 @@ export function fixtureManifestFor(env: {
   });
 }
 
+// Staging Kit starts with every route on Hono. The reviewed deploy workflow
+// may enable only the archive and static page families, while all other routes
+// stay Hono-owned even when the shared manifest enables them for preview/local
+// parity. The staging hostname or any rollout flag selects this restrictive
+// manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
+// can enable a family; absent, malformed and unknown flags keep it disabled.
+export function stagingManifestFor(
+  env: {
+    APP_URL?: string;
+    KIT_ROUTE_ARCHIVE?: string;
+    KIT_ROUTE_STATIC?: string;
+  },
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+): OwnedRoute[] | undefined {
+  let app: URL | undefined;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    // With rollout flags present an invalid URL must not select the preview manifest.
+    app = undefined;
+  }
+  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
+
+  const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
+  // Static pages are the second cumulative rollout stage; they cannot precede
+  // the archive family even if a Worker variable is set out of band.
+  const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  return routes.map((entry) => {
+    const familyEnabled =
+      (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
+      (entry.method === "GET" &&
+        (entry.path === "/about" || entry.path === "/faq") &&
+        staticEnabled);
+    return { ...entry, enabled: entry.enabled && familyEnabled };
+  });
+}
+
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
 // Hono responses (honoFetch or the catch-all fallback) never carry it.
@@ -436,6 +484,11 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  // Staging-only rollout controls. The staging APP_URL selects a fail-closed
+  // manifest that admits only these reviewed families; unset or malformed
+  // values keep every route on Hono. Preview/local parity stays unchanged.
+  kitRouteArchive?: string;
+  kitRouteStatic?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -458,8 +511,26 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
-  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
-  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
+  // The member-document proof is supplied only after audit release and full-HTML
+  // classification below; callers without it retain the moderator admin scope.
+  authStatusCookieFor?: (
+    event: HookEventLike,
+    releasedMemberDocument?: boolean,
+  ) => Promise<string | null>;
+  // Optional sliding-session renewal for the native Kit event detail. Runs
+  // only after the member-read boundary releases a successful GET (see
+  // releasedEventDetailRenewsSession): a refused, failed, throttled or
+  // redirected read never reaches it, so the bearer stays live for the
+  // retry. Absent by default: without it the dispatch behaves exactly as
+  // before.
+  eventDetailRotationFor?: (event: HookEventLike) => Promise<string | null>;
+  // Optional sliding-session renewal for Kit-served admin reads. Runs
+  // only after the member-read boundary releases a successful GET document
+  // (see releasedAdminRenewsSession): a refused, failed, bounced or
+  // redirected read never reaches it, so the bearer stays live for the
+  // retry. Absent by default: without it the dispatch behaves exactly as
+  // before.
+  adminRenewalFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -485,6 +556,13 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native hot-zone read budget around Kit SSR. Same binding shape as the
+  // archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchHotzonesRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  hotzones?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -514,6 +592,36 @@ function decorateKitResponse(
   }
 }
 
+// Catastrophic-fallback CSP widening, async twin of the leaf allowlist: the
+// fallback can be served for ANY path, so unlike the leaf pages it cannot be
+// scoped by path in securityHeadersFor. After decoration, an HTML error
+// response carrying the exact fallback style element gets the block's hash
+// appended to style-src. Gated on status + content-type so normal pages
+// never pay for a body read; the clone keeps the served body intact. The
+// same-origin refusal is JSON-only and the Hono-fallback route returns
+// undecorated (no CSP to widen), so this call lives only on the decorated
+// dispatch path below — any new HTML decorate site must call it too.
+async function allowlistKitFallbackStyle(response: Response): Promise<void> {
+  if (response.status < 400) return;
+  if (!(response.headers.get("content-type") ?? "").includes("text/html")) return;
+  const csp = response.headers.get("Content-Security-Policy");
+  if (!csp || !csp.includes("style-src 'self'")) return;
+  let body: string;
+  try {
+    body = await response.clone().text();
+  } catch (err) {
+    // Fail closed to the unwidened policy: an unstyled fallback still
+    // recovers through its plain anchors, while a thrown read would 500
+    // the error page itself.
+    console.warn("kit fallback style probe unreadable; serving without the style hash.", {
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
+    return;
+  }
+  if (!isKitFallbackDocument(body)) return;
+  response.headers.set("Content-Security-Policy", withKitFallbackStyleCsp(csp));
+}
+
 // Same-origin parity for the Kit branch (src/same-origin.ts twin, framework-free).
 // Exact method + path exemptions only, never prefixes: agent ingress, the CSP
 // sink and the MCP endpoint authenticate/validate independently. Mirrors the
@@ -521,11 +629,31 @@ function decorateKitResponse(
 // (including "null"/malformed), Sec-Fetch-Site same-origin is a fallback only
 // when Origin is absent and only when the request origin is APP_URL, invalid
 // config fails closed. Reads headers + URL only, never the body.
+// Hono-identical path decode for the exemption match. Hono's guard and router
+// both see getPath() (hono/utils/url in the pinned Hono: decodeURI with a
+// %25 pre-escape, falling back to decoding only the valid %XX runs), so the
+// twin decodes the same way. decodeURI on purpose: reserved escapes such as
+// %2F stay encoded on Hono too, and decodeURIComponent would diverge.
+function decodeTwinPath(path: string): string {
+  const preescaped = path.includes("%25") ? path.replace(/%25/g, "%2525") : path;
+  try {
+    return decodeURI(preescaped);
+  } catch {
+    return preescaped.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match) => {
+      try {
+        return decodeURI(match);
+      } catch {
+        return match;
+      }
+    });
+  }
+}
+
 export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
-    path = new URL(request.url).pathname;
+    path = decodeTwinPath(new URL(request.url).pathname);
   } catch {
     return false;
   }
@@ -577,6 +705,7 @@ function renderMemberRead(
   event: HookEventLike,
   reads: MemberRead | undefined,
   deps: HookDispatchDeps,
+  onRelease?: (response: Response) => void,
 ): Promise<Response> {
   return memberReadResponse(
     { method: event.request.method, route: event.route?.id ?? "unmatched" },
@@ -588,8 +717,81 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
-    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
+    (response) => {
+      onRelease?.(response);
+      return deps.afterMemberRead?.(event, response) ?? Promise.resolve();
+    },
   );
+}
+
+// Profile destinations are the Kit twin of Hono's post-boundary takeJoinResult
+// (src/profiles/routes-gate.ts): expire the one-shot join flash only after the
+// member-read boundary has released a successful HTML GET. The peek in
+// readReturnJourney stays read-only, so a refused, failed, HEAD, or non-HTML
+// response leaves the pending cookie untouched. Hono's deleteCookie supplies
+// the zero max-age expiry with return-journey deleteOpts (path /, Secure,
+// HttpOnly, SameSite Lax). No secret, new lifetime, or new cookie.
+function releasedProfileConsumesJoinFlash(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/profile" && route.path !== "/members/:user") return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  const flash = (event.locals as Partial<KitLocals> | undefined)?.joinResult;
+  return flash === "added" || flash === "already_member";
+}
+
+// Sliding renewal for the native Kit event detail: the post-release twin of
+// Hono's readSession rotation (src/index.tsx re-stamps the 120-minute window
+// on every authenticated page view). Only a released successful HTML GET with
+// an authenticated bridge decision renews: the 200 page and the draft 403
+// (Hono reads the session before the draft check, so it rotates there too).
+// Redirects, 404s, the viewer-independent 410, throttles and outages return
+// in Hono before any session read, so they never renew here either. The
+// attendees-live fragment is excluded like Hono's non-rotating fragment read
+// (src/events/routes-detail.tsx): a rotating fragment racing the reload would
+// leave exactly one winner and render the loser as a guest. Not in the
+// loader: that would rotate before the audit can refuse, stranding the
+// session when the refusal throws the rendered response away.
+function releasedEventDetailRenewsSession(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/e/:key") return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200 && response.status !== 403) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  if (event.request.headers.get("x-two-island") === "attendees-live") return false;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  return locals?.status === "authenticated";
+}
+
+// Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
+// admin-guard slide (src/admin/guard.ts renews the 120-minute window on a
+// current bearer only). Only a released successful-or-missing HTML GET document
+// with an authenticated moderator bridge decision renews: the manifest owns the
+// route choice (any enabled admin family entry), so a future admin path renews with
+// zero renewal-code changes. 404s renew like Hono (the guard attaches on 404s
+// when the bearer survives rendering); guest bounces, 403s (unlike the
+// event-detail draft 403 — Hono never renews a refused viewer), 503s,
+// redirects and non-HTML responses never renew. Not in the loader: that would
+// renew before the audit can refuse, spending the window on a response the
+// boundary throws away.
+function releasedAdminRenewsSession(
+  route: OwnedRoute,
+  event: HookEventLike,
+  response: Response,
+): boolean {
+  if (route.path !== "/admin" && !route.path.startsWith("/admin/")) return false;
+  if (event.request.method !== "GET") return false;
+  if (response.status !== 200 && response.status !== 404) return false;
+  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  return locals?.status === "authenticated" && locals.session?.moderator === true;
 }
 
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
@@ -620,6 +822,11 @@ export async function dispatchHookRequest(
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+      }) ??
+      stagingManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
+        KIT_ROUTE_STATIC: deps.kitRouteStatic,
       }) ??
       ROUTE_MANIFEST,
   );
@@ -658,6 +865,10 @@ export async function dispatchHookRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
+  // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
+  const isHotzonesPage =
+    event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
   // shared public-read budget runs before the session bridge through the
   // detail wrapper, exactly as the served handler throttles before any read.
@@ -666,6 +877,7 @@ export async function dispatchHookRequest(
   // clients the budget allows through.
   const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
+  let releasedMemberResponse: Response | undefined;
   if (route.reads !== "public") {
     // Narrowed once for the deferred render: the closure below would lose the
     // branch narrowing on route.reads.
@@ -677,12 +889,16 @@ export async function dispatchHookRequest(
       });
     } else {
       await bridgeSession();
-      response = await renderMemberRead(event, reads, deps);
+      response = await renderMemberRead(event, reads, deps, (released) => {
+        releasedMemberResponse = released;
+      });
     }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isHotzonesPage && deps.hotzones) {
+    response = await deps.hotzones(event.request, () => deps.resolve(event));
   } else if (isContentLeafPath(route.path)) {
     // Content leaves keep #808's zero-stylesheet contract on the served
     // worker: the root layout's Tailwind asset is stripped after resolve and
@@ -701,14 +917,43 @@ export async function dispatchHookRequest(
   if (
     deps.authStatusCookieFor &&
     event.request.method === "GET" &&
-    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
     response.status === 200 &&
     response.headers.get("content-type")?.includes("text/html") &&
-    locals?.status === "authenticated" &&
-    locals.session?.moderator
+    locals?.status === "authenticated"
   ) {
+    // Match the owned manifest entry, not an arbitrary member-looking URL.
+    // Only the exact buffered response released by the audit boundary qualifies.
+    let memberDocument = false;
+    if (
+      response === releasedMemberResponse &&
+      locals.session?.member === true &&
+      ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path)
+    ) {
+      const html = await response.clone().text();
+      memberDocument =
+        /<!doctype html>/i.test(html) && /<html[\s>]/i.test(html) && html.includes("</body>");
+      if (memberDocument) {
+        const headers = new Headers(response.headers);
+        headers.delete("content-length");
+        response = new Response(
+          /<script\b[^>]*src="\/islands\/auth-status\.js"[^>]*>/.test(html)
+            ? html
+            : html.replace(
+                "</body>",
+                '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script></body>',
+              ),
+          { status: response.status, headers },
+        );
+      }
+    }
+    // Preserve admin fragment cookies separately; the new member scope requires
+    // a full document and does not alter the existing admin controller.
+    const adminDocument = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals.session?.moderator;
     try {
-      const cookie = await deps.authStatusCookieFor(event);
+      const cookie =
+        memberDocument || adminDocument
+          ? await deps.authStatusCookieFor(event, memberDocument)
+          : null;
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
@@ -724,6 +969,63 @@ export async function dispatchHookRequest(
       });
     }
   }
+  // Sliding renewal for the released Kit event detail, at the same
+  // post-response position as the probe append above. A rotation that loses
+  // its race resolves to no cookie (the next read retries with a live
+  // bearer); a rotation store failure warns and likewise renews nothing —
+  // the already-rendered member page still stands, and the old row stays
+  // live because rotate is one atomic statement.
+  if (deps.eventDetailRotationFor && releasedEventDetailRenewsSession(route, event, response)) {
+    try {
+      const cookie = await deps.eventDetailRotationFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
+  // Sliding renewal for released Kit admin documents, at the same post-response
+  // position as the event-detail renewal above. A renewal that loses its race
+  // resolves to no cookie (the next read retries with a live bearer); a renewal
+  // store failure warns and likewise renews nothing — the already-rendered
+  // admin page still stands, and the old row stays live because renew only
+  // extends a live row.
+  if (deps.adminRenewalFor && releasedAdminRenewsSession(route, event, response)) {
+    try {
+      const cookie = await deps.adminRenewalFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit admin renewal unavailable; rendering without renewal.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
+  // After the released response exists, and only for the two profile paths.
+  // Not in the loader: that would expire the flash before the audit can refuse.
+  if (releasedProfileConsumesJoinFlash(route, event, response)) {
+    const c = new Context(event.request);
+    c.res = response;
+    deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
+    response = c.res;
+  }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  await allowlistKitFallbackStyle(response);
   return response;
 }

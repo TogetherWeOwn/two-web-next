@@ -6,7 +6,11 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
+import {
+  EVENTS_DISTINCT_GAMES_LIMIT,
+  EVENTS_MONTH_GRID_LIMIT,
+  EVENTS_UPCOMING_PAGE_SIZE,
+} from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
 import { auditPaths, fixtureKey } from "./lighthouse-paths";
@@ -25,7 +29,13 @@ const featuredSql =
 // bounds) stays visible at every instant.
 const publishedFeaturedSql =
   'select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where "featured_contents"."is_published" = $1 order by "featured_contents"."position" asc, "featured_contents"."id" asc';
+// Attributable going count: joins users and counts only named rows, so the
+// badge agrees with the roster (the fixture's three going members are named).
+// Seat occupancy counts every going row (same shape as waitlist.goingCount);
+// the fixture has no nameless rows, so both aggregates are 3.
 const goingSql =
+  'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2 and "users"."username" <> $3) group by "rsvps"."event_id"';
+const occupancySql =
   'select "event_id", count(*) from "rsvps" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2) group by "rsvps"."event_id"';
 const localOrigin = "http://127.0.0.1:8787";
 
@@ -106,7 +116,16 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         return { rows: [] }; // Only these transaction-local read timeouts are simulated.
       }
       if (method === "all") {
-        if (sql === goingSql && sameParams(params, [fixture.id, "going"]))
+        if (
+          sql ===
+            `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1` &&
+          sameParams(params, [EVENTS_DISTINCT_GAMES_LIMIT])
+        ) {
+          return { rows: [[fixture.game]] };
+        }
+        if (sql === goingSql && sameParams(params, [fixture.id, "going", ""]))
+          return { rows: [[fixture.id, 3]] };
+        if (sql === occupancySql && sameParams(params, [fixture.id, "going"]))
           return { rows: [[fixture.id, 3]] };
         if (
           sql === `${eventSelect} where "events"."event_key" = $1` &&
@@ -116,7 +135,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1)` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1)` &&
           params.length === 1 &&
           isInstant(params[0])
         ) {
@@ -128,7 +147,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // closed list deliberately does not know.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
           params.length === 2 &&
           isInstant(params[0]) &&
           params[1] === EVENTS_UPCOMING_PAGE_SIZE + 1
@@ -139,18 +158,19 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // faithfully against the single fixture row so one never 500s silently.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and "events"."starts_at" >= $2 and "events"."starts_at" < $3) order by "events"."starts_at" asc, "events"."id" asc limit $4` &&
-          params.length === 4 &&
-          isInstant(params[0]) &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."status" <> $1 and "events"."ends_at" >= $2 and "events"."starts_at" < $3 and "events"."ends_at" > $4) order by "events"."starts_at" asc, "events"."id" asc limit $5` &&
+          params.length === 5 &&
+          params[0] === "cancelled" &&
           isInstant(params[1]) &&
           isInstant(params[2]) &&
-          params[3] === EVENTS_MONTH_GRID_LIMIT
+          isInstant(params[3]) &&
+          params[4] === EVENTS_MONTH_GRID_LIMIT
         ) {
-          const startsAt = fixture.startsAt.getTime();
-          const inWindow =
-            startsAt >= new Date(params[1]).getTime() && startsAt < new Date(params[2]).getTime();
+          const overlaps =
+            fixture.startsAt.getTime() < new Date(params[2]).getTime() &&
+            fixture.endsAt.getTime() > new Date(params[3]).getTime();
           return {
-            rows: fixture.endsAt >= new Date(params[0]) && inWindow ? [encoded] : [],
+            rows: fixture.endsAt >= new Date(params[1]) && overlaps ? [encoded] : [],
           };
         }
         // Grid day-jumps resolve the card's list page: the anchor row, then the
@@ -158,30 +178,28 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // counts exactly when the anchor is the fixture itself.
         if (
           sql ===
-            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $2)` &&
+            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $2)` &&
           params.length === 2 &&
           params[0] === fixtureKey &&
           isInstant(params[1])
         ) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
+        // The rank anchor compares at the stored timestamp precision: the
+        // count carries the anchor id twice (once per subquery) instead of a
+        // bound JS instant. Single-fixture emulation: the count only runs
+        // when the anchor is the fixture itself, so no visible row sorts
+        // before it.
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < $2 or ("events"."starts_at" = $3 and "events"."id" < $4)))` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."status" != 'past' and "events"."ends_at" >= $1 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $2) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $3) and "events"."id" < $4)))` &&
           params.length === 4 &&
           isInstant(params[0]) &&
-          isInstant(params[1]) &&
-          isInstant(params[2]) &&
-          typeof params[3] === "number"
+          params[1] === fixture.id &&
+          params[2] === fixture.id &&
+          params[3] === fixture.id
         ) {
-          const anchor = { startsAt: new Date(params[1]).getTime(), id: params[3] };
-          const before =
-            fixture.endsAt >= new Date(params[0]) &&
-            (fixture.startsAt.getTime() < anchor.startsAt ||
-              (fixture.startsAt.getTime() === anchor.startsAt && fixture.id < anchor.id))
-              ? "1"
-              : "0";
-          return { rows: [[before]] };
+          return { rows: [["0"]] };
         }
         if (
           inTransaction &&
@@ -194,9 +212,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
+        // Past drawer: finite-window guard keeps infinity rows from occupying
+        // limit slots (like the sibling upcoming reads), so the pinned
+        // statement carries the same isfinite pair.
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" < $1) order by "events"."starts_at" desc, "events"."id" desc limit $2` &&
           params.length === 2 &&
           isInstant(params[0]) &&
           params[1] === 20
@@ -301,7 +322,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
     DISCORD_INVITE_URL: "http://127.0.0.1:8787/join",
     DISCORD_CLIENT_SECRET: "fixture-only",
     DISCORD_BOT_TOKEN: "fixture-only",
-    SESSION_SECRET: "lighthouse-local-fixture-only",
+    SESSION_SECRET: "lighthouse-local-fixture-secret-at-least-32",
     SESSION_STORE: createMemorySessionStore(),
     ADMIN_DB: db as unknown as Db,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },

@@ -13,7 +13,10 @@
 //
 // Env: RELEASE_SHA (40-hex, must be on origin/main), GH_REPO, GH_TOKEN,
 // GITHUB_SERVER_URL, GITHUB_OUTPUT, DRY_RUN=true to print without publishing.
-// Needs a full-history checkout with tags.
+// New tags require trusted production evidence (release-promotion-proof.cjs);
+// PROMOTION_RUN_ID / PROMOTION_RUN_ATTEMPT are optional untrusted selectors.
+// Needs a full-history checkout with tags, Python 3 for bounded receipt reads,
+// and the workflow's ephemeral token with repository-local Actions read.
 
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -111,8 +114,12 @@ function renderNotes({ version, prevTag, date, commits, sections, repoUrl }) {
   return `${lines.join("\n")}\n`;
 }
 
+// A release range can hold hundreds of commits; their log outgrew Node's 1 MiB
+// default (spawnSync ENOBUFS on the 2026-10-19 v0.4.0..754b10b3 range, 1.6 MB).
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
+
 function git(...args) {
-  return execFileSync("git", args, { encoding: "utf8" }).trim();
+  return execFileSync("git", args, { encoding: "utf8", maxBuffer: GIT_MAX_BUFFER }).trim();
 }
 
 // Only a 404 proves the release is absent. Any other failure (outage, rate
@@ -226,6 +233,7 @@ function main() {
     return;
   }
   if (!releaseExists(repo, tag)) {
+    if (!tagsAt.length) require("./release-promotion-proof.cjs").verifyPromotion({ repo, sha });
     const notesFile = `${process.env.RUNNER_TEMP || "/tmp"}/release-notes-${tag}.md`;
     fs.writeFileSync(notesFile, notes);
     // Creates the tag on the promoted commit when it does not exist yet.

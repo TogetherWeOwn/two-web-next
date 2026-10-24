@@ -8,8 +8,10 @@
 //   - `degraded` at or above WARN_AT pending jobs; still `degraded`, never
 //     down, past CRITICAL_AT.
 //   - the queue read can never sink the endpoint. A ledger that will not
-//     answer (or is not configured) reports `queue.status: unknown` and the
-//     endpoint stays on the last known application health.
+//     answer (or is not configured) reports `queue.status: unknown` with
+//     top-level `degraded`, keeping 200: unknown joins the queue-only
+//     degraded family so blindness never reads as healthy, while readiness
+//     stays independent and the uptime prober stays green.
 //
 // The measured object is the Postgres queue ledger (`queue_jobs` /
 // `queue_failed_jobs`): Cloudflare Queues carries the messages but exposes no
@@ -32,7 +34,12 @@ export {
   withHealthReadTimeout,
 } from "./up-database";
 export type { DatabaseReadiness } from "./up-database";
-export { WEB_MIGRATIONS, pendingWebMigrations } from "./up-migrations";
+export {
+  WEB_MIGRATIONS,
+  appliedMigrationTimestamps,
+  migrationLedger,
+  pendingWebMigrations,
+} from "./up-migrations";
 export {
   QUEUE_CRITICAL_AT,
   QUEUE_WARN_AT,

@@ -46,7 +46,7 @@ const NOW = new Date("2030-07-04T18:00:00Z");
 const baseEnv: Env = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
-  DISCORD_GUILD_ID: "guild-id",
+  DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: "https://discord.gg/invite",
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",

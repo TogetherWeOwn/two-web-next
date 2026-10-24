@@ -13,6 +13,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
@@ -202,8 +203,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       send: async (m: Extract<QueueMessage, { kind: "sync-event" }>) => void sent.push(m),
     },
   } as unknown as Env;
-  // Sessions rotate on every authenticated view (a replayed cookie is a guest), so each
-  // request mints a fresh cookie.
+  // Independent sessions keep these requests isolated from page rotation and
+  // its bounded predecessor grace.
   const MOD = "mod" as const;
   const MEMBER = "member" as const;
   const fresh = (who: typeof MOD | typeof MEMBER) =>
@@ -335,6 +336,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     location: string | null;
     capacity: number | null;
     going_count: number;
+    going_occupancy: number;
     status: string;
     rsvp_open: boolean;
     synced_to_discord: boolean;
@@ -425,6 +427,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     },
   );
 
+  it("parses ?page= as strictly as its siblings: prefixes, hex, fractional and padded fall back to page 1", async () => {
+    await db.insert(events).values(Array.from({ length: 7 }, (_, i) => eventRow(i + 1)));
+    const first = await collection("?per_page=3&page=1");
+    expect(first.page).toBe(1);
+    expect(first.meta).toEqual({ current_page: 1, per_page: 3, total: 7, last_page: 3 });
+    // Valid pages unchanged.
+    const second = await collection("?per_page=3&page=2");
+    expect(second.page).toBe(2);
+    expect(second.meta.current_page).toBe(2);
+    expect(second.data).not.toEqual(first.data);
+    // Clamped-paging contract unchanged: a valid past-end page still clamps.
+    expect((await collection("?per_page=3&page=99")).page).toBe(3);
+    // Sibling-strict: parseAttendeePageParam and the admin table viewers accept
+    // only /^[1-9]\d*$/ in full; parseInt would accept "2x" as 2.
+    for (const value of [
+      "2x",
+      "0x10",
+      "2.5",
+      " 2",
+      "2 ",
+      "02",
+      "+2",
+      "2e1",
+      "0",
+      "-1",
+      "abc",
+      "",
+    ]) {
+      const result = await collection(`?per_page=3&page=${encodeURIComponent(value)}`);
+      expect(result.page, value).toBe(1);
+      expect(result.meta.current_page, value).toBe(1);
+      expect(result.data, value).toEqual(first.data);
+    }
+  });
+
   it.each(["per_page", "limit"])(
     "clamps complete signed integer %s sizes at both boundaries",
     async (parameter) => {
@@ -507,6 +544,14 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
         rsvpOpen: false,
       })
       .returning();
+    // Attributable seeds: the going count only counts named rows.
+    await db
+      .insert(users)
+      .values([
+        { id: "going-a", username: "going-a" },
+        { id: "going-b", username: "going-b" },
+      ])
+      .onConflictDoNothing();
     await db.insert(rsvps).values([
       { eventId: event!.id, userId: "going-a", status: "going" },
       { eventId: event!.id, userId: "going-b", status: "going" },
@@ -542,6 +587,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       "location",
       "capacity",
       "going_count",
+      "going_occupancy",
       "status",
       "rsvp_open",
       "synced_to_discord",
@@ -560,6 +606,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       location: "Voice",
       capacity: 2,
       going_count: 2,
+      going_occupancy: 2,
       status: "published",
       rsvp_open: false,
       synced_to_discord: false,
@@ -578,6 +625,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(((await mod.json()) as { data: JsonRow }).data.waitlist_position).toBeNull();
     expect(mod.headers.get("etag")).not.toBe(etag);
     expect(res.headers.get("vary")).toContain("Cookie");
+  });
+
+  it("emits the attributable count beside seat occupancy when a nameless row holds a seat", async () => {
+    // Regression pin for the live refresh: the going-count island re-reads
+    // /events.json after a member answers, so the emission must carry both
+    // aggregates when they differ — dropping occupancy flips data-full and
+    // the CTA back to the named count.
+    const [event] = await db
+      .insert(events)
+      .values({ ...eventRow(1), capacity: 2 })
+      .returning();
+    await db
+      .insert(users)
+      .values([
+        { id: "named-going", username: "named-going" },
+        { id: "nameless-going", username: "" },
+      ])
+      .onConflictDoNothing();
+    await db.insert(rsvps).values([
+      { eventId: event!.id, userId: "named-going", status: "going" },
+      { eventId: event!.id, userId: "nameless-going", status: "going" },
+    ]);
+    const show = (
+      (await (await req(`/events/${event!.eventKey}`, await as(MEMBER))).json()) as {
+        data: JsonRow;
+      }
+    ).data;
+    expect(show).toMatchObject({ going_count: 1, going_occupancy: 2 });
+    const listed = (await collection()).data;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      event_key: event!.eventKey,
+      going_count: 1,
+      going_occupancy: 2,
+    });
   });
 
   it.each(["published", "past"])(
@@ -617,6 +699,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     await db.insert(events).values(eventRow(4, "published", 5));
     expect((await req(path, await as(MEMBER, { "if-none-match": etag }))).status).toBe(200);
     const current = (await req(path, await as(MEMBER))).headers.get("etag")!;
+    // Attributable seed: the going count only counts named rows.
+    await db.insert(users).values({ id: "going", username: "going" }).onConflictDoNothing();
     await db.insert(rsvps).values({ eventId: seeded[0]!.id, userId: "going", status: "going" });
     expect((await req(path, await as(MEMBER, { "if-none-match": current }))).status).toBe(200);
     const counted = (await req(path, await as(MEMBER))).headers.get("etag")!;
@@ -725,7 +809,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
     expect(html).toContain('data-total-pages="2"');
     expect(html).not.toContain("excluded-");
-    expect(html).not.toMatch(/data-island="rsvp-button"|<button|<form/);
+    expect(html).not.toMatch(
+      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b|<form\b/,
+    );
+    // Only the native, non-submitting feed-copy action is allowed in the archive.
+    expect(html.match(/<button\b[^>]*>/g)).toEqual([
+      expect.stringMatching(
+        /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
+      ),
+    ]);
     const second = await (await req("/events/past?page=2")).text();
     expect(keys(second)).toEqual(["archive-5", "archive-4", "archive-3", "archive-2", "archive-1"]);
     expect(second).not.toContain(">Older</a>");

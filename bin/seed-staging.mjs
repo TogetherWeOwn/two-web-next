@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
+import {
+  QA_MEMBER_DISCORD_ID,
+  QA_MODERATOR_DISCORD_ID,
+  STAGING_ORIGIN,
+} from "../ci/operator-constants.mjs";
+import { isProductionDatabaseUrl, LOCAL_HOSTS, TLS_OVERRIDE_REFUSAL } from "./operator-db-core.mjs";
 
 export const SEED_OWNER = "seed-staging-calendar-v1";
-// Keep the two snowflakes aligned with src/qa.ts; usernames are fixture-only.
+// Snowflake source of truth: ci/operator-constants.mjs (usernames are fixture-only).
 export const SEED_USERS = [
-  { id: "900000000000001396", username: "seed-qa-member" },
-  { id: "900000000000001397", username: "seed-qa-moderator" },
+  { id: QA_MEMBER_DISCORD_ID, username: "seed-qa-member" },
+  { id: QA_MODERATOR_DISCORD_ID, username: "seed-qa-moderator" },
   { id: "seed-qa-waitlisted", username: "seed-qa-waitlisted" },
 ];
 const ZONES = [
@@ -25,22 +31,30 @@ const GAMES = [
   "Community chat",
 ];
 const DAY = 86_400_000;
-const hostname = (value) => value.toLowerCase().replace(/\.$/, "");
+const hostname = (value) =>
+  value
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .replace(/^\[|\]$/g, "");
 const list = (value = "") =>
   value
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 
+const USAGE =
+  "Usage: node bin/seed-staging.mjs [--dry-run | --apply] [--help]. Connection settings come from env only.";
+
 export function parseMode(args) {
+  if (args.includes("--help")) return "help";
   if (args.length === 0 || (args.length === 1 && args[0] === "--dry-run")) return "dry-run";
   if (args.length === 1 && args[0] === "--apply") return "apply";
-  throw new Error(
-    "Usage: node bin/seed-staging.mjs [--dry-run | --apply]. Connection settings come from env only.",
-  );
+  throw new Error(USAGE);
 }
 
 export function validateEnvironment(env) {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0")
+    throw new Error(`Refusing seed: ${TLS_OVERRIDE_REFUSAL.replace(/^Refusing:\s*/, "")}`);
   if (env.SEED_CONFIRM !== "staging")
     throw new Error("Refusing seed: SEED_CONFIRM must be staging.");
   if (env.APP_ENV?.toLowerCase() === "production")
@@ -61,8 +75,11 @@ export function validateEnvironment(env) {
     !app.hash &&
     !app.username &&
     !app.password;
+  // Loopback app hosts are single-sourced with the operator floor; the
+  // test-database hostname is never an application host.
   const localApp =
-    ["localhost", "127.0.0.1", "[::1]"].includes(appHost) &&
+    appHost !== "agent-testdb" &&
+    LOCAL_HOSTS.has(appHost) &&
     ["http:", "https:"].includes(app.protocol) &&
     !app.username &&
     !app.password;
@@ -87,9 +104,12 @@ export function validateEnvironment(env) {
     throw new Error("Refusing seed: invalid PostgreSQL credentials encoding.");
   }
   // A driver query parameter must not redirect a checked URL to another host/database.
+  // `require` passes through here so remote URLs fail at the TLS floor below
+  // with a verify-full refusal; local/test URLs keep their existing behavior.
   for (const [key, value] of db.searchParams) {
-    if (key !== "sslmode" || !["require", "verify-full"].includes(value))
-      throw new Error("Refusing seed: unsupported DATABASE_URL query parameter.");
+    if (key === "sslmode" && ["require", "verify-full"].includes(value)) continue;
+    if (key === "sslrootcert" && value === "system") continue;
+    throw new Error("Refusing seed: unsupported DATABASE_URL query parameter.");
   }
   let name;
   try {
@@ -100,10 +120,17 @@ export function validateEnvironment(env) {
   if (!name || name.includes("/")) throw new Error("Refusing seed: invalid database name.");
   const host = hostname(db.hostname);
   const deniedHosts = list(env.SEED_PRODUCTION_DB_HOSTS).map(hostname);
-  const deniedNames = ["prod", "production", ...list(env.SEED_PRODUCTION_DB_NAMES)];
-  if (deniedHosts.includes(host) || /(^|[.-])(prod|production)([.-]|$)/.test(host))
+  const deniedNames = list(env.SEED_PRODUCTION_DB_NAMES);
+  // Production detection is single-sourced with the operator floor (import,
+  // not copy): the shared prod regex/names plus the seed-configured denylists.
+  // Seed keeps outright refusal with no --target escape. The host leg wins, so
+  // probe the host with a safe name to pick the refusal without a local copy.
+  const sharedProd = isProductionDatabaseUrl(env.DATABASE_URL);
+  const sharedProdHost =
+    sharedProd && isProductionDatabaseUrl(`postgres://seed-guard@${db.hostname}/seedguard`);
+  if (deniedHosts.includes(host) || sharedProdHost)
     throw new Error("Refusing seed: production database host.");
-  if (deniedNames.includes(name.toLowerCase()))
+  if (deniedNames.includes(name.toLowerCase()) || sharedProd)
     throw new Error("Refusing seed: production database name.");
   const testDb =
     host === "agent-testdb" &&
@@ -130,6 +157,16 @@ export function validateEnvironment(env) {
       !stagingProvider
     )
       throw new Error("Refusing seed: database is not the allowlisted staging endpoint.");
+    // Operator TLS floor: remote URLs need verify-full (or the sslrootcert
+    // alias); `require` is refused, never silently defaulted. Local/test URLs
+    // return above and keep their existing behavior.
+    const mode = db.searchParams.get("sslmode");
+    const verified =
+      mode === "verify-full" || (mode === null && db.searchParams.has("sslrootcert"));
+    if (!verified)
+      throw new Error(
+        "Refusing seed: remote database must use sslmode=verify-full or sslrootcert=system.",
+      );
   }
   return { databaseUrl: env.DATABASE_URL, host, name };
 }
@@ -173,7 +210,7 @@ export function buildSeed(now = new Date()) {
   const featured = events.slice(0, 3).map((e, i) => ({
     title: `seed-featured-${i + 1}`,
     body: `Synthetic staging calendar: ${e.title}`,
-    url: `https://next.togetherweown.com/e/${e.event_key}`,
+    url: `${STAGING_ORIGIN}/e/${e.event_key}`,
     is_published: true,
     position: i,
     starts_at: new Date(base - DAY),
@@ -273,7 +310,19 @@ export async function applySeed(sql, seed) {
 
 export function createSeedClient(postgres, raw) {
   const url = new URL(raw);
-  return postgres(raw, {
+  const local = LOCAL_HOSTS.has(hostname(url.hostname));
+  const mode = url.searchParams.get("sslmode");
+  const effective = url.searchParams.has("sslrootcert") ? "verify-full" : mode || false;
+  // Operator TLS floor: remote clients require verify-full, like the core.
+  // Local/test clients keep their existing behavior (no TLS by default).
+  if (!local && effective !== "verify-full")
+    throw new Error("Refusing seed: remote client requires verify-full TLS.");
+  // Query parameters (sslrootcert, sslmode) are already folded into `ssl`; a
+  // raw query would reach the server as startup parameters (Postgres 42704).
+  const bare = new URL(url);
+  bare.search = "";
+  bare.hash = "";
+  return postgres(bare.href, {
     max: 1,
     connect_timeout: 10,
     debug: false,
@@ -284,7 +333,7 @@ export function createSeedClient(postgres, raw) {
     port: Number(url.port || 5432),
     // Empty passwords and omitted ports must not fall back to PG* credentials.
     password: () => decodeURIComponent(url.password),
-    ssl: url.searchParams.get("sslmode") || (url.hostname === "agent-testdb" ? false : "require"),
+    ssl: local ? effective || false : "verify-full",
     target_session_attrs: "read-write",
     connection: { timezone: "UTC", search_path: "public", application_name: SEED_OWNER },
   });
@@ -292,6 +341,10 @@ export function createSeedClient(postgres, raw) {
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   const mode = parseMode(args);
+  if (mode === "help") {
+    console.log(USAGE);
+    return;
+  }
   const target = validateEnvironment(env);
   const seed = buildSeed();
   if (mode === "dry-run") {

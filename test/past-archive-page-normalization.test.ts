@@ -125,9 +125,9 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
       expect(html).toContain('data-total-pages="2"');
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
       expect(html).not.toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
-      // Count, page-one rows and the going aggregate; Drizzle elides a zero
-      // offset, so a clamped page sends none.
-      expect(statements).toHaveLength(3);
+      // Count, page-one rows and the two going aggregates (attributable +
+      // occupancy); Drizzle elides a zero offset, so a clamped page sends none.
+      expect(statements).toHaveLength(4);
       for (const statement of statements) expect(statement).not.toContain(" offset ");
     },
   );

@@ -114,7 +114,11 @@ describe("expired admin writes recover instead of 403ing", () => {
     });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
-    expect(res.headers.getSetCookie()).toEqual([]);
+    // The genuine bounce arms its own pending notice for the edit page.
+    const armed = res.headers
+      .getSetCookie()
+      .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+    expect(armed).toHaveLength(1);
   });
 
   it.each([
@@ -273,7 +277,13 @@ describe("admin recovery round trip", () => {
       expect(bounce.headers.get("location")).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
       expect(f.state.writes).toBe(0);
 
-      let jar = mergeCookies("", await f.request(bounce.headers.get("location")!));
+      // The bounce's pending notice rides through the landing untouched.
+      let jar = mergeCookies("", bounce);
+      const landing = await f.request(bounce.headers.get("location")!, {
+        headers: { cookie: jar },
+      });
+      expect(landing.status).toBe(200);
+      jar = mergeCookies(jar, landing);
       const start = await f.request("/auth/discord?next=%2Fadmin%2Fevents%2Fabc", {
         headers: { cookie: jar },
       });
@@ -358,12 +368,17 @@ describe("admin editor session-expiry island", () => {
     expect(notice!.children[0]!.href).toBe(safe);
   });
 
-  it("releases the dirty guard for the recovery trip but keeps prompting otherwise", () => {
+  it("keeps prompting a dirty expired editor on unrelated navigation; only the recovery trip is exempt", () => {
     const guarded = eventEditorBrowser({});
     guarded.values.set("title", "Unsaved headline");
     expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
     guarded.expireSession();
+    // Expiry alone must not disarm the guard: an unrelated departure still prompts.
+    expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+    // The explicit recovery activation releases exactly that one departure.
+    guarded.clickRecovery();
     expect(guarded.navigate("sort").preventDefault).not.toHaveBeenCalled();
+    expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
     const clean = eventEditorBrowser({});
     clean.expireSession();
     expect(clean.navigate("sort").preventDefault).not.toHaveBeenCalled();

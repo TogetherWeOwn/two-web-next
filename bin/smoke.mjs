@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { headerIndexingRules } from "../ci/robots-directives.mjs";
+
+// The fixed missing-event probe key, defined once here: routes below and the
+// smoke fixtures import it by name instead of repeating the literal.
+export const SMOKE_PROBE_KEY = "00000000000000000000000001";
 
 const html = [
   ["/", /The lobby is open/],
@@ -13,9 +18,13 @@ const html = [
   ["/join", /One click with Discord/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
-// and the branded 404 carry their noindex in <meta>, so the deploy smoke
+// and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
-const nonIndexableHtml = new Set(["/events/past", "/__smoke_unknown_route__"]);
+const nonIndexableHtml = new Set([
+  "/events/past",
+  `/e/${SMOKE_PROBE_KEY}`,
+  "/__smoke_unknown_route__",
+]);
 
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
@@ -24,9 +33,45 @@ const routes = [
   { path: "/events.ics", statuses: [200], type: "text/calendar", body: /BEGIN:VCALENDAR/ },
   { path: "/sitemap_index.xml", statuses: [200], type: "application/xml", body: /<urlset\b/ },
   { path: "/robots.txt", statuses: [200], type: "text/plain", body: /User-agent:/i },
+  { path: "/.well-known/security.txt", statuses: [200], type: "text/plain", body: /Contact:/ },
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
+  // Session-free public read API (anonymous by construction in
+  // src/public-data/routes.ts): the collection envelope, one missing
+  // event, the community snapshot, the join handoff, and the discovery
+  // document. No auth, no cookies, no flags; the session-gated /events.json
+  // stays out (staging-only bin/json-smoke.mjs covers it). The single-event
+  // probe uses an all-digit ULID so no secret scanner trips; the probe key
+  // is defined once as SMOKE_PROBE_KEY above and the test fixtures import
+  // it by name. That key is a valid
+  // PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+  // database has it and the real handler answers 404 not_found
+  // (src/public-data/routes.ts): the probe asserts that real contract —
+  // admission, key parsing, cache bypass, the DB lookup and the static
+  // error envelope — instead of a success body no environment serves.
+  { path: "/api/public/events", statuses: [200], type: "application/json" },
+  {
+    path: `/api/public/events/${SMOKE_PROBE_KEY}`,
+    statuses: [404],
+    type: "application/json",
+  },
+  { path: "/api/public/community", statuses: [200], type: "application/json" },
+  { path: "/api/public/join", statuses: [200], type: "application/json" },
+  { path: "/openapi.json", statuses: [200], type: "application/json" },
+  // Single-event HTML detail (src/events/routes-detail.tsx GET /e/:key): the
+  // same fixed probe key exists in no database, so the real handler answers
+  // the branded missing-event page (404 text/html via notFound(), the same
+  // NotFoundPage the unknown-route probe asserts). A published-event 200
+  // would depend on seed data no environment guarantees, so the probe pins
+  // the missing-page contract — HTTP 404 plus the branded marker — with no
+  // live Discord data and no fixture seeding.
+  {
+    path: `/e/${SMOKE_PROBE_KEY}`,
+    statuses: [404],
+    type: "text/html",
+    body: /We cannot find that page[\s\S]*Together We Own/,
+  },
   {
     path: "/__smoke_unknown_route__",
     statuses: [404],
@@ -40,6 +85,32 @@ const routes = [
 // directly instead of through sampled traffic. Format:
 // <worker-name>="<lowercase version uuid>".
 export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a-f-]{36}"$/;
+
+// Queue thresholds shared with src/up-queue.ts (re-exported by src/up.ts).
+// This file runs on plain node with no TS loader, so the values are
+// duplicated here and pinned by the drift guard in test/smoke.test.mjs: a
+// threshold change in src/up-queue.ts fails `npm run test:smoke` at PR time
+// with a drift message; update the values below to match.
+export const SMOKE_QUEUE_WARN_AT = 20;
+export const SMOKE_QUEUE_CRITICAL_AT = 100;
+
+// Pinned review date shared with src/security-txt.ts (re-exported expiry).
+// This file runs on plain node with no TS loader, so the value is duplicated
+// here and pinned by the drift guard in test/smoke.test.mjs: an expiry change
+// in src/security-txt.ts fails `npm run test:smoke` at PR time with a drift
+// message; update the value below to match.
+export const SMOKE_SECURITY_TXT_EXPIRES = "2027-10-01T00:00:00Z";
+
+// Previously reviewed Expires values, oldest last. The rollback smoke runs
+// HEAD's checker against the rolled-back Worker, so after a renewal it would
+// fail the Expires assertion although the rollback worked. Accepting the
+// outgoing reviewed pin keeps that emergency path green; the renewal procedure
+// (docs/runbook.md) moves the outgoing pin here when it bumps the pin above.
+// Empty today: the pin dates to the route's introduction and has never been
+// renewed. Versions predating the route cannot pass this probe; covering those
+// needs the target version's own checker in rollback-production, which is
+// outside this slice (no deployment changes).
+export const SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES = [];
 
 export function assertVersionOverride(value) {
   if (
@@ -56,9 +127,114 @@ export function assertVersionOverride(value) {
   return value;
 }
 
+export function assertFailedBaseline(value) {
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^\d+$/.test(text.trim())) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  return parsed;
+}
+
+// Candidate UUID pinned by a validated version-override header value:
+// worker-name="<lowercase version uuid>". A green HTTP response does not
+// prove which Worker version served it (Cloudflare falls back to normal
+// routing when the override is ignored), so the /up revision.version_id
+// must equal this UUID or the probe fails.
+export function versionIdFromOverride(value) {
+  assertVersionOverride(value);
+  return value.slice(value.indexOf('="') + 2, -1);
+}
+
+// Lowercase Worker Version UUID expected on ordinary (unpinned) routing.
+// Validated before any probe request is sent; malformed values are a usage
+// error, never a serving failure.
+export const EXPECTED_VERSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function assertExpectedVersionId(value) {
+  if (typeof value !== "string" || !EXPECTED_VERSION_ID_PATTERN.test(value)) {
+    throw new Error(
+      'expected-version-id must be a lowercase UUID like "22345678-1234-1234-1234-123456789abc"',
+    );
+  }
+  return value;
+}
+
+// RFC 9116 field parsing for the security.txt probe: "#" lines are comments,
+// field names are case-insensitive, and matching is on whole field values, so
+// a commented-out or foreign line cannot satisfy an assertion by substring.
+export function securityTxtFields(body) {
+  const fields = [];
+  for (const rawLine of String(body).split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    fields.push([line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim()]);
+  }
+  return fields;
+}
+
+// Pure core of the security.txt route assertion, unit-tested in
+// test/smoke.test.mjs across both protocols. Returns [expected, actual] pairs
+// for each failing assertion; smoke() feeds each pair to check().
+export function securityTxtAssertions(
+  body,
+  base,
+  previousExpires = SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES,
+) {
+  const failures = [];
+  const fields = securityTxtFields(body);
+  const expiresValues = fields.filter(([name]) => name === "expires").map(([, value]) => value);
+  if (
+    expiresValues.length !== 1 ||
+    (expiresValues[0] !== SMOKE_SECURITY_TXT_EXPIRES && !previousExpires.includes(expiresValues[0]))
+  ) {
+    failures.push([
+      `security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+      "Expires line missing or stale",
+    ]);
+  }
+  const canonicalValues = fields.filter(([name]) => name === "canonical").map(([, value]) => value);
+  if (base.protocol === "https:") {
+    // Same-origin Canonical, mirroring the robots.txt Sitemap pattern.
+    const canonical = `Canonical: ${base.origin}/.well-known/security.txt`;
+    if (
+      canonicalValues.length !== 1 ||
+      canonicalValues[0] !== `${base.origin}/.well-known/security.txt`
+    ) {
+      failures.push([`security ${canonical}`, "Canonical line missing or foreign"]);
+    }
+  } else {
+    // The producer omits Canonical on http origins (RFC 9116 §2.5.2;
+    // src/security-txt.ts), so an http probe asserts its absence.
+    if (canonicalValues.length !== 0) {
+      failures.push(["security no Canonical on http origin", "unexpected Canonical line"]);
+    }
+  }
+  return failures;
+}
+
+// Optional per-route hook for machine verdicts (--json/--ledger): called once
+// per route with (path, failedAssertionCount) after its PASS/FAIL lines.
+// Omitting it leaves the human output byte-identical to previous versions.
 export async function smoke(
   baseUrl,
-  { timeoutMs = 5_000, log = console.log, allowIndexable = false, versionOverride } = {},
+  {
+    timeoutMs = 5_000,
+    log = console.log,
+    allowIndexable = false,
+    versionOverride,
+    expectedVersionId,
+    failedBaseline,
+    allowMissingBaseline = false,
+    failOnReadyWaitCritical = false,
+    onRoute,
+  } = {},
 ) {
   const base = new URL(baseUrl);
   if (
@@ -74,6 +250,10 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
+  const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
+  const overrideVersionId =
+    versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
   const overrideHeaders =
     versionOverride === undefined
       ? {}
@@ -111,6 +291,19 @@ export async function smoke(
         headers.get("x-content-type-options")?.toLowerCase() === "nosniff",
         "X-Content-Type-Options nosniff",
         headers.get("x-content-type-options") ?? "missing",
+      );
+      // Static security headers (src/headers.ts SECURITY_HEADERS): every
+      // response carries them, not only HTML, so these run unconditionally
+      // like the CSP/nosniff pair above. Values are case-insensitive.
+      check(
+        headers.get("referrer-policy")?.toLowerCase() === "strict-origin-when-cross-origin",
+        "Referrer-Policy strict-origin-when-cross-origin",
+        headers.get("referrer-policy") ?? "missing",
+      );
+      check(
+        headers.get("x-frame-options")?.toLowerCase() === "deny",
+        "X-Frame-Options DENY",
+        headers.get("x-frame-options") ?? "missing",
       );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Indexing posture follows the probed origin (src/headers.ts robotsTagFor):
@@ -160,21 +353,150 @@ export async function smoke(
       if (route.json) {
         try {
           const data = JSON.parse(body);
-          // Healthy, degraded (warn 20 / critical 100, still degraded never
-          // down) and unknown-ledger envelopes all pass; thresholds pinned to
-          // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT.
+          // Healthy, degraded (warn/critical, still degraded never down)
+          // and unknown-ledger envelopes all pass; thresholds pinned to
+          // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT via the exported
+          // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
+          // A stuck staging queue is not promotable: with
+          // failOnReadyWaitCritical (S6, staging deploy only),
+          // ready_wait_severity critical fails closed, as does a blind
+          // queue-observability path (queue.status or ready_wait_severity
+          // unknown). Only healthy / warning severities pass: an absent,
+          // null, wrong-type or unrecognized severity fails closed too,
+          // independently of a healthy/degraded queue.status. The flag is
+          // staging-only by design: the age derives from the shared
+          // queue_jobs table (src/jobs/postgres.ts min(available_at)), not
+          // the Worker version under test, so a production canary probed
+          // with --version-override would report the same critical and a
+          // fail-closed production gate would block its own fix from
+          // shipping (and fail post-rollback smoke after a good rollback).
+          // Without the flag, critical logs WARN and passes; healthy /
+          // warning pass, and unknown / missing severity pass to preserve
+          // the production/rollback posture.
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
             ["healthy", "degraded"].includes(data?.status) &&
             ["healthy", "degraded", "unknown"].includes(data?.queue?.status) &&
-            data?.queue?.warn_at === 20 &&
-            data?.queue?.critical_at === 100;
+            data?.queue?.warn_at === SMOKE_QUEUE_WARN_AT &&
+            data?.queue?.critical_at === SMOKE_QUEUE_CRITICAL_AT;
           check(
             valid,
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
+          // Dead letters are not promotable. Ad-hoc runs without a baseline
+          // fail closed on any positive numeric queue.failed with the count
+          // in the output. Promotion workflows capture the retained-rows
+          // count from /up before the deploy/promote (SMOKE_FAILED_BASELINE)
+          // and fail only on growth past it, so history never blocks a
+          // deploy while new dead letters still do. When the workflows could
+          // not read a baseline (SMOKE_ALLOW_MISSING_BASELINE) the gate is
+          // skipped with a notice instead of falling back to the absolute
+          // gate, so a transient /up blip never reds on retained history.
+          // failed 0/null (an unreadable ledger, or an envelope without the
+          // field) does not fail this gate on its own.
+          const failed = data?.queue?.failed;
+          if (baseline === undefined && allowMissingBaseline) {
+            log("SKIP /up dead-letter gate: no baseline (unreadable /up), not failing on history");
+          } else {
+            const failedIsNew =
+              typeof failed === "number" &&
+              (baseline === undefined ? failed > 0 : failed > baseline);
+            check(
+              !failedIsNew,
+              baseline === undefined
+                ? "queue.failed 0 (no dead letters)"
+                : `queue.failed <= ${baseline} (no new dead letters; baseline ${baseline})`,
+              `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
+            );
+          }
+          // Version attribution (S4/M35): when the probe pins a candidate
+          // version, /up.revision.version_id must equal its UUID. Cloudflare
+          // falls back to normal routing when the override is ignored, so a
+          // healthy old version (or a missing/malformed revision) fails even
+          // though every readiness assertion above would pass. Commit equality
+          // is not identity: only the exact version UUID passes.
+          if (versionOverride !== undefined) {
+            const served =
+              data?.revision !== null &&
+              typeof data?.revision === "object" &&
+              !Array.isArray(data?.revision)
+                ? data.revision.version_id
+                : undefined;
+            check(
+              served === overrideVersionId,
+              `revision.version_id ${overrideVersionId}`,
+              served === undefined
+                ? "missing revision.version_id"
+                : `revision.version_id ${served}`,
+            );
+          }
+          // Ordinary-traffic identity (rollback): when the caller records an
+          // expected version, /up.revision.version_id must equal it even
+          // though no version-override header pins the probe. During
+          // propagation a healthy unwanted version can satisfy every
+          // readiness assertion above without proving the recorded target
+          // serves normal routing, so a missing, malformed or different
+          // identity fails. Commit equality is not identity: only the exact
+          // version UUID passes. Sends no routing header; exact identity
+          // still requires every existing health/security check.
+          if (expectedVersionId !== undefined) {
+            const served =
+              data?.revision !== null &&
+              typeof data?.revision === "object" &&
+              !Array.isArray(data?.revision)
+                ? data.revision.version_id
+                : undefined;
+            check(
+              served === expectedVersionId,
+              `revision.version_id ${expectedVersionId}`,
+              served === undefined
+                ? "missing revision.version_id"
+                : `revision.version_id ${served}`,
+            );
+          }
+          const severity = data?.queue?.ready_wait_severity;
+          const queueStatus = data?.queue?.status;
+          const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
+          const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";
+          if (failOnReadyWaitCritical) {
+            // Fail closed: admit only the documented passing severities
+            // (healthy / warning; src/up-queue.ts ReadyWaitSeverity).
+            // Absent, null, wrong-type and unrecognized values fail
+            // independently of a healthy/degraded queue.status. The
+            // unknown and critical refusals below keep their exact
+            // diagnostics; the unrecognized branch reports only fixed
+            // safe metadata (typeof), never the body value.
+            const unknownReadiness =
+              queueStatus === "unknown" ||
+              severity === "unknown" ||
+              severity === undefined ||
+              severity === null;
+            if (unknownReadiness) {
+              check(
+                false,
+                "known queue.status and ready_wait_severity (not unknown)",
+                `unknown (queue.status: ${queueStatus ?? "missing"}, ready_wait_severity: ${severity ?? "missing"})`,
+              );
+            } else if (severity === "critical") {
+              check(
+                false,
+                "ready_wait_severity not critical",
+                `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+              );
+            } else if (severity !== "healthy" && severity !== "warning") {
+              check(
+                false,
+                "ready_wait_severity healthy or warning",
+                `unrecognized ready_wait_severity (typeof ${typeof severity})`,
+              );
+            }
+          } else if (severity === "critical") {
+            log(
+              `WARN ${route.path}: ready_wait_severity critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+            );
+          }
         } catch {
           check(false, "valid JSON object", "invalid JSON");
         }
@@ -182,8 +504,33 @@ export async function smoke(
       if (route.path === "/robots.txt") {
         // Per-environment robots (W16b TOG-11942): the Sitemap line must name
         // this environment's own origin, never the apex or another env's host.
+        // Comment parity with ci/cutover-check.mjs: "#" starts a comment, so
+        // strip it before the anchored match. A comment-only Sitemap line
+        // cannot pass, while a trailing comment after a real same-origin
+        // line still passes. Horizontal whitespace only: \s would cross
+        // newlines and let a split-line Sitemap directive pass.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
-        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+        const stripped = String(body)
+          .split(/\r?\n/)
+          .map((robotsLine) => robotsLine.split("#", 1)[0])
+          .join("\n");
+        const sitemaps = [...stripped.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
+          (match) => match[1],
+        );
+        const expectedSitemap = `${base.origin}/sitemap_index.xml`;
+        check(
+          sitemaps.length > 0 && sitemaps.every((url) => url === expectedSitemap),
+          `robots ${line}`,
+          "Sitemap line missing or foreign",
+        );
+      }
+      if (route.path === "/.well-known/security.txt") {
+        // RFC 9116 publication (S8): field-parsed assertions shared with the
+        // unit tests (securityTxtAssertions above). Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        for (const [expected, actual] of securityTxtAssertions(body, base)) {
+          check(false, expected, actual);
+        }
       }
       if (route.path === "/sitemap_index.xml") {
         // Same-environment sitemap: every loc stays on the probed origin, and
@@ -192,6 +539,161 @@ export async function smoke(
         check(locs.length > 0, "at least one sitemap <loc>", `${locs.length} <loc> entries`);
         const foreign = locs.filter((loc) => !loc.startsWith(`${base.origin}/`)).length;
         check(foreign === 0, "same-origin sitemap locs", `${foreign} foreign locs`);
+      }
+      if (route.path === "/api/public/events") {
+        // Collection envelope (src/public-data/contracts.ts
+        // PublicApiEventCollectionDto): a data array (empty or populated),
+        // numeric page and limit, and a meta object with numeric
+        // current_page, per_page, total and last_page. An error envelope, a
+        // truncated envelope, wrong-typed paging fields, or a non-JSON body
+        // fails this entry only. Do not print response bodies into deploy
+        // logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const meta =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.meta
+              : undefined;
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.data) &&
+            typeof data.page === "number" &&
+            Number.isFinite(data.page) &&
+            typeof data.limit === "number" &&
+            Number.isFinite(data.limit) &&
+            meta !== null &&
+            typeof meta === "object" &&
+            !Array.isArray(meta) &&
+            typeof meta.current_page === "number" &&
+            Number.isFinite(meta.current_page) &&
+            typeof meta.per_page === "number" &&
+            Number.isFinite(meta.per_page) &&
+            typeof meta.total === "number" &&
+            Number.isFinite(meta.total) &&
+            typeof meta.last_page === "number" &&
+            Number.isFinite(meta.last_page);
+          check(
+            valid,
+            "collection envelope with data array and numeric paging",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path.startsWith("/api/public/events/")) {
+        // Missing-event error envelope (src/public-data/contracts.ts
+        // PublicDataErrorDto): the fixed probe key exists in no database,
+        // so the real handler answers 404 with { error: { code:
+        // "not_found", message } } (src/public-data/routes.ts). The probe
+        // pins the code and a non-empty message, not the message text. A
+        // 200 success body, an empty object, a collection array, a wrong
+        // error code, a missing message, or a non-JSON body fails this
+        // entry only. Do not print response bodies into deploy logs: the
+        // actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const error =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.error
+              : undefined;
+          const valid =
+            error !== null &&
+            typeof error === "object" &&
+            !Array.isArray(error) &&
+            error.code === "not_found" &&
+            typeof error.message === "string" &&
+            error.message.length > 0;
+          check(
+            valid,
+            "missing-event error envelope with not_found code",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/community") {
+        // Community snapshot (src/public-data/contracts.ts
+        // CommunitySnapshotDto): member_count and online_count are null
+        // when the collectors are unavailable (never 0 by default) or
+        // finite numbers, and ranks is an array of key/label/member_count
+        // rows. An error envelope, an empty object, wrong-typed counts,
+        // or a non-JSON body fails this entry only. Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const countsValid = (value) =>
+            typeof value === "number" ? Number.isFinite(value) : value === null;
+          const ranksValid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.ranks) &&
+            data.ranks.every(
+              (rank) =>
+                rank !== null &&
+                typeof rank === "object" &&
+                !Array.isArray(rank) &&
+                typeof rank.key === "string" &&
+                typeof rank.label === "string" &&
+                countsValid(rank.member_count),
+            );
+          const valid =
+            ranksValid && countsValid(data.member_count) && countsValid(data.online_count);
+          check(
+            valid,
+            "community snapshot with nullable counts and ranks array",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/join") {
+        // Join handoff (src/public-data/contracts.ts JoinHandoffDto):
+        // database-free like the /join leaf, a non-empty intro plus the
+        // public HTTPS invite. An error envelope, an empty object,
+        // wrong-typed fields, a non-HTTPS invite, or a non-JSON body
+        // fails this entry only. Do not print response bodies into
+        // deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.intro === "string" &&
+            data.intro.length > 0 &&
+            typeof data.invite_url === "string" &&
+            data.invite_url.startsWith("https://");
+          check(
+            valid,
+            "join handoff with intro and HTTPS invite",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/openapi.json") {
+        // Discovery document: the OpenAPI version marker must be present. A
+        // body without the marker (or not JSON at all) fails this entry only.
+        // Do not print response bodies into deploy logs.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.openapi === "string" &&
+            data.openapi.length > 0;
+          check(valid, "OpenAPI version marker", "valid JSON with unexpected OpenAPI shape");
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
       }
       if (route.body)
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
@@ -227,44 +729,183 @@ export async function smoke(
         error instanceof Error ? error.name : "request error",
       );
     }
+    onRoute?.(route.path, routeFailures);
   }
   log(`smoke: ${routes.length} routes, ${failures} failed assertions`);
   return failures === 0;
 }
 
+// The single flag reference for this tool: --help prints it to stdout,
+// usage errors print it to stderr. Every flag the parser accepts is named.
+export const SMOKE_USAGE =
+  'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline] [--json] [--ledger <path>]';
+
+// Deploy-evidence ledger mirroring bin/json-smoke.mjs writeLedgerFile: one
+// entry per route plus a summary. The --json stdout verdict stays minimal
+// ({ok, routes, failed}); route detail lives here.
+export const SMOKE_LEDGER_VERSION = "smoke/1";
+
+export function writeSmokeLedger(path, origin, entries) {
+  const passed = entries.filter((entry) => entry.status === "pass").length;
+  const failed = entries.filter((entry) => entry.status === "fail").length;
+  const skipped = entries.filter((entry) => entry.status === "skip").length;
+  writeFileSync(
+    path,
+    `${JSON.stringify(
+      {
+        ledger: SMOKE_LEDGER_VERSION,
+        origin,
+        checks: entries,
+        summary: { total: entries.length, passed, failed, skipped },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+// The ledger is written on failure too: a red deploy keeps its evidence.
+// Reporting never decides the exit: a failed evidence write warns and the
+// probe result stands.
+export function tryWriteSmokeLedger(path, origin, entries, { warn = console.error } = {}) {
+  try {
+    writeSmokeLedger(path, origin, entries);
+    return true;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown write error";
+    warn(`smoke: ledger unwritten (${detail}); probe result stands`);
+    return false;
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  const [baseUrl, ...flags] = args;
-  let allowIndexable = false;
-  let versionOverride;
-  let usage = false;
-  for (let i = 0; i < flags.length; i += 1) {
-    if (flags[i] === "--allow-indexable") {
-      allowIndexable = true;
-    } else if (flags[i] === "--version-override") {
-      const value = flags[i + 1];
-      if (value === undefined) {
-        usage = true;
-      } else {
-        versionOverride = value;
-      }
-      i += 1;
-    } else {
-      usage = true;
-    }
-  }
-  if (typeof baseUrl !== "string" || usage) {
-    console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--version-override worker-name="<version-uuid>"]',
-    );
-    process.exitCode = 2;
+  if (args.includes("--help")) {
+    // Safe discovery: usage to stdout, exit 0, zero side effects — no probe,
+    // no ledger write, no env read.
+    console.log(SMOKE_USAGE);
+    process.exitCode = 0;
   } else {
-    try {
-      if (versionOverride !== undefined) assertVersionOverride(versionOverride);
-      process.exitCode = (await smoke(baseUrl, { allowIndexable, versionOverride })) ? 0 : 1;
-    } catch (error) {
-      console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
+    const [baseUrl, ...flags] = args;
+    let allowIndexable = false;
+    let versionOverride;
+    let expectedVersionId;
+    let failedBaseline;
+    let allowMissingBaseline = false;
+    let failOnReadyWaitCritical = false;
+    let jsonVerdict = false;
+    let ledgerPath;
+    let usage = false;
+    for (let i = 0; i < flags.length; i += 1) {
+      if (flags[i] === "--allow-indexable") {
+        allowIndexable = true;
+      } else if (flags[i] === "--allow-missing-baseline") {
+        allowMissingBaseline = true;
+      } else if (flags[i] === "--fail-on-ready-wait-critical") {
+        failOnReadyWaitCritical = true;
+      } else if (flags[i] === "--json") {
+        jsonVerdict = true;
+      } else if (flags[i] === "--ledger") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          ledgerPath = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--version-override") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          versionOverride = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--expected-version-id") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          expectedVersionId = value;
+        }
+        i += 1;
+      } else if (flags[i] === "--failed-baseline") {
+        const value = flags[i + 1];
+        if (value === undefined) {
+          usage = true;
+        } else {
+          failedBaseline = value;
+        }
+        i += 1;
+      } else {
+        usage = true;
+      }
+    }
+    if (typeof baseUrl !== "string" || usage) {
+      console.error(SMOKE_USAGE);
       process.exitCode = 2;
+    } else {
+      try {
+        if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+        if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
+        // Promotion workflows export the pre-deploy/promote retained-rows count
+        // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
+        // explicit --failed-baseline flag wins over the environment. An empty
+        // SMOKE_FAILED_BASELINE means the capture could not read /up and maps
+        // to no baseline. SMOKE_ALLOW_MISSING_BASELINE=1 (or the flag) makes
+        // that no-baseline state skip the dead-letter gate instead of failing
+        // on any positive count; ad-hoc runs without it keep the absolute gate.
+        const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
+        const baseline =
+          baselineRaw === undefined || baselineRaw === ""
+            ? undefined
+            : assertFailedBaseline(baselineRaw);
+        const allowMissingRaw = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+        const allowMissing =
+          allowMissingBaseline ||
+          allowMissingRaw === "1" ||
+          allowMissingRaw?.toLowerCase() === "true";
+        const entries = [];
+        const ok = await smoke(baseUrl, {
+          allowIndexable,
+          versionOverride,
+          expectedVersionId,
+          failedBaseline: baseline,
+          allowMissingBaseline: allowMissing,
+          failOnReadyWaitCritical,
+          onRoute:
+            jsonVerdict || ledgerPath !== undefined
+              ? (path, failedAssertions) => {
+                  entries.push({
+                    check: path,
+                    status: failedAssertions === 0 ? "pass" : "fail",
+                    ...(failedAssertions === 0
+                      ? {}
+                      : {
+                          reason: `${failedAssertions} failed assertion${failedAssertions === 1 ? "" : "s"}`,
+                        }),
+                  });
+                }
+              : undefined,
+        });
+        if (jsonVerdict) {
+          // One machine verdict line after the human output; exit codes unchanged.
+          console.log(
+            JSON.stringify({
+              ok,
+              routes: entries.length,
+              failed: entries.filter((entry) => entry.status === "fail").length,
+            }),
+          );
+        }
+        if (ledgerPath !== undefined) {
+          tryWriteSmokeLedger(ledgerPath, new URL(baseUrl).origin, entries);
+        }
+        process.exitCode = ok ? 0 : 1;
+      } catch (error) {
+        console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
+        process.exitCode = 2;
+      }
     }
   }
 }

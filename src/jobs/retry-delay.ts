@@ -29,3 +29,33 @@ export function admitRetryDelay(candidate: unknown, fallbackSeconds: number): nu
   if (seconds < 1 || seconds > MAX_RETRY_DELAY_SECONDS) return fallbackSeconds;
   return seconds;
 }
+
+/**
+ * One shared `retry-after` response-header parser for every 429 transport:
+ * the Discord OAuth path (`src/discord.ts`, surfaced as
+ * `DiscordError.retryAfter`), the live scheduled-events reader
+ * (`src/events/discord-transients-live.ts`, surfaced as
+ * `ReadFailure.retryAfter`), and the signed bot transport
+ * (`src/bot/client-transport.ts`, surfaced as
+ * `BotFailure.retryAfterSeconds` with `undefined` adapted to `null`).
+ *
+ * Numeric-only delta-seconds — trimmed digits with an optional fraction
+ * (no HTTP dates, signs, exponents, units or markup) — then the same
+ * admission posture as `admitRetryDelay`: fractions round UP so the caller
+ * never retries sooner than the provider asked, values that ceil below 1
+ * second are unusable, and representable-but-absurd values cap at
+ * `MAX_RETRY_DELAY_SECONDS` instead of echoing raw. Anything unusable
+ * yields `undefined` so the caller keeps its existing headerless/fallback
+ * behavior. Callers gate on status themselves: only a 429 carries backoff.
+ */
+export function parseRetryAfterSeconds(header: string | null | undefined): number | undefined {
+  // `Number(null)` and `Number("")` are 0: an absent header must not read as backoff.
+  const raw = header?.trim();
+  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
+  const n = Number(raw);
+  // Only representable numeric delays are valid; no HTTP dates or infinity.
+  if (!Number.isFinite(n) || n * 1000 > 8_000_000_000_000_000) return undefined;
+  const seconds = Math.ceil(n);
+  if (seconds < 1) return undefined;
+  return Math.min(seconds, MAX_RETRY_DELAY_SECONDS);
+}

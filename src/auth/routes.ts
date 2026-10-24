@@ -9,10 +9,13 @@
 // JoinSessionHooks.
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { exceptionClass } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
+import { isDatabaseUnavailable } from "../db/errors";
+import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
-  addGuildMember,
+  addGuildMemberDetailed,
   authorizeUrl,
   exchangeCode,
   failureMeta,
@@ -21,8 +24,15 @@ import {
 } from "../discord";
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
+import {
+  databaseUnavailable,
+  outageRepresentation,
+  prefersHtmlError,
+  varyAccept,
+} from "../error-responses";
 import { safeNext } from "../join/service";
-import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches } from "../qa";
+import { safeRequestId } from "../request-log";
+import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
 import {
   consumeLoginReturn,
   JOURNEY_TTL_SECONDS,
@@ -30,20 +40,33 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, type SessionStore } from "../sessions";
+import { hashToken, isValidSessionToken, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
   throttle,
   throttleGuard,
 } from "../throttle";
-import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../write-recovery";
+import { publicReadGuard } from "../events/routes-shared";
+import {
+  consumeExpiredWrite,
+  flashExpiredWrite,
+  reflashPendingExpiredWrite,
+  recoveryLanding,
+} from "../write-recovery";
 import { SESSION_COOKIE } from "../session-cookie";
 
 export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
 
 type Ctx = Context<{ Bindings: Env }>;
+
+declare module "hono" {
+  interface ContextVariableMap {
+    /** QA fixture admitted by the /auth/qa/:identity gate (stashed pre-throttle). */
+    qaFixture: QaIdentity;
+  }
+}
 
 const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
@@ -63,13 +86,25 @@ export type AuthHooks = {
 };
 
 export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
-  app.get("/auth/status", (c) => authStatus(c, () => hooks.storeFor(c)));
-  app.get("/auth/recover", recoveryLanding);
+  // Session-adjacent reads share the one public-read budget with every other
+  // read: the guard runs before any session, cookie or store work, in the same
+  // in-handler form as the event pages. Admitted responses are unchanged; a
+  // limiter outage degrades to allow inside the guard.
+  app.get("/auth/status", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    return authStatus(c, () => hooks.storeFor(c));
+  });
+  app.get("/auth/recover", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    return recoveryLanding(c);
+  });
 
   // Legacy login links: retain only the existing guarded-next value, never OAuth input.
   app.get("/auth/discord/redirect", (c) => {
     const next = safeNext(c.req.query("next"));
-    c.header("cache-control", "no-store");
+    c.header("cache-control", "no-store, private");
     return c.redirect(
       next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord",
       302,
@@ -85,7 +120,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const state = crypto.randomUUID();
-    const store = await hooks.storeFor(c).catch(() => null);
+    const store = await hooks.storeFor(c).catch((err: unknown) => {
+      // The store never materialized, so no journey exists to sweep: one
+      // class-only warn joins the signin_failed redirect for triage.
+      console.warn("auth login-start store unavailable", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
+      return null;
+    });
     if (!store) return c.redirect("/?n=signin_failed", 302);
     // No-DDL storeFor connects lazily, so an unreachable database surfaces on
     // first use instead of in storeFor: fail the login the same way, never a 500.
@@ -95,7 +138,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       await store.journeys.sweepExpired();
       if (!(await store.journeys.issue(await hashToken(state), "auth")))
         return c.redirect("/?n=signin_failed", 302);
-    } catch {
+    } catch (err) {
+      // A throwing sweep/issue is a store failure, not a refused issue (a
+      // false return stays silent above): one class-only warn for triage.
+      console.warn("auth login-start journey failed", {
+        exception: exceptionClass(err),
+        request_id: safeRequestId(c.get("requestId")),
+      });
       return c.redirect("/?n=signin_failed", 302);
     }
     // Return journey (legacy login_next): a safe ?next= rides the
@@ -115,41 +164,74 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // Clears the state cookie and issues the session on success: every outcome is
     // per-visitor, so a shared cache must never keep one.
     c.header("cache-control", "no-store, private");
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    const oauthError = c.req.query("error");
+    // Inbound length bound: refuse oversized code/state before throttle spend
+    // or any journey consume, exchange, or session work. Refusals keep today's
+    // path, so the error param is peeked first and oversized maps to the
+    // generic failure. Like every other stray below, an oversized hit leaves
+    // the state, next and intended cookies intact for the next real hit.
+    if (!oauthError && hasOversizedOAuthParams(code, state)) {
+      console.warn("discord sign-in failed", {
+        exception: "OversizedOAuthParams",
+        request_id: safeRequestId(c.get("requestId")),
+      });
+      return c.redirect("/?n=signin_failed", 302);
+    }
     const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
-    // Consume the return journey on every terminal path — success, denial and
-    // failure all clear it (legacy forget on login_next + url.intended).
-    const returnTo = await consumeLoginReturn(c);
-    const expiredWrite = await consumeExpiredWrite(c);
-    const code = c.req.query("code");
-    const state = c.req.query("state");
     const store =
       state && typeof expected === "string" && state === expected
         ? await hooks.storeFor(c).catch(() => null)
         : null;
     const admitted =
-      store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
+      store &&
+      (await store.journeys.consume(await hashToken(state!), "auth").catch((err: unknown) => {
+        // A classified store outage is not a stray callback. Preserve the
+        // shared outage boundary and the unclassified-failure fallback.
+        if (isDatabaseUnavailable(err)) throw err;
+        return false;
+      }));
+    if (!admitted || !store) {
+      // Stray hit (bad state, bare hit, OAuth error without a matching
+      // state, replay after the journey was spent): not the real hit, so
+      // consume nothing — the state, next and intended cookies plus the
+      // expired-write notice all survive for the next real hit. The visible
+      // answer stays the generic failure (an unadmitted denial is a failed
+      // sign-in, not the cancelled-consent copy) with zero exchange calls.
+      // The one exception is the denied copy, which keys off presentation
+      // (a matching state cookie with an acquirable store), not journey
+      // admission: a replayed denial keeps the cancelled-consent copy,
+      // while a denial that never presented state keeps the generic one.
+      if (oauthError === "access_denied" && store) return c.redirect("/?n=signin_denied", 302);
+      return c.redirect("/?n=signin_failed", 302);
+    }
+    // Admitted terminal path: consume the return journey exactly once —
+    // success, denial and failure all clear it (legacy forget on login_next
+    // + url.intended). The failed auto-join re-record below re-sets the
+    // intended cookie after this clear.
+    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
+    const returnTo = await consumeLoginReturn(c);
+    const expiredWrite = await consumeExpiredWrite(c);
     // A consent-screen refusal arrives as an `error` param before any code
     // exists. Denied gets its own sentence (the member chose this); any other
     // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
     // error_description is never echoed — we render only our own copy.
     // The denied copy requires a presented state (a matching state cookie
-    // with an acquirable store): a denial that was never admitted — missing
-    // or mismatched state — is a failed sign-in, not a cancelled consent, so
-    // it keeps the generic redirect. A replay still presents matching state,
-    // so it keeps the denied copy; the journey itself is consumed exactly
-    // once above.
-    const oauthError = c.req.query("error");
+    // with an acquirable store): a denial that never presented state is
+    // handled as a stray above with the generic redirect, while a replayed
+    // denial keeps the denied copy in the stray branch for the same reason.
+    // The journey itself is consumed exactly once above.
     if (oauthError) {
       return c.redirect(
-        oauthError === "access_denied" && store ? "/?n=signin_denied" : "/?n=signin_failed",
+        oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
         302,
       );
     }
 
-    if (!admitted || !store || !code) return c.redirect("/?n=signin_failed", 302);
+    if (!code) return c.redirect("/?n=signin_failed", 302);
 
     let accessToken: string;
     let user;
@@ -169,6 +251,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         exception: meta.exception,
         kind: meta.kind,
         status: meta.status,
+        request_id: safeRequestId(c.get("requestId")),
       });
       return c.redirect(
         isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
@@ -177,18 +260,27 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     }
 
     // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
-    // never stored.
-    const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === "";
-    const join = botBlank
-      ? "failed"
-      : await addGuildMember(
+    // never stored. An unset binding reads back as undefined (not ""), so a
+    // missing token takes the same fail-closed invite-fallback path as a blank one.
+    const botBlank = (c.env.DISCORD_BOT_TOKEN ?? "").trim() === "";
+    const add = botBlank
+      ? { result: "failed" as const }
+      : await addGuildMemberDetailed(
           c.env.DISCORD_GUILD_ID,
           user.id,
           accessToken,
           c.env.DISCORD_BOT_TOKEN,
-        ).catch(() => "failed" as const);
-    if (join === "failed")
-      console.warn("guild auto-join failed", { request_id: c.get("requestId") });
+        ).catch(() => ({ result: "transport_failure" as const }));
+    const join = add.result;
+    // A usable 429 backoff rides to the same redirect as a header; every other
+    // path stays headerless even when the provider sent one.
+    const joinRetryAfter = add.result === "rate_limited" ? add.retryAfter : undefined;
+    if (join !== "joined" && join !== "already_member")
+      console.warn("guild auto-join failed", {
+        request_id: c.get("requestId"),
+        guild_id: c.env.DISCORD_GUILD_ID,
+        kind: join,
+      });
 
     // Moderator recompute: roles re-read with the bot token against snowflake IDs
     // (never names). A failed lookup fails closed on the flag, never on sign-in.
@@ -205,17 +297,21 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       userId: user.id,
       username: user.global_name ?? user.username,
       avatar: user.avatar,
-      member: join !== "failed",
+      member: join === "joined" || join === "already_member",
       moderator,
     });
-    await flashExpiredWrite(c, expiredWrite);
     // A failed auto-join keeps the recovery landing even when a destination
     // was remembered: the session is a non-member one, so a member-only gate
-    // (/profile, /members/*) would answer bare 403 and swallow the failure
-    // explanation plus the invite fallback. The intended destination is
-    // re-recorded for the retry instead of being lost. Successful joins keep
-    // the legacy precedence: explicit next, then intended page, then notice.
-    if (join === "failed") {
+    // (/profile, /members/*) would answer 403 and swallow the failure
+    // explanation (the branded page keeps the invite fallback, but not the
+    // reason this join failed). The intended destination is
+    // re-recorded for the retry instead of being lost. The consumed
+    // expired-write notice is re-set as pending (not restored) alongside it:
+    // a pending notice is neither rendered nor consumed by the intermediate
+    // join_failed page, so the retry-to-success callback can still consume
+    // it and flash the resubmit banner. Successful joins keep the legacy
+    // precedence: explicit next, then intended page, then notice.
+    if (join !== "joined" && join !== "already_member") {
       if (returnTo) {
         await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
           path: "/",
@@ -225,22 +321,31 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           maxAge: JOURNEY_TTL_SECONDS,
         });
       }
-      return c.redirect("/?n=join_failed", 302);
+      await reflashPendingExpiredWrite(c, expiredWrite);
+      const failed = c.redirect("/?n=join_failed", 302);
+      if (joinRetryAfter !== undefined) failed.headers.set("Retry-After", String(joinRetryAfter));
+      return failed;
     }
+    await flashExpiredWrite(c, expiredWrite);
     return c.redirect(returnTo ?? `/?n=${join}`, 302);
   });
 
   app.post(
     "/logout",
-    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
+    // Body cap before the throttle: oversized probes 413 with zero
+    // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
+    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer: nothing to revoke — clear cookies and leave without touching
-      // session storage (stays 303 when the store is down; main #239 pins the
-      // authoritative 503 only for a presented token whose revocation fails).
-      if (token) {
+      // No bearer, or a correctly-signed but malformed bearer: nothing to
+      // revoke — clear cookies and leave without touching session storage
+      // (stays 303 when the store is down; main #239 pins the authoritative
+      // 503 only for a well-formed presented token whose revocation fails).
+      // A malformed hash could never match a live row, so revoking it is
+      // useless work that would 503 a sign-out that must always clear.
+      if (isValidSessionToken(token)) {
         try {
           const store = await hooks.storeFor(c);
           await store.revoke(await hashToken(token));
@@ -248,9 +353,23 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
             await store.revokeLineage(statusHash);
           }
-        } catch {
+        } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone.
+          // this browser's cookie as if the server row were gone. The failure
+          // logs bounded facts only — the class, never the message, which can
+          // quote connection details. Explicit JSON callers get the correlated
+          // envelope; absent/wildcard callers keep the legacy text bytes and
+          // browsers the branded page (explicit-HTML opt-in).
+          console.error("logout revocation failed", {
+            exception: exceptionClass(err),
+            request_id: safeRequestId(c.get("requestId")),
+          });
+          c.header("cache-control", "no-store, private");
+          varyAccept(c);
+          if (prefersHtmlError(c)) return databaseUnavailable(c);
+          if (outageRepresentation(c) === "application/json") {
+            return databaseUnavailable(c, true);
+          }
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }
@@ -269,13 +388,28 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
       await next();
     },
-    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
-    requestBodyLimit("action"),
-    async (c) => {
-      const presented = c.req.header(QA_HEADER) ?? "";
-      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
+    // Identity/token gate BEFORE the throttle (S4): unauthenticated probes 404
+    // here without consuming the shared qa-login counter, so a probe flood can
+    // never lock out legitimate QA logins. Same shape as /__probe/alert
+    // (src/alert-probe.ts): only gated requests reach the throttle below. The
+    // gate stashes the admitted fixture for the handler, so the handler issues
+    // the session with no re-check to cover (a handler re-check would be an
+    // uncoverable branch: the gate already admits only valid pairs).
+    async (c, next) => {
       const fixture = qaIdentity(c.req.param("identity") ?? "");
-      if (!ok || !fixture) return c.notFound();
+      if (!fixture) return c.notFound();
+      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, c.req.header(QA_HEADER) ?? "");
+      if (!ok) return c.notFound();
+      c.set("qaFixture", fixture);
+      await next();
+    },
+    // Body cap before the throttle (but after the identity/token gate
+    // above): oversized probes from admitted QA callers 413 with zero
+    // `qa-login`-bucket spend, even on a spent budget.
+    requestBodyLimit("action"),
+    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const fixture = c.get("qaFixture");
       const store = await hooks.storeFor(c);
       await hooks.issueSession(c, store, {
         userId: fixture.discordId,

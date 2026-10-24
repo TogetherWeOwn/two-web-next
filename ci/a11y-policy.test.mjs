@@ -244,7 +244,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
   assert(check, "Required check job must exist");
-  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 40\n/);
+  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 60\n/);
   assert.match(check, /\n      - run: npm ci --no-audit --no-fund\n/);
   const steps = check.split(/\n      - /).slice(1);
   for (const command of [
@@ -261,6 +261,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "node --test ci/production-deploy-gate.test.mjs",
     "npx wrangler deploy --dry-run --outdir dist",
     "npx wrangler deploy --dry-run --env production --outdir dist-production",
+    "npm run test:inventory:selftest && npm run test:inventory -- --strict",
   ]) {
     const step = steps.find(
       (entry) =>

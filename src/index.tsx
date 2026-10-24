@@ -12,12 +12,13 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -51,7 +52,7 @@ import {
   upHttpStatus,
   withHealthReadTimeout,
 } from "./up";
-import { requestLog } from "./request-log";
+import { requestLog, safeRequestId } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
@@ -59,6 +60,7 @@ import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { webmcpPilot } from "./webmcp-pilot";
 
+export { faqLastReviewed } from "./faq-last-reviewed";
 export { rulesLastUpdated } from "./rules-last-updated";
 
 // The session cookie name is defined once in ./session-cookie (re-exported by ./auth/routes, which owns logout).
@@ -211,7 +213,11 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
@@ -219,12 +225,89 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
 // configuration means a no-op upsert so DB-free sign-in tests still work.
 // No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
 // the migrate workflow.
-async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
+function rosterSqlFor(c: Context<{ Bindings: Env }>): {
+  sql: Sql | null;
+  close?: () => Promise<void>;
+} {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
-  if (injected) return injected;
+  if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
-  if (!url) return null;
-  return postgres(url, databaseOptions) as unknown as Sql;
+  if (!url) return { sql: null };
+  // Bare options: this client feeds upsertRosterUser only, whose
+  // transaction already installs a tighter 500 ms SET LOCAL bound.
+  const client = postgres(url, databaseOptions);
+  return {
+    sql: client as unknown as Sql,
+    close: () => client.end({ timeout: 0 }),
+  };
+}
+
+/** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
+ * user run their insert+sweep one at a time, so insert A, insert B, sweep A,
+ * sweep B cannot revoke both fresh tokens. Keys are user ids only — never a
+ * global lock, so different users stay concurrent. Process-wide (not
+ * per-store) so per-request store instances still serialize the same user;
+ * entries are removed when their tail has no waiter. Holds no session data and
+ * no live database connection while waiting (per-request clients connect
+ * lazily on first query, inside the lock body — a queued waiter adds no
+ * socket beyond the client its own request already owns). Single call site
+ * (issueSession below); not reentrant — never wrap it in itself.
+ *
+ * Cross-isolate note: this chain serializes only within one isolate. Two
+ * callbacks for the same user on different isolates still overlap; that case
+ * stays fail-closed (re-login, no leak) until a store-coordinated follow-up
+ * lands behind the same per-user scope. */
+const freshLoginChains = new Map<string, Promise<void>>();
+
+/** Bound on waiting for the previous same-user issuance (see
+ * withFreshLoginUserLock): a holder that never settles its tail — a store
+ * query stalled on transport (the per-request statement timeout cancels
+ * server-side execution, not a dead socket) or a disconnect-cancelled
+ * callback — would otherwise hang that user's future logins on the isolate
+ * indefinitely. Normal insert+sweep work is millisecond-scale and the
+ * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only
+ * fires on a genuinely stuck holder; the bound must stay above the worst
+ * legitimate hold or waiters time out into the very overlap the lock exists
+ * to prevent. A timeout overlap stays fail-closed (re-login, no leak), never
+ * wedged — trading a both-dead window after a >10 s stall for eliminating
+ * the indefinite hang. Exported for tests; production callers use the
+ * default. */
+export const FRESH_LOGIN_LOCK_WAIT_MS = 10_000;
+
+export async function withFreshLoginUserLock<T>(
+  userId: string,
+  fn: () => Promise<T>,
+  waitMs = FRESH_LOGIN_LOCK_WAIT_MS,
+): Promise<T> {
+  const prev = freshLoginChains.get(userId) ?? Promise.resolve();
+  let releaseTail!: () => void;
+  const tail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+  const cur = prev.then(() => tail);
+  freshLoginChains.set(userId, cur);
+  // Bounded wait: skip waiting on a stuck predecessor, never unlink the
+  // chain — later waiters still queue behind this tail, preserving FIFO
+  // order. The timer is cleared on the fast path so settled waits hold no
+  // resources. `prev` never rejects (tails only resolve), so the race cannot
+  // throw here.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      prev,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  try {
+    return await fn();
+  } finally {
+    releaseTail();
+    if (freshLoginChains.get(userId) === cur) freshLoginChains.delete(userId);
+  }
 }
 
 async function issueSession(
@@ -247,12 +330,19 @@ async function issueSession(
   // carries no moderator field — `users` has no such column, and the flag is
   // recomputed from Discord role IDs into the session row only.
   try {
-    await upsertRosterUser(await rosterSqlFor(c), {
-      id: row.userId,
-      username: row.username,
-      avatar: row.avatar,
-      member: row.member,
-    });
+    const roster = rosterSqlFor(c);
+    try {
+      await upsertRosterUser(roster.sql, {
+        id: row.userId,
+        username: row.username,
+        avatar: row.avatar,
+        member: row.member,
+      });
+    } finally {
+      // Dedicated optional client only: never close injected/shared or session
+      // storage. SQL limits cancel backend work; end also settles pending I/O.
+      await roster.close?.();
+    }
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
@@ -268,27 +358,46 @@ async function issueSession(
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  // Fresh authentication revokes the presented pre-login/pre-join token
-  // atomically with the insert (a failed insert leaves the prior session
-  // intact; see store.replace). The token is revoked by hash because it can
-  // belong to a different user (shared terminal).
-  if (typeof prior === "string" && prior.startsWith("two_")) {
-    await store.replace(await hashToken(prior), replacement);
-  } else {
-    await store.create(replacement);
-  }
-  // Session fixation (TOG-12284): additionally revoke every other live
-  // session for this user so only the newest survives. The fresh row already
-  // exists: a sweep failure warns and sign-in still succeeds (fail-open on the
-  // sweep, never a logout-on-login). Token-hash-only.
-  try {
-    await store.revokeUserSessions(row.userId, tokenHash);
-  } catch (err) {
-    console.warn("prior session sweep failed", {
-      request_id: c.get("requestId"),
-      exception: (err as Error)?.constructor?.name ?? "unknown",
-    });
-  }
+  // Malformed pre-login bearers never reach the store: the shared
+  // minted-shape gate rejects them before hashing (malformed prior =>
+  // create, never replace).
+  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
+  // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
+  // second overlapping issuance waits for the first to finish, so the final
+  // state equals a serialized order — newest live, previous revoked. The wait
+  // is bounded: a holder stuck past FRESH_LOGIN_LOCK_WAIT_MS (for example a
+  // disconnect-cancelled callback that never settles its tail) no longer wedges
+  // later logins; the overlap stays fail-closed. A sweep failure still
+  // completes sign-in (fail-open wins over strict newest-wins: both stay live
+  // rather than failing the login). A degenerate empty user id runs unlocked;
+  // Discord ids are never empty.
+  const runLocked =
+    typeof row.userId === "string" && row.userId
+      ? (fn: () => Promise<void>) => withFreshLoginUserLock(row.userId, fn)
+      : (fn: () => Promise<void>) => fn();
+  await runLocked(async () => {
+    // Fresh authentication revokes the presented pre-login/pre-join token
+    // atomically with the insert (a failed insert leaves the prior session
+    // intact; see store.replace). The token is revoked by hash because it can
+    // belong to a different user (shared terminal).
+    if (priorHash) {
+      await store.replace(priorHash, replacement);
+    } else {
+      await store.create(replacement);
+    }
+    // Session fixation: additionally revoke every other live session for this
+    // user so only the newest survives. The fresh row already exists: a sweep
+    // failure warns and sign-in still succeeds (fail-open on the sweep, never
+    // a logout-on-login). Token-hash-only.
+    try {
+      await store.revokeUserSessions(row.userId, tokenHash);
+    } catch (err) {
+      console.warn("prior session sweep failed", {
+        request_id: c.get("requestId"),
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  });
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -304,7 +413,7 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!token || !token.startsWith("two_")) return null;
+  if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
@@ -321,20 +430,44 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest.
+  // the old row in the same statement, keeping the immediate predecessor
+  // valid for 10s (bounded by its own expiry) while its successor stays live.
+  // A replayed cookie past grace finds no row: guest (rotate resolves false
+  // for a revoked/expired/missing source — row ineligible stays guest, never
+  // an outage). Any rotation *error* is an outage, never a silent guest:
+  // classified database failures propagate as themselves, generic errors
+  // normalize to a plain Error so the callers' existing opaque-fallback
+  // boundary (plain Error => outage, named non-outage => 500) renders the
+  // honest outage treatment without leaking driver details or swallowing
+  // genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
-  const rotated = await store
-    .rotate(await hashToken(token), {
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
       tokenHash: await hashToken(replacement),
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    })
-    .catch((err) => {
-      if (isDatabaseUnavailable(err)) throw err;
-      return false;
     });
-  if (!rotated) return null;
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
+  if (!rotated) {
+    // Predecessor grace or a lost rotation race: re-read once. A grace row
+    // (or a concurrent winner's predecessor) authenticates without rotating,
+    // minting or extending — tab B keeps its jar until grace lapses. A
+    // revoked/expired source stays guest.
+    const graceRow = await store.get(await hashToken(token));
+    if (!graceRow) return null;
+    return {
+      id: graceRow.userId,
+      username: graceRow.username,
+      avatar: graceRow.avatar,
+      member: graceRow.member,
+      moderator: graceRow.moderator,
+    };
+  }
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
@@ -382,6 +515,9 @@ app.get("/", async (c) => {
     (session) => ({ session, unavailable: false }),
     (err) => {
       // Keep the opaque session-failure fallback, not named non-outage exceptions.
+      // Rotation errors arrive already normalized (classified outage or plain
+      // Error), so they render sessionUnavailable here; a revoked/expired row
+      // already returned null above (guest) without reaching rotation.
       if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
       // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
       console.warn("Home session unavailable; serving as guest.", {
@@ -414,7 +550,13 @@ app.get("/", async (c) => {
     executionCtx,
     c.get("requestId"),
   );
-  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
+  const featuredPromise = cachedFeatured(
+    c.env,
+    () => dbFor(c),
+    new Date(),
+    executionCtx,
+    c.get("requestId"),
+  );
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
     await Promise.all([
       sessionPromise,
@@ -500,8 +642,10 @@ registerJoinRoutes(
           widgetUrl={props.widgetUrl}
           widgetSnapshot={props.widgetSnapshot}
           next={props.next}
+          source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
+          notice={props.notice}
         />,
       );
     },
@@ -511,7 +655,14 @@ registerJoinRoutes(
     // outage), the private no-store header and the journey-cookie clearing in
     // the callback stay exactly as contracted.
     recovery: (c, props, status = 200) =>
-      renderHtmlOutcome(c, recoveryOutcome(props, honoRecoveryRenderer, { status })),
+      renderHtmlOutcome(
+        c,
+        recoveryOutcome(
+          { ...props, supportReference: safeRequestId(c.get("requestId")) },
+          honoRecoveryRenderer,
+          { status },
+        ),
+      ),
   },
 );
 
@@ -523,7 +674,7 @@ app.get("/.well-known/security.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
+app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
 // existing queue signal. A missing required secret, DB/ledger failure or

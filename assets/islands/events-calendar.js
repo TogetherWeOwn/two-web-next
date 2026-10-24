@@ -1,9 +1,9 @@
 // EventsCalendar: member-driven fragment re-renders (view toggle, month steps,
-// settled search, past drawer, retry, grid day jumps). One fetch in flight —
-// a newer action aborts the older. Skeleton + content swap on member-started
-// actions only; typing in the search box is deliberately untargeted so the
-// input never loses focus. Every control is a real anchor or a GET form, so
-// the whole surface works without this file.
+// month jump, settled search, past drawer, retry, grid day jumps). One fetch
+// in flight — a newer action aborts the older. Skeleton + content swap on
+// member-started actions only; typing in the search box is deliberately
+// untargeted so the input never loses focus. Every control is a real anchor
+// or a GET form, so the whole surface works without this file.
 (function () {
   "use strict";
   var root = document.querySelector('[data-island="events-calendar"]');
@@ -15,6 +15,8 @@
   var feedback = root.querySelector("[data-cal-feedback]");
   var input = root.querySelector('[data-testid="events-search"]');
   var form = input && input.closest("form");
+  var gameField = root.querySelector('select[name="game"]');
+  var gameRevision = 0;
   var LIVE_TESTIDS = [
     "events-view-status",
     "events-search-status",
@@ -24,6 +26,13 @@
   var live = LIVE_TESTIDS.map(function (t) {
     return root.querySelector('[data-testid="' + t + '"]');
   });
+  // Failed-read recovery host (optional: pages and harnesses without it keep
+  // the pre-recovery behavior). Testids mirror EVENTS_READ_*_TESTID in
+  // src/islands/contracts-calendar.ts.
+  var retry = root.querySelector('[data-testid="events-read-retry"]');
+  var clearRead = root.querySelector('[data-testid="events-read-clear"]');
+  var readStatus = root.querySelector('[data-testid="events-read-status"]');
+  var hasRecovery = !!(retry && clearRead && readStatus);
   if (
     zones.length === 0 ||
     !skeleton ||
@@ -51,6 +60,12 @@
   var activeIsSearch = false;
   var debounceTimer = null;
   var inputRevision = 0;
+  // The last failed GET intent (page address plus any card hash), retried
+  // explicitly and dropped by any newer action. A 429 Retry-After cools the
+  // retry down, at most 60 seconds (mirrors EVENTS_READ_RETRY_AFTER_CAP_MS).
+  var RETRY_AFTER_CAP_MS = 60000;
+  var failedIntent = null;
+  var cooldownTimer = null;
   // The deadline needs both timer globals; harnesses with a partial fake
   // clock (setTimeout only) get the pre-deadline behavior.
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
@@ -60,6 +75,120 @@
 
   function pageAddress(url) {
     return url.pathname + url.search;
+  }
+
+  function invalidPage() {
+    throw new Error("Invalid calendar page");
+  }
+
+  var MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
+  // Mirrors calendarMonthLabel in src/islands/contracts-calendar.ts.
+  function monthLabel(month) {
+    var match = /^(\d{1,4})-(\d{1,2})$/.exec(month || "");
+    if (!match) return null;
+    var year = Number(match[1]);
+    var index = Number(match[2]);
+    if (year < 1 || index < 1 || index > 12) return null;
+    return MONTH_NAMES[index - 1] + " " + year;
+  }
+
+  // One line the kept last-good zones can stand beside: what the address
+  // would have shown, never the generic failure copy. The past drawer and the
+  // upcoming-list page are part of the destination: without them a failed
+  // pager turn or past toggle would read as "Couldn't load X. Showing X."
+  function describeDestination(address) {
+    var params = new URL(address, window.location.origin).searchParams;
+    var q = params.get("q") || "";
+    var view = params.get("view") || "list";
+    var place =
+      view === "calendar"
+        ? monthLabel(params.get("month") || "") || "the calendar"
+        : "the events list";
+    var base =
+      q === ""
+        ? place
+        : view === "calendar"
+          ? "results for “" + q + "” in " + place
+          : "results for “" + q + "”";
+    if (params.get("past") === "1") base += " with past events";
+    // Page 1 is the bare address (calendarUrl omits it), so only later list
+    // pages need naming; the grid is month-scoped and never carries a page.
+    var page = params.get("page");
+    if (view !== "calendar" && page !== null && /^\d+$/.test(page) && Number(page) > 1) {
+      base = "page " + Number(page) + " of " + base;
+    }
+    return base;
+  }
+
+  // Strict delay-seconds only: a missing, dated, signed, zero, exponential
+  // or suffixed value leaves the retry immediate instead of parking it, and
+  // an absurd value caps instead of storming (nothing refetches alone).
+  function parseRetryAfterMs(value) {
+    if (typeof value !== "string") return null;
+    if (!/^\d+(\.\d+)?$/.test(value.trim())) return null;
+    var seconds = Math.ceil(Number(value.trim()));
+    if (!isFinite(seconds) || seconds <= 0) return null;
+    return Math.min(seconds * 1000, RETRY_AFTER_CAP_MS);
+  }
+
+  function hideRecovery() {
+    failedIntent = null;
+    if (cooldownTimer !== null) {
+      clearTimeout(cooldownTimer);
+      cooldownTimer = null;
+    }
+    if (!hasRecovery) return;
+    retry.hidden = true;
+    clearRead.hidden = true;
+    retry.disabled = false;
+    readStatus.textContent = "";
+  }
+
+  function startCooldown(ms) {
+    if (!canTimeout) return;
+    retry.disabled = true;
+    if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+    cooldownTimer = setTimeout(function () {
+      cooldownTimer = null;
+      retry.disabled = false;
+    }, ms);
+  }
+
+  function showRecovery(url, cooldownMs) {
+    if (!hasRecovery) return;
+    // Keep the full intent including any card hash: a failed grid day-jump
+    // retries onto the picked card instead of only its list page. The fetch
+    // still sends path+query only; history and jump focus reuse the hash.
+    failedIntent = pageAddress(url) + (url.hash || "");
+    var copy =
+      "Couldn't load " +
+      describeDestination(pageAddress(url)) +
+      ". Showing " +
+      describeDestination(renderedAddress) +
+      ".";
+    if (cooldownMs) {
+      var seconds = Math.round(cooldownMs / 1000);
+      copy += " Retry available in " + seconds + " second" + (seconds === 1 ? "." : "s.");
+    }
+    readStatus.textContent = copy;
+    retry.hidden = false;
+    clearRead.hidden = false;
+    retry.disabled = false;
+    if (cooldownMs) startCooldown(cooldownMs);
   }
 
   function cancelDebounce() {
@@ -137,8 +266,13 @@
   // opts.search: newer input invalidates this request before its debounce fires.
   async function load(url, push, opts) {
     opts = opts || {};
+    // A newer action drops the failed intent before its own read resolves;
+    // a newer failure below replaces it with its own destination.
+    hideRecovery();
     var inputAtStart = input.value;
     var inputRevisionAtStart = inputRevision;
+    var gameAtStart = gameField && gameField.value;
+    var gameRevisionAtStart = gameRevision;
     var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
@@ -159,6 +293,9 @@
     // this request no longer owns the zones: release active first so its late
     // abort/completion stays silent, then restore the last good view.
     var deadlineTimer = null;
+    // 429 backoff belongs to this read only: a missing or hostile
+    // Retry-After leaves the explicit retry immediate.
+    var retryAfterMs = null;
     if (canTimeout) {
       deadlineTimer = setTimeout(function () {
         if (active !== controller) return;
@@ -179,6 +316,7 @@
         if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
           window.location.assign(window.location.href);
         } else {
+          showRecovery(url, null);
           restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
         }
       }, READ_DEADLINE_MS);
@@ -189,7 +327,16 @@
         headers: { accept: "text/html", "x-two-island": "events-calendar" },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error("Calendar unavailable");
+      if (!response.ok) {
+        if (
+          response.status === 429 &&
+          response.headers &&
+          typeof response.headers.get === "function"
+        ) {
+          retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        }
+        throw new Error("Calendar unavailable");
+      }
       var html = await response.text();
       if (active !== controller) return;
       var page = new DOMParser().parseFromString(html, "text/html");
@@ -204,8 +351,36 @@
           return s.getAttribute("data-cal-zone") === null;
         })
       ) {
-        throw new Error("Invalid calendar page");
+        invalidPage();
       }
+      // Admit authentication destinations with the zones, never from a draft.
+      // Require rooted, endpoint-specific links whose sole next is this request;
+      // keep the complete href so attribution parameters survive unchanged.
+      if (!calendarHref(canonical.href)) invalidPage();
+      function authHref(source, endpoint) {
+        var href = source.getAttribute("href");
+        var returns = new URL(href, window.location.href).searchParams.getAll("next");
+        if (
+          !href ||
+          !href.startsWith(endpoint + "?") ||
+          returns.length !== 1 ||
+          returns[0] !== pageAddress(url)
+        )
+          invalidPage();
+        return href;
+      }
+      var authSwaps = [
+        ['header a[data-testid="signin"]', "/auth/discord"],
+        [".schedule-heading a", "/join"],
+      ].map(function (entry) {
+        var target = document.querySelector(entry[0]);
+        var source = page.querySelector(entry[0]);
+        if (!!target !== !!source) invalidPage();
+        return { target: target, href: source && authHref(source, entry[1]) };
+      });
+      Array.from(next.querySelectorAll('a[data-testid="signin"]')).forEach(function (source) {
+        authHref(source, "/join/discord");
+      });
       // Check ownership before replacement detaches the focused control. Newer
       // typing (even back to the same value) or moved focus cancels restoration.
       // Hiding content can itself blur its control to body after a paint.
@@ -222,13 +397,13 @@
       var byName = new Map();
       sources.forEach(function (source) {
         var name = source.getAttribute("data-cal-zone");
-        if (byName.has(name)) throw new Error("Invalid calendar page");
+        if (byName.has(name)) invalidPage();
         byName.set(name, source);
       });
       var swaps = zones.map(function (target) {
         var name = target.getAttribute("data-cal-zone");
         var source = byName.get(name);
-        if (!source) throw new Error("Invalid calendar page");
+        if (!source) invalidPage();
         byName.delete(name);
         return { target: target, source: source };
       });
@@ -242,6 +417,13 @@
         swap.target.replaceChildren.apply(swap.target, swap.children);
         swap.target.hidden = swap.source.hidden;
       });
+      authSwaps.forEach(function (swap) {
+        if (swap.target) swap.target.setAttribute("href", swap.href);
+      });
+      // A swap replaces the month-jump form with a fresh node: rewire it so
+      // the next submit re-enters the fragment flow. A no-op when the zones
+      // carry no form (e.g. the list view) or the node is already wired.
+      wireJumpForm();
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
@@ -249,9 +431,24 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
-      if (opts.syncInput && input.value === inputAtStart) {
+      if (
+        opts.syncInput &&
+        input.value === inputAtStart &&
+        inputRevision === inputRevisionAtStart
+      ) {
         var sourceInput = page.querySelector('[data-testid="events-search"]');
         if (sourceInput) input.value = sourceInput.getAttribute("value") || "";
+      }
+      // The persistent select owns its intent independently of text edits,
+      // including changing away and back while a history read is in flight.
+      if (
+        opts.syncInput &&
+        gameField &&
+        gameField.value === gameAtStart &&
+        gameRevision === gameRevisionAtStart
+      ) {
+        var sourceGame = page.querySelector('select[name="game"]');
+        if (sourceGame) gameField.value = sourceGame.value;
       }
       var canonicalLink = document.querySelector('link[rel="canonical"]');
       var ogUrl = document.querySelector('meta[property="og:url"]');
@@ -277,6 +474,10 @@
       if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
         window.location.assign(window.location.href);
       } else {
+        // Ordinary failure: the last-good zones stay, the missed destination
+        // is named beside them, and the failed GET intent gains an explicit
+        // retry plus a safe return.
+        showRecovery(url, retryAfterMs);
         restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
       }
     } finally {
@@ -294,13 +495,21 @@
   }
 
   // The URL for a settled search: the raw input value (blank means no search),
-  // the drawer stays as it was, and the search forces the list view — so
-  // view/month params are dropped, matching the server's calendarUrl().
+  // the drawer stays as it was, the game facet rides along, and the search
+  // forces the list view — so view/month params are dropped, matching the
+  // server's calendarUrl(). The facet reads the live select (like the input
+  // reads its live value), falling back to the address bar where the form
+  // has no select yet.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
-    if (new URL(window.location.href).searchParams.get("past") === "1") {
+    var current = new URL(window.location.href).searchParams;
+    if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
+    }
+    var game = gameField ? gameField.value : current.get("game");
+    if (game !== null && game !== undefined && String(game).trim() !== "") {
+      url.searchParams.set("game", String(game).trim());
     }
     return url;
   }
@@ -361,11 +570,9 @@
   // reschedules that same timer, so it cannot double-submit).
   var composing = false;
 
-  function scheduleSearch() {
-    inputRevision += 1;
-    cancelDebounce();
-    // Typing supersedes a search immediately, not just when the next fetch starts.
-    // Explicit navigation may still commit while newer text remains in the box.
+  // Text or game intent revokes an ordinary search before its response commits.
+  // Explicit navigation stays alive, preserving each field's independent edits.
+  function cancelSearch() {
     if (active && activeIsSearch) {
       active.abort();
       active = null;
@@ -373,6 +580,15 @@
       // Revoked owners cannot release loading inherited from navigation in finally.
       setLoading(false);
     }
+  }
+
+  function scheduleSearch() {
+    inputRevision += 1;
+    cancelDebounce();
+    // Typing supersedes a failed intent at once, not when the next fetch
+    // starts; composition schedules nothing but still drops the recovery.
+    hideRecovery();
+    cancelSearch();
     if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
@@ -395,12 +611,90 @@
     scheduleSearch();
   });
 
+  if (gameField)
+    gameField.addEventListener("change", function () {
+      gameRevision += 1;
+      cancelSearch();
+    });
+
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     cancelDebounce();
     if (composing || (event && event.isComposing)) return;
     runSearch();
   });
+
+  // Explicit recovery: retry re-issues the last failed GET intent unchanged
+  // (a 429 cooldown holds it briefly); the safe return drops the intent and
+  // restores the committed box without fetching. Plain buttons, so without
+  // this file they stay hidden and inert.
+  if (hasRecovery) {
+    // Hiding the activated recovery button would drop keyboard focus to body
+    // (a hidden element cannot keep it). Park it on the stable heading first;
+    // pointer activation never focuses the button and stays where it was.
+    function parkFocus(control) {
+      if (document.activeElement !== control) return;
+      var target = root.querySelector("#events-heading") || input;
+      if (target) target.focus();
+    }
+    retry.addEventListener("click", function () {
+      if (!failedIntent || retry.disabled) return;
+      parkFocus(retry);
+      var intent = new URL(failedIntent, window.location.origin);
+      load(intent, true, {
+        skeleton: true,
+        syncInput: true,
+        focus: intent.hash || null,
+      });
+    });
+    clearRead.addEventListener("click", function () {
+      if (!failedIntent) return;
+      input.value = new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
+      // The safe return reaches the same steady state as a successful load:
+      // the generic failure line clears instead of prompting a retry of an
+      // intent the member just abandoned.
+      feedback.textContent = overLimit() ? searchTooLong : "";
+      parkFocus(clearRead);
+      hideRecovery();
+    });
+  }
+
+  // The month-jump form is a native GET form (view + game + past ride as hidden
+  // fields), so a jump works without this file. With it, submit reuses the
+  // fragment flow: the chosen month commits exactly like a month step, focus
+  // landing in the new form — or back on the origin submitter on failure.
+  // Typing in the month box schedules nothing: only submit navigates.
+  var JUMP_FORM_SELECTOR = '[data-testid="calendar-month-jump"]';
+  var JUMP_SUBMIT_SELECTOR = '[data-testid="calendar-month-jump-submit"]';
+  var wiredJumpForm = null;
+
+  function jumpUrl(formEl) {
+    var url = new URL("/events", window.location.origin);
+    url.searchParams.set("view", "calendar");
+    ["month", "game", "past"].forEach(function (name) {
+      var field = formEl.querySelector('[name="' + name + '"]');
+      if (field && field.value) url.searchParams.set(name, field.value);
+    });
+    return url;
+  }
+
+  function wireJumpForm() {
+    var formEl = root.querySelector(JUMP_FORM_SELECTOR);
+    if (!formEl || formEl === wiredJumpForm) return;
+    wiredJumpForm = formEl;
+    formEl.addEventListener("submit", function (event) {
+      event.preventDefault();
+      cancelDebounce();
+      var submitter = (event && event.submitter) || formEl.querySelector(JUMP_SUBMIT_SELECTOR);
+      var control = submitter && formEl.contains(document.activeElement) ? submitter : null;
+      load(jumpUrl(formEl), true, {
+        skeleton: true,
+        syncInput: true,
+        control: control,
+        focus: JUMP_SUBMIT_SELECTOR,
+      });
+    });
+  }
 
   window.addEventListener("popstate", function () {
     var url = calendarHref(window.location.href);
@@ -412,4 +706,6 @@
     cancelDebounce();
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });
+
+  wireJumpForm();
 })();
