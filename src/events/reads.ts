@@ -16,6 +16,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { containsControlCharacters } from "../admin/validation-shared";
 import {
   PUBLIC_API_GAME_MAX_LENGTH,
   PUBLIC_DATA_BOUNDS,
@@ -1178,12 +1179,16 @@ export async function listPublicApiEvents(
   db: Db,
   opts: { limit: number; offset: number; game?: string },
 ): Promise<{ rows: PublicApiEvent[]; total: number; page: number }> {
-  // Defense-in-depth: the route already short-circuits blank/oversized games
-  // to the empty page, but a direct caller must never read unfiltered by
-  // passing one. Blank/oversized here answers empty without a database read.
+  // Defense-in-depth: direct callers must not read unfiltered for a blank
+  // game or send a NUL to PostgreSQL. Invalid games answer empty without a
+  // database read, matching the route and the save-side character rule.
   if (opts.game !== undefined) {
     const trimmed = opts.game.trim();
-    if (trimmed === "" || [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH) {
+    if (
+      trimmed === "" ||
+      [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+      containsControlCharacters(trimmed)
+    ) {
       return { rows: [], total: 0, page: 1 };
     }
   }

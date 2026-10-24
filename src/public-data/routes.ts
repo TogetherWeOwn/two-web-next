@@ -9,6 +9,7 @@
 // /events.json contract is untouched.
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
+import { containsControlCharacters } from "../admin/validation-shared";
 import { alertRequestError } from "../alerts";
 import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -308,6 +309,30 @@ async function servePublicJson(
   return c.body(body, 200, headers);
 }
 
+/**
+ * Invalid and unknown games share the canonical empty page, but never occupy
+ * per-input entries in the shared 64-entry cache. Downstream caching and
+ * ETag/304 still apply, unless retirement overtook a database-backed read.
+ */
+async function emptyEventCollection(c: Ctx, expectedGeneration?: number): Promise<Response> {
+  const body = JSON.stringify(
+    serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize),
+  );
+  const etag = await etagFor(body);
+  const cacheControl =
+    expectedGeneration !== undefined && expectedGeneration !== apiPublicCacheGeneration()
+      ? "public, max-age=0, must-revalidate"
+      : PUBLIC_MAX_AGE;
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
+    return c.body(null, 304, { etag, "cache-control": cacheControl });
+  }
+  return c.body(body, 200, {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": cacheControl,
+    etag,
+  });
+}
+
 function parseLimit(raw: string): number {
   return /^[+-]?\d+$/.test(raw)
     ? Math.max(1, Math.min(Number(raw), API_PUBLIC_BOUNDS.maxPageSize))
@@ -342,21 +367,12 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     let gameKey: string | null = null;
     if (rawGame !== undefined) {
       const trimmed = rawGame.trim();
-      if (trimmed === "" || [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH) {
-        const payload = serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize);
-        const emptyBody = JSON.stringify(payload);
-        const etag = await etagFor(emptyBody);
-        // No server-side cache write: blank/oversized inputs are unbounded and
-        // share one empty representation; caching them per-input would flood
-        // the 64-entry map. Downstream may still reuse the 60s max-age.
-        if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
-          return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
-        }
-        return c.body(emptyBody, 200, {
-          "content-type": "application/json; charset=UTF-8",
-          "cache-control": PUBLIC_MAX_AGE,
-          etag,
-        });
+      if (
+        trimmed === "" ||
+        [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+        containsControlCharacters(trimmed)
+      ) {
+        return emptyEventCollection(c);
       }
       game = trimmed;
       // Cache by the lowercased form so `Chess` and `chess` share one entry;
@@ -407,10 +423,8 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       // A filtered total of zero answers the canonical default empty page,
       // ignoring the requested paging: unknown and hostile games degrade to
       // one representation, never a 422 and never unfiltered rows.
-      const payload =
-        game !== null && total === 0
-          ? serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize)
-          : serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
+      if (game !== null && total === 0) return await emptyEventCollection(c, generation);
+      const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
         body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
           ...payload,
