@@ -39,6 +39,21 @@ describe("evaluate", () => {
     ]);
   });
 
+  it("fails capitalized errors in single-quote and template-literal form", () => {
+    // Biome normalizes the single-quote spelling to double quotes but leaves
+    // a template literal untouched, so the checker must catch all three.
+    const sources = {
+      "src/single.ts": "return c.json({ error: 'Unauthorized' }, 401);",
+      "src/template.ts": "return c.json({ error: `Unauthorized` }, 401);",
+      "src/ok.ts": "return c.json({ error: `forbidden` }, 403);",
+    };
+    const r = evaluate({ codes: ["forbidden", "invalid"], doc: DOC, sources });
+    expect(r.failures).toEqual([
+      'non-vocabulary error "Unauthorized" at src/single.ts:1',
+      'non-vocabulary error "Unauthorized" at src/template.ts:1',
+    ]);
+  });
+
   it("fails a non-snake_case code", () => {
     const r = evaluate({ codes: ["Forbidden"], doc: DOC, sources: {} });
     expect(r.failures).toContain("code not snake_case: Forbidden");

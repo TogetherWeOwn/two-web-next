@@ -20,8 +20,11 @@ export function documentedCodes(doc) {
   return [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
 }
 
-// A JSON `error:` literal that is not a lowercase snake_case code.
-const BAD_ERROR = /\berror:\s*"([^"]*[A-Z ][^"]*)"\s*[,}]/g;
+// A JSON `error:` literal that is not a lowercase snake_case code, in any
+// quote form: biome normalizes single quotes and spacing to the canonical
+// double-quoted spelling, but leaves template literals untouched, so match
+// all three delimiters (the capture group is now m[2], m[1] is the quote).
+const BAD_ERROR = /\berror:\s*(["'`])([^"'`]*[A-Z ][^"'`]*)\1\s*[,}]/g;
 
 export function evaluate({ codes, doc, sources }) {
   const failures = [];
@@ -37,7 +40,7 @@ export function evaluate({ codes, doc, sources }) {
   for (const [file, text] of Object.entries(sources)) {
     for (const m of text.matchAll(BAD_ERROR)) {
       const line = text.slice(0, m.index).split("\n").length;
-      failures.push(`non-vocabulary error "${m[1]}" at ${file}:${line}`);
+      failures.push(`non-vocabulary error "${m[2]}" at ${file}:${line}`);
     }
   }
   return { ok: failures.length === 0, codes: [...codes], failures };
