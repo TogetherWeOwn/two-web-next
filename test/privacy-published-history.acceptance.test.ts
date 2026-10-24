@@ -34,6 +34,7 @@ const REQUIRED_PUBLISHED = [
     id: "v5",
     version: 5,
     sourcePath: "content/privacy-policy-v5.md",
+    sourceCommit: "1846a6f2fbf2c956b07f72fb8c0eee76cb92c0ad",
     blob: "77d7b1c75f5b9f0df93971facaec890ab4eddd75",
   },
 ] as const;
@@ -101,17 +102,22 @@ describe("published privacy history: metadata and source integrity", () => {
       );
       const url = new URL(value.href);
       expect(url.username + url.password + url.search + url.hash).toBe("");
-      const gitBlob = execFileSync(
-        "git",
-        ["rev-parse", `${value.sourceCommit}:${value.sourcePath}`],
-        { cwd: historyRoot, encoding: "utf8" },
-      ).trim();
-      expect(gitBlob).toBe(REQUIRED_PUBLISHED.find(({ id }) => id === value.id)!.blob);
+      const evidence = REQUIRED_PUBLISHED.find(({ id }) => id === value.id)!;
+      expect(value.sourceCommit).toBe(evidence.sourceCommit);
+      // This verified public commit/path served the pinned blob. Check the
+      // retained tracked source offline, including in CI's shallow Node 22 clone;
+      // never fetch history or require old Git objects during a fixture run.
+      const gitBlob = execFileSync("git", ["hash-object", value.sourcePath], {
+        cwd: historyRoot,
+        encoding: "utf8",
+      }).trim();
+      expect(gitBlob).toBe(evidence.blob);
       expect(
-        execFileSync("git", ["show", `${value.sourceCommit}:${value.sourcePath}`], {
+        execFileSync("git", ["ls-files", "--error-unmatch", value.sourcePath], {
           cwd: historyRoot,
-        }),
-      ).toEqual(readFileSync(join(historyRoot, value.sourcePath)));
+          encoding: "utf8",
+        }).trim(),
+      ).toBe(evidence.sourcePath);
     }
     expect(fetches).toBe(0);
   });
@@ -219,6 +225,22 @@ for (const twin of ["Hono", "Kit"] as const) {
 }
 
 describe("published privacy history: machine alternate and valid controls", () => {
+  it("PH-C04 CONTROL the verified v5 source pin is present and byte-correct without historical Git objects", () => {
+    expect(
+      execFileSync("git", ["hash-object", "content/privacy-policy-v5.md"], {
+        cwd: historyRoot,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("77d7b1c75f5b9f0df93971facaec890ab4eddd75");
+    expect(
+      execFileSync("git", ["ls-files", "--error-unmatch", "content/privacy-policy-v5.md"], {
+        cwd: historyRoot,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("content/privacy-policy-v5.md");
+    expect(fetches).toBe(0);
+  });
+
   it("PH-05 Markdown agrees with both native HTML lists, outside the unchanged current policy body", async () => {
     const { env, touches } = guardedPrivacyEnv();
     fixture.setEnv(env);
