@@ -1,6 +1,7 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../src/seo";
+import { PREVIOUS_PUBLISHED_POLICIES } from "../../../../src/privacy-history";
 import type { PageProps } from "./$types";
 
 // Markup contract of Privacy (src/screens/privacy.tsx): version strap,
@@ -8,6 +9,9 @@ import type { PageProps } from "./$types";
 // shared, so the existing privacy tests and footer links still apply. The
 // policy HTML is the shared renderPolicyMarkdown output passed in as data —
 // never a copied text — so hostile Markdown stays escaped paragraph text.
+// The history list renders from the same previous-published authority as the
+// Hono twin: native links to immutable public snapshots, never bundled old
+// bodies, and the strap keeps the current policy authoritative.
 let { data }: PageProps = $props();
 const { html, version, appUrl, leafCss } = $derived(data);
 const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
@@ -40,8 +44,20 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
     </nav>
     <section class="content-page" aria-labelledby="privacy-heading">
       <h1 id="privacy-heading">Privacy policy</h1>
-      <p class="strap" data-testid="privacy-version">Version {version}</p>
+      <p class="strap" data-testid="privacy-version">Version {version}, current policy</p>
       <div data-testid="privacy-policy">{@html html}</div>
+      <h2>Previous published versions</h2>
+      <p>
+        Historical snapshots kept in the site&rsquo;s public history. These are not the current
+        policy.
+      </p>
+      <ul>
+        {#each PREVIOUS_PUBLISHED_POLICIES as entry (entry.id)}
+          <li>
+            <a href={entry.href}>Version {entry.version} on GitHub (public repository)</a>
+          </li>
+        {/each}
+      </ul>
       <p>
         <a class="btn" href="/join" data-testid="privacy-join">Join with Discord</a>
         {" "}<a href="/">Back to the homepage</a>

@@ -265,6 +265,12 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
+      - name: Calendar game subscription follows the committed schedule (intercepted fixtures, no network or DB)
+        env:
+          CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
       - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -392,6 +398,9 @@ jobs:
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
+      - name: Kit public payload enumeration and checker selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -400,6 +409,14 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      # The toolchain suite pins the declared browser-helper peer metadata;
+      # this pins the installed half: the root proxy-agent pin must exist and
+      # be the copy that resolves from the helper's context (the LHCI-nested
+      # 6.x copy is outside that path and never satisfies it). Bare
+      # `npm ls --all` exits 0 on an unmet optional peer, so it cannot gate this.
+      - name: Proxy-peer installed resolution (browsers context)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/check-proxy-peer.mjs --selftest && node ci/check-proxy-peer.mjs
       - name: Migration runtime-rights guard
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run migration:rights && npm run migration:rights:selftest
@@ -454,6 +471,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Kit public payload contract (hostile fixtures, no network or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
@@ -874,7 +894,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.

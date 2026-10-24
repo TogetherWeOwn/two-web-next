@@ -1,10 +1,11 @@
 // route-inventory: POST /admin/queue/failed/:id/redispatch
 // route-inventory: POST /admin/events/:key/publish
 // route-inventory: POST /admin/events/:key/cancel
+// route-inventory: POST /admin/events/:key/duplicate
 // route-inventory: POST /admin/events/:key/rsvp-pause
 // route-inventory: POST /admin/events/:key/rsvp-reopen
 // Acceptance: on the moderator lifecycle actions (publish, cancel,
-// rsvp-pause, rsvp-reopen) and the queue redispatch, the body-size cap is
+// duplicate, rsvp-pause, rsvp-reopen) and the queue redispatch, the body-size cap is
 // decided before the shared admin-write throttle. An oversized body from a
 // signed-in moderator is therefore a 413 that spends zero admin-write
 // throttle (the throttle store is not even consulted), performs no event
@@ -19,7 +20,13 @@
 // double; no DATABASE_URL is ever connected, no sockets.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
-import { getEvent, recordAccess, setRsvpOpen, transitionEvent } from "../src/admin/store";
+import {
+  duplicateEvent,
+  getEvent,
+  recordAccess,
+  setRsvpOpen,
+  transitionEvent,
+} from "../src/admin/store";
 import { ValidationError } from "../src/admin/validation";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { events } from "../src/db/admin-schema";
@@ -36,6 +43,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   getEvent: vi.fn(),
   transitionEvent: vi.fn(),
   setRsvpOpen: vi.fn(),
+  duplicateEvent: vi.fn(),
   recordAccess: vi.fn(),
 }));
 
@@ -43,6 +51,9 @@ const pg = vi.hoisted(() => ({ audit: vi.fn(), end: vi.fn(), factory: vi.fn() })
 vi.mock("postgres", () => ({ default: pg.factory }));
 
 const KEY = "01J0000000000000000000ABCD";
+// The duplicate's fresh key: derived, not a new literal, so no new synthetic
+// ULID enters the secret-scan surface.
+const COPY_KEY = `${KEY.slice(0, -1)}E`;
 const MAX = BODY_LIMIT_BYTES.action;
 const ERROR = {
   reason: "payload_too_large",
@@ -79,6 +90,7 @@ const row = {
   createdAt: new Date(0),
   updatedAt: new Date(0),
 } satisfies typeof events.$inferSelect;
+const copyRow = { ...row, eventKey: COPY_KEY, title: `Copy of ${row.title}` };
 
 const replayCandidate: FailedJobReplayCandidate = {
   preview: {
@@ -182,6 +194,7 @@ function expectNoStoreWork() {
   expect(getEvent).not.toHaveBeenCalled();
   expect(transitionEvent).not.toHaveBeenCalled();
   expect(setRsvpOpen).not.toHaveBeenCalled();
+  expect(duplicateEvent).not.toHaveBeenCalled();
   expect(dbTouched).not.toHaveBeenCalled();
 }
 
@@ -194,6 +207,7 @@ function expectAdminWriteBucket(throttle: Throttle) {
 const lifecycle = [
   ["publish", `/events/${KEY}/publish`],
   ["cancel", `/events/${KEY}/cancel`],
+  ["duplicate", `/events/${KEY}/duplicate`],
   ["rsvp-pause", `/events/${KEY}/rsvp-pause`],
   ["rsvp-reopen", `/events/${KEY}/rsvp-reopen`],
 ] as const;
@@ -206,6 +220,7 @@ beforeEach(() => {
   vi.mocked(getEvent).mockResolvedValue(row);
   vi.mocked(transitionEvent).mockResolvedValue({ row, writeBack: null });
   vi.mocked(setRsvpOpen).mockResolvedValue({ row, writeBack: null });
+  vi.mocked(duplicateEvent).mockResolvedValue({ row: copyRow, writeBack: null });
   vi.mocked(recordAccess).mockResolvedValue(true);
   pg.audit.mockResolvedValue([]);
   pg.end.mockResolvedValue(undefined);
@@ -385,7 +400,9 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
       const response = await app.request(path, postAction(env.APP_URL, cookie), bindings);
       expect(response.status).toBe(303);
-      expect(response.headers.get("location")).toBe(`/admin/events/${KEY}`);
+      expect(response.headers.get("location")).toBe(
+        `/admin/events/${action === "duplicate" ? COPY_KEY : KEY}`,
+      );
       expect(throttle.count()).toBe(1);
       expectAdminWriteBucket(throttle);
       if (action === "publish" || action === "cancel") {
@@ -395,6 +412,12 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
           action === "publish" ? "published" : "cancelled",
         ]);
         expect(setRsvpOpen).not.toHaveBeenCalled();
+        expect(duplicateEvent).not.toHaveBeenCalled();
+      } else if (action === "duplicate") {
+        expect(duplicateEvent).toHaveBeenCalledOnce();
+        expect(vi.mocked(duplicateEvent).mock.calls[0]?.slice(2)).toEqual([KEY]);
+        expect(transitionEvent).not.toHaveBeenCalled();
+        expect(setRsvpOpen).not.toHaveBeenCalled();
       } else {
         expect(setRsvpOpen).toHaveBeenCalledOnce();
         expect(vi.mocked(setRsvpOpen).mock.calls[0]?.slice(2)).toEqual([
@@ -402,6 +425,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
           action === "rsvp-reopen",
         ]);
         expect(transitionEvent).not.toHaveBeenCalled();
+        expect(duplicateEvent).not.toHaveBeenCalled();
       }
       expect(dbTouched).not.toHaveBeenCalled();
     },
@@ -435,9 +459,12 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       const failure =
         action === "publish" || action === "cancel"
           ? new ValidationError({ status: "That transition is not allowed from here." })
-          : new ValidationError({ rsvp_open: "RSVPs cannot change for this event." });
+          : action === "duplicate"
+            ? new ValidationError({ join_url: "Enter a valid public HTTP or HTTPS link." })
+            : new ValidationError({ rsvp_open: "RSVPs cannot change for this event." });
       if (action === "publish" || action === "cancel")
         vi.mocked(transitionEvent).mockRejectedValueOnce(failure);
+      else if (action === "duplicate") vi.mocked(duplicateEvent).mockRejectedValueOnce(failure);
       else vi.mocked(setRsvpOpen).mockRejectedValueOnce(failure);
       const throttle = throttleFixture(0);
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
@@ -447,9 +474,15 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       if (action === "publish" || action === "cancel") {
         expect(transitionEvent).toHaveBeenCalledOnce();
         expect(setRsvpOpen).not.toHaveBeenCalled();
+        expect(duplicateEvent).not.toHaveBeenCalled();
+      } else if (action === "duplicate") {
+        expect(duplicateEvent).toHaveBeenCalledOnce();
+        expect(transitionEvent).not.toHaveBeenCalled();
+        expect(setRsvpOpen).not.toHaveBeenCalled();
       } else {
         expect(setRsvpOpen).toHaveBeenCalledOnce();
         expect(transitionEvent).not.toHaveBeenCalled();
+        expect(duplicateEvent).not.toHaveBeenCalled();
       }
       expect(dbTouched).not.toHaveBeenCalled();
     },
