@@ -135,6 +135,24 @@ describe("admin event list query and guard (no DB)", () => {
     },
   );
 
+  it("keeps even an empty exact-series scope on navigation links", () => {
+    // Presence requests the series: "" (empty or overlong input) is a scoped
+    // recovery, and dropping it would silently land on the unscoped inventory.
+    for (const series_event of ["", "x".repeat(300)]) {
+      const scoped = parseEventListQuery({ series_event });
+      expect(scoped.series_event).toBe("");
+      expect(scoped.order).toBe("asc");
+      const url = new URL(eventListUrl(scoped, { page: 2 }), env.APP_URL);
+      expect(url.searchParams.get("series_event")).toBe("");
+      expect(url.searchParams.get("page")).toBe("2");
+    }
+    const unscoped = parseEventListQuery({});
+    expect(unscoped.series_event).toBeNull();
+    expect(new URL(eventListUrl(unscoped), env.APP_URL).searchParams.has("series_event")).toBe(
+      false,
+    );
+  });
+
   it("keeps guests and non-moderators outside the filtered, sorted list", async () => {
     const store = createMemorySessionStore();
     const app = adminApp(store);

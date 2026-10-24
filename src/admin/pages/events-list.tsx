@@ -77,7 +77,7 @@ export const EventsPage: FC<{
       <form method="get" action="/admin/events" class="filters">
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
-        {query.series_event ? (
+        {query.series_event !== null ? (
           <input type="hidden" name="series_event" value={query.series_event} />
         ) : null}
         <div class="field">

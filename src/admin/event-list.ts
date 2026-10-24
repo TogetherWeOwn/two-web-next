@@ -74,8 +74,9 @@ export function eventListUrl(query: EventListQuery, changes: Partial<EventListQu
     if (next[key]) params.set(key, next[key]);
   }
   // Exact-series scope rides every navigation link (sorts, pager, clear)
-  // until the explicit All events escape drops it.
-  if (next.series_event) params.set("series_event", next.series_event);
+  // until the explicit All events escape drops it. Empty string is a scoped
+  // recovery, not an absent scope, so only null omits the parameter.
+  if (next.series_event !== null) params.set("series_event", next.series_event);
   params.set("sort", next.sort);
   params.set("order", next.order);
   if (next.page > 1) params.set("page", String(next.page));
