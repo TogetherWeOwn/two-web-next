@@ -10,12 +10,27 @@ import {
   expectedLhrs,
   main as desktopMain,
 } from "../ci/lighthouse-quality-run.mjs";
+import { navigationMetadata } from "./lighthouse-navigation-fixtures.mjs";
 
 const require = createRequire(import.meta.url);
 const { sampleMatrix, assertionsByUrl } = require("../ci/lighthouse-samples.cjs");
 const url = "https://example.test/events";
 const collect = { url: [url], numberOfRuns: 1 };
-const report = { requestedUrl: url, categories: { performance: { score: 1 } } };
+const report = {
+  ...navigationMetadata("mobile"),
+  requestedUrl: url,
+  finalUrl: url,
+  finalDisplayedUrl: url,
+  categories: { performance: { score: 1 } },
+};
+const freshReport = (overrides = {}) => ({
+  ...navigationMetadata("mobile"),
+  requestedUrl: url,
+  finalUrl: url,
+  finalDisplayedUrl: url,
+  categories: { performance: { score: 1 } },
+  ...overrides,
+});
 
 it.each([
   null,
@@ -29,21 +44,25 @@ it.each([
   expect(sampleMatrix([lhr], collect).complete).toBe(false);
 });
 
-it("keeps final-only legacy reports but never substitutes final for an unplanned request", () => {
+it("requires an explicit requested URL and never substitutes final for an unplanned request", () => {
+  // Final-only reports are not navigation identity: without requestedUrl the
+  // report cannot prove which planned slot it fills.
   expect(
-    sampleMatrix([{ ...report, requestedUrl: undefined, finalUrl: url }], collect).complete,
-  ).toBe(true);
-  expect(
-    sampleMatrix([{ ...report, requestedUrl: `${url}/other`, finalUrl: url }], collect).complete,
+    sampleMatrix([{ ...freshReport(), requestedUrl: undefined, finalUrl: url }], collect).complete,
   ).toBe(false);
+  expect(
+    sampleMatrix([{ ...freshReport(), requestedUrl: `${url}/other`, finalUrl: url }], collect)
+      .complete,
+  ).toBe(false);
+  expect(sampleMatrix([freshReport()], collect).complete).toBe(true);
 });
 
 it("fans a final-URL error out to both its redirecting request and its planned destination", () => {
   const other = `${url}?view=compact`;
   const matrix = sampleMatrix(
     [
-      { ...report, finalUrl: other },
-      { ...report, requestedUrl: other },
+      { ...freshReport(), finalUrl: other, finalDisplayedUrl: other },
+      { ...freshReport(), requestedUrl: other, finalUrl: other, finalDisplayedUrl: other },
     ],
     { ...collect, url: [url, other] },
   );
@@ -99,7 +118,10 @@ it.each([
               writeFileSync(
                 join(root, `lhr-${id++}.json`),
                 JSON.stringify({
+                  ...navigationMetadata("desktop"),
                   requestedUrl,
+                  finalUrl: requestedUrl,
+                  finalDisplayedUrl: requestedUrl,
                   categories: Object.fromEntries(
                     plan.settings.onlyCategories.map((category) => [category, { score: 1 }]),
                   ),
