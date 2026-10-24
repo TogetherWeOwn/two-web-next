@@ -365,7 +365,11 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     expect(rss.headers.get("set-cookie")).toBeNull();
     const rssBody = await rss.text();
     expect(rssBody).toContain("PXB1");
-    for (const k of ["DRF1", "CAN1", "0KD1"]) expect(rssBody).not.toContain(k);
+    // Cancelled rows ship marked, like the ICS collection's STATUS:CANCELLED.
+    expect(rssBody).toContain("CAN1");
+    expect(rssBody).toContain("<title>Cancelled: t-01J0000000000000000000CAN1</title>");
+    expect(rssBody).toContain("<description>This event has been cancelled.</description>");
+    for (const k of ["DRF1", "0KD1"]) expect(rssBody).not.toContain(k);
     const etag = rss.headers.get("etag")!;
     const nm = await req("/events.rss", { headers: { "if-none-match": etag } });
     expect(nm.status).toBe(304);

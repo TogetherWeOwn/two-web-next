@@ -35,7 +35,11 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive and calendar feeds are not game-filtered.
+the separate past-event archive is not game-filtered. The calendar collection
+`/events.ics` accepts the same `?game=` scope: on a filtered schedule the
+Subscribe link, the `.ics` download and the copyable feed URL all carry the
+committed game, and the calendar label names it. Blank means every game; a valid
+unknown game yields an empty scoped calendar, never all games.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
@@ -258,6 +262,7 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
