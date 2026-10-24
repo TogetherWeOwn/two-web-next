@@ -2,6 +2,7 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { safeStoredLink } from "../../featured";
 import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import { adminSaveStatus } from "../save-status";
@@ -41,7 +42,11 @@ export const FeaturedFormPage: FC<{
               Status: <FeaturedStatusBadge row={row} now={now} />
             </p>
             {currentlyVisible(row, now) ? (
-              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
+              <FeaturedContentItem
+                row={safeStoredLink(row)}
+                appUrl={appUrl}
+                imageHosts={imageHosts}
+              />
             ) : (
               <p data-testid="featured-preview-hidden">
                 This slot is not currently visible on the homepage.
@@ -71,7 +76,12 @@ export const FeaturedFormPage: FC<{
               </textarea>
             )}
           </Field>
-          <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
+          <Field
+            name="url"
+            label="Link (full http(s) URL, or empty)"
+            errors={errors}
+            hint="No credentials, backslashes, whitespace or control characters."
+          >
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
           <Field
