@@ -101,18 +101,22 @@ const hostLine = (e: Pick<MdEvent, "organizer_name">): string | null => {
 };
 
 /**
- * Public joining details as inert text: the URL keeps its exact stored
- * destination inside `\[url\](url)`-shaped text whose escaped label brackets
- * stop any CommonMark reader forming a link node (an author URL never becomes
- * a followed link), while agents still read the URL after the stable
- * `/^- Join: /` label. Instructions ride the same line as escaped text.
+ * Public joining details as inert text: the URL rides inside
+ * `\[url\](url)`-shaped text whose escaped label brackets stop any
+ * CommonMark reader forming a link node (an author URL never becomes a
+ * followed link), while agents still read the URL after the stable
+ * `/^- Join: /` label. Both copies run through the inline escaper — the
+ * stored URL is admin-validated, not trusted: a hostile `<tag>` or newline
+ * must stay inert here exactly as in every other author field.
+ * Byte-identical to the stored URL on well-formed links. Instructions ride
+ * the same line as escaped text.
  */
 const joinLine = (e: Pick<MdEvent, "join_url" | "join_instructions">): string | null => {
   const url = nonBlank(e.join_url);
   const text = nonBlank(e.join_instructions);
   if (!url && !text) return null;
   const parts = [
-    url ? `\\[${mdInlineText(url)}\\](${url})` : null,
+    url ? `\\[${mdInlineText(url)}\\](${mdInlineText(url)})` : null,
     text ? mdInlineText(text) : null,
   ].filter((part): part is string => part !== null);
   return `- Join: ${parts.join(" ")}`;
@@ -276,7 +280,10 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 export function mdEvent(appUrl: string, e: MdEvent): string {
   const lineup = lineupLine(e);
   const host = hostLine(e);
-  const join = joinLine(e);
+  // The HTML detail gates "How to join" to published/draft rows; past events
+  // show no joining section, so neither does their Markdown alternate. The
+  // Host line is ungated on both sides.
+  const join = e.status === "past" ? null : joinLine(e);
   return [
     `# ${mdInlineText(e.title)}`,
     "",

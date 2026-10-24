@@ -4,10 +4,12 @@ Event-authored `title`, `game`, `location`, `description`, organizer name and
 join instructions render inside the machine Markdown documents (`/events.md`,
 `/e/:key.md`, the 410 gone body) through one helper, `mdText` in
 `src/ai-friendly/md.ts`. The public join URL rides the detail `- Join:` line
-as inert `\[url\](url)`-shaped text: agents read the exact stored destination,
-while the escaped label brackets stop any CommonMark reader forming a link
-node. The contract: author text can never form an HTML, link (including
-autolink) or image node when a CommonMark reader parses those documents, while
+as inert `\[url\](url)`-shaped text: agents read the stored destination —
+byte-exact on well-formed links, neutralized by the same escaper when hostile
+bytes arrive — while the escaped label brackets stop any CommonMark reader
+forming a link node. The contract: author text can never form an HTML, link
+(including autolink) or image node when a CommonMark reader parses those
+documents, while
 server-owned links, headings, status lines and event-key identities survive
 byte-for-byte on healthy input.
 
@@ -35,7 +37,8 @@ location stay on one heading/row line.
   per row, `- When:`, `- Game:`, `- Where:`, `- Host:`, `- Markdown:` rows.
   No `- Join:` line ever appears in list rows.
 - Detail: `# title`, `- Status:`, `- Starts:`, `- Ends:`, `- Host:`,
-  `- Join:`, `## About this event`, `[Add to calendar (.ics)]` and `[See
+  `- Join:` (published events only, matching the HTML "How to join"
+  section), `## About this event`, `[Add to calendar (.ics)]` and `[See
   upcoming events]` links.
 - Gone: `# title`, the `Cancelled` notice, `[See upcoming events]`.
 - Event keys appear only inside server-built canonical, event, calendar and
@@ -51,6 +54,7 @@ Pure builders, no database or network:
 ```sh
 npx vitest run test/ai-friendly-md-inert-acceptance.test.ts
 npx vitest run test/ai-friendly-md-host-join-acceptance.test.ts
+npx vitest run test/ai-friendly-md-host-join-hardening.test.ts
 ```
 
 `test/ai-friendly-md-inert-acceptance.test.ts` pins 36 cases through a
@@ -66,6 +70,8 @@ cases: `- Host:`/`- Join:` presence and labels on detail and list, blank
 omission, ETag invalidation on host/join edits, envelope/TTL/robots parity,
 no-cookie viewer-independent bytes, the HTML-detail visibility diff, and
 hostile organizer/join text staying inert.
+Builder-owned `test/ai-friendly-md-host-join-hardening.test.ts` adds the
+past-event Join parity and hostile-URL pins.
 
 ## Non-claim
 
