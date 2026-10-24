@@ -1,16 +1,21 @@
 <script lang="ts">
 import { fmt } from "../../../src/events/pages";
 import type { PastArchiveEvent } from "../../../src/kit-past-events";
+import { archiveEventHref, type ArchiveContext } from "../../../src/events/attendee-paths";
 import { goingCountText } from "../../../src/islands/contracts";
-import { searchContext } from "../../../src/events/search-context";
 
 // Same markup contract as Card in src/events/pages.tsx, including the
 // schedule-row chrome and the month/day date badge. The prop is the
 // anonymous-safe slice the past load projects (never the full row), so a
 // new rendered field fails typecheck here instead of silently widening the
-// __data.json payload. During a search the slice carries only the bounded,
-// already-segmented description passage, never the description itself.
-let { e, q = "" }: { e: PastArchiveEvent; q?: string } = $props();
+// __data.json payload. During a search the slice also carries the
+// pre-segmented title spans and the bounded description passage, never
+// the description itself; the segment authority stays server-side.
+let {
+  e,
+  q = "",
+  archive,
+}: { e: PastArchiveEvent; q?: string; archive?: ArchiveContext } = $props();
 
 function dateParts(date: Date, zone: string): { month?: string; day?: string } {
   let parts: Intl.DateTimeFormatPart[];
@@ -42,7 +47,7 @@ const badge = $derived(dateParts(e.startsAt, e.timezone));
   <span class="schedule-date" aria-hidden="true"><span>{badge.month}</span><strong>{badge.day}</strong></span>
   <div class="schedule-info">
     <h2>
-      <a href={`/e/${e.eventKey}`}>{#if q}<span>{#each searchContext(e.title, q) as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
+      <a href={archiveEventHref(e.eventKey, archive)}>{#if q && e.titleSpans}<span>{#each e.titleSpans as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
     </h2>
     <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}<span>{e.timezone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}

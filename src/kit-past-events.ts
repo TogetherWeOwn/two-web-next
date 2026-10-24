@@ -225,10 +225,14 @@ export async function loadPastArchivePage<Row>({
  * `csr=false`, so the past load returns this projection, never the full
  * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
  * for retention), descriptions, organizer names and sync internals never
- * leave the server on this logged-out, indexed page. The one exception is
- * the bounded search passage (`passage`, at most 320 code points, present
- * only for a nonblank search and a non-empty description) that the archive
- * card renders. Mirrors the join
+ * leave the server on this logged-out, indexed page. The exceptions are
+ * query-only, present only for a nonblank search: the bounded description
+ * passage (`passage`, at most 320 code points, only when the row has a
+ * description) and the full-title literal segments (`titleSpans`) that the
+ * archive card renders with semantic marks. Both derive from the already
+ * public title or a bounded excerpt, never member data, and keep the
+ * segment authority server-side so the client ships no search code.
+ * Mirrors the join
  * precedent (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
  */
 export type PastArchiveEvent = Pick<
@@ -243,7 +247,7 @@ export type PastArchiveEvent = Pick<
   | "goingOccupancy"
   | "capacity"
   | "discordEventId"
-> & { passage?: SearchSegment[] };
+> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[] };
 
 /** Project a past-archive row to its anonymous-safe slice. */
 export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
@@ -260,5 +264,6 @@ export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiv
     discordEventId: row.discordEventId,
   };
   if (q && row.description) projected.passage = searchContext(row.description, q, true);
+  if (q) projected.titleSpans = searchContext(row.title, q);
   return projected;
 }

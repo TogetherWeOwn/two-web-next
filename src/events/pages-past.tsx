@@ -19,18 +19,19 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../islands/contracts";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 import { searchContext } from "./search-context";
 
-const Card: FC<{ e: PublicEvent; q: string }> = ({ e, q }) => (
+const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q, archive }) => (
   <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
     <ScheduleDate date={e.startsAt} zone={e.timezone} />
     <div class="schedule-info">
       <h2>
-        <a href={`/e/${e.eventKey}`}>
+        <a href={archiveEventHref(e.eventKey, archive)}>
           {q ? (
             <span>
               {searchContext(e.title, q).map((part) =>
@@ -138,7 +139,7 @@ export const PastEventsPage: FC<{
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} q={q} />
+          <Card e={e} q={q} archive={{ page, q }} />
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
