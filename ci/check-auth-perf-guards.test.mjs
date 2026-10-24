@@ -32,7 +32,11 @@ function runFixture(t, config = {}) {
     timeout: 15_000,
     maxBuffer: 4 * 1024 * 1024,
   });
-  assert.equal(child.status, 0, `fixture driver must finish: ${child.error ?? ""}\n${child.stderr}`);
+  assert.equal(
+    child.status,
+    0,
+    `fixture driver must finish: ${child.error ?? ""}\n${child.stderr}`,
+  );
   const result = JSON.parse(child.stdout);
   assert.equal(result.networkAttempts, 0, "the driver must never fall through to a real fetch");
   assert.deepEqual(result.unhandled, [], "abandoned rejections must be observed");
@@ -46,12 +50,17 @@ function invalidReceipt(result) {
   assert.equal(ledger.version, 2);
   assert.equal(ledger.verdict, "fail");
   assert.equal(ledger.counts.total, 2);
-  assert.deepEqual(ledger.journeys.map((j) => j.id), ids);
+  assert.deepEqual(
+    ledger.journeys.map((j) => j.id),
+    ids,
+  );
   for (const journey of ledger.journeys) {
     assert.equal(journey.status, "failed");
     assert.equal(journey.error?.code, "invalid_configuration");
     assert.equal(journey.error.retryable, false);
-    assert.ok(typeof journey.error.next_action === "string" && journey.error.next_action.length > 0);
+    assert.ok(
+      typeof journey.error.next_action === "string" && journey.error.next_action.length > 0,
+    );
     assert.equal(journey.measurements?.length, 5, "planned slots survive a loaded-budget refusal");
     for (const slot of journey.measurements) {
       assert.equal(slot.state, "unmeasured");
