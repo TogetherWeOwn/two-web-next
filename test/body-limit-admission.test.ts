@@ -274,7 +274,11 @@ describe("global gates reject before admission or buffering", () => {
         if (gate === "missing-origin") request.headers.delete("origin");
         const response = await app.request(request, undefined, env);
         expect(response.status).toBe(gate === "host" ? 404 : 403);
-        if (gate !== "host") expect(await response.json()).toEqual({ error: "cross_origin" });
+        if (gate !== "host")
+          expect(await response.json()).toEqual({
+            error: "cross_origin",
+            request_id: expect.any(String),
+          });
         expect(pull).not.toHaveBeenCalled();
         expect(sql).not.toHaveBeenCalled();
         await request.body?.cancel().catch(() => {});

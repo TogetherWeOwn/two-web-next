@@ -1,7 +1,7 @@
 // Moderator event writes (JSON): POST /events, PATCH /events/:key and the
 // publish/cancel/rsvp-pause/rsvp-reopen transitions. Split out of
 // src/events/routes.tsx; behavior unchanged.
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { dbFor } from "../admin/db";
 import {
@@ -18,6 +18,7 @@ import { exceptionClass } from "../alerts";
 import type { Env, Session } from "../env";
 import { createRateLimitedWarn } from "../log-budget";
 import { safeRequestId } from "../request-log";
+import { jsonRefusal } from "../json-refusal";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { eventKeyAllowed } from "./keys";
@@ -47,9 +48,9 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   if (!session) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
-    return c.json({ error: "unauthenticated" }, 401);
+    return jsonRefusal(c, "unauthenticated", 401);
   }
-  if (!session.moderator) return c.json({ error: "forbidden" }, 403);
+  if (!session.moderator) return jsonRefusal(c, "forbidden", 403);
   return session;
 }
 
@@ -118,16 +119,8 @@ async function eventBody(c: Pick<Ctx, "req" | "get">): Promise<Record<string, un
   throw new UnsupportedMediaTypeError(`Unsupported media type: ${contentType ?? ""}`);
 }
 
-const invalid = (c: Pick<Ctx, "json" | "get">, err: ValidationError) => {
-  // Additive correlation: the validated log id requestLog set on the context,
-  // never raw client header bytes. Omitted when there is no requestLog context
-  // (a bare mount has no log correlation id to carry).
-  const requestId = safeRequestId(c.get("requestId"));
-  return c.json(
-    { error: "invalid", fields: err.fields, ...(requestId ? { request_id: requestId } : {}) },
-    422,
-  );
-};
+const invalid = (c: Context<any>, err: ValidationError) =>
+  jsonRefusal(c, "invalid", 422, { fields: err.fields });
 
 export function registerWriteRoutes(app: App, readFragmentSession: SessionReader): void {
   const moderatorGate: MiddlewareHandler<{
@@ -159,7 +152,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
-          return c.json({ error: "unsupported_media_type" }, 415);
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (err instanceof ValidationError) return invalid(c, err);
         throw err;
       }
@@ -176,7 +169,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       const db = await dbFor(c);
       if (!db) return dbUnavailableJson(c);
       const key = c.req.param("key");
-      if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
       try {
         // PATCH: omitted fields resolve from the locked row inside the same
         // transaction that commits the update (patchEvent), never from a
@@ -209,9 +202,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         return c.json({ data: eventJson(updated!) });
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
-          return c.json({ error: "unsupported_media_type" }, 415);
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (err instanceof ValidationError) return invalid(c, err);
-        if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+        if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
         throw err;
       }
     },
@@ -230,7 +223,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         try {
           const actor = { id: who.id, username: who.username };
           const key = c.req.param("key");
-          if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+          if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
@@ -244,7 +237,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           return c.json({ data: eventJson(await withGoingCount(db, row)) });
         } catch (err) {
           if (err instanceof ValidationError) return invalid(c, err);
-          if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+          if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
           throw err;
         }
       },

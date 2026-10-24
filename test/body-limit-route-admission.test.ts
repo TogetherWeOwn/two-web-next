@@ -227,7 +227,7 @@ describe("profile write admission", () => {
         );
         expect(response.status, `${method} ${path}`).toBe(401);
         expect(await response.json(), `${method} ${path}`).toEqual({
-          error: "Unauthorized",
+          error: "unauthenticated",
           recovery: "/auth/recover?next=%2Fprofile",
         });
         expect(response.headers.get("cache-control") ?? "", `${method} ${path}`).toMatch(/private/);

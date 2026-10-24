@@ -298,6 +298,7 @@ exactly once.
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
+| `src/json-refusal.ts` | http-guard |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |

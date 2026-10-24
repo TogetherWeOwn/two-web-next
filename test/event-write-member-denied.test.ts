@@ -172,7 +172,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           env,
         );
         expect(res.status).toBe(403);
-        expect(await res.json()).toEqual({ error: "forbidden" });
+        expect(await res.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
         expect(await getEvent(fixture.db, row.eventKey)).toEqual(before);
         expect(await fixture.db.select().from(activityLog)).toEqual([]);
         expect(sent).toEqual([]);
@@ -193,7 +193,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         env,
       );
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "forbidden" });
+      expect(await res.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
       expect(sent).toEqual([]);
     });
 

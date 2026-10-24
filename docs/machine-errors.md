@@ -25,3 +25,36 @@ JSON, bad `Accept`/version) keep their standard JSON-RPC codes without
 Code: `src/public-data/contracts.ts`, `src/agent-events/envelope.ts`,
 `src/events/routes-shared.ts`, `src/error-responses.tsx`,
 `src/mcp/routes.ts`. REST schema: `GET /openapi.json`.
+
+## Write refusals
+
+The write surfaces (RSVP, moderator event writes, profile saves,
+expired-write recovery and the same-origin guard) answer every JSON refusal
+with one envelope, built by `jsonRefusal` in `src/json-refusal.ts`:
+
+`{ error, request_id, ...extra }`
+
+`error` is a fixed lowercase code from the table below, never renamed.
+`request_id` is the log correlation id that `requestLog` also puts on
+`x-request-id`; it is omitted only where no `requestLog` context exists (a
+bare mount). Status codes, auth policy and rate limits are unchanged. Browser
+callers keep their HTML and text bodies: only JSON callers (an exact
+`application/json` range in `Accept`, or a JSON-only route) get the envelope.
+
+| Code | Status | Extra keys | Meaning |
+|---|---|---|---|
+| `unauthenticated` | 401 | `recovery` on expired writes | No session, or the session died; follow `recovery` when present. |
+| `forbidden` | 403 | `message` on profile writes | Signed in but not allowed to do this. |
+| `cross_origin` | 403 | none | The write came from an untrusted origin. |
+| `not_found` | 404 | none | No such event or member. |
+| `method_not_allowed` | 405 | none | Wrong verb; the `Allow` header lists the right ones. |
+| `unsupported_media_type` | 415 | none | Send JSON (or a form where the route takes one). |
+| `invalid` | 422 | `fields` | Validation failed; `fields` maps each field name to its message. |
+
+Not part of this envelope: the 429 throttle shape above, `event_not_open`
+RSVP refusals (`reason`), and 503 `db_unavailable`.
+
+Check it offline: `npm run check:refusals` prints one JSON summary line
+(`{"ok":true,"codes":[...],"failures":[]}`) and exits 1 when the code list
+and this table drift, or a capitalized `error` code appears in `src/`. It is
+read-only and needs no network or database.
