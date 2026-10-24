@@ -20,11 +20,15 @@
 // Modes: default prints ::warning:: per orphan and exits 0 (triage runs).
 // --strict exits 1 on any orphan; CI runs --strict (HARD).
 // --root <dir> checks that tree instead of the repo (triage, selftest).
+// --json prints the Playwright summary as one JSON object (checkId, code,
+// orphans, next_action) instead of human lines; the exit code still reflects
+// every gate under --strict.
 // --selftest runs the fixture suite below and exits 0/1 on pass/fail.
 import {
   readdirSync,
   readFileSync,
   existsSync,
+  statSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -234,6 +238,1085 @@ function smokeCommand(root) {
   return pkg.scripts?.["test:smoke"] ?? "";
 }
 
+// Playwright spec reachability (HARD): every e2e/**/*.spec.ts and
+// e2e/**/*.visual.ts must run somewhere in CI. A spec nobody runs claims
+// coverage the suite never verifies — the same failure mode as an orphaned
+// *.test.* file, but through Playwright's testDir/testMatch/testIgnore
+// selection instead of vitest's.
+//
+// Reachability rules (workflows + invoked scripts + configs, all parsed live):
+// - A Playwright config is CI-referenced when a workflow step or a
+//   transitively workflow-invoked package.json script runs `playwright test`
+//   with `--config <path>` naming it, or runs bare `playwright test` (the
+//   default playwright.config.ts). Unused scripts do not count: an
+//   `e2e:kit-parity` script naming the kit-parity config without filters
+//   must not mark it unfiltered when CI only ever runs that config with
+//   explicit file filters — counting unused scripts would hide orphans.
+// - A spec is directly reachable when it sits under a CI-referenced
+//   config's testDir, matches that config's testMatch, matches no
+//   testIgnore, and survives the config's CLI file filters (when every CI
+//   invocation of the config names files, only those files run; a single
+//   unfiltered invocation runs every match). Project-level
+//   testDir/testMatch/testIgnore override the top level for that project; a
+//   file matching any project runs.
+// - A spec is indirectly reachable when a reachable spec imports it,
+//   transitively through relative ESM/CJS static imports (the Kit visual
+//   entrypoint imports its member-board-viewer suite this way). Edges are
+//   side-effect imports, re-exports and require calls: named import
+//   bindings of a spec fail closed, because Playwright's Babel elides
+//   bindings never used as values and the gate cannot verify usage.
+//
+// Config parsing is static and fail-closed, like the vitest exclude parser
+// above: plain string literals (or arrays of them) for
+// testDir/testMatch/testIgnore, single-level `{a,b}` brace expansion,
+// `...base` spreads that resolve to a default-imported relative config, and
+// per-project overrides. RegExp testMatch, unknown `playwright test` flags
+// and non-canonical paths crash loudly instead of reading as reachable;
+// dynamic import specifiers are ignored as edges (a spec reachable only
+// through one is reported as an orphan).
+const PLAYWRIGHT_CHECK_ID = "playwright-spec-reachability";
+const PLAYWRIGHT_CODE_OK = "OK";
+const PLAYWRIGHT_CODE_ORPHAN = "PLAYWRIGHT_SPEC_ORPHAN";
+const PLAYWRIGHT_NEXT_ACTION_OK = "No action needed: every Playwright spec is reachable from CI.";
+const PLAYWRIGHT_NEXT_ACTION_ORPHAN =
+  "Add each orphan to a CI Playwright config's testDir/testMatch (or a workflow file filter), or import it from a reachable spec; see docs/quality-gates.md Test inventory.";
+
+function listPlaywrightSpecs(root) {
+  const out = [];
+  const walk = (d) => {
+    const abs = join(root, d);
+    if (!existsSync(abs)) return;
+    for (const e of readdirSync(abs, { withFileTypes: true })) {
+      const rel = join(d, e.name).replaceAll("\\", "/");
+      if (e.isDirectory()) walk(rel);
+      else if (/\.spec\.ts$/.test(e.name) || /\.visual\.ts$/.test(e.name)) out.push(rel);
+    }
+  };
+  walk("e2e");
+  return [...new Set(out)].sort();
+}
+
+function collectWorkflowFiles(root) {
+  const out = [];
+  const wfDir = join(root, ".github", "workflows");
+  if (!existsSync(wfDir)) return out;
+  for (const e of readdirSync(wfDir)) {
+    if (e.endsWith(".yml") || e.endsWith(".yaml"))
+      out.push({ name: `.github/workflows/${e}`, text: readFileSync(join(wfDir, e), "utf8") });
+  }
+  return out;
+}
+
+// Script names CI actually runs, transitively: a workflow `npm run a` marks
+// `a` invoked, and `a`'s own `npm run b` marks `b`. Anything else in
+// package.json is a local helper, not a CI run. Workflow text is scanned
+// comment-stripped (a commented-out step is not a run). Occurrences are
+// tokenized, not regex-matched, because npm config flags sit around the
+// script name: `npm run b --silent -- x` and `npm run --silent b` both run
+// `b`, and a bare `--` after any flags still forwards file filters. An
+// `npm run` with forwarded `--` arguments fails closed when the target runs
+// `playwright test` (the gate cannot expand forwarded file filters) —
+// whether the forwarding sits in the workflow or in an invoked script body
+// (`"a": "npm run b -- e2e/x.spec.ts"` is the same filter). `--prefix` and
+// `--workspace`/`-w` redirect the run into another package directory, which
+// the gate cannot model, so they fail closed on Playwright targets too
+// (the live `npm run check --prefix web` idiom targets non-Playwright
+// scripts and stays green); `--prefix=.` is the same directory and is
+// allowed. Bundled short flags (`-sw`) and other unmodelable tokens fail
+// closed when the target could run Playwright.
+
+// npm config flags that consume the following token as their value when
+// written without `=` (oracle: npm 11.19.1; `--prefix web b` reads package
+// json from web/, `--omit dev b` and `--include dev b` run b). Names
+// normalize like npm's parser (dash/case-insensitive), so `--log-level`
+// matches `loglevel`. Every other well-formed `--flag` is boolean: npm
+// leaves the next token alone (oracle: `--bogus b` and `--workspaces b`
+// never consume b; the latter fails on workspaces, not on scripts). `-w`
+// is npm's only value-taking short flag.
+const NPM_RUN_VALUE_FLAGS = new Set([
+  "prefix",
+  "workspace",
+  "scriptshell",
+  "loglevel",
+  "cache",
+  "userconfig",
+  "location",
+  "registry",
+  "omit",
+  "include",
+]);
+
+function npmFlagKind(token) {
+  if (token === "--") return "sep";
+  if (token === "-") return "other";
+  if (token.startsWith("--")) {
+    const body = token.slice(2);
+    if (body === "" || body.startsWith("=")) return "unknown";
+    if (body.includes("=")) return "flag";
+    const norm = body.replace(/-/g, "").toLowerCase();
+    return NPM_RUN_VALUE_FLAGS.has(norm) ? "value" : "flag";
+  }
+  if (token.startsWith("-") && token.length > 1) {
+    const body = token.slice(1);
+    if (/^[A-Za-z]$/.test(body)) return body === "w" ? "value" : "flag";
+    return "unknown";
+  }
+  return "other";
+}
+
+// Split shell text into tokens: whitespace-separated, cut at the first
+// unquoted `&`/`|`/`;` (a chained command is a separate occurrence), quotes
+// stripped. An unterminated quote runs to the cut, which can only add a
+// spurious token, never hide a `--` (loud, never a silent miss).
+function splitShellTokens(segment) {
+  const tokens = [];
+  let cur = "";
+  let quote = null;
+  const push = () => {
+    if (cur !== "") tokens.push(cur);
+    cur = "";
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "&" || c === "|" || c === ";") {
+      break;
+    } else if (/\s/.test(c)) {
+      push();
+    } else {
+      cur += c;
+    }
+  }
+  push();
+  return tokens;
+}
+
+// Every `npm run ...` occurrence in shell text: the script name npm resolves
+// (first non-flag token, with value-flags consuming the next), whether a
+// bare `--` after the name forwards arguments, whether `--prefix` or
+// `--workspace`/`-w` redirects into another package directory, and whether
+// an unmodelable token makes the parse uncertain. Backslash-newline
+// continuations join first (the shell removes them), so a `--` on the next
+// line still counts. A bare `--` before the name is skipped: oracle shows
+// `npm run -- b` still runs b.
+function parseNpmRunOccurrences(text) {
+  const out = [];
+  const joined = text.replace(/\\\r?\n/g, " ");
+  for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
+    const lineEnd = joined.indexOf("\n", m.index);
+    const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
+    const tokens = splitShellTokens(segment);
+    const kinds = tokens.map(npmFlagKind);
+    let name = null;
+    let forwarding = false;
+    let redirect = null;
+    let unknown = false;
+    const redirectAt = (idx) => {
+      let flag = tokens[idx];
+      let value;
+      const eq = flag.indexOf("=");
+      if (eq !== -1) {
+        value = flag.slice(eq + 1);
+        flag = flag.slice(0, eq);
+      } else if (idx + 1 < tokens.length && tokens[idx + 1] !== "--") {
+        value = tokens[idx + 1];
+      }
+      let norm = flag.replace(/^-+/, "").replace(/-/g, "").toLowerCase();
+      if (norm === "w") norm = "workspace";
+      if (norm !== "prefix" && norm !== "workspace") return;
+      if (norm === "prefix" && (value === "." || value === "./")) return;
+      redirect = { flag, value };
+    };
+    let i = 0;
+    for (; i < tokens.length; i++) {
+      const kind = kinds[i];
+      if (kind === "other") {
+        name = tokens[i];
+        i++;
+        break;
+      }
+      if (kind === "sep") continue;
+      if (kind === "unknown") {
+        unknown = true;
+        continue;
+      }
+      if (kind === "value") {
+        redirectAt(i);
+        i++;
+      }
+    }
+    for (; i < tokens.length; i++) {
+      if (kinds[i] === "sep") forwarding = true;
+      else if (kinds[i] === "value") {
+        redirectAt(i);
+        i++;
+      }
+    }
+    out.push({ name, forwarding, redirect, unknown });
+  }
+  return out;
+}
+
+function invokedScriptNames(scripts, workflowText) {
+  const invoked = new Set();
+  const queue = [];
+  // Whether a script reaches `playwright test`, directly or through nested
+  // `npm run` occurrences. `unknown` is set when a nested occurrence has an
+  // unmodelable token, so its target is uncertain: callers fail closed on
+  // unknown instead of reading it as clean.
+  const runsPlaywright = (name, seen = new Set()) => {
+    if (seen.has(name)) return { runs: false, unknown: false };
+    seen.add(name);
+    const body = scripts[name] ?? "";
+    if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
+    let unknown = false;
+    for (const occ of parseNpmRunOccurrences(body)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      const nested = runsPlaywright(occ.name, seen);
+      if (nested.runs) return { runs: true, unknown: false };
+      if (occ.unknown || nested.unknown) unknown = true;
+    }
+    return { runs: false, unknown };
+  };
+  const scan = (text, where) => {
+    for (const occ of parseNpmRunOccurrences(text)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      if (occ.unknown) {
+        const target = runsPlaywright(occ.name);
+        if (target.runs || target.unknown) {
+          assert.fail(
+            `CI runs ${where} with an npm flag form this gate cannot parse (npm run ... ${occ.name} ...): bundled short flags and -x=y forms hide the script name; use one flag per token or teach ci/test-inventory.mjs the new form`,
+          );
+        }
+      }
+      if (!invoked.has(occ.name)) {
+        invoked.add(occ.name);
+        queue.push(occ.name);
+      }
+    }
+  };
+  const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
+  scan(stripped, "a workflow step");
+  while (queue.length) {
+    const next = queue.shift();
+    scan(scripts[next] ?? "", `script "${next}"`);
+  }
+  const forwardSources = [
+    [stripped, "a workflow step"],
+    ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`]),
+  ];
+  for (const [text, where] of forwardSources) {
+    for (const occ of parseNpmRunOccurrences(text)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      const target = runsPlaywright(occ.name);
+      if (occ.redirect && (target.runs || target.unknown)) {
+        assert.fail(
+          `CI runs ${where} with ${occ.redirect.flag} (npm run ... ${occ.name}): this gate cannot model cross-directory npm runs; run the package's own script graph or teach ci/test-inventory.mjs the new form`,
+        );
+      }
+      if (occ.forwarding) {
+        if (target.runs) {
+          assert.fail(
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
+          );
+        }
+        if (target.unknown) {
+          assert.fail(
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...) and this gate cannot determine whether it runs playwright (unknown npm flag form in its script graph); disambiguate the flags or teach ci/test-inventory.mjs the new form`,
+          );
+        }
+      }
+    }
+  }
+  return invoked;
+}
+
+function stripYamlComment(line) {
+  if (/^\s*#/.test(line)) return "";
+  const hash = line.indexOf(" #");
+  return hash === -1 ? line : line.slice(0, hash);
+}
+
+// Split an argument string on whitespace, respecting single/double quotes.
+// Anything fancier (escapes, nested quotes) fails closed: the invocation is
+// rewritten as plain tokens or the gate learns the new form.
+function tokenizeArgs(text, source) {
+  const tokens = text.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  return tokens.map((t) => {
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+      const inner = t.slice(1, -1);
+      assert.ok(
+        !inner.includes('"') && !inner.includes("'"),
+        `${source} has a playwright invocation this gate cannot parse (${t})`,
+      );
+      return inner;
+    }
+    assert.ok(
+      !t.includes('"') && !t.includes("'"),
+      `${source} has a playwright invocation this gate cannot parse (${t})`,
+    );
+    return t;
+  });
+}
+
+function normalizeConfigRef(ref, source) {
+  let p = ref;
+  if (p.startsWith("./")) p = p.slice(2);
+  assert.ok(
+    p.length > 0 && !p.startsWith("/") && !p.split("/").includes(".."),
+    `${source} names a playwright config outside the repo (${ref})`,
+  );
+  return p;
+}
+
+function normalizeFilterRef(ref, source) {
+  assert.ok(!ref.includes(":"), `${source} uses a :line filter this gate cannot expand (${ref})`);
+  assert.ok(!ref.includes("*"), `${source} uses a glob filter this gate cannot expand (${ref})`);
+  let p = ref;
+  if (p.startsWith("./")) p = p.slice(2);
+  assert.ok(
+    p.length > 0 && !p.startsWith("/") && !p.split("/").includes(".."),
+    `${source} names a playwright filter outside the repo (${ref})`,
+  );
+  return p;
+}
+
+// Every `playwright test` CI runs, with its config and file filters. Returns
+// Map configRel -> { unfiltered: boolean, files: Set<string> (exact files),
+// dirs: Set<string> (dir prefixes with trailing slash) }. A config with any
+// unfiltered invocation runs every match; otherwise only the union runs.
+function parsePlaywrightInvocations(root, workflowFiles, scripts, invoked) {
+  const found = new Map();
+  const record = (config, files, source) => {
+    const entry = found.get(config) ?? { unfiltered: false, files: new Set(), dirs: new Set() };
+    if (files === null) entry.unfiltered = true;
+    else {
+      for (const f of files) {
+        const abs = join(root, f);
+        assert.ok(existsSync(abs), `${source} filters a missing playwright path (${f})`);
+        if (statSync(abs).isDirectory()) entry.dirs.add(f.endsWith("/") ? f : `${f}/`);
+        else entry.files.add(f);
+      }
+    }
+    found.set(config, entry);
+  };
+  const parseTokens = (tokens, source) => {
+    let config = null;
+    const positionals = [];
+    for (let i = 0; i < tokens.length; i += 1) {
+      const t = tokens[i];
+      if (t === "--config") {
+        assert.ok(i + 1 < tokens.length, `${source} has a --config with no value`);
+        assert.ok(config === null, `${source} names two playwright configs`);
+        config = normalizeConfigRef(tokens[i + 1], source);
+        i += 1;
+      } else if (t.startsWith("-")) {
+        assert.fail(
+          `${source} passes a playwright flag this gate cannot expand (${t}): use --config and file paths only, or teach ci/test-inventory.mjs the new flag`,
+        );
+      } else {
+        positionals.push(normalizeFilterRef(t, source));
+      }
+    }
+    if (config === null) config = "playwright.config.ts";
+    assert.ok(
+      existsSync(join(root, config)),
+      `${source} references a missing playwright config (${config})`,
+    );
+    record(config, positionals.length ? positionals : null, source);
+  };
+  // Workflow steps: `playwright test` plus YAML `>-` continuation lines (the
+  // kit-parity file filters live on the next line). Continuation stops at the
+  // next step, key, or blank line so a following `run:` never bleeds in.
+  for (const { name, text } of workflowFiles) {
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = stripYamlComment(lines[i]);
+      const at = line.search(/\bplaywright\s+test\b/);
+      if (at === -1) continue;
+      let rest = line.slice(at).replace(/^\bplaywright\s+test\b/, "");
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const next = stripYamlComment(lines[j]);
+        if (!next.trim() || /^\s*(-\s|[A-Za-z0-9_-]+\s*:)/.test(next)) break;
+        rest += ` ${next.trim()}`;
+      }
+      parseTokens(tokenizeArgs(rest, name), name);
+    }
+  }
+  // Invoked scripts only (see invokedScriptNames): each `playwright test`
+  // runs to the next shell chain separator, never into a following command.
+  for (const name of invoked) {
+    const body = scripts[name] ?? "";
+    for (const m of body.matchAll(/\bplaywright\s+test\b/g)) {
+      const tail = body.slice(m.index + m[0].length);
+      const end = tail.search(/&&|\|\||;/);
+      parseTokens(
+        tokenizeArgs(end === -1 ? tail : tail.slice(0, end), `script ${name}`),
+        `script ${name}`,
+      );
+    }
+  }
+  return found;
+}
+
+// Offset-aligned views like excludeArrayBody: comments become whitespace in
+// both, quoted strings become whitespace only in `code`. Structure discovery
+// uses code; literal values are read from clean.
+function splitCodeViews(text, label) {
+  let clean = "";
+  let code = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (quote) {
+      clean += c;
+      code += " ";
+      if (c === "\\" && i + 1 < text.length) {
+        clean += text[++i];
+        code += " ";
+      } else if (c === quote) {
+        quote = null;
+      }
+    } else if (c === "/" && (text[i + 1] === "/" || text[i + 1] === "*")) {
+      let end;
+      if (text[i + 1] === "/") {
+        end = i + 2;
+        while (end < text.length && ![10, 13, 0x2028, 0x2029].includes(text.charCodeAt(end)))
+          end += 1;
+      } else {
+        const close = text.indexOf("*/", i + 2);
+        assert.ok(close !== -1, `${label} has an unclosed comment`);
+        end = close + 2;
+      }
+      const blank = " ".repeat(end - i);
+      clean += blank;
+      code += blank;
+      i = end - 1;
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      clean += c;
+      code += " ";
+    } else {
+      clean += c;
+      code += c;
+    }
+  }
+  assert.ok(quote === null, `${label} has an unclosed string`);
+  return { clean, code };
+}
+
+function matchBracket(code, open, label) {
+  const pairs = { "{": "}", "[": "]", "(": ")" };
+  const close = pairs[code[open]];
+  assert.ok(close, `${label} expected an opening bracket`);
+  let depth = 1;
+  for (let i = open + 1; i < code.length; i += 1) {
+    if (code[i] === code[open]) depth += 1;
+    else if (code[i] === close) depth -= 1;
+    if (depth === 0) return i;
+  }
+  assert.fail(`${label} never closes`);
+}
+
+function findDefineConfigBody(text, configPath) {
+  const { clean, code } = splitCodeViews(text, configPath);
+  const calls = [...code.matchAll(/defineConfig\s*\(\s*\{/g)];
+  assert.equal(calls.length, 1, `${configPath} must call defineConfig once with an object literal`);
+  const open = calls[0].index + calls[0][0].length - 1;
+  const end = matchBracket(code, open, `${configPath} defineConfig object`);
+  return { clean: clean.slice(open + 1, end), code: code.slice(open + 1, end) };
+}
+
+// Split an object/array body on top-level commas (depth counts `{`/`[` in
+// the string-blind view, so commas in strings never split).
+function splitTopLevel(bodyCode) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < bodyCode.length; i += 1) {
+    const c = bodyCode[i];
+    if (c === "{" || c === "[") depth += 1;
+    else if (c === "}" || c === "]") depth -= 1;
+    else if (c === "," && depth === 0) {
+      parts.push({ start, end: i });
+      start = i + 1;
+    }
+  }
+  parts.push({ start, end: bodyCode.length });
+  return parts;
+}
+
+function parsePlainString(valueClean, configPath, what) {
+  const m = valueClean.trim().match(/^(['"`])([^\\\r\n]*?)\1$/);
+  assert.ok(m, `${configPath} has a ${what} this gate cannot parse: use a plain string literal`);
+  assert.ok(
+    !m[1].includes("`") || !m[2].includes("${"),
+    `${configPath} has a ${what} this gate cannot parse: no template interpolation`,
+  );
+  return m[2];
+}
+
+function parseStringArray(valueClean, valueCode, configPath, what) {
+  const trimmedCode = valueCode.trim();
+  const open = valueCode.indexOf("[");
+  assert.ok(
+    open !== -1 && trimmedCode.startsWith("["),
+    `${configPath} has a ${what} this gate cannot parse: use a string or an array of strings`,
+  );
+  const end = matchBracket(valueCode, open, `${configPath} ${what}`);
+  assert.ok(
+    valueCode.slice(end + 1).trim() === "",
+    `${configPath} has a ${what} this gate cannot parse: trailing content after the array`,
+  );
+  const innerClean = valueClean.slice(open + 1, end);
+  const innerCode = valueCode.slice(open + 1, end);
+  const out = [];
+  for (const { start, end: e } of splitTopLevel(innerCode)) {
+    const entry = innerClean.slice(start, e).trim();
+    if (!entry) continue; // trailing comma
+    out.push(parsePlainString(entry, configPath, what));
+  }
+  return out;
+}
+
+function parseTestMatchValue(valueClean, valueCode, configPath, what) {
+  if (valueCode.trim().startsWith("["))
+    return parseStringArray(valueClean, valueCode, configPath, what);
+  return [parsePlainString(valueClean, configPath, what)];
+}
+
+function parseConfigImports(text, configPath) {
+  const { clean } = splitCodeViews(text, configPath);
+  const imports = new Map();
+  for (const m of clean.matchAll(
+    /import\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*(['"])([^'"]+)\2/g,
+  )) {
+    imports.set(m[1], m[3]);
+  }
+  for (const m of clean.matchAll(
+    /import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*(['"])([^'"]+)\2/g,
+  )) {
+    imports.set(m[1], m[3]);
+  }
+  return imports;
+}
+
+// A selection key spelled any way but a plain identifier fails closed. The
+// key above is read from the string-blind code view, where `"testDir"` is
+// blank space and `["testDir"]` is brackets around blank space, so both
+// would otherwise skip silently and fall back to wider defaults. Quoted
+// non-selection keys (`"name"`) are known-safe and stay ignored; any
+// computed `[...]` key fails because its runtime name is unknowable.
+function failOnNonPlainSelectionKey(keyClean, configPath) {
+  const quoted = keyClean.match(/^(['"`])\s*(testDir|testMatch|testIgnore|projects)\s*\1$/);
+  if (quoted) {
+    assert.fail(
+      `${configPath} has a quoted ${quoted[2]} key this gate cannot parse (${keyClean}): use a plain identifier, not a quoted or computed key`,
+    );
+  }
+  if (/^\[.*\]$/.test(keyClean)) {
+    assert.fail(
+      `${configPath} has a computed selection key this gate cannot parse (${keyClean}): use a plain identifier, not a quoted or computed key`,
+    );
+  }
+}
+
+// Parse one project's top-level testDir/testMatch/testIgnore. A spread at
+// project top level fails closed (it could carry selection keys); spreads
+// inside nested `use:` blocks are ignored with the rest of `use`.
+function parseProjectObject(objClean, objCode, configPath) {
+  const out = {};
+  for (const { start, end } of splitTopLevel(objCode)) {
+    const entryCode = objCode.slice(start, end);
+    if (!entryCode.trim()) continue;
+    assert.ok(
+      !entryCode.trim().startsWith("..."),
+      `${configPath} has a project spread this gate cannot expand: name testDir/testMatch/testIgnore explicitly`,
+    );
+    const colon = entryCode.indexOf(":");
+    if (colon === -1) {
+      const shorthand = entryCode.trim();
+      if (shorthand === "testDir")
+        assert.fail(
+          `${configPath} has a project testDir this gate cannot parse: use a plain string literal`,
+        );
+      if (shorthand === "testMatch" || shorthand === "testIgnore")
+        assert.fail(
+          `${configPath} has a project ${shorthand} this gate cannot parse: use a string or an array of strings`,
+        );
+      continue;
+    }
+    const key = entryCode.slice(0, colon).trim();
+    if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore") {
+      failOnNonPlainSelectionKey(objClean.slice(start, end).slice(0, colon).trim(), configPath);
+      continue;
+    }
+    const valueClean = objClean.slice(start, end).slice(colon + 1);
+    const valueCode = entryCode.slice(colon + 1);
+    if (key === "testDir")
+      out.testDir = parsePlainString(valueClean, configPath, "project testDir");
+    else out[key] = parseTestMatchValue(valueClean, valueCode, configPath, `project ${key}`);
+  }
+  return out;
+}
+
+// Static Playwright config parse with `...base` inheritance. Returns
+// { testDir: string|null, testMatch: string[]|null,
+//   testIgnore: string[]|null, projects: Array<...> } where null means
+// absent (inherited from spreads, else the Playwright default).
+function parsePlaywrightConfig(root, configRel, seen = new Set()) {
+  const configPath = configRel;
+  assert.ok(!seen.has(configRel), `${configPath} has a cyclic config spread`);
+  seen.add(configRel);
+  const text = readFileSync(join(root, configRel), "utf8");
+  const imports = parseConfigImports(text, configPath);
+  const { clean, code } = findDefineConfigBody(text, configPath);
+  // Source-ordered ops: spreads and explicit keys apply in the order they
+  // appear, like the object literal Playwright evaluates (`{...base, k: v}`
+  // differs from `{k: v, ...base}` when base sets k).
+  const ops = [];
+  for (const { start, end } of splitTopLevel(code)) {
+    const entryCode = code.slice(start, end);
+    if (!entryCode.trim()) continue;
+    const spread = entryCode.trim().match(/^\.\.\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*$/);
+    if (spread) {
+      const id = spread[1];
+      assert.ok(imports.has(id), `${configPath} spreads ...${id} without importing it`);
+      const rel = imports.get(id);
+      assert.ok(
+        rel.startsWith("."),
+        `${configPath} spreads ...${id} from a package import (${rel}): only relative configs`,
+      );
+      const resolved = posixJoin(dirname(configRel).replaceAll("\\", "/"), rel);
+      const candidate = [resolved, `${resolved}.ts`].find((c) => existsSync(join(root, c)));
+      assert.ok(candidate, `${configPath} spreads ...${id} from a missing file (${rel})`);
+      assert.ok(
+        candidate.endsWith(".config.ts"),
+        `${configPath} spreads ...${id} from a non-config file (${candidate})`,
+      );
+      ops.push({ kind: "spread", parsed: parsePlaywrightConfig(root, candidate, seen) });
+      continue;
+    }
+    const colon = entryCode.indexOf(":");
+    if (colon === -1) {
+      const shorthand = entryCode.trim();
+      if (shorthand === "testDir")
+        assert.fail(
+          `${configPath} has a testDir this gate cannot parse: use a plain string literal`,
+        );
+      if (shorthand === "testMatch" || shorthand === "testIgnore")
+        assert.fail(
+          `${configPath} has a ${shorthand} this gate cannot parse: use a string or an array of strings`,
+        );
+      if (shorthand === "projects")
+        assert.fail(`${configPath} has projects this gate cannot parse: use an array of objects`);
+      continue;
+    }
+    const key = entryCode.slice(0, colon).trim();
+    if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore" && key !== "projects") {
+      failOnNonPlainSelectionKey(clean.slice(start, end).slice(0, colon).trim(), configPath);
+      continue;
+    }
+    const valueClean = clean.slice(start, end).slice(colon + 1);
+    const valueCode = entryCode.slice(colon + 1);
+    if (key === "testDir")
+      ops.push({
+        kind: "key",
+        key,
+        value: parsePlainString(valueClean, configPath, "testDir"),
+      });
+    else if (key === "projects") {
+      const open = valueCode.indexOf("[");
+      assert.ok(
+        open !== -1 && valueCode.trim().startsWith("["),
+        `${configPath} has projects this gate cannot parse: use an array of objects`,
+      );
+      const close = matchBracket(valueCode, open, `${configPath} projects`);
+      assert.ok(
+        valueCode.slice(close + 1).trim() === "",
+        `${configPath} has projects this gate cannot parse: trailing content after the array`,
+      );
+      const parsedProjects = [];
+      for (const part of splitTopLevel(valueCode.slice(open + 1, close))) {
+        const pCode = valueCode.slice(open + 1, close).slice(part.start, part.end);
+        if (!pCode.trim()) continue;
+        const pOpen = pCode.indexOf("{");
+        assert.ok(
+          pOpen !== -1 && pCode.trim().startsWith("{"),
+          `${configPath} has a project this gate cannot parse: use an object literal`,
+        );
+        const pClose = matchBracket(pCode, pOpen, `${configPath} project`);
+        const pClean = valueClean.slice(open + 1, close).slice(part.start, part.end);
+        parsedProjects.push(
+          parseProjectObject(
+            pClean.slice(pOpen + 1, pClose),
+            pCode.slice(pOpen + 1, pClose),
+            configPath,
+          ),
+        );
+      }
+      ops.push({ kind: "key", key, value: parsedProjects });
+    } else {
+      ops.push({
+        kind: "key",
+        key,
+        value: parseTestMatchValue(valueClean, valueCode, configPath, key),
+      });
+    }
+  }
+  const merged = { testDir: null, testMatch: null, testIgnore: null, projects: null };
+  for (const op of ops) {
+    if (op.kind === "spread") {
+      if (op.parsed.testDir !== null) merged.testDir = op.parsed.testDir;
+      if (op.parsed.testMatch !== null) merged.testMatch = op.parsed.testMatch;
+      if (op.parsed.testIgnore !== null) merged.testIgnore = op.parsed.testIgnore;
+      if (op.parsed.projects !== null) merged.projects = op.parsed.projects;
+    } else {
+      merged[op.key] = op.value;
+    }
+  }
+  seen.delete(configRel);
+  return merged;
+}
+
+function posixJoin(dir, rel) {
+  const parts = [...(dir === "." ? [] : dir.split("/")), ...rel.split("/")].filter(
+    (p) => p !== "" && p !== ".",
+  );
+  const stack = [];
+  for (const p of parts) {
+    if (p === "..") stack.pop();
+    else stack.push(p);
+  }
+  return stack.join("/") || ".";
+}
+
+// Single-level `{a,b}` brace expansion. Nested, empty or unbalanced braces
+// fail closed instead of silently matching nothing.
+function expandBraces(pattern, configPath) {
+  let out = [pattern];
+  for (let i = 0; i < out.length; i += 1) {
+    const p = out[i];
+    const open = p.indexOf("{");
+    if (open === -1) continue;
+    const close = p.indexOf("}", open);
+    assert.ok(close !== -1, `${configPath} has an unbalanced brace (${p})`);
+    const inner = p.slice(open + 1, close);
+    assert.ok(
+      !inner.includes("{") && !inner.includes("}"),
+      `${configPath} has nested braces this gate cannot expand (${p})`,
+    );
+    const alts = inner.split(",");
+    assert.ok(
+      alts.length > 1 && alts.every((a) => a.length > 0),
+      `${configPath} has an empty brace alternative (${p})`,
+    );
+    out.splice(i, 1, ...alts.map((a) => `${p.slice(0, open)}${a}${p.slice(close + 1)}`));
+    i -= 1;
+    assert.ok(out.length < 100, `${configPath} brace expansion exploded (${pattern})`);
+  }
+  return out;
+}
+
+// Same fail-closed grammar as vitest excludes: after brace expansion every
+// pattern must be exactly what globToRegExp expands (word characters, dash,
+// dot, slash, star), spelled canonically.
+function assertSupportedPlaywrightPatterns(patterns, configPath) {
+  for (const p of patterns) {
+    assert.ok(
+      /^[\w\-./*]+$/.test(p),
+      `${configPath} has a pattern this gate cannot expand (${p}): use literals, * / ** globs or single-level {a,b} braces`,
+    );
+    const segments = p.split("/");
+    assert.ok(
+      segments.every((part) => part && part !== "." && part !== ".."),
+      `${configPath} has a non-canonical pattern (${p}): use paths without empty, . or .. segments`,
+    );
+    // Playwright's minimatch treats `**` inside a segment as segment-local
+    // while this gate's `.*` crosses `/` (verified against the 1.64.1
+    // oracle: testMatch `a**` matches `e2e/a/b.spec.ts` here, never runs
+    // there), so a mid-segment `**` fails closed instead of over-matching.
+    assert.ok(
+      segments.every((part) => !part.includes("**") || part === "**"),
+      `${configPath} has a pattern this gate cannot expand (${p}): ** must be a whole path segment`,
+    );
+    // Playwright matches against the absolute path, so leading bare-`*`
+    // segments can be satisfied by the checkout prefix this gate cannot see
+    // (oracle: `*/*/x.spec.ts` and `**/*/*/x.spec.ts` both match
+    // `<root>/e2e/x.spec.ts`, which the repo-relative match misses). A
+    // literal or `**` first segment anchors the match, so only a leading
+    // bare `*` fails closed.
+    const rest = [...segments];
+    while (rest.length && rest[0] === "**") rest.shift();
+    assert.ok(
+      rest.length === 0 || rest[0] !== "*",
+      `${configPath} has a pattern this gate cannot expand (${p}): a leading */ depends on the absolute checkout path; use **/ or literal segments instead`,
+    );
+  }
+}
+
+// Repo-relative testDir for a config, resolved against the config's own
+// directory. Playwright defaults testDir to the config directory; every repo
+// config names it explicitly, so a missing testDir reads as the config dir.
+function normalizeTestDir(testDir, configRel) {
+  assert.ok(!testDir.includes("\\"), `${configRel} testDir must use forward slashes (${testDir})`);
+  assert.ok(
+    !testDir.startsWith("/"),
+    `${configRel} testDir must be relative to the config (${testDir})`,
+  );
+  const dir = dirname(configRel).replaceAll("\\", "/");
+  const joined = testDir === "." || testDir === "./" ? dir : posixJoin(dir, testDir);
+  const rel = joined === "" ? "." : joined;
+  if (rel !== ".") {
+    assert.ok(
+      rel.split("/").every((part) => part && part !== "." && part !== ".."),
+      `${configRel} has a non-canonical testDir (${testDir})`,
+    );
+  }
+  return rel;
+}
+
+function isFileUnderDir(file, dir) {
+  return dir === "." || file === dir || file.startsWith(`${dir}/`);
+}
+
+// Playwright's createFileMatcher (1.64.1 pin) prefixes `**/` to any string
+// pattern not starting with it and matches with minimatch
+// `{ nocase: true, dot: true }` against the absolute path. The repo-relative
+// path stands in for the absolute (`**/` absorbs the repo prefix); matching
+// is case-insensitive. `*` already matches dots via `[^/]*`, so no dot-flag
+// equivalent is needed.
+function patternMatchesFile(patterns, file) {
+  return patterns.some((p) => {
+    const effective = p.startsWith("**/") ? p : `**/${p}`;
+    const re = new RegExp(globToRegExp(effective).source, "i");
+    return re.test(file);
+  });
+}
+
+function configMatchesFile(parsed, configRel, file) {
+  const contexts = parsed.projects && parsed.projects.length ? parsed.projects : [{}];
+  return contexts.some((project) => {
+    const testDir = normalizeTestDir(project.testDir ?? parsed.testDir ?? ".", configRel);
+    if (!isFileUnderDir(file, testDir)) return false;
+    const testMatch = project.testMatch ?? parsed.testMatch;
+    assert.ok(
+      testMatch !== null && testMatch !== undefined,
+      `${configRel} names no testMatch this gate can expand: use a plain string or array of strings (the Playwright RegExp default is not expandable)`,
+    );
+    const matchPatterns = testMatch.flatMap((p) => expandBraces(p, configRel));
+    assertSupportedPlaywrightPatterns(matchPatterns, configRel);
+    if (!patternMatchesFile(matchPatterns, file)) return false;
+    const testIgnore = project.testIgnore ?? parsed.testIgnore ?? [];
+    if (!testIgnore.length) return true;
+    const ignorePatterns = testIgnore.flatMap((p) => expandBraces(p, configRel));
+    assertSupportedPlaywrightPatterns(ignorePatterns, configRel);
+    return !patternMatchesFile(ignorePatterns, file);
+  });
+}
+
+// Resolve one relative import specifier to a repo-relative path under e2e/,
+// or null when it points elsewhere or nowhere (a broken import is the
+// typechecker's finding, not this gate's).
+function resolveRelativeImport(spec, importer, root) {
+  if (!spec.startsWith(".")) return null;
+  const base = dirname(importer).replaceAll("\\", "/");
+  const joined = posixJoin(base, spec);
+  const candidates = [joined];
+  if (spec.endsWith(".js")) candidates.push(`${joined.slice(0, -3)}.ts`);
+  // A trailing `.visual` (as in `./member-board-viewer.visual`) is a
+  // basename, not an extension: only known extensions suppress probing.
+  if (!/\.(ts|mts|cts|js|mjs|cjs|json)$/.test(joined)) {
+    candidates.push(
+      `${joined}.ts`,
+      `${joined}.mts`,
+      `${joined}.cts`,
+      `${joined}.mjs`,
+      `${joined}.js`,
+    );
+  }
+  for (const c of candidates) {
+    if (c.startsWith("..") || c.startsWith("/")) continue;
+    if (c === "e2e" || c.startsWith("e2e/")) {
+      try {
+        if (existsSync(join(root, c)) && statSync(join(root, c)).isFile()) return c;
+      } catch {
+        // A file that vanishes mid-check is not an edge; the next gate run rereads.
+      }
+    }
+  }
+  return null;
+}
+
+// Static import edges out of one file: ESM `from`/`import`/`export from`,
+// plus CJS/ESM `require(`/`import(` with plain string literals. A dynamic
+// (non-literal) specifier is not an edge: generated-asset loads such as
+// `await import(pathToFileURL(...).href)` are legitimate spec code, and the
+// gate stays fail-closed because a spec reachable only through a dynamic
+// import is reported as an orphan, not as reachable.
+//
+// Deliberately line-based with naive comment stripping, not the
+// string-aware scanner above: spec bodies hold regex literals containing
+// quotes (`/class="([^"]+)"/`), which a quote-tracking scanner misreads as
+// string delimiters. Import specifiers never contain `//` (relative
+// `./...` or package paths), so cutting a line at `//` can only truncate
+// non-import code — and a truncated non-import line is simply ignored.
+function collectSpecImports(root, file) {
+  const text = readFileSync(join(root, file), "utf8");
+  const noBlock = text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+  const lines = noBlock.split("\n").map((line) => {
+    let cut = -1;
+    for (let i = line.indexOf("//"); i !== -1; i = line.indexOf("//", i + 1)) {
+      const prev = i === 0 ? "" : line[i - 1];
+      if (prev !== ":") {
+        cut = i;
+        break;
+      }
+    }
+    return cut === -1 ? line : line.slice(0, cut);
+  });
+  const specs = new Set();
+  const ambiguous = new Set();
+  // Type-only imports are erased at compile time and load nothing, so they
+  // are not reachability edges — but only the type-only part is skipped. A
+  // local `export type Alias = ...` is not an import at all and scans
+  // normally; a complete type-only from-clause scans its remainder (a
+  // runtime import sharing the line is still an edge); only an unterminated
+  // multiline `import type { ...` / `export type { ...` skips forward to
+  // its closing `from` (or `}` for a multiline local export). Inline
+  // `{ type X }` specifiers are erased too and skipped (oracle: Playwright
+  // 1.64.1 transforms with `onlyRemoveTypeImports: false`, so Babel drops
+  // inline type specifiers and any named import whose bindings are never
+  // used as values — `import { a } from "./s.visual"` with `a` unused loads
+  // nothing). Named/default/namespace `import ... from` bindings are
+  // therefore ambiguous without usage analysis: they fail closed when they
+  // resolve to a spec file, unless a side-effect import, re-export or
+  // require of the same file in this spec loads it for sure. Unmarked
+  // `export ... from` and `export * from` are kept by Babel (oracle) and
+  // stay edges, as do side-effect imports and require/dynamic-import calls.
+  // (Transitive caveat: an ambiguous import of a *helper* keeps its edge —
+  // specs import named helpers everywhere, so failing closed there would
+  // forbid ordinary code. A phantom edge needs that import to be elided AND
+  // the helper to import a spec; no helper in the tree imports a spec.)
+  const fromClause = (s) => s.match(/\bfrom\s*(['"])[^'"]+\1/);
+  const stripQuotedSpans = (s) => s.replace(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/g, " ");
+  let inTypeImport = false;
+  let inTypeReexport = false;
+  let stmtTail = "";
+  for (const line of lines) {
+    let scan = line;
+    if (!inTypeImport && !inTypeReexport) {
+      const typeImport = /^\s*import\s+type\b/.exec(scan);
+      const typeExport = !typeImport && /^\s*export\s+type\b/.exec(scan);
+      if (typeImport) {
+        const from = fromClause(scan);
+        if (from) {
+          scan = scan.slice(from.index + from[0].length);
+        } else if (/=/.test(scan)) {
+          // `import type X = ...` (import-equals): complete and type-only.
+          const semi = scan.indexOf(";");
+          scan = semi === -1 ? "" : scan.slice(semi + 1);
+        } else {
+          inTypeImport = true;
+          continue;
+        }
+      } else if (typeExport) {
+        const rest = scan.slice(typeExport[0].length);
+        const from = fromClause(rest);
+        if (from) {
+          scan = rest.slice(from.index + from[0].length);
+        } else if (/^\s*[{*]/.test(rest)) {
+          if (rest.includes("}")) {
+            // Terminated local `export type { X };`: scan the remainder.
+            scan = rest.slice(rest.indexOf("}") + 1);
+          } else {
+            inTypeReexport = true;
+            continue;
+          }
+        }
+        // else: `export type Alias = ...` is a local alias, not an import;
+        // fall through and scan the whole line.
+      }
+    } else if (inTypeImport) {
+      const from = fromClause(scan);
+      if (!from) continue;
+      inTypeImport = false;
+      scan = scan.slice(from.index + from[0].length);
+    } else {
+      const from = fromClause(scan);
+      if (from) {
+        inTypeReexport = false;
+        scan = scan.slice(from.index + from[0].length);
+      } else if (scan.includes("}")) {
+        inTypeReexport = false;
+        scan = scan.slice(scan.indexOf("}") + 1);
+      } else {
+        continue;
+      }
+    }
+    const tailBefore = stmtTail;
+    // Every `from "..."` belongs to the nearest preceding `import`/`export`
+    // (strings stripped, so a keyword inside a path or literal cannot
+    // misattribute the leader). With no leader the clause is unclassifiable
+    // and keeps current behavior (an edge).
+    for (const m of scan.matchAll(/\bfrom\s*(['"])([^'"]+)\1/g)) {
+      const context = stripQuotedSpans(`${tailBefore}\n${scan.slice(0, m.index)}`);
+      const leaders = [...context.matchAll(/\b(import|export)\b/g)];
+      if (!leaders.length) {
+        specs.add(m[2]);
+        continue;
+      }
+      const last = leaders[leaders.length - 1];
+      const bindings = context.slice(last.index + last[0].length);
+      // Statement-level `import/export type ... from` (mid-line, where the
+      // line-start skipper above cannot see it): the `type` modifier erases
+      // the whole clause. A bare `type` alone is a value named `type`.
+      if (/^\s*type\b/.test(bindings) && !/^\s*type\s*$/.test(bindings)) continue;
+      const hasStar = bindings.includes("*");
+      const rest = bindings
+        .replace(/\btype\s+[\w$]+(?:\s+as\s+[\w$]+)?/g, "")
+        .replace(/[,{}*\s]/g, "");
+      if (!hasStar && !/[\w$]/.test(rest)) continue; // all inline-`type`: erased.
+      if (last[1] === "import") ambiguous.add(m[2]);
+      else specs.add(m[2]);
+    }
+    for (const m of scan.matchAll(/\bimport\s*(['"])([^'"]+)\1/g)) specs.add(m[2]);
+    for (const m of scan.matchAll(/\brequire\s*\(\s*(['"])([^'"]+)\1/g)) {
+      // `import X = require("./s")` loads only when X is used (oracle), so
+      // it is ambiguous like a named import; a bare require() call is an edge.
+      const context = stripQuotedSpans(`${tailBefore}\n${scan.slice(0, m.index)}`);
+      if (/import\s+(?!type\b)[\w$]+\s*=\s*$/.test(context)) ambiguous.add(m[2]);
+      else specs.add(m[2]);
+    }
+    for (const m of scan.matchAll(/\bimport\s*\(\s*(['"])([^'"]+)\1/g)) specs.add(m[2]);
+    stmtTail = `${tailBefore}\n${scan}`;
+    const semi = stmtTail.lastIndexOf(";");
+    if (semi !== -1) stmtTail = stmtTail.slice(semi + 1);
+  }
+  const out = [];
+  for (const spec of specs) {
+    const resolved = resolveRelativeImport(spec, file, root);
+    if (resolved) out.push(resolved);
+  }
+  const genuine = new Set(out);
+  for (const spec of ambiguous) {
+    const resolved = resolveRelativeImport(spec, file, root);
+    if (!resolved || genuine.has(resolved)) continue;
+    if (!/\.spec\.ts$/.test(resolved) && !/\.visual\.ts$/.test(resolved)) {
+      out.push(resolved); // helper targets keep current behavior (see above).
+      continue;
+    }
+    assert.fail(
+      `${file} ambiguously imports ${resolved}: named import bindings are not side-effect edges (Playwright's Babel removes bindings never used as values); import the spec for its side effects or teach ci/test-inventory.mjs the new form`,
+    );
+  }
+  return out;
+}
+
 export function inventory(root = repoRoot) {
   const haystack = collectHaystack(root);
   const smokeCmd = smokeCommand(root);
@@ -271,6 +1354,71 @@ export function inventory(root = repoRoot) {
     else orphans.push(file);
   }
   return { files, reachable, orphans };
+}
+
+export function playwrightInventory(root = repoRoot) {
+  const files = listPlaywrightSpecs(root);
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const scripts = pkg.scripts ?? {};
+  const workflowFiles = collectWorkflowFiles(root);
+  const workflowText = workflowFiles.map((w) => w.text).join("\n");
+  const invoked = invokedScriptNames(scripts, workflowText);
+  const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
+  const parsed = new Map();
+  for (const config of refs.keys()) parsed.set(config, parsePlaywrightConfig(root, config));
+  const direct = new Map();
+  for (const file of files) {
+    for (const [config, ref] of refs) {
+      if (!configMatchesFile(parsed.get(config), config, file)) continue;
+      if (!ref.unfiltered) {
+        const inFiles = ref.files.has(file);
+        const inDirs = [...ref.dirs].some((d) => file.startsWith(d));
+        if (!inFiles && !inDirs) continue;
+      }
+      direct.set(file, `playwright ${config} (testMatch)`);
+      break;
+    }
+  }
+  // Transitive import closure: a matched spec's relative imports run with
+  // it, and their imports with them. Helpers are traversed but only
+  // spec/visual files join the reachable set.
+  const fileSet = new Set(files);
+  const reachable = [];
+  const via = new Map(direct);
+  const visited = new Set();
+  const queue = [...direct.keys()];
+  for (const [file, how] of direct) reachable.push({ file, via: how });
+  while (queue.length) {
+    const importer = queue.shift();
+    if (visited.has(importer)) continue;
+    visited.add(importer);
+    for (const next of collectSpecImports(root, importer)) {
+      if (visited.has(next)) continue;
+      if (!via.has(next) && fileSet.has(next)) {
+        const how = `imported by ${importer} (${via.get(importer)})`;
+        via.set(next, how);
+        reachable.push({ file: next, via: how });
+      }
+      queue.push(next);
+    }
+  }
+  reachable.sort((a, b) => (a.file < b.file ? -1 : 1));
+  const orphans = files.filter((f) => !via.has(f));
+  return { files, reachable, orphans };
+}
+
+export function playwrightJsonSummary(root = repoRoot) {
+  const { files, reachable, orphans } = playwrightInventory(root);
+  const ok = orphans.length === 0;
+  return {
+    checkId: PLAYWRIGHT_CHECK_ID,
+    ok,
+    code: ok ? PLAYWRIGHT_CODE_OK : PLAYWRIGHT_CODE_ORPHAN,
+    total: files.length,
+    reachable: reachable.length,
+    orphans: [...orphans].sort(),
+    next_action: ok ? PLAYWRIGHT_NEXT_ACTION_OK : PLAYWRIGHT_NEXT_ACTION_ORPHAN,
+  };
 }
 
 function selftest() {
@@ -726,6 +1874,1145 @@ function selftest() {
     }
   });
 
+  check("playwright matched spec reachable, ignored spec orphan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.foo.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.foo.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "**/ignored/**" });\n',
+      );
+      mkdirSync(join(dir, "e2e", "ignored"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "ignored", "b.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/ignored/b.spec.ts"]);
+      assert.equal(reachable[0].file, "e2e/a.spec.ts");
+      assert.match(reachable[0].via, /playwright\.foo\.config\.ts/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The events-index → member-board-viewer pattern, fixture-level: the
+  // entrypoint is pinned by testMatch, the suite runs only through its
+  // import. Cutting the import (second fixture) must orphan the suite.
+  // Never proved by touching the real import.
+  check("playwright import edge marks visual reachable; cut edge orphans it", () => {
+    const setup = (dir, withEdge) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.entry.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.entry.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "entry", "entry.spec.ts"),
+        `${withEdge ? 'import "./suite.visual";\n' : ""}import { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+      );
+      writeFileSync(
+        join(dir, "e2e", "entry", "suite.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+      );
+    };
+    for (const withEdge of [true, false]) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        setup(dir, withEdge);
+        const { orphans, reachable } = playwrightInventory(dir);
+        if (withEdge) {
+          assert.deepEqual(orphans, []);
+          const suite = reachable.find((r) => r.file === "e2e/entry/suite.visual.ts");
+          assert.ok(suite, "imported suite should be reachable");
+          assert.match(suite.via, /imported by e2e\/entry\/entry\.spec\.ts/);
+        } else {
+          assert.deepEqual(orphans, ["e2e/entry/suite.visual.ts"]);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // The kit-parity filtered run: every invocation names files, so only the
+  // union runs. A spec matching testMatch but named nowhere is an orphan.
+  check("playwright CLI file filter restricts reachability", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: >-\n          npx playwright test --config playwright.filt.config.ts\n          e2e/a.spec.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.filt.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "b.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/b.spec.ts"]);
+      assert.deepEqual(
+        reachable.map((r) => r.file),
+        ["e2e/a.spec.ts"],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright testIgnore brace expansion prunes each alternative", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.br.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.br.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "**/{staging,watch}/**" });\n',
+      );
+      mkdirSync(join(dir, "e2e", "staging"), { recursive: true });
+      mkdirSync(join(dir, "e2e", "watch"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "staging", "b.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "watch", "c.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/staging/b.spec.ts", "e2e/watch/c.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright ...base spread inherits testMatch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.derived.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.base.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      writeFileSync(
+        join(dir, "playwright.derived.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nimport base from "./playwright.base.config";\nexport default defineConfig({ ...base, testDir: "./e2e/sub" });\n',
+      );
+      mkdirSync(join(dir, "e2e", "sub"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "sub", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "top.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/top.spec.ts"]);
+      assert.deepEqual(
+        reachable.map((r) => r.file),
+        ["e2e/sub/a.spec.ts"],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright project testMatch override reaches beyond the top level", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.proj.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.proj.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "visual", testMatch: "**/*.visual.ts" }] });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans } = playwrightInventory(dir);
+      assert.deepEqual(orphans, []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright unused script does not reference its config", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { "e2e:unused": "playwright test --config playwright.unused.config.ts" },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.used.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.used.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/used", testMatch: "**/*.spec.ts" });\n',
+      );
+      writeFileSync(
+        join(dir, "playwright.unused.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e", "used"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "used", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "ghost.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/ghost.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright JSON pins checkId, codes and next_action", () => {
+    const setup = (dir, withOrphan) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.js.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.js.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "a.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      if (withOrphan)
+        writeFileSync(
+          join(dir, "e2e", "ghost.spec.ts"),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+    };
+    for (const withOrphan of [false, true]) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        setup(dir, withOrphan);
+        const summary = playwrightJsonSummary(dir);
+        assert.equal(summary.checkId, "playwright-spec-reachability");
+        if (withOrphan) {
+          assert.equal(summary.ok, false);
+          assert.equal(summary.code, "PLAYWRIGHT_SPEC_ORPHAN");
+          assert.deepEqual(summary.orphans, ["e2e/ghost.spec.ts"]);
+          assert.equal(summary.total, 2);
+          assert.equal(summary.reachable, 1);
+          assert.match(summary.next_action, /workflow file filter/);
+          assert.match(summary.next_action, /quality-gates\.md/);
+        } else {
+          assert.equal(summary.ok, true);
+          assert.equal(summary.code, "OK");
+          assert.deepEqual(summary.orphans, []);
+          assert.equal(summary.total, 1);
+          assert.equal(summary.reachable, 1);
+          assert.match(summary.next_action, /No action needed/);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright RegExp testMatch fails closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.rx.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.rx.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: /.*spec/ });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.throws(() => playwrightInventory(dir), /cannot parse/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright unknown flag fails closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.fl.config.ts --project chromium\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.fl.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.throws(() => playwrightInventory(dir), /flag this gate cannot expand/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A dynamic specifier is not an edge: the matched entry stays reachable
+  // (generated-asset loads are legitimate spec code), while a suite named
+  // only through a dynamic import is reported as an orphan, not reachable.
+  check("playwright dynamic import fails closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.dy.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.dy.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\nconst suitePath = "./suite.visual";\ntest("x", async () => { await import(suitePath); require(other); });\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "suite.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/suite.visual.ts"]);
+      assert.ok(
+        reachable.some((r) => r.file === "e2e/a.spec.ts"),
+        "matched entry with a dynamic import should stay reachable",
+      );
+      assert.equal(playwrightJsonSummary(dir).code, "PLAYWRIGHT_SPEC_ORPHAN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("CLI --json prints one Playwright summary object", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.cli.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.cli.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "a.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "ghost.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const self = fileURLToPath(import.meta.url);
+      const loose = spawnSync(process.execPath, [self, "--root", dir, "--json"], {
+        encoding: "utf8",
+      });
+      assert.equal(loose.status, 0);
+      const summary = JSON.parse(loose.stdout);
+      assert.equal(summary.checkId, "playwright-spec-reachability");
+      assert.equal(summary.code, "PLAYWRIGHT_SPEC_ORPHAN");
+      assert.deepEqual(summary.orphans, ["e2e/ghost.spec.ts"]);
+      const strict = spawnSync(process.execPath, [self, "--root", dir, "--json", "--strict"], {
+        encoding: "utf8",
+      });
+      assert.equal(strict.status, 1);
+      assert.equal(JSON.parse(strict.stdout).code, "PLAYWRIGHT_SPEC_ORPHAN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright commented-out npm run step does not invoke its script", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { "e2e:cmt": "playwright test --config playwright.cmt.config.ts" },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      # - run: npm run e2e:cmt\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.cmt.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/a.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Playwright createFileMatcher parity: `**/` is prefixed when absent and
+  // matching is case-insensitive. A nested `staging/**` ignore must prune,
+  // a differently-cased ignore must prune, and a basename testMatch must
+  // reach a nested file.
+  check("playwright matcher prefixes **/ and ignores case", () => {
+    const setup = (dir, configBody, files) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.m.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.m.config.ts"),
+        `import { defineConfig } from "@playwright/test";\nexport default defineConfig({ ${configBody} });\n`,
+      );
+      for (const f of files) {
+        mkdirSync(join(dir, dirname(f)), { recursive: true });
+        writeFileSync(
+          join(dir, f),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+      }
+    };
+    const cases = [
+      {
+        name: "nested staging ignore",
+        config: 'testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "staging/**"',
+        files: ["e2e/a.spec.ts", "e2e/kit/staging/x.spec.ts"],
+        orphans: ["e2e/kit/staging/x.spec.ts"],
+      },
+      {
+        name: "cased ignore",
+        config: 'testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "**/Staging/**"',
+        files: ["e2e/a.spec.ts", "e2e/staging/x.spec.ts"],
+        orphans: ["e2e/staging/x.spec.ts"],
+      },
+      {
+        name: "basename match",
+        config: 'testDir: "./e2e", testMatch: "a.spec.ts"',
+        files: ["e2e/sub/a.spec.ts", "e2e/other.spec.ts"],
+        orphans: ["e2e/other.spec.ts"],
+      },
+    ];
+    for (const c of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        setup(dir, c.config, c.files);
+        assert.deepEqual(playwrightInventory(dir).orphans, c.orphans, c.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright shorthand selection keys fail closed", () => {
+    const bodies = [
+      'const testDir = "./e2e/only";\nexport default defineConfig({ testDir, testMatch: "**/*.spec.ts" })',
+      'export default defineConfig({ testDir: "./e2e", testMatch })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", testDir }] })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", testMatch }] })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", testIgnore }] })',
+    ];
+    for (const body of bodies) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.sh.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.sh.config.ts"),
+          `import { defineConfig } from "@playwright/test";\n${body};\n`,
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "a.spec.ts"),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot parse/, body);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // A spread after an explicit key wins in JavaScript, so the gate applies
+  // entries in source order: here base's visual-only testMatch overwrites
+  // the earlier spec-only one.
+  check("playwright spread after explicit key applies in source order", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.ord.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.base2.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.visual.ts" });\n',
+      );
+      writeFileSync(
+        join(dir, "playwright.ord.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nimport base from "./playwright.base2.config";\nexport default defineConfig({ testMatch: "**/*.spec.ts", ...base });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "b.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/a.spec.ts"]);
+      assert.deepEqual(
+        reachable.map((r) => r.file),
+        ["e2e/b.visual.ts"],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright type-only imports are not reachability edges", () => {
+    const typeLines = [
+      'import type { X } from "./suite.visual";',
+      'export type { X } from "./suite.visual";',
+      'import type {\n X\n} from "./suite.visual";',
+    ];
+    for (const typeLine of typeLines) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.ty.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.ty.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "entry", "entry.spec.ts"),
+          `${typeLine}\nimport { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+        );
+        writeFileSync(
+          join(dir, "e2e", "entry", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/entry/suite.visual.ts"], typeLine);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright npm run -- forwarded args fail closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { e2e: "playwright test --config playwright.fwd.config.ts" },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run e2e -- e2e/a.spec.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.fwd.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      for (const name of ["a", "b"]) {
+        writeFileSync(
+          join(dir, "e2e", `${name}.spec.ts`),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+      }
+      assert.throws(() => playwrightInventory(dir), /cannot expand/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // The same forwarding nested in an invoked script body fails closed too:
+    // without the scan, `b` reads as an unfiltered run and `y` as reachable.
+    const nested = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(nested, "package.json"),
+        JSON.stringify({
+          scripts: {
+            a: "npm run b -- e2e/x.spec.ts",
+            b: "playwright test --config playwright.fwd3.config.ts",
+          },
+        }),
+      );
+      mkdirSync(join(nested, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(nested, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run a\n",
+      );
+      writeFileSync(
+        join(nested, "playwright.fwd3.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(nested, "e2e"), { recursive: true });
+      for (const name of ["x", "y"]) {
+        writeFileSync(
+          join(nested, "e2e", `${name}.spec.ts`),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+      }
+      assert.throws(() => playwrightInventory(nested), /cannot expand/);
+    } finally {
+      rmSync(nested, { recursive: true, force: true });
+    }
+    // Control: forwarded args to a non-Playwright script stay out of scope.
+    const control = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(control, "package.json"),
+        JSON.stringify({ scripts: { lint: "eslint ." } }),
+      );
+      mkdirSync(join(control, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(control, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run lint -- --fix\n      - run: npx playwright test --config playwright.fwd2.config.ts\n",
+      );
+      writeFileSync(
+        join(control, "playwright.fwd2.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(control, "e2e"), { recursive: true });
+      writeFileSync(
+        join(control, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.deepEqual(playwrightInventory(control).orphans, []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(control, { recursive: true, force: true });
+    }
+    // Control: nested forwarding to a non-Playwright script stays in scope.
+    const nestedControl = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(nestedControl, "package.json"),
+        JSON.stringify({
+          scripts: { a: "npm run lint -- --fix", lint: "eslint ." },
+        }),
+      );
+      mkdirSync(join(nestedControl, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(nestedControl, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run a\n      - run: npx playwright test --config playwright.fwd4.config.ts\n",
+      );
+      writeFileSync(
+        join(nestedControl, "playwright.fwd4.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(nestedControl, "e2e"), { recursive: true });
+      writeFileSync(
+        join(nestedControl, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.deepEqual(playwrightInventory(nestedControl).orphans, []);
+    } finally {
+      rmSync(nestedControl, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright quoted or computed selection keys fail closed", () => {
+    const bodies = [
+      'export default defineConfig({ "testDir": "./e2e/only", testMatch: "**/*.spec.ts" })',
+      'export default defineConfig({ [\'testDir\']: "./e2e/only", testMatch: "**/*.spec.ts" })',
+      'export default defineConfig({ [testDir]: "./e2e/only", testMatch: "**/*.spec.ts" })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", "testDir": "./e2e/only" }] })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", ["testMatch"]: "**/*.spec.ts" }] })',
+    ];
+    for (const body of bodies) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.qk.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.qk.config.ts"),
+          `import { defineConfig } from "@playwright/test";\n${body};\n`,
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "a.spec.ts"),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot parse/, body);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    // Control: a quoted non-selection key stays ignored, not fatal.
+    const control = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(control, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(control, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(control, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.qk2.config.ts\n",
+      );
+      writeFileSync(
+        join(control, "playwright.qk2.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ "name": "p" }] });\n',
+      );
+      mkdirSync(join(control, "e2e"), { recursive: true });
+      writeFileSync(
+        join(control, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.deepEqual(playwrightInventory(control).orphans, []);
+    } finally {
+      rmSync(control, { recursive: true, force: true });
+    }
+  });
+
+  // Oracle-verified divergences from Playwright 1.64.1 createFileMatcher: a
+  // mid-segment `**` over-matches across `/`, and leading bare-`*` segments
+  // match the absolute checkout path the gate cannot see. Both fail closed.
+  check("playwright unsupported matcher classes fail closed", () => {
+    const patterns = ["a**", "*/*/x.spec.ts", "**/*/*/x.spec.ts", "**/*/x.spec.ts"];
+    for (const pattern of patterns) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.mc.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.mc.config.ts"),
+          `import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "${pattern}" });\n`,
+        );
+        mkdirSync(join(dir, "e2e", "a"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "a", "b.spec.ts"),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot expand/, pattern);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    // Control: a literal-anchored star the oracle agrees on stays allowed.
+    const controls = [
+      {
+        name: "literal-anchored star",
+        config: 'testDir: "./e2e", testMatch: "e2e/*/x.spec.ts"',
+        files: ["e2e/a/x.spec.ts", "e2e/x.spec.ts"],
+        orphans: ["e2e/x.spec.ts"],
+      },
+    ];
+    for (const c of controls) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.mc2.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.mc2.config.ts"),
+          `import { defineConfig } from "@playwright/test";\nexport default defineConfig({ ${c.config} });\n`,
+        );
+        for (const f of c.files) {
+          mkdirSync(join(dir, dirname(f)), { recursive: true });
+          writeFileSync(
+            join(dir, f),
+            'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+          );
+        }
+        assert.deepEqual(playwrightInventory(dir).orphans, c.orphans, c.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // Local type syntax must not swallow a following runtime import edge: an
+  // alias, a terminated local export, and a shared-line type import all leave
+  // the entry's `./suite.visual` edge (and the type-only target orphaned).
+  check("playwright local type syntax keeps import edges", () => {
+    const entries = [
+      {
+        name: "alias",
+        head: "export type Alias = { a: number };",
+        typed: null,
+      },
+      {
+        name: "local export",
+        head: "export type { X };",
+        typed: null,
+      },
+      {
+        name: "multiline local export",
+        head: "export type {\n X\n};",
+        typed: null,
+      },
+      {
+        name: "shared-line type import",
+        head: 'import type { X } from "./other.visual"; import "./suite.visual";',
+        typed: "other",
+      },
+      {
+        name: "multiline re-export",
+        head: 'export type {\n X\n} from "./other.visual";',
+        typed: "other",
+      },
+      {
+        name: "import-equals",
+        head: 'import type X = require("./other.visual");',
+        typed: "other",
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.te.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.te.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+        const edgeLine = e.name === "shared-line type import" ? "" : 'import "./suite.visual";\n';
+        writeFileSync(
+          join(dir, "e2e", "entry", "entry.spec.ts"),
+          `${e.head}\n${edgeLine}import { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+        );
+        writeFileSync(
+          join(dir, "e2e", "entry", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+        );
+        if (e.typed) {
+          writeFileSync(
+            join(dir, "e2e", "entry", "other.visual.ts"),
+            'import { test } from "@playwright/test";\ntest("z", async () => {});\n',
+          );
+        }
+        const expected = e.typed ? ["e2e/entry/other.visual.ts"] : [];
+        assert.deepEqual(playwrightInventory(dir).orphans, expected, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright npm run flags around the script name", () => {
+    const pw = "playwright test --config playwright.fl.config.ts";
+    const entries = [
+      // A flag between the script name and `--` must not defeat the
+      // forwarding check: npm consumes its own flags and forwards the rest.
+      {
+        name: "bool flag",
+        scripts: { b: pw },
+        run: "npm run b --silent -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "equals flag",
+        scripts: { b: pw },
+        run: "npm run b --prefix=. -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "two flags",
+        scripts: { b: pw },
+        run: "npm run b --silent --ignore-scripts -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "nested forwarding with flags",
+        scripts: { a: "npm run b --silent -- e2e/x.spec.ts", b: pw },
+        run: "npm run a",
+        throws: /cannot expand/,
+      },
+      // Separate-value flags (`--prefix .`) consume the next token, before
+      // and after the name; `--prefix=.` is the same directory, so only the
+      // forwarding fails closed here, not the redirect.
+      {
+        name: "separate value after name",
+        scripts: { b: pw },
+        run: "npm run b --prefix . -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "separate value before name",
+        scripts: { b: pw },
+        run: "npm run --prefix=. b -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      // `--prefix`/`--workspace` run another package's script, which the gate
+      // cannot model: fail closed on Playwright targets.
+      {
+        name: "prefix redirect",
+        scripts: { b: pw },
+        run: "npm run b --prefix web",
+        throws: /cannot model/,
+      },
+      {
+        name: "prefix redirect before name",
+        scripts: { b: pw },
+        run: "npm run --prefix web b",
+        throws: /cannot model/,
+      },
+      {
+        name: "workspace redirect",
+        scripts: { b: pw },
+        run: "npm run b --workspace web",
+        throws: /cannot model/,
+      },
+      // Controls: flags before the name still invoke it, a redirect of a
+      // non-Playwright script stays out of scope, and bundled short flags
+      // fail closed instead of misreading the script name.
+      {
+        name: "flag before name invokes",
+        scripts: { b: pw },
+        run: "npm run --silent b",
+        orphans: [],
+      },
+      {
+        name: "prefix redirect of non-playwright script",
+        scripts: { lint: "eslint ." },
+        run: "npm run lint --prefix web",
+        orphans: ["e2e/x.spec.ts", "e2e/y.spec.ts"],
+      },
+      {
+        name: "bundled short flags",
+        scripts: { b: pw },
+        run: "npm run -sw b",
+        throws: /cannot parse/,
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.fl.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        for (const name of ["x", "y"]) {
+          writeFileSync(
+            join(dir, `e2e/${name}.spec.ts`),
+            'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+          );
+        }
+        if (e.throws) assert.throws(() => playwrightInventory(dir), e.throws, e.name);
+        else assert.deepEqual(playwrightInventory(dir).orphans, e.orphans, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright ambiguous named imports of specs fail closed", () => {
+    const entries = [
+      // Named bindings are ambiguous without usage analysis (Playwright's
+      // Babel elides bindings never used as values), so they fail closed
+      // whether or not the binding looks used.
+      { name: "named import", head: 'import { a } from "./suite.visual";', expect: "throw" },
+      {
+        name: "named import used",
+        head: 'import { a } from "./suite.visual";\nconsole.log(a);',
+        expect: "throw",
+      },
+      { name: "default import", head: 'import foo from "./suite.visual";', expect: "throw" },
+      { name: "namespace import", head: 'import * as ns from "./suite.visual";', expect: "throw" },
+      {
+        name: "multiline named import",
+        head: 'import {\n a\n} from "./suite.visual";',
+        expect: "throw",
+      },
+      { name: "import-equals", head: 'import X = require("./suite.visual");', expect: "throw" },
+      // Inline `type` specifiers are erased deterministically: no edge, and
+      // no failure. Unmarked re-exports, require calls and dynamic literal
+      // imports load the module and stay edges.
+      {
+        name: "inline type-only",
+        head: 'import { type A } from "./suite.visual";',
+        expect: "orphan",
+      },
+      {
+        name: "multiline inline type-only",
+        head: 'import {\n type A\n} from "./suite.visual";',
+        expect: "orphan",
+      },
+      {
+        name: "export inline type",
+        head: 'export { type A } from "./suite.visual";',
+        expect: "orphan",
+      },
+      { name: "export named", head: 'export { a } from "./suite.visual";', expect: "reachable" },
+      { name: "export star", head: 'export * from "./suite.visual";', expect: "reachable" },
+      { name: "require call", head: 'const x = require("./suite.visual");', expect: "reachable" },
+      {
+        name: "dynamic literal import",
+        head: 'await import("./suite.visual");',
+        expect: "reachable",
+      },
+      // A mid-line `import type` after a genuine edge: the classifier (not
+      // the line-start skipper) must skip the type-only clause.
+      {
+        name: "mid-line type import after edge",
+        head: 'import "./suite.visual"; import type { T } from "./other.visual";',
+        expect: "other",
+        typed: true,
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.am.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.am.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "entry", "entry.spec.ts"),
+          `${e.head}\nimport { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+        );
+        writeFileSync(
+          join(dir, "e2e", "entry", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+        );
+        if (e.typed) {
+          writeFileSync(
+            join(dir, "e2e", "entry", "other.visual.ts"),
+            'import { test } from "@playwright/test";\ntest("z", async () => {});\n',
+          );
+        }
+        if (e.expect === "throw") {
+          assert.throws(() => playwrightInventory(dir), /ambiguously imports/, e.name);
+        } else {
+          const expected =
+            e.expect === "orphan"
+              ? ["e2e/entry/suite.visual.ts"]
+              : e.expect === "other"
+                ? ["e2e/entry/other.visual.ts"]
+                : [];
+          assert.deepEqual(playwrightInventory(dir).orphans, expected, e.name);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   console.log(`test inventory selftest: ${cases} cases passed.`);
   return 0;
 }
@@ -742,21 +3029,38 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       flags.push(args[i]);
     }
   }
-  const unknown = flags.filter((a) => a !== "--selftest" && a !== "--strict");
+  const unknown = flags.filter((a) => a !== "--selftest" && a !== "--strict" && a !== "--json");
   if (unknown.length) {
-    console.error("Usage: node ci/test-inventory.mjs [--selftest] [--strict] [--root <dir>]");
+    console.error(
+      "Usage: node ci/test-inventory.mjs [--selftest] [--strict] [--json] [--root <dir>]",
+    );
     process.exitCode = 2;
   } else if (flags.includes("--selftest")) {
     process.exitCode = selftest();
+  } else if (flags.includes("--json")) {
+    // Agent-consumable Playwright summary only; the exit code still reflects
+    // every gate under --strict, like the human output below.
+    console.log(JSON.stringify(playwrightJsonSummary(root)));
+    const { orphans } = inventory(root);
+    const pw = playwrightInventory(root);
+    if (orphans.length + pw.orphans.length && flags.includes("--strict")) process.exitCode = 1;
   } else {
     const { files, orphans } = inventory(root);
+    const pw = playwrightInventory(root);
     console.log(
       `test inventory: ${files.length - orphans.length}/${files.length} test files reachable from CI.`,
+    );
+    console.log(
+      `playwright inventory: ${pw.files.length - pw.orphans.length}/${pw.files.length} specs reachable from CI.`,
     );
     for (const f of orphans) {
       console.log(`::warning file=${f}::test file is not reachable from any CI job`);
       console.log(`orphan: ${f}`);
     }
-    if (orphans.length && flags.includes("--strict")) process.exitCode = 1;
+    for (const f of pw.orphans) {
+      console.log(`::warning file=${f}::playwright spec is not reachable from any CI job`);
+      console.log(`orphan: ${f}`);
+    }
+    if (orphans.length + pw.orphans.length && flags.includes("--strict")) process.exitCode = 1;
   }
 }
