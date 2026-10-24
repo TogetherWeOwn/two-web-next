@@ -26,24 +26,90 @@ import {
   requestCalendar,
 } from "./helpers/past-archive-search-acceptance";
 
-const decode = (s: string) =>
-  s
-    .replaceAll("&amp;", "&")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">");
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  quot: '"',
+  lt: "<",
+  gt: ">",
+};
+// Single-pass entity decode. Each `&...;` match is replaced once from left
+// to right, so an emitted `&` is never re-scanned (no double-unescape).
+const decode = (s: string): string =>
+  s.replace(/&(amp|quot|lt|gt);/g, (m, e: string) => ENTITIES[e] ?? m);
+// Strip SSR comments without a lazy-dot regex: each iteration removes one
+// `<!--...-->` span via indexOf, so the loop terminates with no complete
+// comment left. An unterminated opener is kept, matching the old regex.
+function stripComments(s: string): string {
+  let out = "";
+  let rest = s;
+  let start = rest.indexOf("<!--");
+  while (start !== -1) {
+    const end = rest.indexOf("-->", start + 4);
+    if (end === -1) return out + rest;
+    out += rest.slice(0, start);
+    rest = rest.slice(end + 3);
+    start = rest.indexOf("<!--");
+  }
+  return out + rest;
+}
+const isWordChar = (c: string): boolean =>
+  (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c === "_";
+// Linear scan for `<option ...>...</option>` pairs. The tag end skips
+// double-quoted spans, so a literal `>` inside a quoted attribute value
+// (Svelte SSR emits those) does not end the tag. Equivalent to the old
+// /<option\b((?:"[^"]*"|[^>])*)>([\s\S]*?)<\/option>/g matchAll on
+// well-formed option markup, without nested quantifiers over `"`.
+function optionPairs(inner: string): Array<{ attrs: string; body: string }> {
+  const pairs: Array<{ attrs: string; body: string }> = [];
+  let from = 0;
+  while (from < inner.length) {
+    const tag = inner.indexOf("<option", from);
+    if (tag === -1) return pairs;
+    const boundary = inner[tag + 7];
+    if (boundary !== undefined && isWordChar(boundary)) {
+      from = tag + 1; // `<options...` is not an option tag; keep scanning.
+      continue;
+    }
+    let cursor = tag + 7;
+    let tagEnd = -1;
+    while (cursor < inner.length) {
+      const char = inner[cursor];
+      if (char === '"') {
+        const close = inner.indexOf('"', cursor + 1);
+        if (close === -1) {
+          cursor += 1;
+          continue;
+        }
+        cursor = close + 1;
+        continue;
+      }
+      if (char === ">") {
+        tagEnd = cursor;
+        break;
+      }
+      cursor += 1;
+    }
+    if (tagEnd === -1) return pairs;
+    const close = inner.indexOf("</option>", tagEnd + 1);
+    if (close === -1) {
+      from = tag + 1;
+      continue;
+    }
+    pairs.push({ attrs: inner.slice(tag + 7, tagEnd), body: inner.slice(tagEnd + 1, close) });
+    from = close + 9;
+  }
+  return pairs;
+}
 function gameOptions(html: string) {
   const select = [...html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/g)].find((m) =>
     /\bname="game"/.test(m[1]!),
   );
   expect(select, "Archive needs a native, named game select").toBeDefined();
-  return [...select![2]!.matchAll(/<option\b((?:"[^"]*"|[^>])*)>([\s\S]*?)<\/option>/g)].map(
-    (m) => ({
-      value: decode(/\bvalue="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!),
-      selected: /\bselected(?:[\s=>]|$)/.test(m[1]!),
-      label: decode(m[2]!.replace(/<!--[\s\S]*?-->/g, "").trim()),
-    }),
-  );
+  return optionPairs(select![2]!).map(({ attrs, body }) => ({
+    value: decode(/\bvalue="([^"]*)"/.exec(attrs)?.[1] ?? body),
+    selected: /\bselected(?:[\s=>]|$)/.test(attrs),
+    label: decode(stripComments(body).trim()),
+  }));
 }
 const totalPages = (html: string) => Number(/\bdata-total-pages="(\d+)"/.exec(html)?.[1]);
 
