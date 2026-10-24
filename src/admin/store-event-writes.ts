@@ -510,7 +510,9 @@ async function shiftFutureChildren(
     const proposedStart = child.startsAt.getTime() + startDelta;
     const proposedEnd = child.endsAt.getTime() + endDelta;
     if (proposedEnd <= proposedStart) {
-      throw new ValidationError({ ends_at: "The end is after the start." });
+      throw new ValidationError({
+        ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
+      });
     }
   }
   const owed: NonNullable<WriteBack>[] = [];
