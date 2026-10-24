@@ -8,6 +8,9 @@ import type { Browser, Locator } from "playwright";
 import { compilePlanningWindowKit } from "./admin-event-planning-window";
 import { pageShellFixture } from "./page-shells";
 
+// Browser callbacks run in Chromium; keep their DOM surface local to this module.
+declare const document: { activeElement: unknown };
+
 export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browser) {
   let kit: Awaited<ReturnType<typeof compilePlanningWindowKit>>;
   before(async () => {
