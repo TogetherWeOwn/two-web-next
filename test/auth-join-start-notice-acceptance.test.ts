@@ -463,7 +463,7 @@ describe("acceptance: /join no-JS contract (GREEN pins)", () => {
     // The only script is the click-to-load widget facade (defer, no inline
     // bootstrap, no hydration): the banner and the one-click link work with
     // scripts disabled.
-    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
     for (const tag of scripts) {
       expect(tag).toContain("/islands/join-widget.js");
       expect(tag).toContain("defer");
@@ -475,7 +475,7 @@ describe("acceptance: /join no-JS contract (GREEN pins)", () => {
     const bare = renderKitJoin(joinBaseData({ widgetUrl: null, widgetSnapshot: null }));
     expect(bare).not.toContain("<script");
     const withWidget = renderKitJoin(joinBaseData({ widgetUrl: WIDGET_URL, widgetSnapshot: null }));
-    const scripts = [...withWidget.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    const scripts = [...withWidget.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toContain("/islands/join-widget.js");
     expect(scripts[0]).toContain("defer");

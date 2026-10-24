@@ -417,7 +417,7 @@ describe("acceptance: / no-JS contract (RED for denied via HTTP, GREEN pins)", (
     const html = await (await app.request("/?n=signin_denied", {}, env)).text();
     // Only the JSON-LD data block (type application/ld+json, not executable);
     // the retry is a plain anchor that works with scripts disabled.
-    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
     for (const tag of scripts) {
       expect(tag).toContain("application/ld+json");
     }
@@ -425,7 +425,7 @@ describe("acceptance: / no-JS contract (RED for denied via HTTP, GREEN pins)", (
 
   it("Kit SSR ships no executable scripts (GREEN)", () => {
     const html = renderKit(baseData({ notice: "signin_denied" }));
-    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+    const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
     for (const tag of scripts) {
       expect(tag).toContain("application/ld+json");
     }
