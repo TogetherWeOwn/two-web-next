@@ -46,6 +46,52 @@ may have no originating HTTP request ID. Do not interpret a missing ID as a
 successful job. The W8 event-sync carrier and W13 queue-ledger carrier both
 propagate it; it is not a deduplication key and does not change job execution.
 
+## Staging calendar phase attribution
+
+Anonymous Hono `GET /events` requests with the exact configured staging
+`APP_URL` (`https://next.togetherweown.com`) add one `calendar_phase_ms`
+object to the existing final `http.request` event. Request host and QA token
+presence do not enable it. HEAD, other routes, resolved signed-in sessions,
+production and other environments retain their existing log shape. Admission
+is timed before session resolution; early admission failures can therefore
+carry that phase without resolving a session.
+
+Use the event's existing `request_id` and `release` to correlate these finite,
+nonnegative monotonic wall times, in milliseconds:
+
+| Key | Existing work measured |
+| --- | --- |
+| `public_read_guard` | Awaited public-read admission guard |
+| `calendar_model` | Complete calendar page-model load, including its fallbacks and search recording |
+| `canonical_read` | Initial canonical pipeline: published games, optional jump rank, parallel upcoming/past reads |
+| `discord_snapshot` | Discord source's upcoming snapshot call (including its existing cache/fallback behavior) |
+| `discord_dedupe` | Persisted Discord-ID read and transient deduplication/filtering |
+| `render_cache` | HTML render and existing eligible anonymous-cache body buffering/settlement; HTML render only on a cache hit |
+
+The object has at most these six keys. Missing means not observed, skipped or
+unmeasurable, **not zero**. A cache hit omits model phases. A rejected phase
+records only if its clock readings are usable; an unfinished peer is not
+awaited merely to complete diagnostics. Snapshots do not acquire late phases.
+Branch durations overlap: **never sum them as total latency**. The unchanged
+outer `duration_ms` includes other request work; a calendar-grid month's
+additional read, for example, belongs to model total, not the initial canonical
+branch. These observations alone prove neither a root cause, a latency
+improvement nor recovery.
+
+No query values, SQL, payloads, session/member identifiers or arbitrary labels
+enter this object. It adds no response header, endpoint, reads, cache bypass or
+refresh. Clock failure must not change the original result or rejection.
+Fixture-only check (no live access):
+
+```sh
+env -u DATABASE_URL -u BOT_DATABASE_URL -u LEGACY_DATABASE_URL \
+  -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  npx vitest run test/calendar-phase-timing.acceptance.test.ts
+```
+
+Rollback is a normally reviewed revert of this diagnostic source addition;
+there is no diagnostic data/schema/configuration state to undo.
+
 ## Sync-event retry-cause diagnostics
 
 The queue consumer emits one `sync retry classified` warning per
