@@ -41,6 +41,14 @@ const SUITES = [
     env: "KIT_ERROR_SHELL_BROWSER_TESTS",
     title: "Kit error shell rendered accessibility",
     min: 6,
+    childSuites: [
+      {
+        title: "admin failed-read retry: native keyboard/no-JS recovery",
+        min: 12,
+        registrarFile: "test/helpers/admin-read-retry-browser-acceptance.ts",
+        registrar: "registerAdminReadRetryBrowserAcceptance",
+      },
+    ],
   },
   {
     file: "test/profile-device-timezone.test.ts",
@@ -90,10 +98,15 @@ for (const suite of SUITES) {
         `\\n          npx vitest run ${escape(suite.file)} --reporter=default --reporter=json --outputFile\\.json=${escape(artifact)}\\n`,
       ),
     );
+    const verifierLine = (title, min) =>
+      `\\n          node ci/a11y-require-executed\\.mjs ${escape(artifact)} "${escape(title)}" ${min}`;
+    const childSuites = suite.childSuites ?? [];
     assert.match(
       step,
       new RegExp(
-        `\\n          node ci/a11y-require-executed\\.mjs ${escape(artifact)} "${escape(suite.title)}" ${suite.min}\\s*$`,
+        verifierLine(suite.title, suite.min) +
+          childSuites.map((child) => verifierLine(child.title, child.min)).join("") +
+          "\\s*$",
       ),
     );
     assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
@@ -103,6 +116,14 @@ for (const suite of SUITES) {
     const source = await readFile(new URL(`../${suite.file}`, import.meta.url), "utf8");
     assert.match(source, new RegExp(`skipIf\\(process\\.env\\.${suite.env} !== "true"\\)`));
     assert.match(source, new RegExp(`"${escape(suite.title)}"`));
+    for (const child of childSuites) {
+      const registrarSource = await readFile(
+        new URL(`../${child.registrarFile}`, import.meta.url),
+        "utf8",
+      );
+      assert.match(registrarSource, new RegExp(`"${escape(child.title)}"`));
+      assert.match(source, new RegExp(`\\b${escape(child.registrar)}\\(`));
+    }
   });
 }
 
