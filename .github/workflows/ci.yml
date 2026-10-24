@@ -888,7 +888,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.
