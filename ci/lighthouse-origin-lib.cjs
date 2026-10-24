@@ -118,6 +118,13 @@ function configFromEnv(env = process.env) {
 // so discovery filters that prefix with no extra request and no cache change.
 // Thresholds, budgets and the fail-closed unmeasured-route verdict are untouched.
 const STAGING_FIXTURE_TITLE_PREFIX = "Staging E2E ";
+// Cancelled events keep their feed row with a `Cancelled: ` title prefix
+// (src/events/feeds.ts RSS_CANCELLED_TITLE_PREFIX), so a cancelled staging
+// fixture reads `Cancelled: Staging E2E ...` and the bare fixture prefix
+// misses it. Strip one `Cancelled: ` prefix before the fixture check so
+// cancelled fixtures stay fixtures; genuine `Cancelled: ...` titles still
+// verify live (404/410 tolerated) as before.
+const CANCELLED_TITLE_PREFIX = "Cancelled: ";
 
 function decodeXmlEntities(value) {
   return value
@@ -130,7 +137,11 @@ function decodeXmlEntities(value) {
 }
 
 function isStagingFixtureTitle(title) {
-  return typeof title === "string" && title.startsWith(STAGING_FIXTURE_TITLE_PREFIX);
+  if (typeof title !== "string") return false;
+  const rest = title.startsWith(CANCELLED_TITLE_PREFIX)
+    ? title.slice(CANCELLED_TITLE_PREFIX.length)
+    : title;
+  return rest.startsWith(STAGING_FIXTURE_TITLE_PREFIX);
 }
 
 function eventItemsFromRss(xml) {
