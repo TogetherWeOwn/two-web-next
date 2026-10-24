@@ -163,7 +163,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         rsvpOpen,
       }));
 
-    it.each(["publish", "cancel", "rsvp-pause", "rsvp-reopen"])(
+    it.each(["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"])(
       "an expired bearer on bodiless %s with no Accept gets the JSON 401",
       async (action) => {
         const before = await rows();

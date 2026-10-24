@@ -6,7 +6,8 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
-import { attendeePageHref } from "./attendee-paths";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import type {
   EventAttendee,
   EventLink,
@@ -54,6 +55,7 @@ export const EventPage: FC<{
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
+  archive?: ArchiveContext | null;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -74,6 +76,7 @@ export const EventPage: FC<{
   series = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
+  archive,
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -119,6 +122,7 @@ export const EventPage: FC<{
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
+      backLink={archiveReturnLink(archive)}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -371,7 +375,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
+              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees

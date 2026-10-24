@@ -192,7 +192,7 @@ describe("Hono admin event writes refuse malformed keys before the store", () =>
     expect(h.query).not.toHaveBeenCalled();
   });
 
-  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+  for (const action of ["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"] as const) {
     it.each(SUBSET)(
       `POST ${action} $label: private 404 with zero statements`,
       async ({ segment }) => {

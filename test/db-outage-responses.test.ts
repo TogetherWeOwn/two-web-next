@@ -14,7 +14,7 @@ import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-d
 const EVENT_WRITES = [
   { method: "POST", path: "/events" },
   { method: "PATCH", path: `/events/${EVENT_KEY}` },
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST",
     path: `/events/${EVENT_KEY}/${action}`,
   })),
