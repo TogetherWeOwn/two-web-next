@@ -12,7 +12,9 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
+import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
+import { searchContext, type SearchSegment } from "./events/search-context";
 import { matchQuery } from "./events/search-log";
 import { publicReadGuard } from "./events/routes-shared";
 
@@ -213,4 +215,50 @@ export async function loadPastArchivePage<Row>({
   } catch (err) {
     reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
+}
+
+/**
+ * The anonymous-safe slice of a past-archive row: the fields the archive
+ * card renders (key/title/time/zone/location/game/counts/capacity) plus the
+ * occupancy aggregate and the public-by-design Discord event id. Kit
+ * serializes load data into `__data.json` for anonymous clients even with
+ * `csr=false`, so the past load returns this projection, never the full
+ * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
+ * for retention), descriptions, organizer names and sync internals never
+ * leave the server on this logged-out, indexed page. The one exception is
+ * the bounded search passage (`passage`, at most 320 code points, present
+ * only for a nonblank search and a non-empty description) that the archive
+ * card renders. Mirrors the join
+ * precedent (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
+ */
+export type PastArchiveEvent = Pick<
+  PublicEvent,
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "goingCount"
+  | "goingOccupancy"
+  | "capacity"
+  | "discordEventId"
+> & { passage?: SearchSegment[] };
+
+/** Project a past-archive row to its anonymous-safe slice. */
+export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
+  const projected: PastArchiveEvent = {
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+    game: row.game,
+    goingCount: row.goingCount,
+    goingOccupancy: row.goingOccupancy,
+    capacity: row.capacity,
+    discordEventId: row.discordEventId,
+  };
+  if (q && row.description) projected.passage = searchContext(row.description, q, true);
+  return projected;
 }
