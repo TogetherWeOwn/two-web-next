@@ -284,8 +284,8 @@ describe("throttle bucket inventory", () => {
   it("pins middleware buckets to their registration files and counts", () => {
     const found = middlewareBuckets();
     const expected = new Map<string, { file: string; count: number }[]>([
-      ["admin-write", [{ file: "src/admin/routes.tsx", count: 7 }]],
-      ["event-write", [{ file: "src/events/routes-writes.ts", count: 3 }]],
+      ["admin-write", [{ file: "src/admin/routes.tsx", count: 8 }]],
+      ["event-write", [{ file: "src/events/routes-writes.ts", count: 4 }]],
       ["logout", [{ file: "src/auth/routes.ts", count: 1 }]],
       ["qa-login", [{ file: "src/auth/routes.ts", count: 1 }]],
       ["alert-probe", [{ file: "src/alert-probe.ts", count: 1 }]],
@@ -431,7 +431,7 @@ describe("throttle bucket inventory", () => {
       "`login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/auth/routes.ts`](../src/auth/routes.ts)",
       "`alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts)",
       "`logout` (`POST /logout`) in [`src/auth/routes.ts`](../src/auth/routes.ts)",
-      "`event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts)",
+      "`event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts)",
     ]) {
       expect(throttlingDoc, `docs pin ${clause.slice(0, 48)}...`).toContain(clause);
     }
