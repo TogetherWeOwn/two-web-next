@@ -33,18 +33,29 @@
 
 ## Captures
 
-Captured and opened on <DATE> using the actual Hono screens and the actual
-Kit SSR, guest fixtures and local assets only. No real member, Discord
-request, or external service was used. Before captures render base
-<BASE>; after captures render this change.
+Captured and opened on 2026-10-24 using the actual Hono screens (via
+`test/app`) and the actual Kit SSR (esbuild + svelte-compiler harness),
+guest fixtures and local assets only. No real member, Discord request, or
+external service was used. Before captures render base `898f64278`; after
+captures render this change.
+
+Hono renders use a DB-less env, so counts hide and the schedule shows the
+unavailable card; Kit renders use guest fixtures (no counts, empty
+schedule, no widget). Both are self-consistent before/after within each
+twin. Kit captures inline the built app stylesheet
+(`0.jsBMoaS5.css`, md5 `ece1009bd…`, identical before and after: no style
+change) plus the compiled component CSS, in the screenshot copies only.
 
 State A is Kit `/join?notice=start-failed`; state B is `?n=signin_denied`
 on both home twins. Every capture is a full-page shot at the named
-viewport. All images were opened: the before pair shows the plain join
-page and the bare denied notice; the after captures show the
+viewport. All twelve images were opened: the before shots show the plain
+join page and the bare denied notice; the after captures show the
 `join-start-notice` banner above the join layout and the "Try signing in
-again" retry link under the denied notice. No horizontal document
-overflow in any capture.
+again" retry link under the denied notice. The retry link carries the
+focus outline from the scripted focus check (it received keyboard focus).
+No horizontal document overflow in any capture (measured 0 px). Render
+deltas are the new markup only: Hono denied +82 B, Kit denied +81 B,
+Kit join +141 B.
 
 | Surface | State | Desktop (1280×800) | Mobile (390×844) |
 | --- | --- | --- | --- |
