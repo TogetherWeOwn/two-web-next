@@ -288,6 +288,11 @@ jobs:
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
+      - name: Native event share (real Chromium, Hono and Kit fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
@@ -401,6 +406,9 @@ jobs:
       - name: Kit public payload enumeration and checker selftests (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
+      - name: Security-pin contracts selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -474,6 +482,9 @@ jobs:
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
+      - name: Security-pin contracts (Host admission + CSP inline styles)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs

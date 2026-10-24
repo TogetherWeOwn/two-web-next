@@ -8,7 +8,9 @@ import {
   EVENT_DRAFT_TESTID,
   SCHEDULE_AVAILABILITY_TESTID,
   SPOTS_LEFT_TESTID,
+  cardDayLabel,
   cardTimeLabel,
+  wallDateIso,
   existingResponsesText,
   goingCountText,
   loginUrl,
@@ -26,6 +28,9 @@ import {
   rowZone,
 } from "./pages-calendar-row";
 
+// Shared by persisted and Discord cards; count code points, never UTF-16 units.
+const DESCRIPTION_LIMIT = 240;
+
 /**
  * One event card (legacy partials/event-card-anon): same markup for every
  * viewer until slice 2 lands the RSVP control — guests get the sign-in link,
@@ -37,23 +42,27 @@ import {
  * (`rowAvailability`: "N seats left", "RSVPs paused", "Ended", "No seat
  * limit", "Discord-managed") is a server-rendered snapshot from existing row
  * data — never a reservation — so members need not open a night to learn it
- * is paused or full. `now` is the same model instant the screen renders with.
+ * is paused or full. Screens pass their model instant as `now`; standalone
+ * callers may omit it and use the render instant, never an unbounded verdict.
  */
 export const CalCard: FC<{
   e: CalRow;
   zone: string;
-  now: Date;
+  now?: Date;
   isPast: boolean;
   member: boolean;
   inviteUrl: string;
   loginReturnTo: string | null;
-}> = ({ e, zone, now, isPast, member, inviteUrl, loginReturnTo }) => {
+}> = ({ e, zone, now = new Date(), isPast, member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
   // The drawer context wins over row dates: a card shown under past events
   // reads Ended even if a fixture disagrees about the instant.
   const availability = rowAvailability(e, now, isPast);
+  const startDay = wallDateIso(e.startsAt, tz);
+  const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
+  const descriptionPoints = [...(e.description ?? "")];
   return (
     <li>
       <article
@@ -101,7 +110,11 @@ export const CalCard: FC<{
             {e.endsAt ? (
               <>
                 {" · "}
-                <span>{wallTimeHm(e.endsAt, tz)}</span>
+                <time datetime={e.endsAt.toISOString()}>
+                  {(endDay !== startDay
+                    ? `${cardDayLabel(e.endsAt, tz)}${endDay!.slice(0, -6) !== startDay.slice(0, -6) ? ` ${endDay!.slice(0, -6)}` : ""}, `
+                    : "") + wallTimeHm(e.endsAt, tz)}
+                </time>
               </>
             ) : null}{" "}
             <span>{tz}</span>
@@ -112,15 +125,29 @@ export const CalCard: FC<{
               </>
             ) : null}
           </p>
-          {e.description ? <p>{e.description}</p> : null}
+          {descriptionPoints.length > DESCRIPTION_LIMIT ? (
+            <details class="schedule-description">
+              <summary>
+                <span class="schedule-excerpt">
+                  {descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…
+                  <br />
+                </span>
+                Full description
+              </summary>
+              <p>{e.description}</p>
+            </details>
+          ) : e.description ? (
+            <p>{e.description}</p>
+          ) : null}
         </div>
         <div class="schedule-actions">
           {!transient ? (
-            <span class="schedule-attendance" data-testid="event-going-count">
-              {cancelled
-                ? existingResponsesText(e.goingCount)
-                : goingCountText(e.goingCount, e.capacity)}
-              {/* Full marker, same node and copy as the detail lineup: one
+            <span class="schedule-attendance">
+              <span data-testid="event-going-count">
+                {cancelled
+                  ? existingResponsesText(e.goingCount)
+                  : goingCountText(e.goingCount, e.capacity)}
+                {/* Full marker, same node and copy as the detail lineup: one
                   inline run, because the actions column is a grid and a
                   sibling would stack onto its own row. The verdict reads seat
                   occupancy, never the attributable count alone, so the card
@@ -133,17 +160,18 @@ export const CalCard: FC<{
                   never Full. A paused row keeps its supplemental Full marker
                   beside the paused line: paused wins the verdict, the marker
                   stays as capacity fact. */}
-              {!cancelled &&
-              availability?.state !== "past" &&
-              e.capacity !== null &&
-              e.goingOccupancy >= e.capacity ? (
-                <>
-                  {" · "}
-                  <span data-testid={SPOTS_LEFT_TESTID}>
-                    {spotsLeftText(e.goingOccupancy, e.capacity)}
-                  </span>
-                </>
-              ) : null}
+                {!cancelled &&
+                availability?.state !== "past" &&
+                e.capacity !== null &&
+                e.goingOccupancy >= e.capacity ? (
+                  <>
+                    {" · "}
+                    <span data-testid={SPOTS_LEFT_TESTID}>
+                      {spotsLeftText(e.goingOccupancy, e.capacity)}
+                    </span>
+                  </>
+                ) : null}
+              </span>
               {/* Availability snapshot: paused/remaining/ended/uncapped. The
                   full state keeps the marker above, so it renders no second
                   node; cancelled and draft rows render none at all. */}
