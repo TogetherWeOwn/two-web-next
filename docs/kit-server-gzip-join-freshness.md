@@ -2,6 +2,53 @@
 
 ## Latest base reconciliation — 2026-10-24
 
+Merge main `30b0415fd6cd50b626a42e9995996cbf04f881e9`, including the
+restored-write/profile budget reconciliation and calendar-card scanning.
+Only the budget comment conflicts. Preserve all incoming history byte-for-byte,
+then the existing 3306-character branch-only join-freshness suffix exactly once.
+Every non-comment budget field equals this base. In particular, retain its
+separately landed client JS raw/gzip ceilings of **253440/102400 bytes** and
+unchanged **333312-byte server gzip ceiling**. This PR adds no allowance.
+
+Two fresh production builds with Node 24.22.1 and committed root/web locks
+installed outside the checkout pass the unchanged checker:
+
+| Artifact | Two resolved-tree builds | Inherited limit |
+| --- | ---: | ---: |
+| Server JS files | 115 | 126 |
+| Server JS raw bytes | 1152618–1152620 | 1203200 |
+| Server JS gzip bytes | 327124–327125 | 333312 |
+| Client JS files | 54 | 55 |
+| Client JS raw/gzip bytes | 251164/101622 | 253440/102400 |
+| Client CSS files | 2 | 4 |
+| Client CSS raw/gzip bytes | 2861/1019 | 3072/1024 |
+| Worker entry raw/gzip bytes | 2551/1219 | 3584/1536 |
+
+Worst server gzip margin: **6187 bytes**. Client gzip has 778 bytes of margin;
+CSS gzip has 5 bytes. These are prerequisite-tree measurements, not feature
+integration measurements. No runtime, test, checker, dependency or workflow
+file differs from this base.
+
+Fresh verification: checker selftests **6/6**, checker tests **13/13**, and
+Lighthouse navigation admission fixtures **113/113** pass. Five incoming-base
+calendar/performance fixture suites report **214 passed, 25 skipped** with
+database environment bindings unset; the skipped database cases are not
+verified. Lint, typecheck, documentation links and floor guard pass. An initial
+invocation of a nonexistent `ci/lighthouse-admission.test.mjs` ran no tests;
+the tracked `test/lighthouse-navigation-admission-acceptance.test.mjs` passed
+using Vitest. No implementation or test edit was needed.
+
+`context-pack --base origin/main` failed during its MCP initialization
+(`MCP server exited`); it did not produce a caller analysis. The independently
+checked branch diff contains only budget prose and this document, with zero
+runtime symbols or callers to update. No fresh full `npm run check`, feature
+integration, join-freshness suite, browser, staging or deployment run is claimed.
+Historical broad-check failures below remain disclosed. Exact-head CI and
+independent review are still required after this resolution; the feature ref
+remains untouched.
+
+## Earlier base reconciliation — 2026-10-24
+
 Merge main `509cb40a7e978031089d92220a7ea2b2ba55516d`, including calendar
 subscriptions, cancelled-event RSS signals, Lighthouse navigation evidence and
 the accessibility allocation history. Only the budget comment conflicts. Keep
