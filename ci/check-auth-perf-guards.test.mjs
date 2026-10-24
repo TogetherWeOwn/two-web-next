@@ -17,14 +17,17 @@ import { fileURLToPath } from "node:url";
 const runner = fileURLToPath(
   new URL("./fixtures/auth-perf-settlement-runner.mjs", import.meta.url),
 );
+const guardsRunner = fileURLToPath(
+  new URL("./fixtures/auth-perf-guards-runner.mjs", import.meta.url),
+);
 const ids = ["member-rsvp", "moderator-admin"];
 const scratch =
   process.env.PAPERCLIP_RUN_SCRATCH_DIR || process.env.PAPERCLIP_SCRATCH_DIR || tmpdir();
 
-function runFixture(t, config = {}) {
+function runFixture(t, config = {}, driver = runner) {
   const cwd = mkdtempSync(join(scratch, "auth-perf-guards-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  const child = spawnSync(process.execPath, [runner], {
+  const child = spawnSync(process.execPath, [driver], {
     cwd,
     env: { NODE_NO_WARNINGS: "1" },
     input: JSON.stringify(config),
@@ -84,6 +87,8 @@ for (const env of [
   { AUTH_PERF_URL: "ftp://example.test" },
   { AUTH_PERF_MUTANT: "unsupported" },
   { AUTH_PERF_URL: "https://qa:secret@fixture.test/" },
+  { AUTH_PERF_URL: "https://qa@fixture.test/" },
+  { AUTH_PERF_URL: "https://:secret@fixture.test/" },
   { AUTH_PERF_URL: "https://fixture.test/private?token=x" },
   { AUTH_PERF_URL: "https://fixture.test/private#frag" },
 ]) {
@@ -99,8 +104,9 @@ for (const env of [
 
 // Finding 1: the known QA value is the journey id, a word the receipt
 // legitimately contains, so the end-to-end secrets wiring must refuse the
-// write. Dropping the secrets argument (or any secrets.add site) lets the
-// write succeed and fails this test.
+// write. Dropping the secrets argument or the QA-token collection lets the
+// write succeed and fails this test. The observed-cookie collection has its
+// own test below via the guards-owned runner.
 test("known QA value reaching the ledger refuses both artifact writes", (t) => {
   const result = runFixture(t, { env: { E2E_QA_TOKEN: "member-rsvp" } });
   assert.equal(result.done, true);
@@ -109,6 +115,19 @@ test("known QA value reaching the ledger refuses both artifact writes", (t) => {
   assert.match(result.output, /secret-shaped content in ledger/);
   assert.deepEqual(result.files, {}, "a refused ledger must write no receipts");
   assert.deepEqual(result.filesAfterLate, {});
+  const logins = result.calls.filter((c) => c.label.endsWith(":login"));
+  assert.equal(logins.length, 2, "the probe ran; refusal happened at write time");
+});
+
+// Finding 1, cookie branch: the issued cookie value is the journey id, so the
+// observed-cookie collection must refuse the write. Dropping that secrets.add
+// site lets the write succeed and fails this test.
+test("observed cookie value reaching the ledger refuses both artifact writes", (t) => {
+  const result = runFixture(t, { cookieValue: "member-rsvp" }, guardsRunner);
+  assert.equal(result.rejected, null);
+  assert.notEqual(result.code, 0, "guard refusal must exit nonzero");
+  assert.match(result.output, /secret-shaped content in ledger/);
+  assert.deepEqual(result.files, {}, "a refused ledger must write no receipts");
   const logins = result.calls.filter((c) => c.label.endsWith(":login"));
   assert.equal(logins.length, 2, "the probe ran; refusal happened at write time");
 });
