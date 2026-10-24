@@ -45,13 +45,17 @@ const SUITES = ["test/host-admission-forwarding.test.ts", "test/inline-style-rou
 
 const file = (rel) => readFileSync(join(ROOT, rel), "utf8");
 
-/** Admission must read the Host header and no other request header. */
-export function extractHeaderReads(source) {
-  const code = source
+function stripComments(source) {
+  return source
     .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
     .replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/** Admission must read the Host header and no other request header. */
+export function extractHeaderReads(source) {
+  const code = stripComments(source);
   const reads = [];
-  for (const match of code.matchAll(/\.header\(\s*["'`]([^"'`]+)["'`]/gi)) {
+  for (const match of code.matchAll(/\.header\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
     reads.push(match[1].toLowerCase());
   }
   return [...new Set(reads)].sort();
@@ -60,6 +64,35 @@ export function extractHeaderReads(source) {
 export function checkHostSourcePin(source = file(TRUST_HOSTS_PATH)) {
   if (!source.includes("deliberately ignored")) {
     return { id: "host-source-pin", status: "fail", detail: "deliberate-ignore marker missing" };
+  }
+  const code = stripComments(source);
+  // Fail closed on header-access shapes the literal extractor cannot see: a
+  // raw headers.get read or any .raw access blinds the Host-only pin, as does
+  // a .header() call whose argument is not a string literal (variable,
+  // computed or template name). Each shape fails even when no literal
+  // non-Host read is visible.
+  if (/\.headers\s*\.\s*get\s*\(/i.test(code)) {
+    return {
+      id: "host-source-pin",
+      status: "fail",
+      detail: "admission uses raw headers.get (non-Host read)",
+    };
+  }
+  if (/\.raw\b/i.test(code)) {
+    return {
+      id: "host-source-pin",
+      status: "fail",
+      detail: "admission uses .raw request access (non-Host read)",
+    };
+  }
+  const totalHeaderCalls = (code.match(/\.header\s*\(/gi) ?? []).length;
+  const literalHeaderCalls = [...code.matchAll(/\.header\s*\(\s*["'`][^"'`]+["'`]/gi)].length;
+  if (totalHeaderCalls > literalHeaderCalls) {
+    return {
+      id: "host-source-pin",
+      status: "fail",
+      detail: "admission uses non-literal .header() argument (pin is blind)",
+    };
   }
   const reads = extractHeaderReads(source);
   if (reads.length === 0) {
@@ -119,7 +152,18 @@ export function checkLeafLifecycleStatic(
 export function parseAllowlist(source) {
   const block = /INLINE_CRITICAL_CSS_PATHS[^=]*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(source);
   if (!block) return null;
-  return [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const literals = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  // Fail closed on non-literal Set entries: a spread, identifier,
+  // single-quoted or template-literal path would otherwise be invisible to
+  // the literal extractor while widening the runtime allowlist. Anything
+  // besides double-quoted literals, commas and whitespace rejects the pin.
+  const rest = block[1]
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "$1")
+    .replace(/"[^"]*"/g, "")
+    .replace(/[\s,]/g, "");
+  if (rest.length > 0 || literals.length === 0) return null;
+  return literals;
 }
 
 export function checkInlineAllowlist(source = file(HEADERS_PATH)) {
@@ -341,6 +385,30 @@ function selftest() {
       JSON.stringify(["host", "x-host"]),
     "reads dedupe and lowercase",
   );
+  assert(
+    checkHostSourcePin('// deliberately ignored\nc.req.header ("host")').status === "pass",
+    "spaced host read passes",
+  );
+  assert(
+    checkHostSourcePin('// deliberately ignored\nc.req.header ("x-forwarded-host")').status ===
+      "fail",
+    "spaced forwarding read fails",
+  );
+  assert(
+    checkHostSourcePin(
+      '// deliberately ignored\nconst fwd = c.req.raw.headers.get("x-original-host");\nc.req.header("host")',
+    ).status === "fail",
+    "raw headers.get read fails",
+  );
+  assert(
+    checkHostSourcePin("// deliberately ignored\nc.req.raw.url").status === "fail",
+    "raw request access fails",
+  );
+  assert(
+    checkHostSourcePin('// deliberately ignored\nconst name = "host";\nc.req.header(name)')
+      .status === "fail",
+    "variable header name fails",
+  );
   // Lifecycle: matching bytes pass; drifted bytes or hash fail; the input
   // list must match the generated marker or the gate is checking the wrong files.
   assert(
@@ -387,6 +455,26 @@ function selftest() {
       allowlistSource('  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",\n  "/join",'),
     ).status === "fail",
     "widened allowlist fails",
+  );
+  assert(
+    checkInlineAllowlist(
+      allowlistSource(
+        '  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",\n  ...EXTRA_INLINE_PATHS,',
+      ),
+    ).status === "fail",
+    "spread widening fails",
+  );
+  assert(
+    checkInlineAllowlist(
+      allowlistSource('  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",\n  EXTRA_PATH,'),
+    ).status === "fail",
+    "identifier entry fails",
+  );
+  assert(
+    checkInlineAllowlist(
+      allowlistSource("  '/',\n  '/about',\n  '/faq',\n  '/rules',\n  '/privacy',"),
+    ).status === "fail",
+    "single-quoted entries fail",
   );
   assert(checkInlineAllowlist("no set here").status === "fail", "unparseable allowlist fails");
   // Threat evidence: both rows with both pointers pass; a missing row or a

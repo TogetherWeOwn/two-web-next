@@ -87,6 +87,16 @@ async function classifyResponse(
         detail: `allowlisted style-src is ${styleSrc ?? "missing"}`,
       };
     }
+    // Presence is not exactness: an extra block beside the expected one is
+    // not covered by the recorded hash, so strip the expected block and fail
+    // if any further inline <style> emission remains.
+    if (INLINE_STYLE_OPEN.test(body.replace(ctx.expectedBlock, ""))) {
+      return {
+        kind: "violation",
+        path,
+        detail: "allowlisted path emits an inline <style> block beyond the exact block",
+      };
+    }
     return { kind: "allowlisted", path };
   }
   if (INLINE_STYLE_OPEN.test(body)) {
@@ -168,6 +178,15 @@ function canaryFixture() {
       "<!doctype html><html><head><style>p{color:blue}</style></head><body>wrong bytes</body></html>",
     );
   });
+  fixture.get("/extra-block", (c) => {
+    c.header(
+      "Content-Security-Policy",
+      `default-src 'self'; style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`,
+    );
+    return c.html(
+      `<!doctype html><html><head>${EXPECTED_BLOCK}<style>p{color:red}</style></head><body>extra block</body></html>`,
+    );
+  });
   return fixture;
 }
 
@@ -192,6 +211,17 @@ describe("inline-style route sweep", () => {
     ).toMatchObject({
       kind: "violation",
       detail: "allowlisted path is missing the exact inlined block",
+    });
+  });
+
+  it("canary: an allowlisted path with an extra block beyond the exact block is flagged", async () => {
+    const fixture = canaryFixture();
+    const ctx = { ...SWEEP_CTX, allowlist: new Set(["/extra-block"]) };
+    expect(
+      await classifyResponse("/extra-block", await fixture.request("/extra-block"), ctx),
+    ).toMatchObject({
+      kind: "violation",
+      detail: "allowlisted path emits an inline <style> block beyond the exact block",
     });
   });
 

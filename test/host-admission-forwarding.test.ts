@@ -33,7 +33,9 @@ const EVIL_DIRECT = "evil-direct.example.test";
 const EVIL_FORWARD = "evil-forward.example.test";
 
 // Host-valued forwarding signals: each carries a hostile host the verdict
-// must ignore (direct-host mismatch, forwarded-host-only mismatch).
+// must ignore (direct-host mismatch, forwarded-host-only mismatch). The last
+// two are unenumerated legacy aliases: the static pin fails closed on any
+// header read, and the matrix proves these aliases stay ignored too.
 const HOST_VALUED_FORWARDING: Array<[string, string]> = [
   ["x-forwarded-host", EVIL_FORWARD],
   ["forwarded", `host=${EVIL_FORWARD}`],
@@ -41,6 +43,8 @@ const HOST_VALUED_FORWARDING: Array<[string, string]> = [
   // Comma-joined values are the classic poisoning shape; admission must not
   // parse this header at all, so any value stays ignored.
   ["x-forwarded-host", `${TRUSTED}, ${EVIL_FORWARD}`],
+  ["x-original-host", EVIL_FORWARD],
+  ["x-host", EVIL_FORWARD],
 ];
 
 // Non-host forwarding signals: hostile-looking values the verdict must also
@@ -110,6 +114,8 @@ describe("host-admission forwarding contract", () => {
       "x-forwarded-host": TRUSTED,
       forwarded: `for=203.0.113.7;host=${TRUSTED}`,
       "x-forwarded-proto": "https",
+      "x-original-host": TRUSTED,
+      "x-host": TRUSTED,
     };
     const res = await app.request(
       `${base.APP_URL}/up`,
@@ -169,6 +175,8 @@ describe("host-admission forwarding contract", () => {
       "x-forwarded-proto": "http",
       "x-forwarded-port": "8080",
       "x-forwarded-for": "203.0.113.7",
+      "x-original-host": EVIL_FORWARD,
+      "x-host": EVIL_FORWARD,
     };
     const headers = { host: TRUSTED, ...evilForwarding };
     const home = await app.request(`${base.APP_URL}/`, { headers }, base);

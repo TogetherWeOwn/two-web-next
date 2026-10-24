@@ -119,6 +119,13 @@ test("an allowlist widening fails the static pin", () => {
   assert.match(result.detail, /\/join/);
 });
 
+test("a spread-widened allowlist fails closed, not silently exact", () => {
+  const widened = `const INLINE_CRITICAL_CSS_PATHS = new Set([\n  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",\n  ...EXTRA_INLINE_PATHS,\n]);`;
+  const result = checkInlineAllowlist(widened);
+  assert.equal(result.status, "fail");
+  assert.match(result.detail, /does not parse/);
+});
+
 function runGate(args) {
   try {
     const stdout = execFileSync(process.execPath, [GATE, ...args], {
