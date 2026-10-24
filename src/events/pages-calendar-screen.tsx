@@ -159,7 +159,11 @@ export const EventsCalendarPage: FC<{
   // incomplete — older in-month past rows may exist unread — so the claim is
   // suppressed there; future months cannot hold past rows. A failed source
   // suppresses the claim — October may only look empty — while the
-  // error/never/gap states keep their own precedence.
+  // error/never/gap states keep their own precedence. A game-scoped miss
+  // already names the effective scope with its own broadening link, so it
+  // suppresses the unscoped month sentence: with game-filtered grid rows the
+  // sentence is false when another game occupies the month, and its
+  // Upcoming-events link would land back on the same filtered zero.
   const monthHasInMonthRows =
     weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
     past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
@@ -170,7 +174,8 @@ export const EventsCalendarPage: FC<{
     state.view === "calendar" &&
     !discordFailed &&
     !monthHasInMonthRows &&
-    !(pastMayBeTruncated && monthCouldHoldPast);
+    !(pastMayBeTruncated && monthCouldHoldPast) &&
+    !searchMiss;
   return (
     <ScheduleShell
       title="Events"
