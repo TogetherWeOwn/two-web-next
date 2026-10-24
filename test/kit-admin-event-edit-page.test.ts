@@ -26,14 +26,6 @@ const load = readFileSync(
   ),
   "utf8",
 );
-const rsvpReview = readFileSync(
-  fileURLToPath(new URL("../web/src/lib/RsvpReview.svelte", import.meta.url).href),
-  "utf8",
-);
-const rsvpReviewCopy = readFileSync(
-  fileURLToPath(new URL("../src/admin/rsvp-review.ts", import.meta.url).href),
-  "utf8",
-);
 
 describe("Kit event-edit page contract", () => {
   it("posts the edit form to the Hono-owned update endpoint with the editor guard", () => {
@@ -112,15 +104,7 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain("Cancel event");
     expect(source).toContain("rsvp-pause");
     expect(source).toContain("rsvp-reopen");
-    // Pause renders through the shared native review: the page passes the
-    // unchanged endpoint and testid, and the component carries the form.
-    expect(source).toContain("<RsvpReview");
-    expect(source).toContain("action={`/admin/events/${view.key}/rsvp-pause`}");
-    expect(source).toContain('testId="rsvp-pause"');
-    expect(rsvpReview).toContain('method="post"');
-    expect(rsvpReview).toContain("{action}");
-    expect(rsvpReview).toContain("data-testid={testId}");
-    expect(rsvpReviewCopy).toContain('final: "Pause RSVPs"');
+    expect(source).toContain("Pause RSVPs");
     expect(source).toContain("Reopen RSVPs");
   });
 

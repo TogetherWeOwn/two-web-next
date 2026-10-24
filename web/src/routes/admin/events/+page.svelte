@@ -1,6 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import RsvpReview from "#lib/RsvpReview.svelte";
 import type { PageProps } from "./$types";
 import {
   eventListUrl,
@@ -18,7 +17,10 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // strings from the load, exactly as the Hono page emits them. No island and
 // no event handlers: every control is a plain GET form, sort/paging link or
 // POST form to the Hono-owned mutation endpoints, so the page works with
-// JavaScript disabled, exactly like the Hono panel.
+// JavaScript disabled, exactly like the Hono panel. The pause review below
+// is inlined, not a shared component: a shared chunk would breach the
+// client file-count ceiling. Its copy mirrors src/admin/rsvp-review.ts and
+// the parity test fails on drift.
 let { data }: PageProps = $props();
 const { query, rows, hasNext, emptyText } = $derived(data);
 const now = new Date();
@@ -156,12 +158,16 @@ const now = new Date();
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {#if r.rsvpOpen}
-                    <RsvpReview
-                      title={r.title}
-                      targetId={r.eventKey}
-                      action={`/admin/events/${r.eventKey}/rsvp-pause`}
-                      testId="rsvp-pause"
-                    />
+                    <details class="rsvp-review" data-testid="rsvp-pause-review">
+                      <summary aria-label={`Review pause: ${r.title}`}>Review pause</summary>
+                      <p>Saved event: <strong>{r.title}</strong></p>
+                      <p class="rsvp-review-id">ID: {r.eventKey}</p>
+                      <p>Pausing closes signups and freezes the waitlist line. Reopening settles waitlist vacancies.</p>
+                      <p>To keep RSVPs open, close this review using Review pause again. Opening or closing this review changes nothing.</p>
+                      <form method="post" action={`/admin/events/${r.eventKey}/rsvp-pause`}>
+                        <button type="submit" class="btn" data-testid="rsvp-pause">Pause RSVPs</button>
+                      </form>
+                    </details>
                   {:else}
                     <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
                       <button type="submit" class="link" data-testid="rsvp-reopen">
