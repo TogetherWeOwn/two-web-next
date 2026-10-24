@@ -18,6 +18,7 @@ import {
 import { createRequire } from "node:module";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse } from "parse5";
 
 const origin = "http://127.0.0.1:8787";
 const fixtureKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -74,7 +75,6 @@ export function classifyHref(href, documentUrl) {
     if (href.trim() === "" || href.startsWith("#")) return { kind: "fragment" };
     const scheme = href.match(/^\s*([A-Za-z][A-Za-z0-9+.-]*):/);
     if (scheme && !/^https?$/i.test(scheme[1])) return { kind: "non-http" };
-    if (href.trim().startsWith("//")) return { kind: "external" };
     const base = new URL(documentUrl);
     if (base.protocol !== "http:" && base.protocol !== "https:") return { kind: "malformed" };
     const url = new URL(href, base);
@@ -92,115 +92,22 @@ export function classifyHref(href, documentUrl) {
   }
 }
 
-function decodeEntities(value) {
-  // Single pass with &amp; last so "&amp;lt;" decodes to "&lt;", not "<".
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-// Tag-name boundary after "<script" / "</script": only whitespace, "/" or ">"
-// ends the name, so "<scripts>" never matches. Quotes do not end a tag name
-// (the HTML parser keeps them in the name), so "<script"x">" is not a script
-// element either.
-function isTagNameBoundary(ch) {
-  return (
-    ch === undefined ||
-    ch === ">" ||
-    ch === "/" ||
-    ch === " " ||
-    ch === "\t" ||
-    ch === "\n" ||
-    ch === "\f" ||
-    ch === "\r"
-  );
-}
-
-// Offset just past the ">" of a "<script ...>" open tag at i, or -1 when the
-// position holds no script open tag. Case-insensitive on the element name only.
-function matchScriptOpen(html, i) {
-  if (html.slice(i, i + 7).toLowerCase() !== "<script") return -1;
-  if (!isTagNameBoundary(html[i + 7])) return -1;
-  const end = html.indexOf(">", i + 7);
-  return end === -1 ? -1 : end + 1;
-}
-
-function indexOfTag(html, tag, from) {
-  let i = from;
-  for (;;) {
-    i = html.indexOf("<", i);
-    if (i === -1 || i + tag.length > html.length) return -1;
-    if (html.slice(i, i + tag.length).toLowerCase() === tag) return i;
-    i += 1;
-  }
-}
-
-// Offset just past a script element's end tag: the first "</script" with a tag
-// boundary after it, through its ">". End tags may carry whitespace or
-// attributes ("</script foo>" still closes the element); without any end tag
-// the script runs to end of input, the way browsers parse it.
-function skipScriptBody(html, from) {
-  let at = from;
-  for (;;) {
-    const close = indexOfTag(html, "</script", at);
-    if (close === -1) return html.length;
-    const after = close + "</script".length;
-    if (!isTagNameBoundary(html[after])) {
-      at = after;
-      continue;
-    }
-    const end = html.indexOf(">", after);
-    return end === -1 ? html.length : end + 1;
-  }
-}
-
-// The document with HTML comments and script elements removed, found with an
-// explicit scanner instead of filter regexes. A comment runs to the first
-// "-->"; an unterminated comment runs to end of input, the way browsers
-// parse it.
-function stripNonRendered(html) {
-  const kept = [];
-  let runStart = 0;
-  let i = 0;
-  const n = html.length;
-  while (i < n) {
-    let skipTo = -1;
-    if (html[i] === "<") {
-      if (html.startsWith("<!--", i)) {
-        const end = html.indexOf("-->", i + 4);
-        skipTo = end === -1 ? n : end + 3;
-      } else {
-        const body = matchScriptOpen(html, i);
-        if (body !== -1) skipTo = skipScriptBody(html, body);
-      }
-    }
-    if (skipTo === -1) {
-      i += 1;
-    } else {
-      if (i > runStart) kept.push(html.slice(runStart, i));
-      i = skipTo;
-      runStart = skipTo;
-    }
-  }
-  if (n > runStart) kept.push(html.slice(runStart));
-  return kept.join("");
-}
-
-// Raw anchor hrefs in document order. Anchors inside HTML comments and script
-// text are not real links, so those regions are skipped before scanning. The
-// first href attribute on an <a> tag wins, matching browser behavior; lookalike
-// attributes such as data-href never match because "data-" sits between the
-// whitespace and "href".
+// Parse as HTML, without executing scripts or fetching resources. Attribute
+// quoting, duplicate attributes and character references follow the browser
+// tokenizer, so marker-shaped attribute text cannot hide later anchors. Walk
+// the document tree only: template contents are a separate, inert fragment.
 function rawHrefs(html) {
-  const text = typeof html === "string" ? html : "";
-  const visible = stripNonRendered(text);
+  const document = parse(typeof html === "string" ? html : "");
+  const pending = [document];
   const out = [];
-  for (const tag of visible.matchAll(/<a\b[^>]*>/gi)) {
-    const attr = tag[0].match(/\s+href\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
-    if (attr) out.push(decodeEntities(attr[1] ?? attr[2] ?? ""));
+  while (pending.length) {
+    const node = pending.pop();
+    if (node.tagName === "a") {
+      const href = node.attrs.find((attr) => attr.name === "href" && !attr.namespace);
+      if (href) out.push(href.value);
+    }
+    for (let i = (node.childNodes?.length ?? 0) - 1; i >= 0; i -= 1)
+      pending.push(node.childNodes[i]);
   }
   return out;
 }
@@ -324,7 +231,8 @@ function linkPathname(link) {
 }
 
 function isMalformedLink(link) {
-  if (typeof link !== "string") return true;
+  // This phase accepts classified internal targets, never raw URL authorities.
+  if (typeof link !== "string" || !link.startsWith("/") || link.startsWith("//")) return true;
   try {
     decodeURI(linkPathname(link));
     return false;
@@ -333,11 +241,14 @@ function isMalformedLink(link) {
   }
 }
 
-// Bounded preview of a malformed href: query and hash are stripped so finding
-// text never dumps query values, and the remainder is capped.
+// Never echo an unparseable authority: it may contain userinfo credentials.
+// Only a bounded root-relative pathname is useful as a diagnostic preview.
 function malformedPreview(raw) {
-  const text = typeof raw === "string" ? raw : String(raw ?? "");
-  return text.split("#")[0].split("?")[0].slice(0, malformedPreviewLength);
+  if (typeof raw !== "string" || !raw.startsWith("/") || raw.startsWith("//"))
+    return "[invalid href]";
+  const path = raw.split("#")[0].split("?")[0];
+  if (/[\s<>"'\\]/.test(path)) return "[invalid href]";
+  return path.slice(0, malformedPreviewLength);
 }
 
 export function linkFindingRecords(links, matchers, publicDir = "public") {
@@ -528,13 +439,7 @@ export async function collectStandards(options = {}) {
           "STATUS_TIMEOUT",
           `${path}: timed out after ${timeoutMs}ms`,
         );
-      else
-        pushRouteFinding(
-          path,
-          "status",
-          "STATUS_FETCH_FAILED",
-          `${path}: ${err?.message || "request failed"}`,
-        );
+      else pushRouteFinding(path, "status", "STATUS_FETCH_FAILED", `${path}: request failed`);
       continue;
     }
     if (status !== 200)
@@ -916,21 +821,22 @@ async function main() {
   );
   mkdirSync(".lighthouseci", { recursive: true });
   writeFileSync(".lighthouseci/standards-summary.md", lines.join("\n") + "\n");
-  if (args.format === "json") {
-    console.log(
-      JSON.stringify(
-        buildJsonReport({
-          origin: base,
-          routes,
-          linksChecked: checked.size,
-          linksCollected: totalCollected,
-          findings: findingRecords,
-        }),
-      ),
-    );
-  } else {
-    console.log(lines.join("\n"));
-  }
+  const output =
+    args.format === "json"
+      ? JSON.stringify(
+          buildJsonReport({
+            origin: base,
+            routes,
+            linksChecked: checked.size,
+            linksCollected: totalCollected,
+            findings: findingRecords,
+          }),
+        )
+      : lines.join("\n");
+  // POSIX pipes write asynchronously. Publish the complete report before exit.
+  await new Promise((resolve, reject) => {
+    process.stdout.write(`${output}\n`, (err) => (err ? reject(err) : resolve()));
+  });
   process.exit(findings.length ? 1 : 0);
 }
 
