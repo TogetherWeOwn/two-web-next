@@ -30,6 +30,13 @@ export const EventStatusSection: FC<{ row: EventRow; origin?: string | null }> =
             </button>
           </form>
         ) : null}
+        {row.status === "draft" || row.status === "published" || row.status === "cancelled" ? (
+          <form method="post" action={`/admin/events/${row.eventKey}/duplicate`}>
+            <button type="submit" class="link" data-testid="duplicate-event">
+              Duplicate as draft
+            </button>
+          </form>
+        ) : null}
         <RsvpAction row={row} origin={origin} />
       </div>
     </section>
