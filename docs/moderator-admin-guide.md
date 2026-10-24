@@ -298,7 +298,7 @@ the remaining moderator-admin journeys stay Hono-only, ledgered as skipped.
 Before publishing, use the [event page content readiness checklist](event-content-readiness.md) to confirm members can decide whether and how to attend.
 
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
-   title. **Search** matches title only; **Status** filters `draft`, `published`,
+   title. **Search** matches titles and saved games; **Status** filters `draft`, `published`,
    `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters
    Parent/Child/Standalone; **Fill** filters Full/Has seats/Unlimited.
    Full/Has seats compare finite capacity with **Going** answers only, not Maybe
