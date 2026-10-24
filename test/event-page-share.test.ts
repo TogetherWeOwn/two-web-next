@@ -118,7 +118,7 @@ function fixture(
     row,
     queries,
     env,
-    async cookie() {
+    async cookie(moderator = false) {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
@@ -126,7 +126,7 @@ function fixture(
         username: "member",
         avatar: null,
         member: true,
-        moderator: false,
+        moderator,
         expiresAt: new Date(Date.now() + 3600_000),
       });
       return (
@@ -170,7 +170,12 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).toContain(`href="/join?next=${encodeURIComponent(PATH)}"`);
     expect(html).toContain("Log in with Discord");
     expect(html).not.toContain('data-testid="event-attendees"');
-    expect(html).not.toContain("Who&#39;s going");
+    // The roster is named, not hidden: the guest nudge carries the count and
+    // the sign-in return, never identities.
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("Who&#39;s going");
+    expect(html).toContain("sign in to see who&#39;s in");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(PATH)}"`);
     expect(html).not.toContain("/members/");
     expect(html).not.toContain(">member</a>");
     // No roster-shaped read runs for guests; the public attributable count
@@ -178,6 +183,17 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(
       source.queries.filter((q) => q.includes('inner join "users"') && !q.includes("group by")),
     ).toHaveLength(0);
+  });
+
+  it("shows a guest on a zero-RSVP event its own nudge line, never a 0-going line", async () => {
+    const source = fixture({}, { going: 0 });
+    const html = await (await source.request()).text();
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("No RSVPs yet");
+    expect(html).toContain("sign in to be the first");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(PATH)}"`);
+    // The old nudge line is gone; the lineup's "0 of 10 going" stays.
+    expect(html).not.toContain("0 going —");
   });
 
   it("shows a member their going answer and their linked attendee name, never the pitch", async () => {
@@ -248,4 +264,70 @@ describe("Event detail share matrix (fixture-only)", () => {
       expect(html).not.toContain("calendar.google.com");
     },
   );
+});
+
+describe("Event detail closed/paused roster copy (fixture-only)", () => {
+  // Past, paused and draft events keep a plain honest empty line with no
+  // RSVP invitation: the RSVP block on the same page already says no seat
+  // can be taken. A guest who could still act (a populated roster to see)
+  // keeps the sign-in nudge. Drafts 403 for non-moderators, so the draft
+  // guest has no roster surface to pin.
+  const PAST_START = new Date("2020-01-10T20:00:00Z");
+  const PAST_END = new Date("2020-01-10T22:00:00Z");
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone", false],
+    [
+      "ended event",
+      { startsAt: PAST_START, endsAt: PAST_END },
+      "This one has been and gone",
+      false,
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
+    ["draft", { status: "draft" }, "Not published yet", true],
+  ])(
+    "member on an empty roster sees a plain line on %s, never an invitation",
+    async (_label, over, verdict, moderator) => {
+      const source = fixture(over, { going: 0, attendees: [] });
+      const response = await source.request(await source.cookie(moderator));
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(verdict);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No RSVPs.");
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone"],
+    ["ended event", { startsAt: PAST_START, endsAt: PAST_END }, "This one has been and gone"],
+    ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
+  ])(
+    "guest on a zero-RSVP event sees a plain line on %s, never a be-the-first nudge",
+    async (_label, over, rsvpCopy) => {
+      const source = fixture(over, { going: 0, attendees: [] });
+      const response = await source.request();
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(rsvpCopy);
+      expect(html).toContain('data-testid="event-roster-guest-nudge"');
+      expect(html).toContain("No RSVPs.");
+      expect(html).not.toContain("sign in to be the first");
+    },
+  );
+
+  it("guest on a past event with RSVPs keeps the sign-in nudge for a roster they can still see", async () => {
+    const source = fixture(
+      { status: "past" },
+      { going: 2, attendees: [{ id: MEMBER_ID, name: "member" }] },
+    );
+    const response = await source.request();
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("This one has been and gone");
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("2 going");
+    expect(html).toContain("sign in to see who&#39;s in");
+  });
 });

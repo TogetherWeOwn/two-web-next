@@ -91,6 +91,22 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  // One render instant for the RSVP verdict below and the RSVP block, so the
+  // roster invitations and the closed/paused notice can never disagree.
+  const now = new Date();
+  // Closed/paused verdict for the roster invitations: the same verdict
+  // RsvpButton renders (src/events/rsvp-button.tsx). Past, paused and draft
+  // events keep a plain honest empty line with no impossible RSVP
+  // invitation on the same page as the closed/paused notice.
+  const rsvpClosed =
+    e.status === "cancelled"
+      ? "cancelled"
+      : e.status === "draft"
+        ? "draft"
+        : e.status !== "published" || e.endsAt <= now
+          ? "past"
+          : null;
+  const rsvpUnavailable = rsvpClosed !== null || !e.rsvpOpen;
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -174,7 +190,18 @@ export const EventPage: FC<{
               </p>
             </dd>
           </div>
-        ) : null}
+        ) : (
+          // Venue-less detail names the gap instead of hiding the row; list
+          // cards stay clean (no TBD there).
+          <div>
+            <dt>Where</dt>
+            <dd>
+              <p data-testid="event-venue-tbd">
+                Venue TBD — check <a href="/discord">Discord</a> for updates.
+              </p>
+            </dd>
+          </div>
+        )}
         {e.organizer_name ? (
           <div>
             <dt>Hosted by</dt>
@@ -216,6 +243,7 @@ export const EventPage: FC<{
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
           attendeePage={attendeePage}
+          now={now}
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
@@ -355,7 +383,55 @@ export const EventPage: FC<{
             .
           </p>
         </section>
-      ) : null}
+      ) : !member && !session ? (
+        // Guest: the lineup count shows above, so the roster names itself and
+        // points at sign-in with this event as ?next= instead of vanishing.
+        // Zero RSVPs gets its own line: "0 going — sign in to see who's in"
+        // invites a sign-in to view an empty list.
+        <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
+          <h2 id="event-roster-heading">Who's going</h2>
+          <p>
+            {e.goingCount > 0 ? (
+              <>
+                {e.goingCount} going —{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
+                  sign in to see who's in
+                </a>
+                .
+              </>
+            ) : rsvpUnavailable ? (
+              <>No RSVPs.</>
+            ) : (
+              <>
+                No RSVPs yet —{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
+                  sign in to be the first
+                </a>
+                .
+              </>
+            )}
+          </p>
+        </section>
+      ) : !member ? (
+        // Signed-in non-member: members-only explainer with the join path.
+        <section aria-labelledby="event-roster-heading" data-testid="event-roster-members-only">
+          <h2 id="event-roster-heading">Who's going</h2>
+          <p>
+            Members only — <a href={`/join?next=${encodeURIComponent(path)}`}>join the Discord</a>{" "}
+            to see who's in.
+          </p>
+        </section>
+      ) : (
+        // Member on an empty page-1 roster: honest empty state. Page>1 keeps
+        // the existing stale-page copy above. Closed/paused events keep a
+        // plain line: the RSVP block on the same page already says no seat
+        // can be taken. None of these states carries the attendees-live
+        // mount: the island finds the member list by section identity.
+        <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
+          <h2 id="event-roster-heading">Who's going (0)</h2>
+          {rsvpUnavailable ? <p>No RSVPs.</p> : <p>No RSVPs yet — RSVP to start the list.</p>}
+        </section>
+      )}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />

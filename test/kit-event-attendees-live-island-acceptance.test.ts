@@ -962,6 +962,7 @@ describe("Kit who's-going roster live refresh", () => {
       viewerGoingBefore: false,
     });
     expect(b.byTestId("event-attendees")).toBeNull();
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     expect(badgeCount(b)).toBe(0);
 
     b.byTestId("rsvp-going")!.click();
@@ -970,7 +971,28 @@ describe("Kit who's-going roster live refresh", () => {
 
     expect(b.reloads()).toBe(0);
     expect(rosterNames(b)).toEqual([VIEWER.name]);
+    // The swap consumes the empty placeholder: exactly one roster section.
+    expect(b.byTestId("event-roster-empty")).toBeNull();
     expectRosterBadgeAgreement(b, 1);
+  });
+
+  it("swaps the roster for the empty placeholder after the last withdrawal, no reload", async () => {
+    const b = await browser({
+      before: [VIEWER],
+      after: [],
+      viewerGoingBefore: true,
+    });
+    expect(b.byTestId("event-attendees")).not.toBeNull();
+
+    b.byTestId("rsvp-withdraw")!.click();
+    const write = await b.answerWrite();
+    expect(write.init.method).toBe("DELETE");
+    await b.answerReads();
+
+    expect(b.reloads()).toBe(0);
+    expect(b.byTestId("event-attendees")).toBeNull();
+    // The honest empty state arrives with the same refresh, not on reload.
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
   });
 
   it("surfaces a stale signal instead of a silent contradiction when the refresh read fails", async () => {

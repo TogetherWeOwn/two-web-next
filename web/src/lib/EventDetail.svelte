@@ -67,6 +67,10 @@ const detailIslands = [
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
 const closed = $derived(model.rsvpClosed);
+// Roster invitations follow the same closed/paused verdict the RSVP block
+// renders: past, paused and draft events keep a plain honest empty line
+// with no impossible RSVP invitation.
+const rsvpUnavailable = $derived(closed !== null || !model.rsvpOpen);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
@@ -209,7 +213,18 @@ const lineup = $derived(
           {/if}
         </dd>
       </div>
-    {/if}{#if model.series && model.series.hosts.length > 0}
+    {:else}
+      <!-- Venue-less detail names the gap instead of hiding the row; list cards stay clean. -->
+      <div>
+        <dt>Where</dt>
+        <dd>
+          <p data-testid="event-venue-tbd">
+            Venue TBD — check <a href="/discord">Discord</a> for updates.
+          </p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
         <dd>
@@ -381,6 +396,48 @@ const lineup = $derived(
         Attendees shown at page load.{" "}
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
       </p>
+    </section>
+  {:else if !model.viewerMember && !model.viewerUsername}
+    <!-- Guest: the lineup count shows above, so the roster names itself and points at
+         sign-in with this event as ?next= instead of vanishing. Zero RSVPs gets its own
+         line: "0 going — sign in to see who's in" invites a sign-in to view an
+         empty list. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
+      <h2 id="event-roster-heading">Who's going</h2>
+      <p>
+        {#if model.goingCount > 0}
+          {model.goingCount} going —
+          <a href={loginUrl(model.path)}>sign in to see who's in</a>.
+        {:else if rsvpUnavailable}
+          No RSVPs.
+        {:else}
+          No RSVPs yet —
+          <a href={loginUrl(model.path)}>sign in to be the first</a>.
+        {/if}
+      </p>
+    </section>
+  {:else if !model.viewerMember}
+    <!-- Signed-in non-member: members-only explainer with the join path. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-members-only">
+      <h2 id="event-roster-heading">Who's going</h2>
+      <p>
+        Members only —
+        <a href="/join?next={encodeURIComponent(model.path)}">join the Discord</a>
+        to see who's in.
+      </p>
+    </section>
+  {:else}
+    <!-- Member on an empty page-1 roster: honest empty state. Page>1 keeps the existing
+         stale-page copy above. Closed/paused events keep a plain line: the RSVP
+         block on the same page already says no seat can be taken. None of these
+         states carries the attendees-live mount. -->
+    <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
+      <h2 id="event-roster-heading">Who's going (0)</h2>
+      {#if rsvpUnavailable}
+        <p>No RSVPs.</p>
+      {:else}
+        <p>No RSVPs yet — RSVP to start the list.</p>
+      {/if}
     </section>
   {/if}
   {@html detailIslands}
