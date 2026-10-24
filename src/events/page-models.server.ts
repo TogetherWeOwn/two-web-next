@@ -203,7 +203,8 @@ export async function loadCalendarPageModel(args: {
   // indexable copy of page one — so the robots decision sees the request flag.
   const robots = searching || state.page > 1 || jumpRequested ? "noindex, follow" : undefined;
   const emptyState = calendarEmptyState({
-    searching,
+    // A recognized game narrows the empty claim, not text-search demand below.
+    searching: searching || gameFilter !== null,
     upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
     pastEmpty: localPast.length === 0,
     readFailed: discordFailed,

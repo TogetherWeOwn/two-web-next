@@ -294,6 +294,14 @@ jobs:
           for surface in hono-calendar hono-archive kit-calendar kit-archive; do
             node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
           done
+      - name: Calendar game recovery (Hono and Kit, source and shipped bytes)
+        run: |
+          npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-recovery.json
+          for surface in Hono Kit; do
+            for bundle in source shipped; do
+              node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
+            done
+          done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
           PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"

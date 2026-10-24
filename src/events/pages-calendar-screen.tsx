@@ -114,7 +114,12 @@ export const EventsCalendarPage: FC<{
   const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
   // An error state suppresses the miss block: a failed read must never read
   // as "no matches" (contract: error beats everything, including a search).
-  const searchMiss = searching && !hasVisibleResults && emptyState === null && !outOfRange;
+  const searchMiss =
+    emptyState === null &&
+    !discordFailed &&
+    !outOfRange &&
+    ((searching && !hasVisibleResults) ||
+      (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
   const pushDay = (day: string, e: CalRow) => {
@@ -243,7 +248,9 @@ export const EventsCalendarPage: FC<{
           </button>
         </div>
 
-        <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
+        <div data-cal-zone="miss">
+          {searchMiss ? <SearchMiss state={state} gameFilter={gameFilter} /> : null}
+        </div>
 
         {/* Skeleton: member-started re-renders only — typing is untargeted. */}
         <div data-testid={EVENTS_LOADING_TESTID} hidden>
