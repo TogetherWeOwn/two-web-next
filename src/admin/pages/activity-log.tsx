@@ -5,6 +5,7 @@ import type { ActivityLogViewerRow } from "../reads";
 import {
   formatActivityCauser,
   activityLogEmptyText,
+  activityLogUnscopedUrl,
   activityLogUrl,
   type ActivityLogQuery,
 } from "../table-list";
@@ -27,7 +28,14 @@ export const ActivityLogPage: FC<{
         Read-only. Who changed what, when. Views that name a member are access-logged; imported
         causer IDs are labeled legacy.
       </p>
+      {query.event ? (
+        <p data-testid="activity-log-scope">
+          Recorded changes for this event <code>{query.event}</code>.{" "}
+          <a href={activityLogUnscopedUrl(query)}>Show all activity</a>
+        </p>
+      ) : null}
       <form method="get" action="/admin/activity-log" class="filters">
+        {query.event ? <input type="hidden" name="event" value={query.event} /> : null}
         <div class="field">
           <label for="subject">Subject</label>
           <input id="subject" name="subject" type="search" value={query.subject} />

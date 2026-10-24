@@ -650,6 +650,12 @@ recorded change. It shows up to **50 rows per page**, newest first. Use
 **Filter**; use **Next** for older rows and **Previous** to return. There is no
 edit or delete control, and the raw change payload is never shown.
 
+From a saved event editor, **Recorded changes for this event** opens
+`/admin/activity-log?event=<key>` with the recorded changes for exactly that
+event: the scope shows above the filters, stays applied through filtering and
+paging, and **Show all activity** removes it. An unrecognized scope fails
+explicitly instead of showing other events' rows.
+
 **Who** is a Discord ID for current activity. Imported rows keep their legacy
 internal causer IDs, shown with a **legacy ID** label; those IDs are not
 remapped to members and are never access-log subjects. Views that name a member

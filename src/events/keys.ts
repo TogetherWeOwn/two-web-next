@@ -11,6 +11,15 @@ export function eventKeyAllowed(key: string, appUrl: string): boolean {
   return ULID_KEY.test(key) || (demoApp && SEED_KEY.test(key));
 }
 
+// Shape gate for values that NAME an event key without routing to one (the
+// activity-log event scope). Unlike eventKeyAllowed — which keeps seed keys
+// off production ROUTES — admitting the seed shape in a read filter cannot
+// widen anything: the scope is an exact-equality conjunction applied before
+// paging, so a seed-shaped scope on production simply matches nothing.
+export function eventKeyShaped(key: string): boolean {
+  return ULID_KEY.test(key) || SEED_KEY.test(key);
+}
+
 // One canonical key form per event: ULIDs are stored uppercase, so a key in
 // any other letter case redirects to the uppercase URL before lookup.
 // Seed/demo keys are already lowercase and never ULID-shaped; anything else

@@ -3,6 +3,7 @@ import AdminShell from "#lib/AdminShell.svelte";
 import {
   formatActivityCauser,
   activityLogEmptyText,
+  activityLogUnscopedUrl,
   activityLogUrl,
   type ActivityLogQuery,
 } from "../../../../../src/admin/table-list";
@@ -38,7 +39,16 @@ const subjectOf = (row: {
       Read-only. Who changed what, when. Views that name a member are access-logged; imported
       causer IDs are labeled legacy.
     </p>
+    {#if query.event}
+      <p data-testid="activity-log-scope">
+        Recorded changes for this event <code>{query.event}</code>.
+        <a href={activityLogUnscopedUrl(query as ActivityLogQuery)}>Show all activity</a>
+      </p>
+    {/if}
     <form method="get" action="/admin/activity-log" class="filters">
+      {#if query.event}
+        <input type="hidden" name="event" value={query.event} />
+      {/if}
       <div class="field">
         <label for="subject">Subject</label>
         <input id="subject" name="subject" type="search" value={query.subject} />
