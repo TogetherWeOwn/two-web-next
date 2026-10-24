@@ -659,6 +659,8 @@ describe("Kit GET /events anonymous payload", () => {
         emptyState: null,
         robots: undefined,
         discordFailed: false,
+        games: [],
+        gameFilter: null,
       }),
       discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }) as never,
     });
