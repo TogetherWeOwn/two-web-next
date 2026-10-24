@@ -103,10 +103,14 @@ describe("moderator event-write 404s carry request_id when logged", () => {
   });
 
   it("POST publish forged key 404s with request_id before the store", async () => {
-    const res = await app.request("/events/forged/publish", {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
+    const res = await app.request(
+      "/events/forged/publish",
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
     expect(res.status).toBe(404);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(await res.json()).toEqual({ error: "not_found", request_id: RAY });
@@ -116,10 +120,14 @@ describe("moderator event-write 404s carry request_id when logged", () => {
 
   it("POST publish unknown ULID 404s with request_id through the store", async () => {
     vi.mocked(transitionEvent).mockRejectedValueOnce(new NotFoundError("missing"));
-    const res = await app.request(`/events/${UNKNOWN_ULID}/publish`, {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
+    const res = await app.request(
+      `/events/${UNKNOWN_ULID}/publish`,
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
     expect(res.status).toBe(404);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(await res.json()).toEqual({ error: "not_found", request_id: RAY });
@@ -127,10 +135,14 @@ describe("moderator event-write 404s carry request_id when logged", () => {
   });
 
   it("POST duplicate forged key 404s with request_id before the store", async () => {
-    const res = await app.request("/events/forged/duplicate", {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
+    const res = await app.request(
+      "/events/forged/duplicate",
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
     expect(res.status).toBe(404);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(await res.json()).toEqual({ error: "not_found", request_id: RAY });
@@ -140,10 +152,14 @@ describe("moderator event-write 404s carry request_id when logged", () => {
 
   it("POST duplicate unknown ULID 404s with request_id through the store", async () => {
     vi.mocked(duplicateEvent).mockRejectedValueOnce(new NotFoundError("missing"));
-    const res = await app.request(`/events/${UNKNOWN_ULID}/duplicate`, {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
+    const res = await app.request(
+      `/events/${UNKNOWN_ULID}/duplicate`,
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
     expect(res.status).toBe(404);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(await res.json()).toEqual({ error: "not_found", request_id: RAY });
@@ -163,14 +179,22 @@ describe("moderator event-write 404s carry request_id when logged", () => {
       },
       env,
     );
-    const publish = await app.request(`/events/${UNKNOWN_ULID}/publish`, {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
-    const duplicate = await app.request(`/events/${UNKNOWN_ULID}/duplicate`, {
-      method: "POST",
-      headers: { "cf-ray": RAY },
-    }, env);
+    const publish = await app.request(
+      `/events/${UNKNOWN_ULID}/publish`,
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
+    const duplicate = await app.request(
+      `/events/${UNKNOWN_ULID}/duplicate`,
+      {
+        method: "POST",
+        headers: { "cf-ray": RAY },
+      },
+      env,
+    );
     for (const res of [patch, publish, duplicate]) {
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: "not_found", request_id: RAY });
