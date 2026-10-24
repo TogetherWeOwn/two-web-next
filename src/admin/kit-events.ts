@@ -11,7 +11,12 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  eventEmptyText,
+  eventStartsWindowSummary,
+  type EventListQuery,
+} from "./event-list";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -32,6 +37,9 @@ export type KitEventListView = {
   rows: KitEventListRow[];
   hasNext: boolean;
   emptyText: string;
+  /** Active UTC window sentence, built on the server so the client bundle
+   * ships neither the formatter nor its copy. */
+  windowSummary: string | null;
 };
 
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
@@ -57,5 +65,6 @@ export function buildEventListView(
     rows: fetched.slice(0, EVENT_PAGE_SIZE).map(serializeEventListRow),
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
+    windowSummary: eventStartsWindowSummary(query.startsWindow),
   };
 }

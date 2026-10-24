@@ -15,6 +15,9 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { registerPlanningWindowBrowserAcceptance } from "../test/helpers/admin-event-planning-window-browser.ts";
+
+registerPlanningWindowBrowserAcceptance(() => browser);
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
