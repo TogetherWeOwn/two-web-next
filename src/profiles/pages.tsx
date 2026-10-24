@@ -347,6 +347,11 @@ export const ProfilePage: FC<{
                     (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)
                   }`}
                 </p>
+                <div data-local-time-compare={member.timezone ?? ""}>
+                  <button type="button" class="btn profile-secondary" hidden>
+                    Compare local times
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -379,6 +384,7 @@ export const ProfilePage: FC<{
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
+        <script src="/islands/local-time-compare.js" defer></script>
         {isOwner ? (
           <section
             class="profile-panel profile-new-member"

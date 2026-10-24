@@ -307,6 +307,12 @@ jobs:
         run: |
           npx vitest run test/profile-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-device-timezone.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-device-timezone.json "profile device timezone in Chromium" 49
+      - name: Profile local time comparison (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-local-time-comparison-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-comparison-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-comparison-acceptance.json "profile local time comparison in Chromium" 72
       - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
         env:
           ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
