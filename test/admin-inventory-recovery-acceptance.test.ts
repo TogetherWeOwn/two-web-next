@@ -286,7 +286,9 @@ for (const renderer of renderers) {
         );
         const editPath =
           inventory === "events" ? "/admin/events/inventory-fixture-1" : "/admin/featured/1";
-        expect(links(result.html).some((link) => link.href === editPath)).toBe(true);
+        expect(
+          links(result.html).some((link) => new URL(link.href, origin).pathname === editPath),
+        ).toBe(true);
         if (renderer === "Hono" && inventory === "events") expect(result.html).toContain("Publish");
         expect(result.probe.queries).toHaveLength(inventory === "events" ? 2 : 1);
         expect(result.probe.audits).toEqual([]);

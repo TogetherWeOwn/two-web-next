@@ -7,6 +7,7 @@ import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
+import { INVENTORY_RETURN_PARAM } from "../event-list";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
@@ -16,7 +17,8 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  origin?: string | null;
+}> = ({ mode, row, values, errors, action, origin }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
@@ -26,6 +28,7 @@ export const EventFormFields: FC<{
         data-event-editor=""
         data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
       >
+        {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
             <input
@@ -210,7 +213,7 @@ export const EventFormFields: FC<{
           <button type="submit" class="btn" data-testid="save-event">
             {mode === "new" ? "Create draft" : "Save"}
           </button>
-          <a href="/admin/events">Cancel</a>
+          <a href={origin ?? "/admin/events"}>Cancel</a>
         </div>
       </form>
       {raw(adminSaveStatus)}

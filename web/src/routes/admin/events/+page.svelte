@@ -2,7 +2,9 @@
 import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 import {
+  editUrlWithOrigin,
   eventListUrl,
+  INVENTORY_RETURN_PARAM,
   eventListHasFilters,
   eventListClearUrl,
   type EventSort,
@@ -20,6 +22,8 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // JavaScript disabled, exactly like the Hono panel.
 let { data }: PageProps = $props();
 const { query, rows, hasNext, emptyText } = $derived(data);
+// The normalized inventory every row link and row action carries back.
+const inventory = $derived(eventListUrl(query));
 const now = new Date();
 </script>
 
@@ -46,6 +50,10 @@ const now = new Date();
       <span data-testid={`event-over-capacity-${row.eventKey}`}> Over capacity</span>
     {/if}
   </td>
+{/snippet}
+
+{#snippet inventoryCarrier()}
+  <input type="hidden" name={INVENTORY_RETURN_PARAM} value={inventory} />
 {/snippet}
 
 <AdminShell title="Events">
@@ -135,7 +143,7 @@ const now = new Date();
           {#each rows as r (r.eventKey)}
             <tr>
               <td>
-                <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                <a href={editUrlWithOrigin(r.eventKey, inventory)}>{r.title}</a>
               </td>
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
@@ -145,17 +153,20 @@ const now = new Date();
               <td>
                 {#if r.status === "draft"}
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link">Publish</button>
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link">Cancel</button>
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
                   <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
+                    {@render inventoryCarrier()}
                     <button type="submit" class="link" data-testid={action}>
                       {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
                     </button>

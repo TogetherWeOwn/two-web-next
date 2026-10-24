@@ -7,6 +7,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { cloneElement, isValidElement } from "hono/jsx";
 import { SkipLink } from "../../pages";
 import type { EventRow } from "../store";
+import { INVENTORY_RETURN_PARAM } from "../event-list";
 import type { SortOrder } from "../table-list";
 
 export const TableSortHeader: FC<{
@@ -60,11 +61,20 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
   </>
 );
 
-export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (
+export const ErrorPage: FC<{ heading: string; detail?: string; origin?: string | null }> = ({
+  heading,
+  detail,
+  origin,
+}) => (
   <Shell title={heading}>
     <section>
       <h1>{heading}</h1>
       {detail ? <p data-testid="error-detail">{detail}</p> : null}
+      {origin ? (
+        <p>
+          <a href={origin}>Back to these event results</a>
+        </p>
+      ) : null}
       <p>
         <a href="/admin">Back to the dashboard</a>
       </p>
@@ -72,11 +82,12 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
   </Shell>
 );
 
-export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+export const RsvpAction: FC<{ row: EventRow; origin?: string | null }> = ({ row, origin }) => {
   if (row.status !== "published" || row.endsAt <= new Date()) return null;
   const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
   return (
     <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
+      {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}
       <button type="submit" class="link" data-testid={action}>
         {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
       </button>

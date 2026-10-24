@@ -4,8 +4,10 @@ import type { FC } from "hono/jsx";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
 import {
+  editUrlWithOrigin,
   eventEmptyText,
   eventListUrl,
+  INVENTORY_RETURN_PARAM,
   eventListHasFilters,
   eventListClearUrl,
   type EventListQuery,
@@ -169,7 +171,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
               rows.map((r) => (
                 <tr key={r.eventKey}>
                   <td>
-                    <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                    <a href={editUrlWithOrigin(r.eventKey, eventListUrl(query))}>{r.title}</a>
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>
@@ -179,6 +181,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                   <td>
                     {r.status === "draft" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
+                        <input
+                          type="hidden"
+                          name={INVENTORY_RETURN_PARAM}
+                          value={eventListUrl(query)}
+                        />
                         <button type="submit" class="link">
                           Publish
                         </button>
@@ -186,12 +193,17 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
+                        <input
+                          type="hidden"
+                          name={INVENTORY_RETURN_PARAM}
+                          value={eventListUrl(query)}
+                        />
                         <button type="submit" class="link">
                           Cancel
                         </button>
                       </form>
                     ) : null}
-                    <RsvpAction row={r} />
+                    <RsvpAction row={r} origin={eventListUrl(query)} />
                   </td>
                 </tr>
               ))

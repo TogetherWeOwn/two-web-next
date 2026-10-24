@@ -62,6 +62,7 @@ jobs:
             "src/admin/routes.tsx" \
             "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
+            "src/admin/event-list.ts" \
             "src/admin/featured-list-query.ts" \
             "src/db/admin-schema.ts" \
             "src/db/schema.ts" \
