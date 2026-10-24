@@ -410,13 +410,16 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // Five forms: edit update, publish, cancel, RSVP toggle, roster search.
-    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(4);
+    // Six source forms: edit update, publish, cancel, pause review, reopen,
+    // roster search. Pause and reopen are exclusive branches rendering a
+    // single RSVP form; the rendered count is pinned by the pause-review
+    // suites instead of this source text.
+    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
+    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
     expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);
     // Every button submits its form; nothing depends on a click handler.
-    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(5);
+    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(6);
+    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
     expect(pageSource).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
     // Sorting and paging are plain links a no-JS browser can follow.
