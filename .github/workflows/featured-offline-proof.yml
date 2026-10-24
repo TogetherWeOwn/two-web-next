@@ -61,6 +61,7 @@ jobs:
             "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
             "src/admin/table-list.ts" \
+            "src/admin/event-list.ts" \
             "src/admin/featured-list-query.ts" \
             "src/db/admin-schema.ts" \
             "src/db/schema.ts" \
