@@ -397,6 +397,10 @@ beforeEach(() => {
     forDb(db).steps.push("archive");
     return { rows: [], totalPages: 1, hasMore: false };
   });
+  vi.spyOn(reads, "listArchiveGames").mockImplementation(async (db) => {
+    forDb(db).steps.push("archive-games");
+    return { games: [], omitted: false };
+  });
   router = new Hono<{ Bindings: Env }>();
   router.use("*", requestLogging.requestLog);
   router.onError((error, c) => {

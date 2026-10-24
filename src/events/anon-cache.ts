@@ -105,12 +105,16 @@ export interface AnonEligibility {
   hasSession: boolean;
   searching: boolean;
   flashed: boolean;
+  /** A non-text filter (the archive game facet) narrows this render. */
+  filtering?: boolean;
 }
 
 /**
  * Only a cookieless anonymous render may serve or settle shared bytes. Any
  * cookie at all bypasses — session, flash and stray OAuth cookies alike —
- * so viewer state can never be stored or served as shared.
+ * so viewer state can never be stored or served as shared. Filtered renders
+ * never share: archive keys stay page-only, so a game-filtered render must
+ * not read or populate the ordinary entry.
  */
 export function isAnonCacheEligible(e: AnonEligibility): boolean {
   return (
@@ -118,7 +122,8 @@ export function isAnonCacheEligible(e: AnonEligibility): boolean {
     !e.hasCookie &&
     !e.hasSession &&
     !e.searching &&
-    !e.flashed
+    !e.flashed &&
+    !e.filtering
   );
 }
 

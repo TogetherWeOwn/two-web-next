@@ -14,7 +14,7 @@ import {
 import { normalizePastPage } from "./events/reads";
 import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
-import { matchQuery } from "./events/search-log";
+import { matchGame, matchQuery, resolveArchiveGameFilter } from "./events/search-log";
 import { publicReadGuard } from "./events/routes-shared";
 
 export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
@@ -40,9 +40,15 @@ export async function dispatchPastArchiveRequest(
   now: number = Date.now(),
 ): Promise<Response> {
   const url = new URL(request.url);
-  const input = resolveCalendarInput({ q: url.searchParams.get("q") });
-  // The loader rejects raw oversized input before reads, even on a warm cache.
-  if (input.queryTooLong) return resolve();
+  const input = resolveCalendarInput({
+    q: url.searchParams.get("q"),
+    game: url.searchParams.get("game"),
+    games: url.searchParams.getAll("game"),
+    qs: url.searchParams.getAll("q"),
+  });
+  // The loader rejects raw oversized/refused input before reads, even on a warm cache.
+  if (input.queryTooLong || input.gameTooLong || input.gameRefused || input.queryConflicting)
+    return resolve();
   const limited = await guard(request, env);
   if (limited) return limited;
   // Kit data requests still execute the read guard/load but their JSON payload
@@ -57,6 +63,7 @@ export async function dispatchPastArchiveRequest(
       hasSession: false,
       searching: input.searching,
       flashed: false,
+      filtering: matchGame(input.game) !== null,
     });
   const source = eligible ? anonCacheSource(env) : null;
   const key = eligible ? anonPastKey(request.method, page) : null;
@@ -126,15 +133,26 @@ export type PastArchiveListPast<Row = never> = (
   page: number,
   now?: Date,
   q?: string | null,
+  game?: string | null,
 ) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
+
+export type PastArchiveListGames = (
+  db: Db,
+  now?: Date,
+) => Promise<{ games: string[]; omitted: boolean }>;
 
 export interface PastArchiveLoadArgs<Row = never> {
   env: Env;
   pageParam: string | null;
   queryParam?: string | null;
+  gameParam?: string | null;
+  gameValues?: readonly string[] | null;
+  qValues?: readonly string[] | null;
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
+  /** Archive-visible suggestions; the binding always passes the live read. */
+  listArchiveGamesFn?: PastArchiveListGames;
   /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
   requestId?: string;
 }
@@ -169,9 +187,13 @@ export async function loadPastArchivePage<Row>({
   env,
   pageParam,
   queryParam,
+  gameParam,
+  gameValues,
+  qValues,
   setHeaders,
   dbForFn,
   listPastFn,
+  listArchiveGamesFn = async () => ({ games: [], omitted: false }),
   requestId,
 }: PastArchiveLoadArgs<Row>): Promise<{
   rows: Row[];
@@ -180,13 +202,26 @@ export async function loadPastArchivePage<Row>({
   totalPages: number;
   appUrl: string;
   q: string;
+  games: string[];
+  game: string;
+  gamesOmitted: boolean;
 }> {
-  const input = resolveCalendarInput({ q: queryParam });
+  const input = resolveCalendarInput({
+    q: queryParam,
+    game: gameParam,
+    games: gameValues,
+    qs: qValues,
+  });
   if (input.queryTooLong) {
     setHeaders({ "cache-control": "private, no-store" });
     throw Object.assign(new Error("Search query too long"), { status: 422 });
   }
+  if (input.gameTooLong || input.gameRefused || input.queryConflicting) {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw Object.assign(new Error("Invalid archive game filter"), { status: 400 });
+  }
   const q = matchQuery(input.q);
+  const filtering = matchGame(input.game) !== null;
   let db: Db | null;
   try {
     db = await dbForFn({ env });
@@ -199,18 +234,36 @@ export async function loadPastArchivePage<Row>({
   }
   const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
   try {
-    const { rows, hasMore, totalPages } = q
-      ? await listPastFn(db, page, new Date(), q)
-      : await listPastFn(db, page);
+    const now = new Date();
+    const { games, omitted: gamesOmitted } = await listArchiveGamesFn(db, now);
+    const gameFilter = resolveArchiveGameFilter(games, input.game);
+    // Narrowest arity first: unfiltered renders keep the two-arg read so the
+    // row query carries no filter bindings at all.
+    const { rows, hasMore, totalPages } = gameFilter
+      ? await listPastFn(db, page, now, q, gameFilter)
+      : q
+        ? await listPastFn(db, page, now, q)
+        : await listPastFn(db, page);
+    const unfiltered = !input.searching && !filtering;
     setHeaders({
-      "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
-      "x-two-past-cacheable": String(!input.searching && rows.length > 0),
+      "cache-control": unfiltered ? "public, max-age=300" : "private, no-store",
+      "x-two-past-cacheable": String(unfiltered && rows.length > 0),
       // Browsing renders are public and shared, like the Hono twin: name the
       // Cookie variance so shared caches key anonymous and signed-in shells
-      // apart. Searching renders stay private no-store with no Vary.
-      ...(!input.searching ? { vary: "Cookie" } : {}),
+      // apart. Searching/filtered renders stay private no-store with no Vary.
+      ...(unfiltered ? { vary: "Cookie" } : {}),
     });
-    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
+    return {
+      rows,
+      page,
+      hasMore,
+      totalPages,
+      appUrl: env.APP_URL,
+      q: q ?? "",
+      games,
+      game: gameFilter ?? "",
+      gamesOmitted,
+    };
   } catch (err) {
     reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }

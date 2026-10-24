@@ -810,13 +810,20 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(html).toContain('data-total-pages="2"');
     expect(html).not.toContain("excluded-");
     expect(html).not.toMatch(
-      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b|<form\b/,
+      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b/,
     );
-    // Only the native, non-submitting feed-copy action is allowed in the archive.
+    // The only form is the game facet: a native GET that cannot mutate.
+    expect(html.match(/<form\b[^>]*>/g)).toEqual([
+      expect.stringMatching(
+        /^<form\b(?=[^>]*\smethod="get")(?=[^>]*\saction="\/events\/past")[^>]*>$/,
+      ),
+    ]);
+    // Only the native, non-submitting feed-copy action plus the facet submit are allowed.
     expect(html.match(/<button\b[^>]*>/g)).toEqual([
       expect.stringMatching(
         /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
       ),
+      expect.stringMatching(/^<button\b(?=[^>]*\stype="submit")[^>]*>$/),
     ]);
     const second = await (await req("/events/past?page=2")).text();
     expect(keys(second)).toEqual(["archive-5", "archive-4", "archive-3", "archive-2", "archive-1"]);

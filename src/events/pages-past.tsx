@@ -1,8 +1,12 @@
 // Past events archive screen: paginated list of what already happened.
 import type { FC } from "hono/jsx";
+import { kitErrorCopy } from "../kit-errors";
+import { RecoveryShell } from "../pages";
 import { canonicalUrl } from "../seo";
 import {
   EVENTS_EMPTY_COPY,
+  EVENTS_GAME_ALL_COPY,
+  EVENTS_GAME_FILTER_LABEL,
   EVENTS_SUBSCRIBE_TESTID,
   PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
@@ -50,6 +54,26 @@ const Card: FC<{ e: PublicEvent; archive: ArchiveContext }> = ({ e, archive }) =
   </li>
 );
 
+/** Invalid archive filter (overlong/NUL/duplicate game, duplicate query):
+ * a branded 400 naming no input back, twin-agreed with kitErrorCopy(400).
+ * Served before any throttle spend, DB open or cache lookup. */
+export const PastEventsBadFilterPage: FC = () => {
+  const copy = kitErrorCopy(400);
+  return (
+    <RecoveryShell
+      code={copy.code}
+      title={copy.title}
+      headingId="error-heading"
+      robots="noindex, nofollow"
+    >
+      <p class="lead">{copy.lead}</p>
+      <p>
+        <a href="/events/past">Back to past events</a>
+      </p>
+    </RecoveryShell>
+  );
+};
+
 export const PastEventsPage: FC<{
   rows: PublicEvent[];
   page: number;
@@ -57,13 +81,29 @@ export const PastEventsPage: FC<{
   totalPages: number;
   appUrl: string;
   q?: string;
-}> = ({ rows, page, hasMore, totalPages, appUrl, q = "" }) => (
+  /** Archive-visible game suggestions (capped); empty when unlisted. */
+  games?: string[];
+  /** Effective game filter (canonical suggestion or retained valid input); "" = unfiltered. */
+  game?: string;
+  /** More distinct archive games exist beyond the rendered suggestions. */
+  gamesOmitted?: boolean;
+}> = ({
+  rows,
+  page,
+  hasMore,
+  totalPages,
+  appUrl,
+  q = "",
+  games = [],
+  game = "",
+  gamesOmitted = false,
+}) => (
   <ScheduleShell
     title="Past events"
-    canonical={canonicalUrl(appUrl, pastEventsUrl(page, q))}
+    canonical={canonicalUrl(appUrl, pastEventsUrl(page, q, game))}
     description="Look back at the community’s game nights and tournaments."
     robots="noindex, follow"
-    loginReturnTo={pastEventsUrl(page, q)}
+    loginReturnTo={pastEventsUrl(page, q, game)}
   >
     <section
       data-island={PAST_EVENTS_ISLAND}
@@ -71,6 +111,7 @@ export const PastEventsPage: FC<{
       data-page={page}
       data-total-pages={totalPages}
       data-query={q}
+      data-game={game}
       data-load-error={PAST_EVENTS_COPY.failed}
       aria-labelledby="past-events-heading"
     >
@@ -94,15 +135,78 @@ export const PastEventsPage: FC<{
       </p>
       {subscriptionHelp(appUrl)}
       <div data-archive-state>
-        {q ? (
+        {/* Native GET facet inside the swapped zone, so enhanced page turns
+            keep the selected game in sync. Changing it submits without a page
+            value, resetting to page one; the text query rides along hidden. */}
+        <form method="get" action="/events/past" role="search">
+          <label for="past-events-game-filter">{EVENTS_GAME_FILTER_LABEL}</label>
+          <select
+            id="past-events-game-filter"
+            name="game"
+            aria-describedby="past-events-game-scope"
+          >
+            <option value="" selected={game === ""}>
+              {EVENTS_GAME_ALL_COPY}
+            </option>
+            {games.map((suggestion) => (
+              <option value={suggestion} selected={suggestion === game}>
+                {suggestion}
+              </option>
+            ))}
+            {/* A selected game beyond the capped suggestions stays selected:
+                suggestions never silently unfilter a valid game. */}
+            {game !== "" && !games.includes(game) ? (
+              <option value={game} selected>
+                {game}
+              </option>
+            ) : null}
+          </select>
+          {q ? <input type="hidden" name="q" value={q} /> : null}
+          <button class="btn" type="submit">
+            Search
+          </button>
+          <p id="past-events-game-scope">Games from past events.</p>
+          {gamesOmitted ? (
+            <p>Showing the first 100 games; more games exist in the archive.</p>
+          ) : null}
+        </form>
+        {q || game ? (
           <p role="status">
-            Past events matching “{q}”. <a href="/events/past">Clear search</a>
+            {q && game ? (
+              <>
+                Past events matching “{q}” for game “{game}”.{" "}
+                <a href={pastEventsUrl(1, q)}>Clear game</a>{" "}
+                <a href={pastEventsUrl(1, "", game)}>Clear search</a>
+              </>
+            ) : q ? (
+              <>
+                Past events matching “{q}”. <a href="/events/past">Clear search</a>
+              </>
+            ) : (
+              <>
+                Past events for game “{game}”. <a href="/events/past">Clear game</a>
+              </>
+            )}
           </p>
         ) : null}
         {rows.length === 0 ? (
-          totalPages === 0 && q ? (
+          totalPages === 0 && (q || game) ? (
             <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
-              No past events match “{q}”. <a href="/events/past">Clear search</a>
+              {q && game ? (
+                <>
+                  No past events match “{q}” for game “{game}”.{" "}
+                  <a href={pastEventsUrl(1, q)}>Clear game</a>{" "}
+                  <a href={pastEventsUrl(1, "", game)}>Clear search</a>
+                </>
+              ) : q ? (
+                <>
+                  No past events match “{q}”. <a href="/events/past">Clear search</a>
+                </>
+              ) : (
+                <>
+                  No past events for game “{game}”. <a href="/events/past">Clear game</a>
+                </>
+              )}
             </p>
           ) : totalPages === 0 ? (
             <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
@@ -114,14 +218,14 @@ export const PastEventsPage: FC<{
           ) : (
             <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>
               {pastEventsOutOfRangeCopy(page, totalPages)}{" "}
-              <a href={pastEventsUrl(1, q)}>Back to page 1</a>
+              <a href={pastEventsUrl(1, q, game)}>Back to page 1</a>
             </p>
           )
         ) : null}
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} archive={{ page, q }} />
+          <Card e={e} archive={{ page, q, game }} />
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
@@ -129,7 +233,7 @@ export const PastEventsPage: FC<{
           <a
             data-testid={PAST_EVENTS_PAGER_NEWER_TESTID}
             data-archive-page
-            href={pastEventsUrl(Math.min(page - 1, totalPages), q)}
+            href={pastEventsUrl(Math.min(page - 1, totalPages), q, game)}
           >
             Newer
           </a>
@@ -138,7 +242,7 @@ export const PastEventsPage: FC<{
           <a
             data-testid={PAST_EVENTS_PAGER_OLDER_TESTID}
             data-archive-page
-            href={pastEventsUrl(page + 1, q)}
+            href={pastEventsUrl(page + 1, q, game)}
           >
             Older
           </a>

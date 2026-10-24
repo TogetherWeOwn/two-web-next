@@ -35,11 +35,16 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive is not game-filtered. The calendar collection
+the RSS feed is not game-filtered. The calendar collection
 `/events.ics` accepts the same `?game=` scope: on a filtered schedule the
 Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
-unknown game yields an empty scoped calendar, never all games.
+unknown game yields an empty scoped calendar, never all games. The separate
+past-event archive carries the same facet with archive-visible suggestions
+(explicit past plus ended published nights): filter earlier game nights by game,
+alone or with text, and continue a game-filtered schedule into history. A valid
+game never silently becomes **All games**; overlong, NUL-bearing and
+conflicting-duplicate filters are refused with a branded 400 before any read.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to

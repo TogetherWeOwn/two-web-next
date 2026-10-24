@@ -13,7 +13,7 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
-import { listPast, type PublicEvent } from "../../src/events/reads";
+import { listArchiveGames, listPast, type PublicEvent } from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
 import {
@@ -165,6 +165,23 @@ export function archiveReadFixture() {
     // Calendar upcoming/Discord-id lookups are empty in this past-only fixture.
     if (!params.includes("past") && !sql.includes('"events"."ends_at" < '))
       return { rows: sql.startsWith("select count(*)") ? [[0]] : [] };
+    // Archive game suggestions: one column of distinct trimmed games, like the
+    // DISTINCT ON read (case-insensitive, first-seen wins), honoring its limit.
+    if (/^select distinct/i.test(sql)) {
+      const seen = new Map<string, string>();
+      for (const row of rows) {
+        if (row.game === null) continue;
+        const trimmed = row.game.trim();
+        if (trimmed === "") continue;
+        const folded = trimmed.toLowerCase();
+        if (!seen.has(folded)) seen.set(folded, trimmed);
+      }
+      const limit = Number(params.at(-1));
+      const games = [...seen.values()];
+      return {
+        rows: (Number.isSafeInteger(limit) ? games.slice(0, limit) : games).map((game) => [game]),
+      };
+    }
     const pattern = sql.toLowerCase().includes("ilike")
       ? params.find(
           (p): p is string => typeof p === "string" && p.startsWith("%") && p.endsWith("%"),
@@ -206,6 +223,7 @@ export function archiveReadFixture() {
 
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
+  listArchiveGames,
   listPast,
   loadPastArchivePage,
   toPublicPastArchiveRow,
@@ -233,7 +251,7 @@ export async function compileArchiveKit() {
   const outfile = join(scratch, "kit.mjs");
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
-    [join(root, "src/events/reads.ts"), ["listPast"]],
+    [join(root, "src/events/reads.ts"), ["listArchiveGames", "listPast"]],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],

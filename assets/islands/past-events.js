@@ -63,10 +63,11 @@
       window.location.assign(window.location.href);
   }
 
-  function archiveSearch(page, query) {
+  function archiveSearch(page, query, game) {
     var params = new URL("/events/past", window.location.href).searchParams;
     if (Number(page) > 1) params.set("page", String(page));
     if (query) params.set("q", query);
+    if (game) params.set("game", game);
     var search = params.toString();
     return search ? "?" + search : "";
   }
@@ -75,7 +76,7 @@
     var url = new URL(href, window.location.href);
     var params = url.searchParams;
     var valid = Array.from(params.keys()).every(function (key) {
-      return (key === "page" || key === "q") && params.getAll(key).length === 1;
+      return (key === "page" || key === "q" || key === "game") && params.getAll(key).length === 1;
     });
     var page = params.get("page");
     return url.origin === window.location.origin &&
@@ -185,12 +186,13 @@
       var pageNumber = next.dataset.page;
       var totalPages = next.dataset.totalPages;
       var query = next.dataset.query || "";
+      var game = next.dataset.game || "";
       if (
         !/^[1-9]\d*$/.test(pageNumber) ||
         !/^(0|[1-9]\d*)$/.test(totalPages) ||
         !Number.isSafeInteger(Number(pageNumber)) ||
         !Number.isSafeInteger(Number(totalPages)) ||
-        new URL(incoming.href).search !== archiveSearch(pageNumber, query)
+        new URL(incoming.href).search !== archiveSearch(pageNumber, query, game)
       ) {
         throw new Error("Invalid archive page");
       }
@@ -223,6 +225,7 @@
       root.dataset.page = pageNumber;
       root.dataset.totalPages = totalPages;
       root.dataset.query = query;
+      root.dataset.game = game;
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);

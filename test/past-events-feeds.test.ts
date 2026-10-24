@@ -68,6 +68,23 @@ function archive(total: number, appUrl = APP_URL) {
   const db = drizzle(async (sql, params) => {
     if (sql.startsWith('select count(*) from "events"')) return { rows: [[total]] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // Archive game suggestions: one column of distinct trimmed games, like the
+    // DISTINCT ON read (case-insensitive, first-seen wins), honoring its limit.
+    if (/^select distinct/i.test(sql)) {
+      const seen = new Map<string, string>();
+      for (const row of rows) {
+        if (row.game === null) continue;
+        const trimmed = row.game.trim();
+        if (trimmed === "") continue;
+        const folded = trimmed.toLowerCase();
+        if (!seen.has(folded)) seen.set(folded, trimmed);
+      }
+      const limit = Number(params.at(-1));
+      const games = [...seen.values()];
+      return {
+        rows: (Number.isSafeInteger(limit) ? games.slice(0, limit) : games).map((game) => [game]),
+      };
+    }
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     const limit = Number(params.at(hasOffset ? -2 : -1));

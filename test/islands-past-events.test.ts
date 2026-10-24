@@ -69,6 +69,23 @@ function archive(total: number) {
     queries.push({ sql, params });
     if (sql.startsWith('select count(*) from "events"')) return { rows: [[total]] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // Archive game suggestions: one column of distinct trimmed games, like the
+    // DISTINCT ON read (case-insensitive, first-seen wins), honoring its limit.
+    if (/^select distinct/i.test(sql)) {
+      const seen = new Map<string, string>();
+      for (const row of rows) {
+        if (row.game === null) continue;
+        const trimmed = row.game.trim();
+        if (trimmed === "") continue;
+        const folded = trimmed.toLowerCase();
+        if (!seen.has(folded)) seen.set(folded, trimmed);
+      }
+      const limit = Number(params.at(-1));
+      const games = [...seen.values()];
+      return {
+        rows: (Number.isSafeInteger(limit) ? games.slice(0, limit) : games).map((game) => [game]),
+      };
+    }
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid archive SQL offset");
@@ -117,13 +134,20 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
     expect(html).toContain('href="/events/past?page=2"');
     expect(html).not.toMatch(
-      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b|<form\b/,
+      /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b/,
     );
-    // Only the native, non-submitting feed-copy action is allowed in the archive.
+    // The only form is the game facet: a native GET that cannot mutate.
+    expect(html.match(/<form\b[^>]*>/g)).toEqual([
+      expect.stringMatching(
+        /^<form\b(?=[^>]*\smethod="get")(?=[^>]*\saction="\/events\/past")[^>]*>$/,
+      ),
+    ]);
+    // Only the native, non-submitting feed-copy action plus the facet submit are allowed.
     expect(html.match(/<button\b[^>]*>/g)).toEqual([
       expect.stringMatching(
         /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
       ),
+      expect.stringMatching(/^<button\b(?=[^>]*\stype="submit")[^>]*>$/),
     ]);
   });
 
@@ -144,7 +168,7 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain(`<a href="/join">${PAST_EVENTS_COPY.join}</a>`);
     expect(html).toContain('href="/events">Back to upcoming events');
     expect(html).not.toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
-    expect(source.queries).toHaveLength(1); // count only: no row or aggregate read
+    expect(source.queries).toHaveLength(2); // distinct suggestions plus count: no row or aggregate read
   });
 
   it.each(["9", String(Math.floor(Number.MAX_SAFE_INTEGER / PAGE_SIZE) + 1)])(
@@ -157,8 +181,9 @@ describe("PastEvents contract and SSR drift", () => {
       expect(html).toContain(pastEventsOutOfRangeCopy(Number(page), 2));
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past?page=${page}"`);
       expect(keys(html)).toEqual([]);
-      expect(source.queries).toHaveLength(1);
-      expect(source.queries[0]!.sql).toMatch(/^select count\(\*\)/);
+      expect(source.queries).toHaveLength(2);
+      expect(source.queries[0]!.sql).toMatch(/^select distinct/i);
+      expect(source.queries[1]!.sql).toMatch(/^select count\(\*\)/);
     },
   );
 
@@ -179,8 +204,8 @@ describe("PastEvents contract and SSR drift", () => {
     expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
     expect(html).toContain('data-page="1"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
-    expect(source.queries).toHaveLength(4);
-    expect(source.queries[1]!.sql).not.toContain(" offset "); // Drizzle elides zero
+    expect(source.queries).toHaveLength(5);
+    expect(source.queries[2]!.sql).not.toContain(" offset "); // Drizzle elides zero
   });
 
   it.each([
@@ -221,8 +246,12 @@ describe("PastEvents contract and SSR drift", () => {
   it("uses one predicate for count/rows, stable newest-first paging and two grouped aggregates, never viewer answers", async () => {
     const source = archive(25);
     await source.request("/events/past?page=2");
-    expect(source.queries).toHaveLength(4);
-    const [count, rows, named, occupancy] = source.queries;
+    expect(source.queries).toHaveLength(5);
+    const [games, count, rows, named, occupancy] = source.queries;
+    // One capped, ordered distinct read backs the game facet suggestions.
+    expect(games!.sql).toMatch(/select distinct/i);
+    expect(games!.sql).toMatch(/\border by\b/i);
+    expect(games!.params.at(-1)).toBe(101);
     expect(count!.sql.split(" where ")[1]).toBe(
       rows!.sql.split(" where ")[1]!.split(" order by ")[0],
     );

@@ -69,6 +69,23 @@ function archive(total: number) {
   const db = drizzle(async (sql, params) => {
     if (sql.startsWith('select count(*) from "events"')) return { rows: [[total]] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // Archive game suggestions: one column of distinct trimmed games, like the
+    // DISTINCT ON read (case-insensitive, first-seen wins), honoring its limit.
+    if (/^select distinct/i.test(sql)) {
+      const seen = new Map<string, string>();
+      for (const row of rows) {
+        if (row.game === null) continue;
+        const trimmed = row.game.trim();
+        if (trimmed === "") continue;
+        const folded = trimmed.toLowerCase();
+        if (!seen.has(folded)) seen.set(folded, trimmed);
+      }
+      const limit = Number(params.at(-1));
+      const games = [...seen.values()];
+      return {
+        rows: (Number.isSafeInteger(limit) ? games.slice(0, limit) : games).map((game) => [game]),
+      };
+    }
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     const limit = Number(params.at(hasOffset ? -2 : -1));
@@ -117,15 +134,21 @@ function expectArchiveSeo(html: string, canonical: string) {
   expect(html).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(html).not.toContain("/rsvp");
   // Header/footer chrome is tolerated outside the archive section; the
-  // section allows only the native, non-submitting feed-copy action.
+  // section allows only the game-facet GET form plus the native,
+  // non-submitting feed-copy action.
   const section = archiveSection(html);
   expect(section).not.toMatch(/data-testid="(?:rsvp-|waitlist-|event-going-count)/);
   expect(section).not.toContain("/rsvp");
-  expect(section).not.toMatch(/<form\b/);
+  expect(section.match(/<form\b[^>]*>/g)).toEqual([
+    expect.stringMatching(
+      /^<form\b(?=[^>]*\smethod="get")(?=[^>]*\saction="\/events\/past")[^>]*>$/,
+    ),
+  ]);
   expect(section.match(/<button\b[^>]*>/g)).toEqual([
     expect.stringMatching(
       /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
     ),
+    expect.stringMatching(/^<button\b(?=[^>]*\stype="submit")[^>]*>$/),
   ]);
   expect(scripts(html)).toEqual(["/islands/copy-link.js", "/islands/past-events.js"]);
 }

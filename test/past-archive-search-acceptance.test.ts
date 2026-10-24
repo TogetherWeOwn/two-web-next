@@ -250,8 +250,9 @@ describe.each(archiveTwins)("%s archive search acceptance", (twin) => {
     expect(eventKeys(far)).toEqual([]);
     expect(far).toContain(PAST_EVENTS_OUT_OF_RANGE_TESTID);
     expect(far).toContain('data-total-pages="2"');
-    expect(source.statements).toHaveLength(1);
-    expect(source.statements[0]!.sql).not.toContain(" offset ");
+    expect(source.statements).toHaveLength(2);
+    expect(source.statements[0]!.sql).toMatch(/^select distinct/i);
+    expect(source.statements[1]!.sql).not.toContain(" offset ");
     const recovery = linksIn(far).find((link) => link.pager);
     expect(recovery).toBeDefined();
     expect(queryMeaning(recovery!.url.searchParams.get("q"))).toBe("raid  night");
