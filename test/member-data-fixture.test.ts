@@ -97,6 +97,41 @@ it.each([
   }
 });
 
+it("permits the exact existing browser-smoke disposable service inside GitHub CI", () => {
+  expect(
+    testDatabaseUrl("postgres://agent_test@127.0.0.1:5432/two_web_next", {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+    }).hostname,
+  ).toBe("127.0.0.1");
+  expect(postgres).not.toHaveBeenCalled();
+});
+
+it.each([
+  "postgres://agent_test@127.0.0.1:5433/two_web_next",
+  "postgres://postgres@127.0.0.1:5432/two_web_next",
+  "postgres://agent_test:unexpected@127.0.0.1:5432/two_web_next",
+  "postgres://agent_test@127.0.0.1:5432/staging",
+  "postgres://agent_test@staging.example.test:5432/two_web_next",
+  "postgres://agent_test@127.0.0.1:5432/two_web_next?host=staging.example.test",
+  "postgres://agent_test@127.0.0.1:5432/two_web_next#public",
+])("refuses browser-smoke service near misses before driver construction: %s", (raw) => {
+  expect(() => testDatabaseUrl(raw, { CI: "true", GITHUB_ACTIONS: "true" })).toThrow(
+    "refusing before connecting",
+  );
+  expect(postgres).not.toHaveBeenCalled();
+});
+
+it.each([{}, { CI: "true" }, { GITHUB_ACTIONS: "true" }, { CI: "false", GITHUB_ACTIONS: "true" }])(
+  "refuses browser-smoke service outside the full CI runner contract %j",
+  (runner) => {
+    expect(() =>
+      testDatabaseUrl("postgres://agent_test@127.0.0.1:5432/two_web_next", runner),
+    ).toThrow("refusing before connecting");
+    expect(postgres).not.toHaveBeenCalled();
+  },
+);
+
 it("pins the empty test password and port instead of inheriting libpq credentials/options", async () => {
   vi.stubEnv("PGPASSWORD", "sentinel-inherited-password");
   vi.stubEnv("PGPORT", "5433");
