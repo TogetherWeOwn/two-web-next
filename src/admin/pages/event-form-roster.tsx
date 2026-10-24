@@ -3,7 +3,15 @@
 
 import type { FC } from "hono/jsx";
 import type { RosterEntry } from "../reads";
-import { ROSTER_PAGE_SIZE, rosterEmptyText, rosterUrl, type RosterQuery } from "../table-list";
+import {
+  ROSTER_PAGE_SIZE,
+  ROSTER_STATUSES,
+  rosterEmptyText,
+  rosterRangeText,
+  rosterRecovery,
+  rosterUrl,
+  type RosterQuery,
+} from "../table-list";
 import { TableSortHeader } from "./shell";
 
 export const EventRosterSection: FC<{
@@ -17,23 +25,32 @@ export const EventRosterSection: FC<{
   action,
   roster,
   rosterTotal,
-  rosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
+  rosterQuery = { q: "", status: "", sort: "answered", order: "desc", page: 1 },
 }) => {
   const total = rosterTotal ?? roster.length;
   const rangeStart = roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
   const rangeEnd =
     roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + roster.length : 0;
   const rosterHasNext = rosterQuery.page * ROSTER_PAGE_SIZE < total;
+  const recovery = rosterRecovery(eventKey, rosterQuery, roster.length, total);
   return (
     <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
-      <p data-testid="roster-range">
-        Showing {rangeStart}-{rangeEnd} of {total}
-      </p>
+      <p data-testid="roster-range">{rosterRangeText(rangeStart, rangeEnd, total)}</p>
       <form method="get" action={`${action}#rsvp-roster`} class="filters">
         <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
         <input type="hidden" name="roster_order" value={rosterQuery.order} />
+        <div class="field">
+          <label for="roster-status">Answer status</label>
+          <select id="roster-status" name="roster_status">
+            {ROSTER_STATUSES.map((o) => (
+              <option value={o.value} selected={o.value === rosterQuery.status}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div class="field">
           <label for="roster-q">Search members</label>
           <input id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
@@ -94,6 +111,12 @@ export const EventRosterSection: FC<{
           </tbody>
         </table>
       </div>
+      {recovery.clearUrl || recovery.firstUrl ? (
+        <p class="actions">
+          {recovery.firstUrl ? <a href={recovery.firstUrl}>First page of these responses</a> : null}
+          {recovery.clearUrl ? <a href={recovery.clearUrl}>Clear roster filters</a> : null}
+        </p>
+      ) : null}
       <nav aria-label="RSVP roster pages" class="actions">
         {rosterQuery.page > 1 ? (
           <a rel="prev" href={rosterUrl(eventKey, rosterQuery, { page: rosterQuery.page - 1 })}>
