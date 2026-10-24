@@ -165,6 +165,20 @@ falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
 
+## Pending or unconfirmed saves
+
+With JavaScript enabled, event and featured-content editors show **Saving… Please
+wait.** when you submit. Repeating the action during the next ten seconds sends
+no extra submission and explains that saving is already pending. This feedback
+does not move keyboard focus or confirm success.
+
+If the page has not navigated after ten seconds, the message says saving is not
+confirmed. Your draft remains in the current document. Check the saved record
+before resubmitting: the first write may have succeeded. There is no automatic
+retry or draft storage across navigation. Returning to the document clears stale
+save feedback without marking your draft saved. Native forms still submit
+normally without JavaScript, but do not show this client-side feedback.
+
 ## Recover an empty event or featured list
 
 On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
