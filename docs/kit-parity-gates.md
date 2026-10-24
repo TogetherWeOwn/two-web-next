@@ -263,11 +263,20 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
   (`test-results-kit-visual/`, `test-results-kit-parity/`,
   `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
-  artifact. The Kit visual config has its own Playwright output directory so
-  the later parity run cannot clear visual actuals before artifact upload.
-  When an actual and its stale committed baseline share a destination, the
-  reviewed actual wins; distinct actuals still refuse. Inspect every expected,
-  actual and diff image in the failed run's artifact before running
+  artifact. Use `node ci/kit-visual-accept.mjs <artifact-root> [--dry-run]
+  [--format json]` for Kit-only acceptance. Actual replacement authority comes
+  only from the existing exact `test-results-kit-visual` or
+  `test-results-kit-parity` segments inside the artifact; baseline copies
+  retain the existing `e2e/visual/__screenshots-kit__` path. Hono and
+  unrelated/lookalike screenshots have no Kit replacement authority. The
+  extraction folder's name is not a suite marker. Hono and Kit share one
+  bounded filesystem/plan policy and the same version-1 reporting/error
+  conventions, with stable `hono`/`kit` suite identity and stable
+  effective-item IDs. The Kit visual config has its own Playwright output
+  directory so the later parity run cannot clear visual actuals before artifact
+  upload. When an actual and its stale committed baseline share a destination,
+  the reviewed actual wins; distinct actuals still refuse. Inspect every
+  expected, actual and diff image in the failed run's artifact before running
   `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>`. Suite ownership uses
   exact directory segments relative to that root: extraction folder names and
   substring-lookalike folders do not admit or exclude images. Copies under
@@ -275,27 +284,36 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   (no rewrite), but cannot replace a differing checkout baseline without a
   reviewed actual. Such a stale-copy conflict names the target and refuses
   the whole plan. Use a current artifact or review the matching actual, never
-  delete the newer checkout baseline to force acceptance. All source bytes
-  and existing targets are preflighted before writes, including sources later
-  superseded by actuals; unreadable files refuse without partial application.
-  Apply-time disk failures are not rolled back. Commit only the intentional
-  changes in the same PR and explain each one; never regenerate the tree.
-  `ci/visual-accept.mjs`
-  ignores actuals from both `test-results-kit-visual/` and
-  `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
-  An intentional redesign is a reviewed artifact
-  committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. Kit baselines pin the events index, member board,
-  and archive. `e2e/kit-parity/events-index.visual.spec.ts` captures the populated
-  `/events` state at desktop and mobile widths against the built Kit Worker as a
-  guest. It runs before mutable journeys and asserts exactly the three seeded
-  upcoming event rows plus the zero-RSVP count, so fixture leftovers cannot
-  silently become the reference image. `e2e/kit-parity/parity.spec.ts` captures
-  member-board default, relative, season and activity views at desktop and mobile
-  widths, reusing the journey's single shared QA login. The archive visual case
-  captures populated and out-of-range `/events/past` at desktop and mobile widths
-  against the built Kit Worker as a guest on the deterministic seeded past row;
-  its DOM/state parity runs in the same spec.
+  delete the newer checkout baseline to force acceptance. Dry-run is read-only
+  and validates the same authority as apply. Reject source symlinks (including
+  root/ancestor links, descendants and cycles) and linked destination
+  files/ancestors before directory creation or writes. Confine the resolved
+  plan to the intended artifact and Kit destination roots. Preflight the entire
+  plan and cache source bytes, preserving actual-over-stale-copy precedence,
+  collision/stale-copy refusal, additions and identical no-ops. Refusal must
+  not change destination or outside bytes. Do not delete newer baselines to
+  bypass a stale-copy conflict. All source bytes and existing targets are
+  preflighted before writes, including sources later superseded by actuals;
+  unreadable files refuse without partial application. These checks do not
+  promise safety against a concurrent hostile filesystem writer or rollback
+  after an apply-time disk failure. Commit only the intentional changes in the
+  same PR and explain each one; never regenerate the tree.
+  `ci/visual-accept.mjs` ignores actuals from foreign suites and both
+  `test-results-kit-visual/` and `test-results-kit-parity/`, as well as
+  baselines under `__screenshots-kit__/`. An intentional redesign is a reviewed
+  artifact committed in the same PR — reviewers treat a baseline change like
+  code — never a silent regeneration. Kit baselines pin the events index,
+  member board, and archive. `e2e/kit-parity/events-index.visual.spec.ts`
+  captures the populated `/events` state at desktop and mobile widths against
+  the built Kit Worker as a guest. It runs before mutable journeys and asserts
+  exactly the three seeded upcoming event rows plus the zero-RSVP count, so
+  fixture leftovers cannot silently become the reference image.
+  `e2e/kit-parity/parity.spec.ts` captures member-board default, relative,
+  season and activity views at desktop and mobile widths, reusing the journey's
+  single shared QA login. The archive visual case captures populated and
+  out-of-range `/events/past` at desktop and mobile widths against the built
+  Kit Worker as a guest on the deterministic seeded past row; its DOM/state
+  parity runs in the same spec.
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.

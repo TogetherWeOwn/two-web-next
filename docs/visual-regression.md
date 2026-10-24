@@ -57,16 +57,34 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    generated ones), and an HTML report under `playwright-report-visual/`.
 2. Check every diff image. Only accept changes the PR meant to make.
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
-   `*-actual.png` over its baseline and each new baseline into place. A
-   reviewed actual supersedes the stale committed copy of the same baseline
-   inside the artifact. A baseline-directory copy alone can add a genuinely
-   absent baseline or match an existing one (a byte-identical no-op); it cannot
-   replace differing checkout bytes. A stale-copy conflict names that baseline
-   and refuses the entire plan. Use a current artifact or review a matching
-   actual; do not delete the newer checkout baseline to force acceptance.
-   Conflicting actuals, differing copies without an actual, and unreadable
-   sources or existing targets also refuse before any baseline is written.
-   All source bytes and local targets are preflighted first; apply-time disk
+   `*-actual.png` over its baseline and each new baseline into place. Only
+   actual images under the exact `test-results-visual` directory segment inside
+   the extracted artifact have Hono replacement authority. An extraction folder
+   named like a suite does not itself confer authority. Unrelated, lookalike
+   and Kit suite screenshots are ignored. A reviewed actual supersedes the
+   stale committed copy of the same baseline inside the artifact. Copies under
+   the existing Hono baseline path can add absent baselines or match identical
+   bytes, but cannot replace differing checkout bytes; a reviewed matching
+   actual outranks its stale artifact copy. A baseline-directory copy alone can
+   add a genuinely absent baseline or match an existing one (a byte-identical
+   no-op). A stale-copy conflict names that baseline and refuses the entire
+   plan. Use a current artifact or review a matching actual; do not delete the
+   newer checkout baseline to force acceptance. Conflicting actuals, differing
+   copies without an actual, and unreadable sources or existing targets also
+   refuse before any baseline is written.
+
+   Preview with `node ci/visual-accept.mjs <artifact-root> --dry-run`, or add
+   `--format json` for the version-1 suite/item/error report and next action.
+   Apply uses the same validated plan with `node ci/visual-accept.mjs
+   <artifact-root>`. Validate flags and the entire bounded plan before creating
+   any directory or writing any destination. Input roots must be real
+   directories; reject symlinks at the root, in its ancestry and among
+   discovered descendants, including cycles. Reject linked destination files,
+   the destination root and linked ancestors. Keep resolved sources and
+   destinations inside their intended roots, and apply the source bytes cached
+   during preflight. Any boundary refusal leaves existing destinations and
+   outside files unchanged. All source bytes and local targets are preflighted
+   first. This assumes no concurrent hostile filesystem writer; apply-time disk
    failures are not rolled back.
 
    Suite ownership uses exact directory segments relative to the unzipped
