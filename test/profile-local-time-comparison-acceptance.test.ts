@@ -4,7 +4,7 @@
 // Run (no DB): A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts
 // Root + web locked dev dependencies and Playwright Chromium are required.
 // The combined implementation PR must add this file to the existing a11y browser
-// step and its a11y-require-executed verifier: ancestor below, minimum 70 cases.
+// step and its a11y-require-executed verifier: ancestor below, minimum 72 cases.
 // The inventory gate already discovers this .test.ts. Do not merge RED alone.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -234,11 +234,13 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       })()`);
       const errors: string[] = [];
       const dynamicRequests: string[] = [];
+      const requests: string[] = [];
       const writes: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await context.route("**/*", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
+        requests.push(`${request.method()} ${url.href}`);
         if (["fetch", "xhr", "ping", "websocket"].includes(request.resourceType()))
           dynamicRequests.push(`${request.method()} ${url.pathname}`);
         if (url.origin !== ORIGIN) return route.abort();
@@ -284,7 +286,15 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       await page.goto(ORIGIN + fixture.path);
       if (options.javaScriptEnabled !== false) await settle(page);
       expect(errors, "rendered islands must not throw during mount").toEqual([]);
-      return { ...fixture, page, errors, dynamicRequests, writes };
+      return {
+        ...fixture,
+        page,
+        errors,
+        dynamicRequests,
+        writes,
+        requests,
+        initialRequests: requests.slice(),
+      };
     }
     const button = (page: Page) =>
       page.getByRole("button", { name: "Compare local times", exact: true });
@@ -308,7 +318,10 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         "LCT-1: requested result has a polite status and checked-at wording",
       ).toBe(1);
       expect(await result(page).isVisible()).toBe(true);
-      expect(await result(page).getAttribute("aria-live")).not.toBe("assertive");
+      expect(
+        [null, "polite"],
+        "LCT-1: role=status is implicitly polite; do not override it off or assertive",
+      ).toContain(await result(page).getAttribute("aria-live"));
       expect(
         await button(page).evaluate((element) => element === element.ownerDocument.activeElement),
         "LCT-1: focus stays on the activating control",
@@ -326,6 +339,10 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         interval: 0,
       });
       expect(fixture.dynamicRequests).toEqual([]);
+      expect(
+        fixture.requests,
+        "LCT-5: activation cannot initiate any additional network request",
+      ).toEqual(fixture.initialRequests);
       expect(fixture.writes).toEqual([]);
       expect(fixture.operations).toEqual([{ method: "find", args: [OWNER] }]);
       expect(fixture.errors).toEqual([]);
@@ -535,60 +552,67 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         expect(await page.locator('[name="timezone"]').inputValue()).toBe("Europe/London");
         expect((await editorState(page)).dirty).toBe(false);
       });
-      it(`${renderer} LCT-6 pending older save cannot take a newer draft through comparison`, async () => {
-        const fixture = await open(renderer, { presentation: "completed owner" });
-        const { page } = fixture;
-        // Absence fails before entering the held-request rendezvous.
-        await activate(page);
-        await showEditor(page);
-        await page.locator('[name="timezone"]').fill("Asia/Tokyo");
-        let release!: () => void;
-        let arrived!: () => void;
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const seen = new Promise<void>((resolve) => {
-          arrived = resolve;
-        });
-        await page.route("**/members/*", async (route) => {
-          if (route.request().method() !== "PATCH") return route.fallback();
-          arrived();
-          await gate;
-          return route.fallback();
-        });
-        try {
-          await page.getByTestId("profile-save").click();
-          await seen;
-          await page.locator('[name="timezone"]').fill("Asia/Kathmandu");
-          const before = await editorState(page);
-          const beforeEffects = await page.evaluate("window.comparisonEffects");
-          const beforeRequests = fixture.dynamicRequests.slice();
-          const beforeOperations = fixture.operations.slice();
-          await activate(page);
-          expect(await editorState(page)).toEqual(before);
-          expect(await page.evaluate("window.comparisonEffects")).toEqual(beforeEffects);
-          expect(fixture.dynamicRequests).toEqual(beforeRequests);
-          expect(fixture.operations).toEqual(beforeOperations);
-          const response = page.waitForResponse(
-            (response) => response.request().method() === "PATCH",
-          );
-          release();
-          expect((await response).status()).toBe(200);
-          await settle(page);
-          expect(await page.locator('[name="timezone"]').inputValue()).toBe("Asia/Kathmandu");
-          expect((await editorState(page)).dirty).toBe(true);
-          expect(fixture.writes).toEqual(["PATCH"]);
-          expect(
-            fixture.operations.filter((operation) => operation.method === "save"),
-          ).toHaveLength(1);
-          expect(fixture.store.rows.get(OWNER)?.timezone).toBe("Asia/Tokyo");
-          await page.getByTestId("profile-cancel").click();
-          expect(await page.locator('[name="timezone"]').inputValue()).toBe("Asia/Tokyo");
-          expect((await editorState(page)).dirty).toBe(false);
-        } finally {
-          release();
-        }
-      });
+      it.each([
+        { compare: false, label: "CONTROL" },
+        { compare: true, label: "comparison" },
+      ])(
+        `${renderer} $label LCT-6 pending older save preserves a newer draft`,
+        async ({ compare }) => {
+          const fixture = await open(renderer, { presentation: "completed owner" });
+          const { page } = fixture;
+          // Absence fails before entering the held-request rendezvous. The false
+          // control proves this exact save fixture even before the feature exists.
+          if (compare) await activate(page);
+          await showEditor(page);
+          await page.locator('[name="timezone"]').fill("Asia/Tokyo");
+          let release!: () => void;
+          let arrived!: () => void;
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const seen = new Promise<void>((resolve) => {
+            arrived = resolve;
+          });
+          await page.route("**/members/*", async (route) => {
+            if (route.request().method() !== "PATCH") return route.fallback();
+            arrived();
+            await gate;
+            return route.fallback();
+          });
+          try {
+            await page.getByTestId("profile-save").click();
+            await seen;
+            await page.locator('[name="timezone"]').fill("Asia/Kathmandu");
+            const before = await editorState(page);
+            const beforeEffects = await page.evaluate("window.comparisonEffects");
+            const beforeRequests = fixture.dynamicRequests.slice();
+            const beforeOperations = fixture.operations.slice();
+            if (compare) await activate(page);
+            expect(await editorState(page)).toEqual(before);
+            expect(await page.evaluate("window.comparisonEffects")).toEqual(beforeEffects);
+            expect(fixture.dynamicRequests).toEqual(beforeRequests);
+            expect(fixture.operations).toEqual(beforeOperations);
+            const response = page.waitForResponse(
+              (response) => response.request().method() === "PATCH",
+            );
+            release();
+            expect((await response).status()).toBe(200);
+            await settle(page);
+            expect(await page.locator('[name="timezone"]').inputValue()).toBe("Asia/Kathmandu");
+            expect((await editorState(page)).dirty).toBe(true);
+            expect(fixture.writes).toEqual(["PATCH"]);
+            expect(
+              fixture.operations.filter((operation) => operation.method === "save"),
+            ).toHaveLength(1);
+            expect(fixture.store.rows.get(OWNER)?.timezone).toBe("Asia/Tokyo");
+            await page.getByTestId("profile-cancel").click();
+            expect(await page.locator('[name="timezone"]').inputValue()).toBe("Asia/Tokyo");
+            expect((await editorState(page)).dirty).toBe(false);
+          } finally {
+            release();
+          }
+        },
+      );
       it(`${renderer} LCT-6 CONTROL device autofill remains a draft-only explicit action`, async () => {
         const fixture = await open(renderer, { presentation: "completed owner" });
         const { page } = fixture;
