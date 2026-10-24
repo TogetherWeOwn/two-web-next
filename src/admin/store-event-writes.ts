@@ -511,7 +511,7 @@ async function shiftFutureChildren(
     const proposedEnd = child.endsAt.getTime() + endDelta;
     if (proposedEnd <= proposedStart) {
       throw new ValidationError({
-        ends_at: `Occurrence ${child.eventKey} must end after it starts.`,
+        ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
       });
     }
   }

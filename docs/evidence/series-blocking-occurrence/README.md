@@ -25,6 +25,8 @@ The parent is 20:00–22:00, and its individually shortened future occurrence is
 
 All four images were opened for visual inspection. Both states at both widths have no horizontal overflow and no serious or critical axe violations. These are local Hono screenshots, not live staging evidence or Kit-route coverage. No visual baseline was changed; the existing public-page visual comparisons remain a separate CI gate.
 
+The after captures were refreshed after integrating the duplicate-event feature. That feature accounts for the extra **Duplicate as draft** action; this diagnostic change does not add a control. The final copy retains the existing sentence, then appends `Blocking occurrence: <public event key>.`, preserving existing consumers of the validation text.
+
 ## Acceptance verification
 
 The combined focused run executes both complete suites with the disposable test database supplied:
@@ -36,3 +38,11 @@ npx vitest run test/event-series-window-acceptance.test.ts test/event-series-pos
 Before implementation: **34 passed, 15 failed, 0 skipped**. Every failure was the missing blocking key. After implementation: **49 passed, 0 failed, 0 skipped**. The complete Hono accessibility gate also passed. These results do not claim completion of the remaining local, CI or release gates.
 
 The acceptance contribution is consumed unchanged from commit `567b507107990f7a37add4cca1bb5ea91561a77e`, retaining its author attribution. Neither acceptance file was rewritten by the implementer.
+
+The later duplicate-source regression suite also requires the original validation sentence. Before the compatibility correction, its complete run produced **35 passed, 2 failed, 0 skipped**. After retaining that sentence and appending the key, all three complete suites produced **86 passed, 0 failed, 0 skipped**:
+
+```sh
+npx vitest run test/event-duplicate-source-validation.test.ts test/event-series-window-acceptance.test.ts test/event-series-post-lock-eligibility.test.ts
+```
+
+The duplicate-source tests were not modified. Both acceptance-file hashes remain unchanged.
