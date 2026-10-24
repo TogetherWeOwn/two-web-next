@@ -59,6 +59,8 @@ import {
   type Sql,
 } from "../src/sessions";
 import { WRITE_THROTTLE_PER_MINUTE, type EnvWithThrottle } from "../src/throttle";
+import { profilesApp } from "../src/profiles/routes";
+import { createMemoryProfileStore, type MemberView } from "../src/profiles/store";
 import app from "./app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
@@ -160,6 +162,18 @@ function envFor(
     ...(throttle ? { THROTTLE_STORE: throttle.store } : {}),
   } as unknown as Env & { SESSION_STORE: SessionStore } & Partial<EnvWithThrottle>;
 }
+
+// Plain bindings for profilesApp requests: the session store arrives via deps,
+// like the matrix-layer harness in test/profiles.test.ts.
+const profileEnv: Env = {
+  APP_URL,
+  DISCORD_CLIENT_ID: "client-id",
+  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_INVITE_URL: "https://discord.gg/invite",
+  DISCORD_CLIENT_SECRET: "client-secret",
+  DISCORD_BOT_TOKEN: "bot-token",
+  SESSION_SECRET,
+};
 
 function throttleFixture(initial: number) {
   let hits = initial;
@@ -553,18 +567,44 @@ describe("sign out everywhere admission matches POST /logout", () => {
 
 describe("sign out everywhere renders on both twins", () => {
   it("RED: Hono profile header renders the everywhere form next to sign-out on /profile and /members/:id", async () => {
-    const store = createMemorySessionStore();
+    const sessions = createMemorySessionStore();
     const cookie = (
-      await mint(store, {
+      await mint(sessions, {
         userId: ACTOR.userId,
         username: ACTOR.username,
         member: true,
         moderator: false,
       })
     ).cookie;
+    // Profile rendering needs a member store, so seed the ACTOR and OTHER
+    // rows in memory and render through profilesApp, following the
+    // matrix-layer harness in test/profiles.test.ts.
+    const members: MemberView[] = [
+      {
+        id: ACTOR.userId,
+        username: ACTOR.username,
+        avatar: null,
+        bio: null,
+        games: [],
+        timezone: null,
+      },
+      {
+        id: OTHER.userId,
+        username: OTHER.username,
+        avatar: null,
+        bio: null,
+        games: [],
+        timezone: null,
+      },
+    ];
+    const profiles = profilesApp({
+      sessionStore: sessions,
+      store: createMemoryProfileStore(members),
+      accessLog: async () => true,
+    });
     const paths = ["/profile", `/members/${ACTOR.userId}`, `/members/${OTHER.userId}`];
     for (const path of paths) {
-      const res = await app.request(path, { headers: { cookie } }, envFor(store));
+      const res = await profiles.request(path, { headers: { cookie } }, profileEnv);
       expect(res.status, `${path} must render for a signed-in member`).toBe(200);
       const html = await res.text();
       expect(html, `${path} keeps the single-session sign-out`).toContain(SINGLETON_FORM);
