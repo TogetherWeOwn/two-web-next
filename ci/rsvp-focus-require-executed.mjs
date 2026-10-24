@@ -182,7 +182,13 @@ function collectLeaves(node, path, leaves) {
 function matchedLeaves(suite, roots) {
   const matched = [];
   const visit = (node) => {
-    if (node.name === suite) collectLeaves(node, [], matched);
+    // A suite is a parent block: a lone leaf with the same title is not the
+    // named suite, and a nested same-name block is already collected with the
+    // outer match, so stop descending once a block matches.
+    if (node.children.length > 0 && node.name === suite) {
+      collectLeaves(node, [], matched);
+      return;
+    }
     for (const child of node.children) visit(child);
   };
   for (const root of roots) visit(root);

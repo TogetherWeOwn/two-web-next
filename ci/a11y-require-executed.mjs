@@ -162,9 +162,12 @@ function admitVitest(report, suite, min) {
       if (!isRecord(entry))
         throw new ReceiptFailure("execution receipt refused (malformed-result-entry)");
       const ancestors = entry.ancestorTitles;
+      // Genuine Vitest reports top-level tests with an empty ancestor list;
+      // only the shape (array of non-blank strings) is structural. Identity
+      // still binds below: fullName must equal ancestors plus title, so an
+      // emptied suite member fails as a conflicting identity.
       if (
         !Array.isArray(ancestors) ||
-        ancestors.length === 0 ||
         ancestors.some((title) => typeof title !== "string" || title.trim().length === 0)
       )
         throw new ReceiptFailure("execution receipt refused (malformed-ancestor-titles)");

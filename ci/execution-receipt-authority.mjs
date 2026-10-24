@@ -174,8 +174,8 @@ export function emitFailure({ adapter, suite, format, error }) {
 
 export function emitSuccess({ suite, count, min, format, receipt }) {
   const line = humanSuccessLine(suite, count, min);
-  if (format === "json") process.stdout.write(`${JSON.stringify(receipt)}\n`);
-  else process.stdout.write(`${line}\n`);
+  // Append the CI summary before emitting stdout: if the append fails, the
+  // refusal must not follow an already-written pass receipt or success line.
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (summary) {
     try {
@@ -186,5 +186,7 @@ export function emitSuccess({ suite, count, min, format, receipt }) {
       );
     }
   }
+  if (format === "json") process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  else process.stdout.write(`${line}\n`);
   return line;
 }
