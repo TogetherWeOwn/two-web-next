@@ -11,13 +11,15 @@ const env = {
 } as never;
 
 const baseModel = () => ({
-  state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", game: "", past: false, page: 1 },
   upcoming: [],
   past: [],
   zone: "Europe/London",
   totalPages: 1,
   emptyState: null,
   robots: undefined,
+  games: [],
+  gameFilter: null,
   discordFailed: false,
 });
 
