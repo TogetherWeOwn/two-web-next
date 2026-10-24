@@ -85,7 +85,7 @@ const readSource = (p: string): string => readFileSync(join(root, p), "utf8");
 
 const SCOPE_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OTHER_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
-const UNKNOWN_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+const UNKNOWN_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAC";
 const LINK_COPY = "Recorded changes for this event";
 // Malformed scope values: each is present-but-not-key-shaped and must fail
 // explicitly rather than render unscoped rows.
@@ -99,7 +99,7 @@ const MALFORMED = [
 ];
 
 const unescapeHtml = (html: string): string =>
-  html.replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+  html.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
 
 /** Every /admin/activity-log href in rendered HTML, entities unescaped. */
 function activityHrefs(html: string): string[] {
