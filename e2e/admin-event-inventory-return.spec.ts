@@ -39,6 +39,22 @@ async function mount(context: BrowserContext, twin: "Hono" | "Kit") {
         headers: { origin, "content-type": "application/x-www-form-urlencoded" },
         body: request.postData() ?? "",
       });
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        // Follow same-origin redirects server-side, like the node U3.2
+        // companion: a fulfilled 303 cannot be followed by the harness because
+        // the followed GET is not re-intercepted and fails closed on the dead
+        // proxy (see playwright.config.ts). Both twins share this mount; Kit
+        // POSTs already route to h.request, and h.document serves the twin.
+        const target = new URL(location, origin);
+        if (target.origin === origin) {
+          return route.fulfill({
+            status: 200,
+            contentType: "text/html",
+            body: await h.document(twin, target.pathname + target.search),
+          });
+        }
+      }
       return route.fulfill({
         status: response.status,
         headers: Object.fromEntries(response.headers),

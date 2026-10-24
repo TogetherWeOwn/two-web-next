@@ -49,6 +49,10 @@ export const row: EventRow = {
   proofMarker: null,
   agentVersion: 1,
 };
+// Fixed fixture binding, never interpolated into generated code. Set by
+// compileInventoryReturn via Reflect.set and removed by dispose; suites run in
+// isolated workers so the binding is never shared across suites.
+const binding = "__inventoryReturnAcceptanceBinding";
 
 export type FixtureState = {
   event: EventRow;
@@ -108,23 +112,21 @@ export async function compileInventoryReturn() {
   };
   const db = fixtureDb(state);
   const namespace = `inventory-return-${Math.random().toString(36).slice(2)}`;
-  const stateName = `__${namespace.replaceAll("-", "_")}`;
-  // This private per-harness slot is removed by dispose; never shared across suites.
-  (globalThis as Record<string, unknown>)[stateName] = { state, db };
-  const slot = `globalThis[${JSON.stringify(stateName)}]`;
+  Reflect.set(globalThis, binding, { state, db });
   const webRequire = createRequire(join(root, "web/package.json"));
   const { compile } = webRequire("svelte/compiler");
   const modules: Record<string, string> = {
     kit: `export function error(status,message){throw Object.assign(new Error(message),{status})}`,
     workers: `export const env={APP_URL:${JSON.stringify(origin)}};`,
-    db: `export async function dbFor(){return ${slot}.db}`,
-    access: `export async function recordAccess(...args){${slot}.state.audits.push(args)}; export async function ensureAccessLogGin(){throw Error('unexpected DDL')}`,
+    db: "export async function dbFor(){return globalThis.__inventoryReturnAcceptanceBinding.db}",
+    access:
+      "export async function recordAccess(...args){globalThis.__inventoryReturnAcceptanceBinding.state.audits.push(args)}; export async function ensureAccessLogGin(){throw Error('unexpected DDL')}",
     postgres: `export default function(){throw Error('SQL forbidden in fixture')}`,
     writes: `
       export * from ${JSON.stringify(join(root, "src/admin/store-event-writes.ts"))};
       import { ValidationError } from ${JSON.stringify(join(root, "src/admin/validation.ts"))};
       async function write(operation,args){
-        const s=${slot}.state; s.writes.push({operation,args});
+        const s=globalThis.__inventoryReturnAcceptanceBinding.state; s.writes.push({operation,args});
         if(s.refusal==='validation')throw new ValidationError({location:'A location is required'});
         if(s.refusal==='stale')throw new ValidationError({status:'The saved event changed; review it before trying again'});
         if(s.refusal==='unavailable')throw Object.assign(new Error('fixture unavailable'),{code:'ECONNREFUSED'});
@@ -150,10 +152,10 @@ export async function compileInventoryReturn() {
         import List from './web/src/routes/admin/events/+page.svelte';
         import Edit from './web/src/routes/admin/events/[key]/+page.svelte';
         const sessions=createMemorySessionStore();
-        const app=new Hono().use('*',sameOrigin).route('/admin',adminApp({sessionStore:sessions,db:${slot}.db}));
+        const app=new Hono().use('*',sameOrigin).route('/admin',adminApp({sessionStore:sessions,db:globalThis.__inventoryReturnAcceptanceBinding.db}));
         registerErrorHandlers(app);
         export const cookie=async(member=false)=>cookieFor(sessions,member?MEMBER:MODERATOR);
-        export const request=(path,init)=>app.request(new URL(path,env.APP_URL),init,{...env,ADMIN_DB:${slot}.db});
+        export const request=(path,init)=>app.request(new URL(path,env.APP_URL),init,{...env,ADMIN_DB:globalThis.__inventoryReturnAcceptanceBinding.db});
         export { listLoad, editLoad };
         export const renderList=data=>render(List,{props:{data}}).body;
         export const renderEdit=data=>render(Edit,{props:{data}}).body;
@@ -267,29 +269,52 @@ export async function compileInventoryReturn() {
       });
     },
     dispose() {
-      delete (globalThis as Record<string, unknown>)[stateName];
+      Reflect.deleteProperty(globalThis, binding);
     },
   };
 }
 
 export function decode(value: string): string {
+  // &amp; last: decoding it first would double-unescape sequences like &amp;lt;.
   return value
-    .replaceAll("&amp;", "&")
     .replaceAll("&quot;", '"')
     .replaceAll("&#39;", "'")
     .replaceAll("&#x27;", "'")
     .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">");
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }
 export function attribute(tag: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`\\b${escaped}=["']([^"']*)["']`).exec(tag);
   return match ? decode(match[1]!) : null;
 }
+function stripTags(markup: string): string {
+  // Walk original tokens, not successively rewritten markup. Byte-identical to
+  // removing every <...> span: text between tags is concatenated unchanged.
+  let text = "";
+  let last = 0;
+  for (const token of markup.matchAll(/<[^>]*>/g)) {
+    text += markup.slice(last, token.index);
+    last = token.index + token[0].length;
+  }
+  return text + markup.slice(last);
+}
+function decodeText(value: string): string {
+  // Link text only: never produce < > from entities, so a decoded entity can
+  // never become a <script>-capable tag. Attributes and form values still use
+  // decode(), which handles the full entity set including &lt;/&gt;.
+  // &amp; last, same double-unescape rule as decode().
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&amp;", "&");
+}
 export function links(html: string) {
   return [...html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/g)].map(([tag]) => ({
     href: attribute(tag, "href"),
-    text: decode(tag.replace(/<[^>]*>/g, "")).trim(),
+    text: decodeText(stripTags(tag)).trim(),
     tag,
   }));
 }
