@@ -39,6 +39,7 @@ vi.mock("../src/events/reads", async (original) => ({
   listUpcoming: vi.fn(),
   listUpcomingForMonth: vi.fn(),
   listCalendarPast: vi.fn(),
+  listPublishedGames: vi.fn(async () => []),
   persistedDiscordIds: vi.fn(async () => new Set<string>()),
 }));
 vi.mock("../src/events/search-log", async (original) => ({
