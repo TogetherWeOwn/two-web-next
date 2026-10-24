@@ -30,6 +30,8 @@ import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { eventKeyAllowed } from "../events/keys";
+import { eventContentBaseline } from "./event-baseline";
+import { EventHostJoinFields, EventNotesField } from "./pages/event-host-join-fields";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -47,6 +49,10 @@ export type KitEventEditValues = {
   title: string;
   game: string;
   description: string;
+  accessibility_notes: string;
+  organizer_name: string;
+  join_url: string;
+  join_instructions: string;
   starts_at: string;
   ends_at: string;
   timezone: string;
@@ -96,7 +102,12 @@ export type KitEventEditView = {
   key: string;
   title: string;
   status: string;
+  /** The Hono save precondition for this row; the ported form posts it back. */
+  baseline: string;
   values: KitEventEditValues;
+  /** Escaped application-generated HTML from the Hono field renderer, never raw row HTML. */
+  hostJoinFieldsHtml: string;
+  notesHtml: string;
   errors: Record<string, string>;
   hasErrors: boolean;
   isDraft: boolean;
@@ -122,6 +133,12 @@ export type KitEventEditRow = {
   title: string;
   game: string | null;
   description: string | null;
+  /** Displayed by the Kit form and read by the baseline mint: narrowing the
+   * Kit projection breaks saves. */
+  accessibilityNotes?: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
@@ -214,16 +231,29 @@ export async function resolveKitEventEdit(
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
+  const hostJoinValues = {
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
+  };
   return {
     kind: "ok",
     view: {
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      // The save form posts to the Hono-owned update, which refuses a save
+      // without the current baseline — mint it from the same row the Hono
+      // edit GET mints from.
+      baseline: await eventContentBaseline(row),
       values: {
         title: row.title,
         game: row.game ?? "",
         description: row.description ?? "",
+        // The Hono POST overwrites notes from this field: omitting it would
+        // silently clear notes the form never displayed.
+        accessibility_notes: row.accessibilityNotes ?? "",
+        ...hostJoinValues,
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
         starts_at: utcToWall(row.startsAt, row.timezone),
@@ -232,6 +262,11 @@ export async function resolveKitEventEdit(
         location: row.location ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
       },
+      hostJoinFieldsHtml: EventHostJoinFields({ values: hostJoinValues, errors: {} }).toString(),
+      notesHtml: EventNotesField({
+        values: { accessibility_notes: row.accessibilityNotes ?? "" },
+        errors: {},
+      }).toString(),
       errors: {},
       hasErrors: false,
       isDraft: false,

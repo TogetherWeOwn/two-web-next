@@ -52,6 +52,7 @@ import {
 } from "./table-list";
 import { type AccessDecl, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
+import { EVENT_BASELINE_FIELD, eventContentBaseline, isWellFormedBaseline } from "./event-baseline";
 import {
   type EventRow,
   type FeaturedEditRow,
@@ -65,8 +66,9 @@ import {
   listFeatured,
   NotFoundError,
   setRsvpOpen,
+  StaleBaselineError,
   transitionEvent,
-  updateEvent,
+  updateEventIfBaselineMatches,
   updateFeatured,
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
@@ -91,6 +93,7 @@ import {
   JoinAttemptPage,
   JoinAttemptsPage,
 } from "./pages";
+import type { SaveConflict } from "./pages/event-form-fields";
 
 type Vars = QueuePreviewVars;
 
@@ -160,6 +163,28 @@ function formError(
 ): Response | Promise<Response> {
   c.status(422);
   return render(err.fields, values);
+}
+
+/** Another moderator committed between this form's GET and its POST (409). */
+function staleConflict(key: string): SaveConflict {
+  return {
+    heading: "Another moderator changed this event while you were editing.",
+    detailLead: "Your draft is preserved below.",
+    reviewHref: `/admin/events/${key}`,
+    reviewText: "Review the current values",
+    detailTail: ", copy over anything to keep, then save again.",
+  };
+}
+
+/** The form carried no usable baseline, so nothing was trusted (400). */
+function bypassConflict(key: string): SaveConflict {
+  return {
+    heading: "Save conflict: this form carried no valid save baseline.",
+    detailLead: "Nothing was written and your draft is preserved below.",
+    reviewHref: `/admin/events/${key}`,
+    reviewText: "Review the current values",
+    detailTail: " and save again from the fresh form.",
+  };
 }
 
 /**
@@ -446,7 +471,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       <EventFormPage
         mode="edit"
         row={row}
-        values={eventValues(row)}
+        values={{ ...eventValues(row), [EVENT_BASELINE_FIELD]: await eventContentBaseline(row) }}
         errors={{}}
         roster={roster}
         rosterTotal={rosterTotal}
@@ -491,11 +516,29 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         }
         throw err;
       }
+      // The save precondition runs after parsing so an invalid form keeps its
+      // 422 field errors. Every refusal below re-renders the submitted
+      // baseline echoed, never re-minted, so a rejected draft cannot acquire
+      // a current baseline on retry.
+      const submittedBaseline = values[EVENT_BASELINE_FIELD];
+      if (!isWellFormedBaseline(submittedBaseline)) {
+        return c.html(
+          <EventFormPage
+            mode="edit"
+            row={existing}
+            values={values}
+            errors={{}}
+            conflict={bypassConflict(key)}
+          />,
+          400,
+        );
+      }
       try {
-        const { row, writeBack, childWriteBacks } = await updateEvent(
+        const { row, writeBack, childWriteBacks } = await updateEventIfBaselineMatches(
           db,
           c.get("adminActor"),
           key,
+          submittedBaseline,
           input,
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
@@ -503,6 +546,18 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof StaleBaselineError) {
+          return c.html(
+            <EventFormPage
+              mode="edit"
+              row={existing}
+              values={values}
+              errors={{}}
+              conflict={staleConflict(key)}
+            />,
+            409,
+          );
+        }
         if (err instanceof ValidationError) {
           return formError(
             c,
@@ -552,12 +607,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               const key = c.req.param("key");
               const row = await getEvent(db, key);
               if (!row) return errorPage(c, 404, "Event not found");
+              // The render shows the row's current content, so the baseline is
+              // minted fresh here — unlike refusal re-renders, which echo the
+              // submitted draft's baseline.
+              const values = {
+                ...eventValues(row),
+                [EVENT_BASELINE_FIELD]: await eventContentBaseline(row),
+              };
               return formError(
                 c,
                 err,
                 (errors, v) =>
                   c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-                eventValues(row),
+                values,
               );
             }
             return errorPage(

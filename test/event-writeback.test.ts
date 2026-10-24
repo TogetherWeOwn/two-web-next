@@ -18,6 +18,11 @@ import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { enqueueSyncEvent, handleQueue } from "../src/jobs/worker";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
+  EVENT_BASELINE_FIELD,
+  eventContentBaseline,
+  type BaselineContent,
+} from "../src/admin/event-baseline";
+import {
   createMemberDataFixture,
   testDatabaseUrl,
   type MemberDataFixture,
@@ -128,6 +133,25 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       values (${eventKey}, 'Game night', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z', 'Voice', ${status}) returning id`;
     return row!.id as number;
   }
+  // The admin edit form's save precondition, minted from the stored row. (A
+  // GET would enter the keyed read boundary, which refuses this suite's
+  // non-numeric moderator id; the render path is pinned elsewhere.)
+  async function adminBaseline(): Promise<Record<string, string>> {
+    const [row] = await sql`
+      select title, game, description, starts_at, ends_at, timezone, location, capacity
+      from events where event_key = ${eventKey}`;
+    const content = {
+      title: row!.title,
+      game: row!.game,
+      description: row!.description,
+      startsAt: new Date(row!.starts_at),
+      endsAt: new Date(row!.ends_at),
+      timezone: row!.timezone,
+      location: row!.location,
+      capacity: row!.capacity,
+    } satisfies BaselineContent;
+    return { [EVENT_BASELINE_FIELD]: await eventContentBaseline(content) };
+  }
   async function request(
     method: string,
     path: string,
@@ -219,7 +243,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         const response = await request(
           mode === "admin" || !edit ? "POST" : "PATCH",
           path,
-          edit ? (mode === "admin" ? fields : { title: fields.title }) : undefined,
+          edit
+            ? mode === "admin"
+              ? { ...fields, ...(await adminBaseline()) }
+              : { title: fields.title }
+            : undefined,
           mode === "admin",
         );
         expect(response.status).toBe(mode === "admin" ? 303 : 200);
@@ -281,7 +309,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       const response = await request(
         mode === "admin" ? "POST" : "PATCH",
         `${mode === "admin" ? "/admin" : ""}/events/${eventKey}`,
-        mode === "admin" ? { ...fields, location: "   " } : { location: "   " },
+        mode === "admin"
+          ? { ...fields, location: "   ", ...(await adminBaseline()) }
+          : { location: "   " },
         mode === "admin",
       );
       expect(response.status).toBe(mode === "admin" ? 422 : 422);

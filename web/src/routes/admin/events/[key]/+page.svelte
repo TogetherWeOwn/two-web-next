@@ -21,16 +21,16 @@ import type { PageProps } from "./$types";
 // Hono-owned too.
 let { data }: PageProps = $props();
 const view = $derived(data.view);
-const values = $derived(view.values ?? {});
-const errors = $derived(view.errors ?? {});
-const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
+const values = $derived(view.values);
+const errors = $derived(view.errors);
+const hasErrors = $derived(view.hasErrors);
 const val = (name: string) => values[name] ?? "";
-const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
-const textLimitsIsland =
-  '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
-const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const editorIslands =
+  '<script type="module" src="/islands/admin-event-text-limits.js"></' +
+  'script><script src="/islands/admin-event-editor.js" defer></' +
+  "script>";
 </script>
 
 <AdminShell title={`Edit ${view.title}`}>
@@ -58,6 +58,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-editor=""
     data-event-draft={hasErrors ? "" : undefined}
   >
+    <!-- The Hono-owned update refuses a save without the current baseline. -->
+    <input type="hidden" name="saved_baseline" value={view.baseline} />
     <div class="field">
       <label for="f-title">Title</label>
       <input
@@ -105,6 +107,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </p>
       {/if}
     </div>
+    <!-- Same escaped SSR field as Hono; keeps notes visible without a duplicate client template. -->
+    {@html view.notesHtml}
     <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
@@ -145,7 +149,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         id="f-timezone"
         name="timezone"
         type="text"
-        value={timezoneVal}
+        value={val("timezone") || "Europe/London"}
         aria-invalid={errors.timezone ? "true" : undefined}
         aria-describedby={errors.timezone ? "f-timezone-hint f-timezone-error" : "f-timezone-hint"}
       />
@@ -175,6 +179,8 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </p>
       {/if}
     </div>
+    <!-- Escaped server output from the same fields Hono renders; never caller-supplied HTML. -->
+    {@html view.hostJoinFieldsHtml}
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input
@@ -291,7 +297,6 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </nav>
   </section>
-  {@html textLimitsIsland}
-  {@html editorIsland}
+  {@html editorIslands}
 </section>
 </AdminShell>

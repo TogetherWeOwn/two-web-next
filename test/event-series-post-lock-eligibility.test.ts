@@ -26,6 +26,7 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 // Any producer-created connection must inherit the fixture's owned schema.
 vi.mock("postgres", async () => {
@@ -235,6 +236,16 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
         if (error instanceof ValidationError) return { status: 422, fields: error.fields };
         throw error;
       }
+    }
+    if (surface !== "JSON PATCH") {
+      // The admin surface carries the save precondition from its own GET.
+      const page = await adminApp({ sessionStore: sessions, db: fixture.db }).request(
+        `/events/${key}`,
+        { headers: { cookie } },
+        env(),
+      );
+      expect(page.status).toBe(200);
+      changes = { ...changes, ...savedForm(await page.text()).hidden };
     }
     const res =
       surface === "JSON PATCH"

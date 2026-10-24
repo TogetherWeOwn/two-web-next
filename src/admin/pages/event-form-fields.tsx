@@ -4,9 +4,42 @@
 // save/cancel actions. Field errors render through the shared Field helper.
 
 import type { FC } from "hono/jsx";
+import { EVENT_BASELINE_FIELD } from "../event-baseline";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
+import { EventHostJoinFields, EventNotesField } from "./event-host-join-fields";
 import { ValidationSummary } from "./validation-summary";
+
+/**
+ * A refused save that keeps the typed draft: another moderator committed
+ * first (stale baseline) or the form carried no valid baseline (bypass).
+ * The notice names the refusal, and the native review link re-enters the
+ * current values — the whole workflow stays keyboard-operable with no
+ * scripting, exactly like the validation summary above it.
+ */
+export type SaveConflict = {
+  heading: string;
+  detailLead: string;
+  detailTail: string;
+  reviewHref: string;
+  reviewText: string;
+};
+
+const ConflictNotice: FC<{ conflict: SaveConflict }> = ({ conflict }) => (
+  <div
+    class="notice"
+    role="alert"
+    tabindex={-1}
+    data-testid="save-conflict"
+    data-admin-conflict-summary=""
+  >
+    <p>{conflict.heading}</p>
+    <p>
+      {conflict.detailLead} <a href={conflict.reviewHref}>{conflict.reviewText}</a>
+      {conflict.detailTail}
+    </p>
+  </div>
+);
 
 export const EventFormFields: FC<{
   mode: "new" | "edit";
@@ -14,16 +47,25 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  conflict?: SaveConflict;
+}> = ({ mode, row, values, errors, action, conflict }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
+      {conflict ? <ConflictNotice conflict={conflict} /> : null}
       <form
         method="post"
         action={action}
         data-event-editor=""
-        data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+        data-event-draft={conflict || Object.keys(errors).length > 0 ? "" : undefined}
       >
+        {mode === "edit" ? (
+          <input
+            type="hidden"
+            name={EVENT_BASELINE_FIELD}
+            value={val(values, EVENT_BASELINE_FIELD)}
+          />
+        ) : null}
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
             <input
@@ -54,18 +96,7 @@ export const EventFormFields: FC<{
             </textarea>
           )}
         </Field>
-        <Field
-          name="accessibility_notes"
-          label="Accessibility notes"
-          errors={errors}
-          hint="Optional; include only confirmed details, not personal contact information."
-        >
-          {(id) => (
-            <textarea id={id} name="accessibility_notes" rows={4} data-event-text-limit={1000}>
-              {val(values, "accessibility_notes")}
-            </textarea>
-          )}
-        </Field>
+        <EventNotesField values={values} errors={errors} />
         <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
           {(id) => (
             <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />
@@ -102,42 +133,7 @@ export const EventFormFields: FC<{
             />
           )}
         </Field>
-        <Field
-          name="organizer_name"
-          label="Organizer display name (optional)"
-          errors={errors}
-          hint="Use a name the organizer has agreed to show publicly. Do not enter contact details."
-        >
-          {(id) => (
-            <input
-              id={id}
-              name="organizer_name"
-              type="text"
-              value={val(values, "organizer_name")}
-              data-event-text-limit={500}
-            />
-          )}
-        </Field>
-        <Field
-          name="join_url"
-          label="Public joining link (optional)"
-          errors={errors}
-          hint="HTTPS or HTTP link visible to everyone. Never use attendee-only or private links."
-        >
-          {(id) => <input id={id} name="join_url" type="url" value={val(values, "join_url")} />}
-        </Field>
-        <Field
-          name="join_instructions"
-          label="Public joining instructions (optional)"
-          errors={errors}
-          hint="Share only verified details that are safe for anyone to see. Do not enter contact details."
-        >
-          {(id) => (
-            <textarea id={id} name="join_instructions" rows={4} data-event-text-limit={5000}>
-              {val(values, "join_instructions")}
-            </textarea>
-          )}
-        </Field>
+        <EventHostJoinFields values={values} errors={errors} />
         <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
           {(id) => (
             <input
