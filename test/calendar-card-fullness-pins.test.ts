@@ -86,11 +86,15 @@ describe("calendar card fullness pins", () => {
 });
 
 // Visible end-date pins: inner text of the second <time> element only, so a
-// datetime attribute can never satisfy a visible-label assertion.
+// datetime attribute can never satisfy a visible-label assertion. The card
+// renders the end label as plain text (no nested markup), so the helper
+// asserts that directly instead of stripping tags.
 function endTimeText(html: string): string {
   const bodies = [...html.matchAll(/<time\b[^>]*>([\s\S]*?)<\/time>/g)].map((match) => match[1]!);
   expect(bodies, "card renders a start and an end time").toHaveLength(2);
-  return bodies[1]!.replace(/<[^>]*>/g, "");
+  const text = bodies[1]!;
+  expect(text, "end time has no nested markup").not.toContain("<");
+  return text;
 }
 
 describe("calendar card end-date visible-text pins", () => {
