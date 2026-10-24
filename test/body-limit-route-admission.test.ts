@@ -254,7 +254,7 @@ describe("profile write admission", () => {
 const moderatorWrites = [
   ["POST", "/events", BODY_LIMIT_BYTES.json],
   ["PATCH", "/events/test-event", BODY_LIMIT_BYTES.json],
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => [
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => [
     "POST",
     `/events/test-event/${action}`,
     BODY_LIMIT_BYTES.action,

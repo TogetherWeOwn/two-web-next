@@ -131,8 +131,10 @@ const patch = (segment: string, body = '{"title":"Renamed"}') =>
     env,
   );
 
-const act = (segment: string, action: "publish" | "cancel" | "rsvp-pause" | "rsvp-reopen") =>
-  app.request(`/events/${segment}/${action}`, { method: "POST" }, env);
+const act = (
+  segment: string,
+  action: "publish" | "cancel" | "duplicate" | "rsvp-pause" | "rsvp-reopen",
+) => app.request(`/events/${segment}/${action}`, { method: "POST" }, env);
 
 function expectWritersSilent() {
   expect(patchEvent).not.toHaveBeenCalled();
@@ -181,7 +183,7 @@ describe("JSON event PATCH refuses malformed keys before the store", () => {
 });
 
 describe("JSON event transitions refuse malformed keys before the store", () => {
-  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+  for (const action of ["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"] as const) {
     it.each(SUBSET)(`POST ${action} $label: 404 not_found, writers silent`, async ({ segment }) => {
       const res = await act(segment, action);
       expect(res.status).toBe(404);
