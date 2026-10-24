@@ -77,12 +77,11 @@ async function open(t, twin, options = {}) {
       scripts.includes("/islands/event-device-timezone.js"),
       "U2_FIXTURE_DEVICE_ZONE: real mount still wires the existing island",
     );
-  // Keep structured data; suppress unrelated executable scripts so their RSVP /
-  // telemetry effects cannot be mistaken for this informational enhancement.
-  let html = rendered.html.replace(
-    /<script\b(?![^>]*type="application\/ld\+json")[^>]*>[\s\S]*?<\/script>/g,
-    "",
-  );
+  // Keep structured data; the route handler below aborts every /islands/
+  // fetch so no renderer script runs except the islands this test injects
+  // itself via addScriptTag. No rewritten HTML copy: serve rendered.html
+  // unchanged (plus Kit CSS) so JSON-LD stays verbatim.
+  let html = rendered.html;
   if (kit.css) html = html.replace("</head>", `<style>${kit.css}</style></head>`);
   if (spec.corrupt) {
     html = html.replaceAll(spec.corrupt[0], spec.corrupt[1]);
@@ -188,6 +187,12 @@ async function open(t, twin, options = {}) {
     const url = new URL(route.request().url());
     if (url.origin === scheduleOrigin && url.pathname === schedulePath) {
       await route.fulfill({ contentType: "text/html", body: html });
+      return;
+    }
+    // Suppress the renderer's executable island fetches; the test injects the
+    // chosen island bytes itself via addScriptTag after navigation.
+    if (url.origin === scheduleOrigin && url.pathname.startsWith("/islands/")) {
+      await route.abort();
       return;
     }
     const file = resolve(publicRoot, `.${url.pathname}`);
