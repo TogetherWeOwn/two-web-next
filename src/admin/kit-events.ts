@@ -11,7 +11,12 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  eventEmptyText,
+  eventScopeRecoveryText,
+  type EventListQuery,
+} from "./event-list";
 import type { EventListRow, EventListScope } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -42,6 +47,13 @@ export type KitEventListView = {
    * page's single `{@html}` of this field cannot inject elements.
    */
   scopeHeadingHtml: string | null;
+  /**
+   * Pre-rendered recovery copy for an unusable scope, or null when the scope
+   * is absent or ok. Server-carried like scopeHeadingHtml so the client
+   * bundle does not ship the recovery strings; same shared copy the Hono
+   * twin renders via eventScopeRecoveryText.
+   */
+  scopeRecoveryText: string | null;
 };
 
 const escapeHtmlText = (value: string): string =>
@@ -79,5 +91,6 @@ export function buildEventListView(
     scope,
     scopeHeadingHtml:
       scope?.status === "ok" ? `Events in this series: ${escapeHtmlText(scope.parentTitle)}` : null,
+    scopeRecoveryText: scope && scope.status !== "ok" ? eventScopeRecoveryText(scope.status) : null,
   };
 }
