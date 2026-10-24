@@ -7,9 +7,79 @@
 // plus a verdict. The `ci/check-staging-journeys.mjs` gate runs it in CI and
 // fails loud when nothing passed.
 
-export const LEDGER_VERSION = 1;
+import { createHash } from "node:crypto";
+
+export const LEDGER_VERSION = 2;
+export const REPORT_LIMITS = Object.freeze({
+  bytes: 8 * 1024 * 1024,
+  depth: 64,
+  nodes: 100000,
+  journeys: 100,
+});
 
 const MAX_REASON_LENGTH = 200;
+const MAX_DIAGNOSTIC_COUNT = 10000;
+const DIAGNOSTICS = Object.freeze({
+  report_unreadable: [
+    true,
+    "Restore the local Playwright JSON report, then regenerate the receipt. Do not rerun a deployment.",
+  ],
+  report_invalid_json: [
+    false,
+    "Fix the report producer or recover a complete JSON report, then regenerate the receipt.",
+  ],
+  report_invalid_shape: [
+    false,
+    "Check the report producer and nested collection types; retained rows are partial evidence only.",
+  ],
+  report_too_large: [
+    false,
+    "Check report size, collection volume and reporter configuration before regenerating the receipt.",
+  ],
+  report_too_deep: [
+    false,
+    "Check report nesting and reporter configuration before regenerating the receipt.",
+  ],
+  runner_error: [
+    false,
+    "Inspect the original runner/teardown failure in restricted evidence. Do not trust passing rows or rerun until green.",
+  ],
+  output_unwritable: [
+    true,
+    "Choose distinct writable local receipt and step-summary paths, then regenerate the receipt.",
+  ],
+});
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Inspect even ignored metadata without recursion or serialization. CLI input also
+// has a byte cap before JSON.parse; direct callers get node/string/depth bounds.
+function reportBoundError(report) {
+  const pending = [{ value: report, depth: 0 }];
+  const seen = new WeakSet();
+  let nodes = 0;
+  let bytes = 0;
+  while (pending.length) {
+    const { value, depth } = pending.pop();
+    if (++nodes > REPORT_LIMITS.nodes) return "report_too_large";
+    if (depth > REPORT_LIMITS.depth) return "report_too_deep";
+    if (typeof value === "string") bytes += Buffer.byteLength(value);
+    if (value !== null && typeof value === "object") {
+      if (seen.has(value)) return "report_invalid_shape";
+      seen.add(value);
+      const keys = Object.keys(value);
+      if (nodes + pending.length + keys.length > REPORT_LIMITS.nodes) return "report_too_large";
+      for (const key of keys) {
+        bytes += Buffer.byteLength(key);
+        pending.push({ value: value[key], depth: depth + 1 });
+      }
+    }
+    if (bytes > REPORT_LIMITS.bytes) return "report_too_large";
+  }
+  return null;
+}
 
 function cleanReason(value) {
   if (typeof value !== "string") return "";
@@ -37,6 +107,9 @@ function skipReason(test, qaAuthToken) {
 
 function scrubDiagnosticReason(value, qaAuthToken) {
   if (typeof value !== "string") return "";
+  // Withhold oversized diagnostics in full instead of truncating a secret or
+  // running the legacy redaction patterns over megabytes of attacker text.
+  if (value.length > 2048) return "[redacted oversized diagnostic]";
   // Find URL/token spans in the original text: replacing either first can split
   // the other and leave a tail. Merge overlaps before inserting any markers.
   const spans = Array.from(value.matchAll(/https?:\/\/\S+/gi), (match) => ({
@@ -113,42 +186,119 @@ function unknownStatusReason(status, qaAuthToken) {
   return `unknown test status: ${cleaned}`.slice(0, MAX_REASON_LENGTH);
 }
 
-function collectTests(suites, out) {
-  for (const suite of suites ?? []) {
-    if (!suite || typeof suite !== "object") continue;
-    for (const spec of suite.specs ?? []) {
-      const file = typeof spec?.file === "string" ? spec.file : "";
-      const title = typeof spec?.title === "string" ? spec.title : "";
-      for (const test of spec?.tests ?? []) {
-        out.push({ file, title, test });
+function collection(owner, key, addDiagnostic) {
+  if (!Object.hasOwn(owner, key)) return [];
+  if (Array.isArray(owner[key])) return owner[key];
+  addDiagnostic("report_invalid_shape");
+  return [];
+}
+
+function collectTests(suites, out, addDiagnostic, parents = []) {
+  for (const suite of suites) {
+    if (!isRecord(suite)) {
+      addDiagnostic("report_invalid_shape");
+      continue;
+    }
+    const path = [...parents, typeof suite.title === "string" ? suite.title : ""];
+    for (const spec of collection(suite, "specs", addDiagnostic)) {
+      if (!isRecord(spec)) {
+        addDiagnostic("report_invalid_shape");
+        continue;
+      }
+      const file = typeof spec.file === "string" ? spec.file : "";
+      const title = typeof spec.title === "string" ? spec.title : "";
+      for (const test of collection(spec, "tests", addDiagnostic)) {
+        if (!isRecord(test)) {
+          addDiagnostic("report_invalid_shape");
+          continue;
+        }
+        for (const key of ["results", "annotations"]) {
+          for (const item of collection(test, key, addDiagnostic)) {
+            if (!isRecord(item)) addDiagnostic("report_invalid_shape");
+          }
+        }
+        if (out.length === REPORT_LIMITS.journeys) {
+          addDiagnostic("report_too_large");
+          return;
+        }
+        out.push({ file, title, test, path });
       }
     }
-    collectTests(suite.suites, out);
+    collectTests(collection(suite, "suites", addDiagnostic), out, addDiagnostic, path);
   }
 }
 
-/**
- * Summarize a Playwright JSON report into a journey ledger.
- *
- * @param {unknown} report parsed `playwright/test --reporter=json` output
- * @param {{ qaAuthToken?: string }} options known secret values to scrub from diagnostic reasons
- * @returns {{ version: number, counts: { total: number, passed: number, failed: number, skipped: number, flaky: number }, journeys: Array<{ name: string, file: string, project: string, status: string, reason: string | null }>, verdict: "pass" | "fail" | "all-skipped" | "empty" }}
- */
-export function summarizeJourneys(report, { qaAuthToken } = {}) {
-  const suites = Array.isArray(report?.suites) ? report.suites : [];
-  const flat = [];
-  collectTests(suites, flat);
+function safeProvenance(provenance = {}) {
+  return {
+    sha:
+      typeof provenance.sha === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(provenance.sha)
+        ? provenance.sha
+        : "unknown",
+    runId:
+      typeof provenance.runId === "string" && /^[1-9]\d{0,19}$/.test(provenance.runId)
+        ? provenance.runId
+        : "unknown",
+    runAttempt:
+      typeof provenance.runAttempt === "string" && /^[1-9]\d{0,9}$/.test(provenance.runAttempt)
+        ? provenance.runAttempt
+        : "unknown",
+  };
+}
 
-  const journeys = flat.map(({ file, title, test }) => {
-    const project =
-      typeof test?.projectName === "string" && test.projectName ? test.projectName : "default";
-    const name = project === "default" ? title : `${title} [${project}]`;
-    const status = test?.status;
+/**
+ * Summarize bounded Playwright JSON. No report objects, global error text,
+ * timing measurements, paths supplied to the CLI, or arbitrary provenance are
+ * copied into diagnostics. See docs/critical-journeys.md for the receipt contract.
+ */
+export function summarizeJourneys(
+  report,
+  { qaAuthToken, provenance, inputError, outputError = false } = {},
+) {
+  const diagnosticCounts = new Map();
+  const addDiagnostic = (code, count = 1) => {
+    diagnosticCounts.set(
+      code,
+      Math.min(MAX_DIAGNOSTIC_COUNT, (diagnosticCounts.get(code) ?? 0) + count),
+    );
+  };
+  const flat = [];
+  const boundError = inputError ?? reportBoundError(report);
+  if (boundError && Object.hasOwn(DIAGNOSTICS, boundError)) {
+    addDiagnostic(boundError);
+  } else if (!isRecord(report)) {
+    addDiagnostic("report_invalid_shape");
+  } else {
+    const errors = collection(report, "errors", addDiagnostic);
+    let runnerErrors = 0;
+    for (const error of errors) {
+      if (isRecord(error)) runnerErrors++;
+      else addDiagnostic("report_invalid_shape");
+    }
+    if (runnerErrors) addDiagnostic("runner_error", runnerErrors);
+    collectTests(collection(report, "suites", addDiagnostic), flat, addDiagnostic);
+  }
+
+  if (outputError) addDiagnostic("output_unwritable");
+  const journeys = flat.map(({ file: rawFile, title, test, path }) => {
+    const rawProject =
+      typeof test.projectName === "string" && test.projectName ? test.projectName : "default";
+    const id = `journey:${createHash("sha256")
+      .update(JSON.stringify([rawFile, path, title, rawProject]))
+      .digest("hex")}`;
+    const file = scrubDiagnosticReason(rawFile, qaAuthToken);
+    const project = scrubDiagnosticReason(rawProject, qaAuthToken);
+    const safeTitle = scrubDiagnosticReason(title, qaAuthToken);
+    const name = (project === "default" ? safeTitle : `${safeTitle} [${project}]`).slice(
+      0,
+      MAX_REASON_LENGTH,
+    );
+    const status = test.status;
     if (status === "skipped") {
-      return { name, file, project, status: "skipped", reason: skipReason(test, qaAuthToken) };
+      return { id, name, file, project, status: "skipped", reason: skipReason(test, qaAuthToken) };
     }
     if (status === "flaky") {
       return {
+        id,
         name,
         file,
         project,
@@ -157,12 +307,20 @@ export function summarizeJourneys(report, { qaAuthToken } = {}) {
       };
     }
     if (status === "unexpected") {
-      return { name, file, project, status: "failed", reason: failureReason(test, qaAuthToken) };
+      return {
+        id,
+        name,
+        file,
+        project,
+        status: "failed",
+        reason: failureReason(test, qaAuthToken),
+      };
     }
     if (status === "expected") {
-      return { name, file, project, status: "passed", reason: null };
+      return { id, name, file, project, status: "passed", reason: null };
     }
     return {
+      id,
       name,
       file,
       project,
@@ -179,16 +337,34 @@ export function summarizeJourneys(report, { qaAuthToken } = {}) {
     flaky: journeys.filter((j) => j.status === "flaky").length,
   };
 
+  const diagnostics = [...diagnosticCounts]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, count]) => ({
+      code,
+      count,
+      retryable: DIAGNOSTICS[code][0],
+      next_action: DIAGNOSTICS[code][1],
+    }));
   let verdict = "pass";
-  if (counts.total === 0) {
+  if (diagnosticCounts.has("runner_error")) {
+    verdict = "fail";
+  } else if (counts.total === 0) {
     verdict = "empty";
-  } else if (counts.failed > 0) {
+  } else if (diagnostics.length > 0 || counts.failed > 0) {
     verdict = "fail";
   } else if (counts.passed === 0) {
     verdict = "all-skipped";
   }
 
-  return { version: LEDGER_VERSION, counts, journeys, verdict };
+  return {
+    version: LEDGER_VERSION,
+    schemaVersion: LEDGER_VERSION,
+    provenance: safeProvenance(provenance),
+    counts,
+    journeys,
+    diagnostics,
+    verdict,
+  };
 }
 
 /**
@@ -204,6 +380,19 @@ export function formatLedgerMarkdown(summary) {
     `Verdict: **${verdict}** — ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped, ${counts.total} total.`,
     "",
   ];
+  if (summary.provenance) {
+    const { sha, runId, runAttempt } = summary.provenance;
+    lines.push(
+      `Receipt v${summary.schemaVersion}; SHA: ${sha}; run: ${runId}; attempt: ${runAttempt}.`,
+      "",
+    );
+  }
+  for (const diagnostic of summary.diagnostics ?? []) {
+    lines.push(
+      `> ${diagnostic.code} (count: ${diagnostic.count}, retryable: ${diagnostic.retryable}): ${diagnostic.next_action}`,
+      "",
+    );
+  }
   if (verdict === "all-skipped") {
     lines.push(
       "> LOUD ALL-SKIPPED: every staging journey skipped, so this run FAILS instead of",
