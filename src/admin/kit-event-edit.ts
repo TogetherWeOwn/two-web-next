@@ -47,10 +47,14 @@ export type KitEventEditValues = {
   title: string;
   game: string;
   description: string;
+  accessibility_notes: string;
   starts_at: string;
   ends_at: string;
   timezone: string;
   location: string;
+  organizer_name: string;
+  join_url: string;
+  join_instructions: string;
   capacity: string;
 };
 
@@ -122,10 +126,15 @@ export type KitEventEditRow = {
   title: string;
   game: string | null;
   description: string | null;
+  /** Optional like EventRow: older in-memory fixtures omit it; live rows carry it nullable. */
+  accessibilityNotes?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
   location: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
   capacity: number | null;
   status: string;
   rsvpOpen: boolean;
@@ -224,12 +233,16 @@ export async function resolveKitEventEdit(
         title: row.title,
         game: row.game ?? "",
         description: row.description ?? "",
+        accessibility_notes: row.accessibilityNotes ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
         starts_at: utcToWall(row.startsAt, row.timezone),
         ends_at: utcToWall(row.endsAt, row.timezone),
         timezone: row.timezone,
         location: row.location ?? "",
+        organizer_name: row.organizer_name ?? "",
+        join_url: row.join_url ?? "",
+        join_instructions: row.join_instructions ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
       },
       errors: {},
