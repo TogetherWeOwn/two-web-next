@@ -62,8 +62,8 @@ jobs:
       - name: Gate (High never; Medium/Low within ci/zap-budget.json)
         run: |
           set -uo pipefail
-          node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/verdict.json"
-          rc=$?
+          rc=0
+          node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/verdict.json" || rc=$?
           if [ "$rc" -eq 0 ]; then exit 0; fi
           if [ "$rc" -ne 1 ]; then exit 1; fi
           if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/verdict.json"; then
