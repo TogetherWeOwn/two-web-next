@@ -6,14 +6,14 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the sixteenth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `dd841a1ae`,
-including main's own #1761 client-gzip step (not authored here); earlier
+**Current decision after the seventeenth base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `e046a2040`,
+including main's own #1669 raw/gzip allocation (not authored here); earlier
 proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 that client fits, but that union breaches server gzip and file count. The
-[sixteenth reconciliation](#sixteenth-base-conflict-reconciliation-absorb-visual-accept-roster-gzip-reconcile-and-security-pin-main-side-work-limits-equal-base)
+[seventeenth reconciliation](#seventeenth-base-conflict-reconciliation-preserve-the-restored-write-allocation-limits-equal-base)
 verifies the actual prerequisite tree only, not a new feature union. Neither
 this client decision nor the prerequisite-tree build releases the source
 feature's server HOLD or proves it is ready to merge.
@@ -1154,3 +1154,61 @@ pinned main. All exact-head CI and independent review gates remain required.
 Rollback reverts only this history/evidence reconciliation relative to main,
 not any independently merged allocation (#1761 included), dependency repair
 or feature.
+
+## Seventeenth base-conflict reconciliation: preserve the restored-write allocation, limits equal base
+
+On 2026-10-24 GitHub confirmed the live conflict on `3ed7a6e8e` against
+pinned main `e046a2040` (one commit, #1669's restored-write-banner allocation).
+Only `ci/kit-perf-budget.json` changed on main. The branch has no numeric
+delta against common base `dd841a1ae`; resolution takes main's numbers
+verbatim: client raw 251904 to 253440 B and gzip 101888 to 102400 B are
+#1669's independent allocation, not a new proposal here. Every other cap is
+unchanged. The original board-client increase remains withdrawn.
+
+Programmatic assertions verify the common comment prefix (347547 characters),
+main's unique suffix (43315 characters) and this branch's unique suffix
+(10900 characters). Each suffix is absent from the opposite side and appears
+exactly once in the result: common base + main suffix + branch suffix. The
+result preserves main's JSON representation with one additive comment-line
+diff against main; every non-comment value equals main. No source, test,
+lockfile, baseline, checker, workflow or historical per-file TSV changes.
+
+Two fresh locked production builds on Node `v24.22.1` / npm `11.19.1`, using
+external root/web dependencies, pass the unchanged checker (exit **0** twice):
+
+| Group | Actual prerequisite tree | Merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 251164/101622 B | 253440/102400 B |
+| Client JS files | 54 | 55 |
+| Server JS raw/gzip | 1151946–1151948/326919 B | 1203200/333312 B |
+| Server JS files | 115 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2861/1019 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 twice | 0 required |
+
+All 54 client path/hash pairs match across rebuilds. Client margins are
+2276 raw / 778 gzip B; CSS gzip margin remains 5 B. Root/web lock SHA-256s
+remain `131c46575f340d700c1c3dd414c64d403289042b77fbaf7ec7e7a3d9449437e0`
+and `feaa492a89fb6ffe07ea4114e2111219e1f8ff4d2a99dc53fc7b7898f8be565e`,
+byte-identical to pinned main. Startup 60000 ms is a configured bound, not a
+latency measurement.
+
+Fresh verification: checker selftest **6/6**; focused Node suites (checker,
+parity, config and citation files) **107/107**; Hono bundle selftest **34/34**,
+Hono budget and parity-gate selftest **13/13** pass. Lint **1979 files**,
+root/CI typecheck, asset drift, floor guard plus **59/59** selftests,
+inventory **1200/1200**, ratchet **27/27** plus scan, and dependency-audit
+selftests **56/56** plus audit exit **0** pass. Docs links pass with **12/12**
+citation tests and **142** Markdown files; aggregate gate selftests pass
+**6/6**. `context-pack --base origin/main` failed with `RuntimeError: MCP
+server exited`; no pack was produced. No functions differ from pinned main,
+so no caller updates apply. Optional routed arithmetic review failed response
+schema validation and supplied no verdict. Fresh-context local review found
+no blocking issues, not hosted merge approval. No new audit repair or
+red-before result is claimed. Full `npm run check`, fresh feature union or
+acceptance, browser/visual/quality gates, startup latency and staging were
+not rerun. No page differs from pinned main. The older union's server breach
+remains pinned to `d6a65b4fa`, not asserted for current main; source-feature
+server HOLD and its own exact-head CI/review remain mandatory. Rollback is
+history/evidence only relative to main; do not undo #1669's allocation.
