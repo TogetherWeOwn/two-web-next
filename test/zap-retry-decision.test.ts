@@ -15,42 +15,58 @@ const nullBudget = { maxMedium: null, maxLow: null };
 
 describe("ci/zap-retry-decision.mjs", () => {
   it("flags a lone PII Disclosure High as retryable", () => {
-    const md = markdown(summarize(report([alert(10062, "3", "PII Disclosure")]), nullBudget));
-    expect(isRetryablePiiFlake(md)).toBe(true);
+    const verdict = summarize(report([alert(10062, "3", "PII Disclosure")]), nullBudget);
+    expect(isRetryablePiiFlake(verdict)).toBe(true);
   });
 
   it("rejects retry when any other High is present", () => {
-    const md = markdown(
-      summarize(
-        report([alert(10062, "3", "PII Disclosure"), alert(40012, "3", "XSS")]),
-        nullBudget,
-      ),
+    const verdict = summarize(
+      report([alert(10062, "3", "PII Disclosure"), alert(40012, "3", "XSS")]),
+      nullBudget,
     );
-    expect(isRetryablePiiFlake(md)).toBe(false);
+    expect(isRetryablePiiFlake(verdict)).toBe(false);
   });
 
   it("rejects retry for a lone non-PII High", () => {
-    const md = markdown(summarize(report([alert(40012, "3", "Cross Site Scripting")]), nullBudget));
-    expect(isRetryablePiiFlake(md)).toBe(false);
+    const verdict = summarize(report([alert(40012, "3", "Cross Site Scripting")]), nullBudget);
+    expect(isRetryablePiiFlake(verdict)).toBe(false);
   });
 
   it("rejects retry when a lone PII High sits next to invalid evidence", () => {
-    const md = markdown(summarize(report([alert(10062, "3", "PII Disclosure"), {}]), nullBudget));
-    expect(isRetryablePiiFlake(md)).toBe(false);
+    const verdict = summarize(report([alert(10062, "3", "PII Disclosure"), {}]), nullBudget);
+    expect(isRetryablePiiFlake(verdict)).toBe(false);
   });
 
   it("rejects retry when Medium or Low are over budget", () => {
-    const md = markdown(
-      summarize(report([alert(10062, "3", "PII Disclosure"), alert(10021, "1")]), {
-        maxMedium: null,
-        maxLow: 0,
-      }),
-    );
-    expect(isRetryablePiiFlake(md)).toBe(false);
+    const verdict = summarize(report([alert(10062, "3", "PII Disclosure"), alert(10021, "1")]), {
+      maxMedium: null,
+      maxLow: 0,
+    });
+    expect(isRetryablePiiFlake(verdict)).toBe(false);
   });
 
   it("rejects retry on a clean PASS", () => {
-    const md = markdown(summarize({ site: [] }, nullBudget));
-    expect(isRetryablePiiFlake(md)).toBe(false);
+    const verdict = summarize({ site: [] }, nullBudget);
+    expect(isRetryablePiiFlake(verdict)).toBe(false);
+  });
+
+  it.each([
+    { counts: { 0: 0, 1: 0, 2: 0, 3: 2 } },
+    { counts: [] },
+    { site_count: -1 },
+    { site_count: 0 },
+    { site_count: 1001 },
+    { site_count: "1" },
+    { site_count: 9007199254740992 },
+    { evidence_complete: false },
+    { errors_truncated: true },
+  ])("rejects inconsistent optional completeness metadata: %j", (metadata) => {
+    const verdict = summarize(report([alert(10062, "3")]), nullBudget);
+    expect(isRetryablePiiFlake({ ...verdict, ...metadata })).toBe(false);
+  });
+
+  it("never accepts even legitimate Markdown as retry authority", () => {
+    const verdict = summarize(report([alert(10062, "3")]), nullBudget);
+    expect(isRetryablePiiFlake(markdown(verdict))).toBe(false);
   });
 });
