@@ -137,9 +137,8 @@ describe.skipIf(!url)("equal-start subscription feeds (isolated test DB)", () =>
       const before = await request(path);
       const beforeBody = await before.text();
       expect(before.status).toBe(200);
-      const expectedIds = path.endsWith(".ics")
-        ? [99, 5, 9, 10, 20, 30, 1]
-        : [99, 9, 10, 20, 30, 1];
+      // Both collections include the cancelled tie (id 5) in (startsAt, id) order.
+      const expectedIds = [99, 5, 9, 10, 20, 30, 1];
       expect.soft(feedKeys(path, beforeBody)).toEqual(expectedIds.map((id) => key(id)));
       expect(before.headers.get("etag")).toBe(etagFor(beforeBody));
 

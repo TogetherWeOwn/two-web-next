@@ -296,6 +296,7 @@ describe("FAIL_TO_PASS: inline db_unavailable JSON legs", () => {
   const WRITES = [
     { method: "POST", path: "/events", body: {} },
     { method: "PATCH", path: `/events/${EVENT_KEY}`, body: {} },
+    { method: "POST", path: `/events/${EVENT_KEY}/duplicate`, body: {} },
     { method: "POST", path: `/events/${EVENT_KEY}/publish`, body: {} },
     { method: "POST", path: `/events/${EVENT_KEY}/cancel`, body: {} },
     { method: "POST", path: `/events/${EVENT_KEY}/rsvp-pause`, body: {} },

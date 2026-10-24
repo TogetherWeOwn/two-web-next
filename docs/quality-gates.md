@@ -16,10 +16,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
-  A missing `coverage-final.json` fails the step instead of skipping, so a
-  broken coverage run cannot silence the gate (docs-only and draft PRs skip
-  via the scope guard). Aggregate floors in `vitest.config.ts` stay. Flip to
-  `--strict` for HARD.
+  Missing or malformed `coverage-final.json` fails the step instead of skipping,
+  so broken evidence cannot silence the gate (docs-only and draft PRs skip
+  via the unchanged scope guard). Aggregate floors in `vitest.config.ts` stay.
+  Flip to `--strict` for HARD. See [CLI, JSON schema and recovery](#patch-coverage-cli).
 - **Semgrep TS + secrets (HARD):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
   secret-shaped literals. CI installs the pinned CLI into a Python virtual
@@ -106,6 +106,103 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   caught one live `expect(true).toBe(true)` placeholder in
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
+
+## Patch coverage CLI
+
+`ci/patch-coverage.mjs` is the single patch-coverage authority. It reads the
+existing v8/Istanbul JSON report once, then compares the merge base of
+`origin/main` and `HEAD` with `HEAD`. Only added `.ts`/`.tsx` lines under
+`src/` and `tail/` are scored; it does not generate coverage, fetch Git refs,
+write files, retry, use the network, or act on a deployment/database.
+
+```sh
+node ci/patch-coverage.mjs --help
+node ci/patch-coverage.mjs --json --base origin/main
+node ci/patch-coverage.mjs --strict --json --base origin/main
+# Hermetic, no report/database/dependencies/network needed:
+npm run patch:coverage:selftest
+# Independent boundary corpus alone:
+node --test ci/patch-coverage-acceptance.test.mjs
+```
+
+`--json`, `--strict` and `--base <ref>` can be combined once each. `--help`
+and `--selftest` are standalone modes, read no inputs, and cannot be combined
+with scoring flags. Unknown/duplicate flags, missing/empty base values and
+leading-dash base options exit **2**, before reading inputs or running Git.
+Base values accept a local ref/hash using letters, digits, `_./@{}~^+-`
+(starting with a letter, digit or underscore); no shell interpolation occurs.
+Git failures/timeouts become `git_failed` with no raw Git diagnostics. Each
+of the two read-only Git commands has a 10s timeout and a 64MiB output cap.
+No `--dry-run` is needed or accepted: all modes are already read-only.
+
+### Scoring and evidence admission
+
+- Hunk counts distinguish metadata from source: `+++counter` is an added
+  `++counter` statement inside a hunk, and `---counter` consumes only the old
+  side. File/hunk changes, context, Git-quoted paths, the single TAB
+  terminator Git appends to space-containing `+++` headers, and no-newline
+  markers preserve new-side line numbers.
+- In a present file, only statement **start** lines enter the denominator.
+  Any positive statement hit on that line covers it. Other added lines
+  (including type-only lines, blanks and braces) are `skipped`, not missed.
+- A file absent from an otherwise valid report remains fully uncovered:
+  **all** its added TS/TSX lines count as missed. An empty report object is
+  valid evidence of no instrumented files, not a missing report.
+- A valid empty/non-TS diff or a present type-only file with empty maps has
+  `total=0`, `hit=0`, `pct=100`. Malformed evidence never gets that receipt,
+  even on an empty diff.
+- The report and every file entry must be objects, not null, arrays or scalars.
+  Each file requires `path`, `statementMap` and `s`. Map/hit IDs must match
+  exactly; locations require safe positive integer lines and either a safe
+  nonnegative integer column or an explicit null (the v8 reporter emits null
+  for unknown positions, and only start lines enter the score). The end must
+  be at or after the start, with same-line column order enforced only when
+  both columns are known. Hits must be safe nonnegative integers. Empty maps
+  are valid only when both are empty.
+- Keys and `path` must normalize to the same nonempty repo-relative path,
+  with no control characters or traversal outside the repo. Duplicate
+  normalized file entries are ambiguous and rejected. All entries, including
+  unchanged files, are validated **before** any score is emitted. Function
+  and branch maps are not used by this statement-start metric.
+
+### JSON v1 and recovery
+
+`--json` writes exactly one JSON object to stdout, with no annotations or
+stderr diagnostics. Keys are emitted in a fixed order; there are no timestamps,
+absolute paths or raw report data. `added`, `missed` and `skipped` hold complete
+repo-relative `file:line` IDs, sorted by file (code-unit order), then numeric
+line, independent of report order. The schema version changes if these
+semantics change. Extra fields may be added compatibly.
+
+```json
+{"schema_version":1,"floor":80,"verdict":"WARN","error_code":null,"next_action":"add_tests","total":4,"hit":3,"pct":75,"added":["src/a.ts:1","src/a.ts:2","src/a.ts:3","src/a.ts:4"],"missed":["src/a.ts:4"],"skipped":[]}
+```
+
+| Verdict / error_code | Exit | next_action |
+| --- | --- | --- |
+| `PASS` / null, at least 80% | 0 | `none` |
+| `WARN` / null, below 80% by default | 0 | `add_tests` |
+| `FAIL` / null, below 80% with `--strict` | 1 | `add_tests` |
+| `ERROR` / `missing_report` | 1 | `generate_coverage`: run `npm run test:coverage` in the disposable test environment |
+| `ERROR` / `invalid_coverage` | 1 | `fix_coverage_report`: regenerate a complete valid report; never hand-fill missing maps |
+| `ERROR` / `git_failed` | 1 | `check_base`: check the local ref/repository, then rerun |
+| `ERROR` / `invalid_arguments` | 2 | `fix_arguments`: follow `--help` |
+
+Errors set `total`, `hit` and `pct` to **null** and all line arrays to `[]`.
+They name only a fixed error code and safe next action, never a report value,
+path, parser exception or stack. Human mode retains its summary, at most
+30 uncovered lines (each ID bounded to 180 UTF-8 bytes plus a truncation
+marker), an omitted-line count and `::warning::` below the floor, even in
+strict mode. Errors retain bounded `::error::` diagnostics. Complete IDs
+remain available in JSON; human output sanitizes control characters.
+
+`npm run patch:coverage:selftest` runs the original seven checks, the
+independently authored acceptance corpus, and supplementary edge fixtures
+through the existing required CI step. Fixtures exercise real local Git and
+the shipped CLI: exact counts/line IDs, default/strict exits, malformed
+reports with canaries, repeatability, and no writes/network/timers/retries.
+They do not need a full coverage run. Generating a real report still requires
+the disposable test database described in [the README](../README.md#coverage-ratchet).
 
 ## Focused mutation rollout (WARN-first)
 

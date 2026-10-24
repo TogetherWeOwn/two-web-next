@@ -3,7 +3,14 @@
 import type { FC } from "hono/jsx";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
-import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "../event-list";
+import {
+  eventEmptyText,
+  eventListUrl,
+  eventListHasFilters,
+  eventListClearUrl,
+  type EventListQuery,
+  type EventSort,
+} from "../event-list";
 import { RsvpAction, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
@@ -121,6 +128,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
             Filter
           </button>
         </div>
+        {eventListHasFilters(query) ? (
+          <div class="field">
+            <a href={eventListClearUrl(query)}>Clear filters</a>
+          </div>
+        ) : null}
       </form>
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
@@ -187,6 +199,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </tbody>
         </table>
       </div>
+      {rows.length === 0 && query.page > 1 ? (
+        <p>
+          <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
+        </p>
+      ) : null}
       <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? (
           <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>
