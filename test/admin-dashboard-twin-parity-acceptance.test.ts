@@ -262,9 +262,20 @@ for (const renderer of renderers) {
       expect(text(byTestId(empty, "join-funnel-empty").body)).toBe(
         "No join attempts in the window.",
       );
-      expect(text(byTestId(empty, "top-zero-searches-empty").body)).toBe("No missed searches.");
+      expect(text(byTestId(empty, "top-zero-searches-empty").body)).toBe(
+        "No recorded missed searches.",
+      );
       const unavailable = renderer.render("unavailable");
-      expect(unavailable).not.toMatch(/data-testid="(?:join-funnel|top-zero-searches)"/);
+      for (const widget of widgets) {
+        const section = byTestId(unavailable, widget.id);
+        const headings = elements(section.body, "h2");
+        expect(headings).toHaveLength(1);
+        expect(text(headings[0]!.body)).toBe(widget.heading);
+        expect(attr(section, "aria-labelledby")).toBe(attr(headings[0]!, "id"));
+        expect(text(section.body)).toMatch(/unavailable for this load/i);
+        expect(elements(section.body, "table")).toHaveLength(0);
+        expect(section.body).not.toContain(`data-testid="${widget.id}-empty"`);
+      }
     });
   });
 }

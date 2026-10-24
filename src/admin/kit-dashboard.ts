@@ -22,9 +22,9 @@ export type DashboardWidgetValues<F, Z> = {
  * database outage in either widget answers the shared 503 (the Hono guard's
  * memberReadBoundary turns the funnel's rethrown outage into the
  * databaseUnavailable envelope; SvelteKit would otherwise render its 500
- * error page for the uncaught rejection). Any other rejection degrades to
- * an omitted section — missing analytics never fail the page — exactly like
- * the widgets' own undefined resolves.
+ * error page for the uncaught rejection). Any other rejection resolves to
+ * undefined, which the page shows as unavailable for this load, exactly like
+ * the widgets' own undefined resolves. Missing analytics never fail the page.
  */
 export function resolveDashboardWidgets<F, Z>(
   funnel: PromiseSettledResult<F | undefined>,

@@ -1,7 +1,6 @@
-// Builder-owned companion to test/degraded-dashboard-logging-acceptance.test.ts
-// (which the Test Author owns and this card must not edit): the real widget
-// helpers resolve undefined — not rejection — on cancellations, ordinary
-// failures and deadline timeouts, so the route must log the omitted section
+// Companion to the Test Author-owned degraded-dashboard-logging acceptance:
+// the real widget helpers resolve undefined — not rejection — on cancellations,
+// ordinary failures and deadline timeouts, so the route must log the unavailable section
 // for fulfilled-undefined settlements too. These tests drive the real helpers
 // through the real route with no module mocks.
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -99,6 +98,14 @@ function widgetLines(pattern: RegExp): string[] {
   return out;
 }
 
+function dashboardSection(html: string, id: "join-funnel" | "top-zero-searches"): string {
+  const section = new RegExp(
+    `<section\\b[^>]*data-testid="${id}"[^>]*>([\\s\\S]*?)</section>`,
+  ).exec(html);
+  expect(section, `${id} remains visible on an admitted dashboard`).not.toBeNull();
+  return section![1]!;
+}
+
 const cancellation = () =>
   Object.assign(new Error("statement timeout"), {
     code: "57014",
@@ -114,9 +121,9 @@ describe("degraded dashboard widgets resolve undefined through the real helpers"
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("a funnel statement cancellation logs one funnel line and omits only the funnel", async () => {
+  it("a funnel cancellation logs one line and marks only the funnel unavailable", async () => {
     // Real helpers, no mocks: the funnel SELECT hits its statement timeout,
-    // dashboardJoinFunnel resolves undefined, and the route omits the section
+    // dashboardJoinFunnel resolves undefined, and the route marks the section unavailable
     // at 200 with one correlated line. Promise.allSettled evaluates the
     // funnel read first, so its transaction is always call 1.
     const store = createMemorySessionStore();
@@ -135,18 +142,26 @@ describe("degraded dashboard widgets resolve undefined through the real helpers"
     expect(res.status).toBe(200);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     const html = await res.text();
-    expect(html).not.toContain('data-testid="join-funnel"');
-    expect(html).toContain('data-testid="top-zero-searches"');
+    const funnelWidget = dashboardSection(html, "join-funnel");
+    expect(funnelWidget).toMatch(/<h2\b[^>]*>Join funnel/);
+    expect(funnelWidget).toMatch(/unavailable for this load/i);
+    expect(funnelWidget).not.toContain('data-testid="join-funnel-empty"');
+    expect(funnelWidget).not.toMatch(/<table\b|data-testid="funnel-/);
+    expect(funnelWidget).not.toMatch(/No (?:recorded )?join attempts|\b0 attempts\b/i);
+    const searchWidget = dashboardSection(html, "top-zero-searches");
+    expect(searchWidget).toMatch(/<h2\b[^>]*>Top searches with no results/);
+    expect(searchWidget).toContain('data-testid="top-zero-searches-empty"');
+    expect(searchWidget).not.toMatch(/unavailable/i);
     const lines = widgetLines(/funnel/i);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(RAY);
     expect(widgetLines(/zero.?searches/i)).toEqual([]);
   });
 
-  it("an ordinary zero-search failure logs one zero-search line and omits only that widget", async () => {
+  it("an ordinary zero-search failure logs one line and marks only searches unavailable", async () => {
     // Real helpers, no mocks: an ordinary (non-outage, non-cancellation)
     // error resolves undefined out of topZeroResultSearches, and the route
-    // omits the section at 200 with one correlated line carrying no error text.
+    // marks the section unavailable at 200 with one correlated line carrying no error text.
     const store = createMemorySessionStore();
     const { db, session } = aggregateDb(7);
     let calls = 0;
@@ -163,8 +178,17 @@ describe("degraded dashboard widgets resolve undefined through the real helpers"
     expect(res.status).toBe(200);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     const html = await res.text();
-    expect(html).toContain('data-testid="join-funnel"');
-    expect(html).not.toContain('data-testid="top-zero-searches"');
+    const funnelWidget = dashboardSection(html, "join-funnel");
+    expect(funnelWidget).toMatch(/<h2\b[^>]*>Join funnel/);
+    expect(funnelWidget).toContain('data-testid="funnel-added"');
+    expect(funnelWidget).toMatch(/<td\b[^>]*>7<\/td>/);
+    expect(funnelWidget).not.toMatch(/unavailable/i);
+    const searchWidget = dashboardSection(html, "top-zero-searches");
+    expect(searchWidget).toMatch(/<h2\b[^>]*>Top searches with no results/);
+    expect(searchWidget).toMatch(/unavailable for this load/i);
+    expect(searchWidget).not.toContain('data-testid="top-zero-searches-empty"');
+    expect(searchWidget).not.toMatch(/<table\b/);
+    expect(searchWidget).not.toMatch(/No (?:recorded )?missed searches|\b0 (?:misses|searches)\b/i);
     const lines = widgetLines(/zero.?searches/i);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain(RAY);
