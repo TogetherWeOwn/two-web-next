@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { URL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import worker, { fixtureEnvForRequest } from "../ci/lighthouse-worker";
 import type { Db } from "../src/db/index";
@@ -401,6 +401,108 @@ describe("performance CI", () => {
     const after = Date.now();
     expect(() => assertFixtureContent(path, response, html, before, after)).not.toThrow();
     expect(() => assertFixtureContent(path, response, mutate(html), before, after)).toThrow();
+  });
+
+  describe.each(["/events", `/e/${fixtureKey}`])("production endpoint admission: %s", (path) => {
+    const before = Date.parse("2030-01-01T20:00:00.000Z");
+    const after = before + 10;
+    const start = "2030-01-08T20:00:00.005Z";
+    const end = "2030-01-08T22:00:00.005Z";
+    let response: Response;
+    let html: string;
+
+    beforeAll(async () => {
+      const requestedAt = Date.now();
+      response = await request(path);
+      html = await response.text();
+      expect(() =>
+        assertFixtureContent(path, response, html, requestedAt, Date.now()),
+      ).not.toThrow();
+      expect([...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)]).toHaveLength(2);
+    });
+
+    function withTimes(instants: (string | null)[]) {
+      const replacement = instants
+        .map((instant) =>
+          instant === null
+            ? "<time>Endpoint</time>"
+            : `<time datetime="${instant}">Endpoint</time>`,
+        )
+        .join("");
+      let seen = 0;
+      return html.replace(/<time\b[^>]*>[\s\S]*?<\/time>/g, () =>
+        seen++ === 0 ? replacement : "",
+      );
+    }
+
+    it.each([
+      ["2030-01-08T20:00:00.000Z", "2030-01-08T22:00:00.000Z"],
+      [start, end],
+      ["2030-01-08T20:00:00.010Z", "2030-01-08T22:00:00.010Z"],
+    ])("admits the exact two-hour range starting at %s", (startsAt, endsAt) => {
+      expect(() =>
+        assertFixtureContent(path, response, withTimes([startsAt, endsAt]), before, after),
+      ).not.toThrow();
+    });
+
+    it.each([
+      { name: "missing end", instants: [start] },
+      { name: "missing start", instants: [end] },
+      { name: "no endpoints", instants: [] },
+      { name: "extra endpoint", instants: [start, end, end] },
+      { name: "extra in-window start", instants: [start, end, start] },
+      { name: "swapped endpoints", instants: [end, start] },
+      { name: "duplicate start", instants: [start, start] },
+      { name: "duplicate end", instants: [end, end] },
+      { name: "malformed start", instants: ["invalid", end] },
+      { name: "malformed end", instants: [start, "invalid"] },
+      { name: "start without datetime", instants: [null, end] },
+      { name: "end without datetime", instants: [start, null] },
+      {
+        name: "short duration inside normalized window",
+        instants: [start, "2030-01-08T22:00:00.004Z"],
+      },
+      {
+        name: "long duration inside normalized window",
+        instants: [start, "2030-01-08T22:00:00.006Z"],
+      },
+      {
+        name: "stale range with exact duration",
+        instants: ["2030-01-08T19:59:59.999Z", "2030-01-08T21:59:59.999Z"],
+      },
+      {
+        name: "late range with exact duration",
+        instants: ["2030-01-08T20:00:00.011Z", "2030-01-08T22:00:00.011Z"],
+      },
+      {
+        name: "start shifted into end window with exact duration",
+        instants: [end, "2030-01-09T00:00:00.005Z"],
+      },
+      {
+        name: "module epoch range with exact duration",
+        instants: ["1970-01-08T00:00:00.000Z", "1970-01-08T02:00:00.000Z"],
+      },
+    ])("rejects $name", ({ instants }) => {
+      // Controls prove the body remains admissible; only the endpoints change.
+      expect(() =>
+        assertFixtureContent(path, response, withTimes([start, end]), before, after),
+      ).not.toThrow();
+      expect(() =>
+        assertFixtureContent(path, response, withTimes(instants), before, after),
+      ).toThrow();
+    });
+  });
+
+  it("never normalizes a homepage timestamp into the two-hour end window", async () => {
+    const response = await request("/");
+    const html = await response.text();
+    const before = Date.parse("2030-01-01T20:00:00.000Z");
+    const after = before + 10;
+    expect([...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)]).toHaveLength(1);
+    const withStart = html.replace(/datetime="[^"]+"/g, 'datetime="2030-01-08T20:00:00.005Z"');
+    const withEnd = html.replace(/datetime="[^"]+"/g, 'datetime="2030-01-08T22:00:00.005Z"');
+    expect(() => assertFixtureContent("/", response, withStart, before, after)).not.toThrow();
+    expect(() => assertFixtureContent("/", response, withEnd, before, after)).toThrow();
   });
 
   it("refuses redirects and non-HTML responses before Lighthouse admission", async () => {
