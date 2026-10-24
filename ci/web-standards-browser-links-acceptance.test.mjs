@@ -81,12 +81,11 @@
 //   or gate relaxation.
 //
 // Honest limits of this suite: it is offline (synthetic HTML plus run-owned
-// mkdtemp fixtures; CLI probes stub PATH so "node" cannot spawn a Worker). It
-// does not require link->route provenance (link-phase findings are global with
-// stable check ids), and full-run JSON fidelity (every CLI finding appears in
-// --format json on a live run) is the builder's own verification, not an
-// offline assertion. Fixture-only evidence here must not claim browser or
-// runtime execution.
+// mkdtemp fixtures; CLI probes stub PATH so "node" cannot spawn a Worker).
+// Normal CLI report probes preload fixture fetch responses, exercising the real
+// collector/main/report pipeline and Markdown writes without a live server.
+// Link-phase findings are global; this suite does not require link->route
+// provenance or claim live Worker/browser execution.
 //
 // Integration: the builder continues this pushed history on their
 // harness-owned branch and never edits this file; wire it into the
@@ -99,10 +98,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -208,6 +209,123 @@ function runCli(args) {
     spawned = null;
   }
   return { ...result, elapsedMs, spawned, summaryBefore: before, summaryAfter: summarySnapshot() };
+}
+
+// Run the actual non-dry-run CLI, not a handcrafted buildJsonReport call.
+// --origin selects the existing no-Worker path; every fetch is replaced before
+// main loads, and socket APIs are disabled. No request reaches that origin.
+function runReportCli(t, format) {
+  const root = mkdtempSync(join(tmpdir(), "standards-report-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "ci"));
+  mkdirSync(join(root, "src"));
+  mkdirSync(join(root, "public"));
+  // Resolve the CLI's installed parser dependency without installing or copying
+  // packages into the fixture; this symlink may be dangling on dependency-free heads.
+  symlinkSync(join(repoRoot, "node_modules"), join(root, "node_modules"), "dir");
+  for (const file of [
+    "web-standards.mjs",
+    "lighthouse-origin-lib.cjs",
+    "lighthouserc.cjs",
+    "lighthouse-samples.cjs",
+    "quality-budget.json",
+  ]) {
+    copyFileSync(join(repoRoot, "ci", file), join(root, "ci", file));
+  }
+  // Only the filesystem/network boundary is synthetic: classification,
+  // collection, source-derived route matching and report serialization are real.
+  writeFileSync(join(root, "src", "fixture.ts"), 'app.get("/acceptance-ok/:id", handler);');
+  writeFileSync(join(root, "public", "ok.txt"), "ok");
+  const base = "https://next.togetherweown.com";
+  const routes = PATHS.filter((path) => !path.startsWith("/e/"));
+  const clean = shell("");
+  const bulk =
+    '<a href="/missing-cli?token=CLI-QUERY-PRIVATE">bad</a><a href="/ok.txt">file</a>' +
+    '<a href="/about">route</a>' +
+    Array.from({ length: 300 }, (_, i) => `<a href="/acceptance-ok/${i}">ok</a>`).join("");
+  const fixtures = {
+    "/": { html: shell('<a href="/%E0%A4%A?token=CLI-MALFORMED-PRIVATE">bad</a>') },
+    "/events": { status: 503 },
+    "/join": { headers: {} },
+    "/about": { html: "<html><body></body></html>" },
+    "/faq": { html: shell(bulk) },
+    "/rules": {},
+    "/privacy": {},
+  };
+  const fetchLog = join(root, "fetch.jsonl");
+  const preload = join(root, "fetch-preload.mjs");
+  writeFileSync(
+    preload,
+    `import { appendFileSync } from 'node:fs';
+import net from 'node:net';
+import tls from 'node:tls';
+import { syncBuiltinESMExports } from 'node:module';
+const denySocket = () => { throw new Error('live network forbidden in acceptance'); };
+net.connect = net.createConnection = tls.connect = denySocket;
+syncBuiltinESMExports();
+const fixtures = ${JSON.stringify(fixtures)};
+globalThis.fetch = async (input, init) => {
+  const url = String(input);
+  appendFileSync(${JSON.stringify(fetchLog)}, JSON.stringify({ url, redirect: init?.redirect }) + '\\n');
+  const path = url.slice(${base.length});
+  if (!url.startsWith(${JSON.stringify(base)}) || !Object.hasOwn(fixtures, path)) {
+    throw new Error('unexpected acceptance fetch');
+  }
+  const fixture = fixtures[path];
+  return new Response(fixture.html ?? ${JSON.stringify(clean)}, {
+    status: fixture.status ?? 200,
+    headers: fixture.headers ?? ${JSON.stringify(GOOD_HEADERS)},
+  });
+};
+`,
+  );
+  const spawnLog = join(root, "spawn.log");
+  const stub = join(root, "node");
+  writeFileSync(
+    stub,
+    `#!/bin/sh\nprintf 'unexpected Worker spawn\\n' >> ${JSON.stringify(spawnLog)}\nexit 1\n`,
+  );
+  chmodSync(stub, 0o755);
+  const run = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      preload,
+      join(root, "ci", "web-standards.mjs"),
+      "--origin",
+      base,
+      "--format",
+      format,
+    ],
+    {
+      cwd: root,
+      env: { PATH: root },
+      encoding: "utf8",
+      timeout: CLI_BOUND_MS,
+      maxBuffer: 1_048_576,
+    },
+  );
+  assert.equal(run.error, undefined, `CLI must finish within its bound: ${run.error}`);
+  assert.equal(run.signal, null, "CLI must not be killed");
+  assert.equal(run.status, 1, `fixture findings require exit 1\n${run.stdout}\n${run.stderr}`);
+  assert.equal(run.stderr, "", "normal CLI findings belong to the report, not stderr");
+  assert.deepEqual(
+    readFileSync(fetchLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+    routes.map((path) => ({ url: base + path, redirect: "manual" })),
+    "read every planned route once, never follow or fetch a discovered link",
+  );
+  assert.throws(() => readFileSync(spawnLog), { code: "ENOENT" }, "no Worker may start");
+  assert.deepEqual(readdirSync(join(root, ".lighthouseci")), ["standards-summary.md"]);
+  return {
+    ...run,
+    summary: readFileSync(join(root, ".lighthouseci", "standards-summary.md"), "utf8"),
+    root,
+    routes,
+    base,
+  };
 }
 
 function assertSummaryUntouched(run) {
@@ -551,13 +669,57 @@ test("malformed links become bounded findings while siblings are still reported"
   const malformed = findings.find((f) => f.includes("malformed"));
   assert.ok(malformed, `one finding must say malformed: ${findings}`);
   assert.ok(malformed.length < 400, `malformed finding must stay bounded: ${malformed.length}`);
-  assert.ok(malformed.includes(MALFORMED_LONG.slice(0, 60)));
+  assert.ok(
+    !malformed.includes(MALFORMED_LONG.slice(0, 121)),
+    "safe root-relative previews are optional and must not exceed 120 characters",
+  );
   assert.ok(!malformed.includes(MALFORMED_LONG.slice(-60)));
   assert.ok(!malformed.includes("URIError"), "raw exception text must not leak into findings");
   assert.ok(
     findings.some((f) => f.includes("/bad-sibling")),
     `sibling still reported: ${findings}`,
   );
+});
+
+test("malformed absolute and userinfo hrefs never echo authority, credentials or query values", async () => {
+  const { pub } = makePublicFixture();
+  const unsafe = [
+    "http://private-host.invalid:bad/%?token=ABSOLUTE-QUERY",
+    "http://acceptance-user:acceptance-password@/%?token=USERINFO-QUERY",
+  ];
+  const linkDetails = standards.linkFindings(unsafe, [], pub);
+  const { findings, findingRecords } = await standards.collectStandards({
+    base: ORIGIN,
+    routes: ["/unsafe"],
+    fetchImpl: async () =>
+      new Response(shell(unsafe.map((href) => `<a href="${href}">bad</a>`).join("")), {
+        status: 200,
+        headers: GOOD_HEADERS,
+      }),
+    timeoutMs: 1_000,
+  });
+  assert.equal(linkDetails.length, 2);
+  assert.equal(findings.length, 2);
+  assert.equal(findingRecords.length, 2);
+  assert.deepEqual(
+    findingRecords.map((r) => r.detail),
+    findings,
+  );
+  for (const detail of [...linkDetails, ...findings]) {
+    assert.match(detail, /malformed/i);
+    assert.ok(detail.length < 400);
+    for (const forbidden of [
+      ...unsafe,
+      "private-host.invalid",
+      "acceptance-user",
+      "acceptance-password",
+      "ABSOLUTE-QUERY",
+      "USERINFO-QUERY",
+      "URIError",
+    ]) {
+      assert.ok(!detail.includes(forbidden), `malformed detail must not echo ${forbidden}`);
+    }
+  }
 });
 
 test("finding text never dumps query values", () => {
@@ -589,23 +751,58 @@ test("a malformed href becomes a bounded route finding without dropping siblings
   assert.ok(!findings.some((f) => f.startsWith("/b:")), "later routes still run clean");
 });
 
-test("malformed findings per route are capped with an overflow total", async () => {
-  const many = Array.from({ length: 25 }, (_, i) => `<a href="/%E0%A4%A-${i}">b${i}</a>`).join("");
-  const fetchImpl = () =>
-    Promise.resolve(new Response(shell(many), { status: 200, headers: GOOD_HEADERS }));
-  const { findings } = await standards.collectStandards({
-    base: ORIGIN,
-    routes: ["/many"],
-    fetchImpl,
-    timeoutMs: 1_000,
+// Catch early/late slice bounds, premature/missing overflow, and lost totals.
+for (const [count, shown, overflow] of [
+  [9, 9, 0],
+  [10, 10, 0],
+  [11, 10, 1],
+  [25, 10, 1],
+]) {
+  test(`malformed cap: ${count} distinct hrefs yield ${shown} items and ${overflow} overflow`, async () => {
+    const many = Array.from({ length: count }, (_, i) => `<a href="/%E0%A4%A-${i}">b${i}</a>`).join(
+      "",
+    );
+    const fetched = [];
+    const { findings, findingRecords, links } = await standards.collectStandards({
+      base: ORIGIN,
+      routes: ["/many", "/later"],
+      fetchImpl: async (url) => {
+        fetched.push(url);
+        return new Response(url.endsWith("/many") ? shell(many) : GOOD_HTML, {
+          status: 200,
+          headers: GOOD_HEADERS,
+        });
+      },
+      timeoutMs: 1_000,
+    });
+    assert.deepEqual(fetched, [`${ORIGIN}/many`, `${ORIGIN}/later`]);
+    assert.deepEqual([...links], ["/about"], "later routes must still collect their links");
+    assert.equal(findings.length, shown + overflow, "human findings obey the exact cap");
+    assert.equal(findingRecords.length, shown + overflow, "records obey the exact cap");
+    assert.deepEqual(
+      findingRecords.map((r) => r.detail),
+      findings,
+      "every human item and overflow has exactly one matching record",
+    );
+    assert.deepEqual(
+      findingRecords.map((r) => [r.path, r.check, r.code]),
+      Array.from({ length: shown + overflow }, () => ["/many", "links", "LINK_MALFORMED"]),
+    );
+    const items = findings.filter((f) => !/truncated/i.test(f));
+    assert.equal(items.length, shown, "emit exactly min(count, 10) item findings");
+    for (const detail of items) {
+      assert.match(detail, /^\/many:.*malformed/i);
+      assert.ok(detail.length < 400, "each malformed item stays bounded");
+      assert.ok(!detail.includes("URIError"), "raw exceptions never become item findings");
+    }
+    const overflows = findings.filter((f) => /truncated/i.test(f));
+    assert.equal(overflows.length, overflow, "one overflow iff more than ten hrefs were collected");
+    if (overflow) {
+      assert.match(overflows[0], new RegExp(`showing 10 of ${count} collected\\b`));
+      assert.match(overflows[0], /^\/many:.*malformed/i);
+    }
   });
-  const route = findings.filter((f) => f.startsWith("/many:"));
-  assert.ok(route.length <= 12, `malformed findings must be capped, got ${route.length}`);
-  assert.ok(
-    route.some((f) => f.includes("25")),
-    `overflow finding must name the total: ${route}`,
-  );
-});
+}
 
 // --- Structured link records and the versioned JSON report. ---
 
@@ -726,6 +923,97 @@ test("JSON reports carry stable ids, counts and static next actions", () => {
   assert.ok(
     again.findings.every((f) => !f.next_action.includes("SECRET-XYZ")),
     "next_action carries no input-derived text",
+  );
+});
+
+// Catch dropping collector findingRecords.push, main's route-record merge, or
+// main's findings argument: helper-only report tests cannot detect those losses.
+test("normal CLI propagates every collected finding into JSON and the human Markdown report", (t) => {
+  const human = runReportCli(t, "human");
+  const machine = runReportCli(t, "json");
+  assert.equal(human.stdout, human.summary, "human stdout is the actual Markdown artifact");
+  assert.equal(machine.summary, human.summary, "format selection must not change the artifact");
+  const report = JSON.parse(machine.stdout);
+  assert.equal(report.version, 1);
+  assert.equal(report.origin, machine.base);
+  assert.deepEqual(
+    report.routes,
+    machine.routes.map((path, i) => ({ id: `route-${i}`, path })),
+  );
+  assert.deepEqual(report.counts, {
+    routes: 7,
+    findings: 13,
+    linksChecked: 300,
+    linksCollected: 303,
+  });
+  assert.match(human.stdout, /Routes: 7\. Internal links checked: 300 of 303 collected\./);
+  const humanFindings = human.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2));
+  assert.equal(
+    humanFindings.length,
+    13,
+    "status, three headers, six HTML, malformed, unresolved, truncation",
+  );
+  assert.equal(
+    report.findings.length,
+    humanFindings.length,
+    "JSON must not drop any real CLI finding",
+  );
+  assert.deepEqual(
+    report.findings.map((f) => f.message),
+    humanFindings,
+  );
+  assert.deepEqual(
+    report.findings.map((f) => f.id),
+    humanFindings.map((_, i) => `finding-${i}`),
+  );
+  assert.deepEqual(
+    report.findings.map((f) => [f.routeId, f.checkId, f.code]),
+    [
+      ["route-0", "route-0/links", "LINK_MALFORMED"],
+      ["route-1", "route-1/status", "STATUS_NON_200"],
+      ["route-2", "route-2/headers", "HEADER_CSP_MISSING"],
+      ["route-2", "route-2/headers", "HEADER_CTO_MISSING"],
+      ["route-2", "route-2/headers", "HEADER_REFERRER_MISSING"],
+      ["route-3", "route-3/html", "HTML_DOCTYPE_MISSING"],
+      ["route-3", "route-3/html", "HTML_LANG_MISSING"],
+      ["route-3", "route-3/html", "HTML_TITLE_MISSING"],
+      ["route-3", "route-3/html", "HTML_VIEWPORT_MISSING"],
+      ["route-3", "route-3/html", "HTML_DESCRIPTION_MISSING"],
+      ["route-3", "route-3/html", "HTML_H1_COUNT"],
+      [null, "global/link", "LINK_UNRESOLVED"],
+      [null, "global/links", "LINKS_TRUNCATED"],
+    ],
+  );
+  assert.match(humanFindings[1], /^\/events: status 503$/);
+  assert.match(
+    humanFindings[11],
+    /internal link \/missing-cli: no app route or public file serves it/,
+  );
+  assert.match(humanFindings[12], /checked first 300 of 303 collected/);
+  for (const finding of report.findings) {
+    assert.ok(finding.message.length <= 300);
+    assert.equal(typeof finding.next_action, "string");
+    assert.ok(finding.next_action.length > 0);
+  }
+  for (const output of [human.stdout, human.summary, machine.stdout, machine.summary]) {
+    for (const forbidden of [
+      "CLI-QUERY-PRIVATE",
+      "CLI-MALFORMED-PRIVATE",
+      "URIError",
+      human.root,
+      machine.root,
+    ]) {
+      assert.ok(!output.includes(forbidden), "CLI and artifact must preserve redaction");
+    }
+  }
+  const repeat = runReportCli(t, "json");
+  assert.deepEqual(
+    JSON.parse(repeat.stdout),
+    report,
+    "real CLI report IDs and next actions are stable",
   );
 });
 
