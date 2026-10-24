@@ -24,21 +24,29 @@ const noMatch = {
 };
 
 function decode(value: string) {
-  return value
-    .replaceAll("&amp;", "&")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&#x27;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">");
+  const entities: Record<string, string> = {
+    "&amp;": "&",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&#x27;": "'",
+    "&lt;": "<",
+    "&gt;": ">",
+  };
+  return value.replace(/&(?:amp|quot|#39|#x27|lt|gt);/g, (entity) => entities[entity]!);
+}
+
+// Read text tokens from rendered markup; this is not an HTML sanitizer.
+function textOf(fragment: string) {
+  return [...fragment.matchAll(/<!--[\s\S]*?-->|<(?:[^"'<>]|"[^"]*"|'[^']*')*>|([^<]+)/g)]
+    .map((token) => token[1] ?? "")
+    .join("");
 }
 
 // Inspect rendered anchors, never Svelte/TSX source or a production URL builder.
 function links(html: string) {
   return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((match) => {
     const attributes = match[1]!;
-    const label =
-      attributes.match(/aria-label="([^"]*)"/)?.[1] ?? match[2]!.replace(/<[^>]*>/g, "");
+    const label = attributes.match(/aria-label="([^"]*)"/)?.[1] ?? textOf(match[2]!);
     return {
       name: decode(label).replace(/\s+/g, " ").trim(),
       href: decode(attributes.match(/href="([^"]*)"/)?.[1] ?? ""),

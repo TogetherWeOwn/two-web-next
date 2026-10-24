@@ -178,7 +178,7 @@ export function compileInventoryKit(): Promise<KitRuntime> {
                   ? "export function error(status, message) { throw Object.assign(new Error(message), { status }); }"
                   : path === "env"
                     ? "export const env = {};"
-                    : `export async function dbFor() { const b = globalThis[${JSON.stringify(binding)}]; b.calls++; return b.db; }`,
+                    : "export async function dbFor() { const b = globalThis.__inventoryRecoveryAcceptanceBinding; b.calls++; return b.db; }",
               loader: "js",
             }));
             plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
