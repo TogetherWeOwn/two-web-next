@@ -12,6 +12,7 @@ import { InviteConfigError, inviteDestination, isInviteConfigUsable } from "./in
 import { safeNext } from "./join/service";
 import { About, Faq, Rules } from "./pages";
 import { requestRoute } from "./request-log";
+import { faqLastReviewed } from "./faq-last-reviewed";
 import { rulesLastUpdated } from "./rules-last-updated";
 
 // Dedicated per-fingerprint mute for the broken-invite page (one alert per
@@ -70,17 +71,22 @@ export function registerStaticLeaves(app: Hono<{ Bindings: Env }>): void {
     return c.redirect("/", 302);
   });
 
-  // Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-  // no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
+  // Static funnel leaf (ports two-web routes/funnel.php's `/about`): dependency-free,
+  // no controller, no session, no database — it stays 200 during an app-DB outage. No cookies are
   // read or set here on purpose, for the same reason.
-  for (const path of ["/about", "/faq"] as const) {
-    app.get(path, (c) => {
-      c.header("cache-control", "public, max-age=3600");
-      return c.html(
-        path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
-      );
-    });
-  }
+  app.get("/about", (c) => {
+    c.header("cache-control", "public, max-age=3600");
+    return c.html(<About appUrl={c.env.APP_URL} />);
+  });
+
+  // Static FAQ (ports two-web routes/funnel.php's `/faq`): dependency-free like
+  // `/about`, plus the config-driven "Last reviewed" stamp. An empty or
+  // unparseable value hides the stamp instead of 500ing, mirroring /rules.
+  app.get("/faq", (c) => {
+    const stamp = faqLastReviewed(c.env.FAQ_LAST_REVIEWED);
+    c.header("cache-control", "public, max-age=3600");
+    return c.html(<Faq appUrl={c.env.APP_URL} lastReviewed={stamp} />);
+  });
 
   // Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
   // even when the bot's database is down. The last-updated stamp comes from config, and an empty
