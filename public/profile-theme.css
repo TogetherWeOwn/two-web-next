@@ -41,6 +41,9 @@
 .profile-theme .profile-milestones li:last-child { border: 0; padding-bottom: 0; }
 .profile-theme .profile-milestones p { margin: .25rem 0 0; white-space: pre-wrap; }
 .profile-theme .profile-milestones time { color: var(--muted); font-size: .9rem; }
+.profile-theme .profile-milestones-disclosure { margin-top: 1rem; }
+.profile-theme .profile-milestones-disclosure > summary { cursor: pointer; min-height: 44px; padding: .5rem 0; color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+.profile-theme .profile-milestones-disclosure > summary:hover { text-decoration: underline; }
 .profile-theme .profile-new-member { text-align: center; }
 .profile-theme .profile-new-member h2 { font-size: 1.5rem; margin-bottom: .5rem; }
 .profile-theme .profile-new-member .actions { justify-content: center; }

@@ -27,6 +27,7 @@ import {
   PROFILE_FIELD_IDS,
   PROFILE_SHARE_DESCRIPTION,
   PROFILE_TIMEZONE_HELP_ID,
+  milestoneDisclosureLabel,
   profileFieldForErrorKey,
   profileInitials,
   statsDate,
@@ -46,7 +47,10 @@ import {
   parseGamesText,
 } from "../../../src/profiles/composition";
 import type { MemberStats } from "../../../src/profiles/stats";
-import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
+import {
+  MEMBER_MILESTONES_CAP,
+  MEMBER_MILESTONES_VISIBLE,
+} from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
 import { canonicalUrl, shareImageUrl } from "../../../src/seo";
@@ -303,7 +307,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             {/if}
             {#if stats.milestones.length > 0}
               <ol class="profile-milestones">
-                {#each stats.milestones as milestone}
+                {#each stats.milestones.slice(0, MEMBER_MILESTONES_VISIBLE) as milestone}
                   <li>
                     <div>
                       <strong>{statsLabel(milestone.type)}</strong>
@@ -315,6 +319,28 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
                   </li>
                 {/each}
               </ol>
+              {#if stats.milestones.length > MEMBER_MILESTONES_VISIBLE}
+                <details class="profile-milestones-disclosure">
+                  <summary>
+                    {milestoneDisclosureLabel(
+                      stats.milestones.length - MEMBER_MILESTONES_VISIBLE,
+                    )}
+                  </summary>
+                  <ol class="profile-milestones" start={MEMBER_MILESTONES_VISIBLE + 1}>
+                    {#each stats.milestones.slice(MEMBER_MILESTONES_VISIBLE) as milestone}
+                      <li>
+                        <div>
+                          <strong>{statsLabel(milestone.type)}</strong>
+                          {#if milestone.detail}<p>{milestone.detail}</p>{/if}
+                        </div>
+                        <time datetime={milestone.occurredAt.toISOString()}>
+                          {statsDate(milestone.occurredAt)}
+                        </time>
+                      </li>
+                    {/each}
+                  </ol>
+                </details>
+              {/if}
             {:else}
               <p>No milestones yet.</p>
             {/if}

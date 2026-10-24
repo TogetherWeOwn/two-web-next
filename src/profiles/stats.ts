@@ -4,7 +4,11 @@ import type { Db } from "../db/index";
 import { keyedMemberRead } from "../member-reads";
 import { memberReadDb } from "../db/member-reads";
 import { safeRequestId } from "../request-log";
-import { MEMBER_MILESTONES_CAP, MEMBER_STATS_BUDGET_MS } from "./stats-limits";
+import {
+  MEMBER_MILESTONES_CAP,
+  MEMBER_MILESTONES_VISIBLE,
+  MEMBER_STATS_BUDGET_MS,
+} from "./stats-limits";
 
 export type Milestone = { type: string; occurredAt: Date; detail: string | null };
 export type MemberStats = {
@@ -22,7 +26,7 @@ export type MemberStats = {
 export type MemberStatsSource = (id: string, signal: AbortSignal) => Promise<MemberStats | null>;
 // Re-exported from the import-clean limits module so server and test imports
 // of stats.ts keep working; the Kit twin imports the cap from there directly.
-export { MEMBER_MILESTONES_CAP, MEMBER_STATS_BUDGET_MS };
+export { MEMBER_MILESTONES_CAP, MEMBER_MILESTONES_VISIBLE, MEMBER_STATS_BUDGET_MS };
 
 // Membership unknown: every fact reads null and the twins render the
 // unavailable state instead of the stats grid. isCurrentMember is a
