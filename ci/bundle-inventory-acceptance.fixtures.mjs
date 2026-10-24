@@ -100,7 +100,7 @@ export function makeKitFixture({
     startup: { maxMs: 30_000 },
   };
   if (budgetMutate) budgetMutate(budget);
-  writeFile(root, "ci/kit-perf-budget.json", JSON.stringify(budget));
+  writeFile(root, "ci/kit-perf-budgets/base.json", JSON.stringify(budget));
   return { root, budget };
 }
 
