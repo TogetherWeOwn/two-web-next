@@ -214,6 +214,12 @@ export function latestWireUpdatedAt(rows: EventRow[]): Date {
   return latest ?? new Date(0);
 }
 
+/** RSS marking for cancelled events: the title prefix plus the one-line
+ * description note. The ICS collection signals the same rows with
+ * STATUS:CANCELLED; RSS has no status field, so the mark lives in the text. */
+export const RSS_CANCELLED_TITLE_PREFIX = "Cancelled: ";
+export const RSS_CANCELLED_NOTE = "This event has been cancelled.";
+
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);
   const renderable = rows.filter((e) => isWireInstant(e.startsAt) && isWireInstant(e.endsAt));
@@ -224,10 +230,17 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
   const items = renderable
     .map((e) => {
       const url = xml(pageUrl(e, appUrl));
+      const cancelled = e.status === "cancelled";
+      const title = cancelled ? `${RSS_CANCELLED_TITLE_PREFIX}${e.title}` : e.title;
+      const description = cancelled
+        ? e.description
+          ? `${e.description} ${RSS_CANCELLED_NOTE}`
+          : RSS_CANCELLED_NOTE
+        : e.description;
       return (
-        `<item><title>${xml(e.title)}</title><link>${url}</link><guid isPermaLink="true">${url}</guid>` +
+        `<item><title>${xml(title)}</title><link>${url}</link><guid isPermaLink="true">${url}</guid>` +
         `<pubDate>${rssDate(e.startsAt)}</pubDate>` +
-        (e.description ? `<description>${xml(e.description)}</description>` : "") +
+        (description ? `<description>${xml(description)}</description>` : "") +
         "</item>"
       );
     })
