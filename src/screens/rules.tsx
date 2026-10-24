@@ -1,7 +1,7 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
-import { RULES } from "../rules-content";
+import { RULES, RULES_INTRO } from "../rules-content";
 
 // Re-exported so existing importers (the Markdown alternate) keep working.
 export { RULES };
@@ -18,20 +18,30 @@ export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: stri
     headingId="rules-heading"
     heading="House rules"
   >
-    <p class="lead">
-      Five rules that keep the lobby a place people come back to. Short on purpose — if anything is
-      unclear, ask in Discord before you assume.
-    </p>
+    <p class="lead">{RULES_INTRO}</p>
     {lastUpdated ? (
       <p data-testid="rules-last-updated" class="strap">
         Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>
       </p>
     ) : null}
-    <ol data-testid="rules-list" class="facts">
-      {RULES.map(([name, body]) => (
-        <li class="card" key={name}>
-          <h2>{name}</h2>
+    <nav aria-label="Jump to a rule" data-testid="rules-jump">
+      <p class="strap">Jump to a rule</p>
+      <ul class="jump">
+        {RULES.map(([name, , id]) => (
+          <li key={id}>
+            <a href={`#${id}`}>{name}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+    <ol data-testid="rules-list" class="facts rules">
+      {RULES.map(([name, body, id]) => (
+        <li class="card" key={id}>
+          <h2 id={id}>{name}</h2>
           <p>{body}</p>
+          <a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>
+            Permalink
+          </a>
         </li>
       ))}
     </ol>
