@@ -7,6 +7,9 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_GUEST_FULL_HINT_TESTID,
+  RSVP_GUEST_SIGNIN_TESTID,
+  RSVP_JOIN_SERVER_TESTID,
   RSVP_MAYBE_TESTID,
   RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_TESTID,
@@ -29,6 +32,9 @@ import { rsvpActionHref } from "./attendee-paths";
 export const RsvpButton: FC<{
   e: PublicEvent;
   member: boolean;
+  /** Boolean only: true for any signed-in viewer (member or not). Guests see
+   * the sign-in link; signed-in non-members see the join path, never login. */
+  signedIn?: boolean;
   answer: ViewerRsvp | null;
   returnTo: string;
   waitlistPosition?: number | null;
@@ -39,6 +45,7 @@ export const RsvpButton: FC<{
 }> = ({
   e,
   member,
+  signedIn = false,
   answer,
   returnTo,
   waitlistPosition = null,
@@ -62,10 +69,39 @@ export const RsvpButton: FC<{
   const waitlisted = answer?.status === "waitlisted";
   const soft = answer?.status === "maybe" || answer?.status === "not_going";
   const signIn = loginUrl(returnTo);
+  const joinHref = `/join?next=${encodeURIComponent(returnTo)}`;
   const button = (id: string, action: string, copy: string) => (
     <button type="submit" name="status" value={action} data-testid={id} data-action={action}>
       {copy}
     </button>
+  );
+  // Guests get the same paused/full truth members see, plus the sign-in path;
+  // signed-in non-members get the join path instead of a login loop. Both are
+  // real anchors with no form, so no-JS parity holds.
+  const guestPrompt = !e.rsvpOpen ? (
+    <>
+      <p role="status" data-testid={RSVP_PAUSED_TESTID}>
+        {RSVP_COPY.paused}
+      </p>
+      <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>
+        {RSVP_COPY.guestCta}
+      </a>
+    </>
+  ) : full ? (
+    <>
+      <p role="status" data-testid={EVENT_FULL_TESTID}>
+        {RSVP_COPY.full} {rsvpFullCapCopy(e.capacity!)}
+      </p>
+      <p data-testid={RSVP_GUEST_FULL_HINT_TESTID}>
+        <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>
+          {RSVP_COPY.guestFullHint}
+        </a>
+      </p>
+    </>
+  ) : (
+    <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>
+      {RSVP_COPY.guestCta}
+    </a>
   );
   return (
     <section
@@ -75,6 +111,7 @@ export const RsvpButton: FC<{
       data-capacity={e.capacity ?? undefined}
       data-full={full ? "true" : "false"}
       data-paused={e.rsvpOpen ? "false" : "true"}
+      data-signed-in={signedIn ? "true" : "false"}
       aria-label="RSVP"
     >
       {closed ? (
@@ -82,7 +119,13 @@ export const RsvpButton: FC<{
           {rsvpClosedCopy(closed)}
         </p>
       ) : !member ? (
-        <a href={signIn}>{RSVP_COPY.guestCta}</a>
+        signedIn ? (
+          <a href={joinHref} data-testid={RSVP_JOIN_SERVER_TESTID}>
+            {RSVP_COPY.joinToRsvp}
+          </a>
+        ) : (
+          guestPrompt
+        )
       ) : (
         <form method="post" action={rsvpActionHref(e.eventKey, attendeePage)} data-rsvp-form>
           {!e.rsvpOpen ? (

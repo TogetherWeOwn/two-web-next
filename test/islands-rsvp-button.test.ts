@@ -373,7 +373,10 @@ describe("rsvp-button SSR/server drift", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(mount(html)).toContain(`data-event-key="${KEY}"`);
     expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}?from=calendar`)}"`);
-    expect(mount(html)).toContain(RSVP_COPY.guestCta);
+    // The default fixture is a full event, so the guest sees the full note
+    // plus the waitlist-hint sign-in link — never the bare login link.
+    expect(mount(html)).toContain(`data-testid="${EVENT_FULL_TESTID}"`);
+    expect(mount(html)).toContain(RSVP_COPY.guestFullHint);
     expect(mount(html)).not.toContain("data-action");
     expect(html).toContain('src="/islands/rsvp-button.js"');
     expect(

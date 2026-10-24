@@ -212,6 +212,7 @@ export const EventPage: FC<{
         <RsvpButton
           e={e}
           member={member}
+          signedIn={session != null}
           answer={answer}
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
