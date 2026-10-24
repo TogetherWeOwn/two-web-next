@@ -32,7 +32,7 @@ device-timezone buttons above convert one instant each using your device
 setting, while the profile editor helper only previews the zone saved on your
 profile. The chosen zone is used for this one comparison only. Nothing is saved
 to your profile, cookies or storage, and no request is sent; typing alone never
-converts. An unknown or overlong identifier, or a browser without Intl
+converts. Surrounding whitespace is ignored. An unknown or overlong identifier, or a browser without Intl
 formatting, yields honest guidance pointing back at the host schedule and
 calendar links.
 

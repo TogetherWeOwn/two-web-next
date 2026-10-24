@@ -55,15 +55,16 @@ export function eventStartInDeviceTimezone(datetime: unknown): string {
 
 export function eventRangeInChosenTimezone(start: unknown, end: unknown, zone: unknown): string {
   try {
-    if (typeof zone !== "string" || !zone.trim() || zone.length > 64)
-      return CHOSEN_TIMEZONE_UNAVAILABLE;
+    if (typeof zone !== "string") return CHOSEN_TIMEZONE_UNAVAILABLE;
+    const clean = zone.trim();
+    if (!clean || clean.length > 64) return CHOSEN_TIMEZONE_UNAVAILABLE;
     const first = readInstant(start);
     const second = readInstant(end);
     if (!first || !second) return CHOSEN_TIMEZONE_UNAVAILABLE;
-    const startText = formatInstantInZone(first, zone);
-    const endText = formatInstantInZone(second, zone);
+    const startText = formatInstantInZone(first, clean);
+    const endText = formatInstantInZone(second, clean);
     if (!startText || !endText) return CHOSEN_TIMEZONE_UNAVAILABLE;
-    return `In ${zone}: starts ${startText}; ends ${endText}.`;
+    return `In ${clean}: starts ${startText}; ends ${endText}.`;
   } catch {
     return CHOSEN_TIMEZONE_UNAVAILABLE;
   }
