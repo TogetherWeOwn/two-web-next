@@ -178,7 +178,7 @@ const MATRIX: Case[] = [
     format: "json",
     body: "{}",
   },
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST",
     route: `/events/:key/${action}`,
     status: 503,
@@ -319,6 +319,7 @@ const MATRIX: Case[] = [
     "/admin/events/:key",
     "/admin/events/:key/publish",
     "/admin/events/:key/cancel",
+    "/admin/events/:key/duplicate",
     "/admin/events/:key/rsvp-pause",
     "/admin/events/:key/rsvp-reopen",
     "/admin/featured",

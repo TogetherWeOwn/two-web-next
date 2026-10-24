@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { acceptBaselines } from "./visual-accept.mjs";
+import { CODES, parseInvocation } from "./visual-accept-cli.mjs";
 import { acceptBaselines as acceptKitBaselines } from "./kit-visual-accept.mjs";
 
 const SCRIPT = new URL("./visual-accept.mjs", import.meta.url);
@@ -557,4 +558,318 @@ test("Kit: lookalike-only suite directories do not admit Hono actuals", (t) => {
 
   assert.equal(result.ok, true, result.message);
   assert.deepEqual(baselineBytes(dest), { "kit.png": "reviewed-kit" });
+});
+
+// CLI contract (flags, dry run, stable codes). Black-box coverage of both
+// scripts lives in test/visual-accept-cli-safety-acceptance.test.ts; these
+// selftests pin the parser and the properties that file does not: the dry-run
+// plan equals what a real run writes, and I/O failures never echo paths.
+const CLI_SUITES = [
+  {
+    name: "Hono",
+    script: SCRIPT,
+    actuals: "test-results-visual",
+    dest: "e2e/visual/__screenshots__",
+  },
+  {
+    name: "Kit",
+    script: new URL("./kit-visual-accept.mjs", import.meta.url),
+    actuals: "test-results-kit-visual",
+    dest: "e2e/visual/__screenshots-kit__",
+  },
+];
+
+function runScript(suite, args, cwd) {
+  const result = spawnSync(process.execPath, [suite.script.pathname, ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    cwd,
+  });
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+test("parseInvocation accepts flags on either side and refuses everything else first", () => {
+  const ok = (argv) => parseInvocation(argv);
+  assert.deepEqual(ok(["dir"]), { dryRun: false, json: false, error: null, artifact: "dir" });
+  assert.deepEqual(ok(["--dry-run", "--format", "json", "dir"]), {
+    dryRun: true,
+    json: true,
+    error: null,
+    artifact: "dir",
+  });
+  assert.equal(ok(["dir", "--format", "json", "--dry-run"]).error, null);
+  for (const argv of [
+    ["dir", "-x"],
+    ["dir", "--bogus"],
+    ["dir", "--DRY-RUN"],
+    ["dir", "--format=json"],
+    ["dir", "--format"],
+    ["dir", "--format", "xml"],
+    ["dir", "--format", ""],
+    ["dir", "--format", "--dry-run"],
+    ["extra", "dir", "--bogus"],
+    ["--bogus"],
+  ]) {
+    assert.equal(parseInvocation(argv).error, CODES.UNKNOWN_FLAG, argv.join(" "));
+  }
+  assert.equal(parseInvocation([]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["--dry-run"]).error, CODES.MISSING_ARG);
+  assert.equal(parseInvocation(["a", "b"]).error, CODES.EXTRA_ARGS);
+});
+
+for (const suite of CLI_SUITES) {
+  test(`${suite.name}: the dry-run plan names exactly what the real run writes`, (t) => {
+    const root = scratchRoot("visual-accept-plan-");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const workspace = join(root, "checkout");
+    const artifact = join(root, "artifact");
+    mkdirSync(workspace, { recursive: true });
+    writeBytes(join(artifact, suite.actuals, "a", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "b", "about-actual.png"), "about-bytes");
+    writeBytes(join(artifact, suite.actuals, "home-actual.png"), "home-bytes");
+    writeBytes(join(artifact, suite.dest, "home.png"), "stale-home-bytes");
+    writeBytes(join(artifact, suite.dest, "same.png"), "same-bytes");
+    writeBytes(join(workspace, suite.dest, "same.png"), "same-bytes");
+
+    const plan = JSON.parse(
+      runScript(suite, ["--dry-run", "--format", "json", artifact], workspace).stdout,
+    ).plan;
+    assert.deepEqual(plan.destinations, ["about.png", "home.png"]);
+    assert.deepEqual(
+      plan.skipped.map(({ item, reason }) => [item.replaceAll("\\", "/"), reason]),
+      [
+        [
+          `test-results-${suite.name === "Kit" ? "kit-" : ""}visual/b/about-actual.png`,
+          "byte-identical duplicate",
+        ],
+        [`${suite.dest}/home.png`, "superseded by reviewed actual"],
+        [`${suite.dest}/same.png`, "identical to checkout baseline"],
+      ],
+    );
+    assert.deepEqual(listFilesRecursive(workspace), [`${suite.dest}/same.png`]);
+
+    assert.equal(runScript(suite, [artifact], workspace).status, 0);
+    assert.deepEqual(listFilesRecursive(join(workspace, suite.dest)), [
+      "about.png",
+      "home.png",
+      "same.png",
+    ]);
+  });
+}
+
+test("I/O failures print a fixed code and errno, never a path or raw message", (t) => {
+  const root = scratchRoot("visual-accept-io-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifact = join(root, "artifact");
+  const unreadable = join(artifact, "test-results-visual", "z-actual.png");
+  writeBytes(unreadable, "secret-bytes");
+  const runner = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const [script, unreadable, artifact] = process.argv.slice(1);
+    const original = fs.readFileSync;
+    fs.readFileSync = function (path, ...rest) {
+      if (String(path) === unreadable) {
+        const error = new Error("EACCES: raw message " + path);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(this, path, ...rest);
+    };
+    syncBuiltinESMExports();
+    const { runCli, HONO_ADAPTER } = await import(script).then(async (m) => ({
+      runCli: (await import(new URL("./visual-accept-cli.mjs", script).href)).runCli,
+      HONO_ADAPTER: m.HONO_ADAPTER,
+    }));
+    const { status, stdout, stderr } = runCli(HONO_ADAPTER, ["--format", "json", artifact]);
+    process.stdout.write(JSON.stringify({ status, stdout, stderr }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", runner, SCRIPT.href, unreadable, artifact],
+    { encoding: "utf8", timeout: 30_000, cwd: root },
+  );
+  assert.equal(result.error, undefined);
+  const { status, stdout, stderr } = JSON.parse(result.stdout);
+  assert.equal(status, 1);
+  assert.equal(stderr, "");
+  const verdict = JSON.parse(stdout);
+  assert.equal(verdict.code, CODES.IO_ERROR);
+  assert.equal(verdict.ok, false);
+  assert.ok(!stdout.includes(root) && !stdout.includes("raw message"), stdout);
+});
+
+test("Human I/O failures print the fixed line with the errno, never a path or raw message", (t) => {
+  const root = scratchRoot("visual-accept-io-human-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const artifact = join(root, "artifact");
+  const unreadable = join(artifact, "test-results-visual", "z-actual.png");
+  writeBytes(unreadable, "secret-bytes");
+  const runner = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const [script, unreadable, artifact] = process.argv.slice(1);
+    const original = fs.readFileSync;
+    fs.readFileSync = function (path, ...rest) {
+      if (String(path) === unreadable) {
+        const error = new Error("EACCES: raw message " + path);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(this, path, ...rest);
+    };
+    syncBuiltinESMExports();
+    const { runCli, HONO_ADAPTER } = await import(script).then(async (m) => ({
+      runCli: (await import(new URL("./visual-accept-cli.mjs", script).href)).runCli,
+      HONO_ADAPTER: m.HONO_ADAPTER,
+    }));
+    const { status, stdout, stderr } = runCli(HONO_ADAPTER, [artifact]);
+    process.stdout.write(JSON.stringify({ status, stdout, stderr }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", runner, SCRIPT.href, unreadable, artifact],
+    { encoding: "utf8", timeout: 30_000, cwd: root },
+  );
+  assert.equal(result.error, undefined);
+  const { status, stdout, stderr } = JSON.parse(result.stdout);
+  assert.equal(status, 1);
+  assert.equal(stdout, "");
+  assert.match(stderr, /could not read or write baseline files \(EACCES\)/);
+  assert.match(stderr, /code=IO_ERROR/);
+  assert.match(stderr, /next_action=.+/);
+  assert.ok(!stderr.includes(root), stderr);
+  assert.ok(!stderr.includes(artifact), stderr);
+  assert.ok(!stderr.includes("raw message"), stderr);
+  assert.ok(!stderr.includes("secret-bytes"), stderr);
+});
+
+test("Hono: all-matching candidates exit 1 NO_CHANGES in every mode", (t) => {
+  const suite = CLI_SUITES[0];
+  const root = scratchRoot("visual-accept-no-changes-hono-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(join(workspace, suite.dest), { recursive: true });
+  mkdirSync(join(artifact, suite.actuals), { recursive: true });
+  writeBytes(join(workspace, suite.dest, "home.png"), "same-bytes");
+  writeBytes(join(artifact, suite.actuals, "home-actual.png"), "same-bytes");
+  const before = readFileSync(join(workspace, suite.dest, "home.png"), "utf8");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 1);
+  assert.match(human.stdout, /accepted 0 baseline\(s\)/);
+  assert.match(human.stderr, /code=NO_CHANGES/);
+  assert.match(human.stderr, /next_action=.+/);
+  assert.ok(!human.stderr.includes(workspace), human.stderr);
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 1);
+  assert.equal(json.stderr, "");
+  const verdict = JSON.parse(json.stdout);
+  assert.equal(verdict.code, CODES.NO_CHANGES);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.mode, "accept");
+  assert.equal(verdict.destinations, 1);
+  assert.equal(verdict.sources, 1);
+  assert.ok(!json.stdout.includes(workspace), json.stdout);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 1);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /dry run: nothing written/);
+  assert.match(dry.stdout, /no-op \(every candidate matches the checkout/);
+  assert.match(dry.stdout, /test-results-visual\/home-actual\.png: identical to checkout baseline/);
+  assert.match(dry.stdout, /code=NO_CHANGES/);
+  assert.ok(!dry.stdout.includes(artifact), dry.stdout);
+  assert.ok(!dry.stdout.includes(workspace), dry.stdout);
+
+  const dryJson = runScript(suite, ["--dry-run", "--format", "json", artifact], workspace);
+  assert.equal(dryJson.status, 1);
+  assert.equal(dryJson.stderr, "");
+  const dryVerdict = JSON.parse(dryJson.stdout);
+  assert.equal(dryVerdict.code, CODES.NO_CHANGES);
+  assert.equal(dryVerdict.ok, false);
+  assert.equal(dryVerdict.mode, "dry-run");
+  assert.equal(dryVerdict.plan.verdict, "no-op");
+  assert.equal(dryVerdict.plan.skipped.length, 1);
+  assert.ok(!dryJson.stdout.includes(workspace), dryJson.stdout);
+
+  assert.equal(readFileSync(join(workspace, suite.dest, "home.png"), "utf8"), before);
+});
+
+test("Kit: all-matching candidates exit 0 OK in every mode", (t) => {
+  const suite = CLI_SUITES[1];
+  const root = scratchRoot("visual-accept-no-changes-kit-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(join(workspace, suite.dest), { recursive: true });
+  mkdirSync(join(artifact, suite.actuals), { recursive: true });
+  writeBytes(join(workspace, suite.dest, "home.png"), "same-bytes");
+  writeBytes(join(artifact, suite.actuals, "home-actual.png"), "same-bytes");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 0);
+  assert.match(human.stdout, /accepted 0 Kit baselines/);
+  assert.equal(human.stderr, "");
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 0);
+  assert.equal(json.stderr, "");
+  const verdict = JSON.parse(json.stdout);
+  assert.equal(verdict.code, CODES.OK);
+  assert.equal(verdict.ok, true);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 0);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /would write 0 baseline\(s\)/);
+  assert.match(dry.stdout, /code=OK/);
+
+  const dryJson = runScript(suite, ["--dry-run", "--format", "json", artifact], workspace);
+  assert.equal(dryJson.status, 0);
+  assert.equal(dryJson.stderr, "");
+  const dryVerdict = JSON.parse(dryJson.stdout);
+  assert.equal(dryVerdict.code, CODES.OK);
+  assert.equal(dryVerdict.ok, true);
+  assert.equal(dryVerdict.mode, "dry-run");
+});
+
+test("Hono collision diagnostics print artifact-relative sources, never absolute paths", (t) => {
+  const suite = CLI_SUITES[0];
+  const root = scratchRoot("visual-accept-collision-paths-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  mkdirSync(workspace, { recursive: true });
+  writeBytes(join(artifact, "a", "home-actual.png"), "bytes-A");
+  writeBytes(join(artifact, "b", "home-actual.png"), "bytes-B");
+
+  const human = runScript(suite, [artifact], workspace);
+  assert.equal(human.status, 1);
+  assert.equal(human.stdout, "");
+  assert.match(human.stderr, /home\.png/);
+  assert.match(human.stderr, /a\/home-actual\.png/);
+  assert.match(human.stderr, /b\/home-actual\.png/);
+  assert.match(human.stderr, /code=COLLISION/);
+  assert.ok(!human.stderr.includes(artifact), human.stderr);
+  assert.ok(!human.stderr.includes(workspace), human.stderr);
+  assert.ok(!human.stderr.includes(root), human.stderr);
+
+  const dry = runScript(suite, ["--dry-run", artifact], workspace);
+  assert.equal(dry.status, 1);
+  assert.equal(dry.stderr, "");
+  assert.match(dry.stdout, /a\/home-actual\.png/);
+  assert.match(dry.stdout, /b\/home-actual\.png/);
+  assert.match(dry.stdout, /code=COLLISION/);
+  assert.ok(!dry.stdout.includes(artifact), dry.stdout);
+  assert.ok(!dry.stdout.includes(workspace), dry.stdout);
+  assert.ok(!dry.stdout.includes(root), dry.stdout);
+
+  const json = runScript(suite, ["--format", "json", artifact], workspace);
+  assert.equal(json.status, 1);
+  assert.ok(!json.stdout.includes(artifact), json.stdout);
+  assert.ok(!json.stdout.includes(root), json.stdout);
 });

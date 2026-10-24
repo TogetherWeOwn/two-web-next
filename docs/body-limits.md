@@ -19,8 +19,8 @@ exhausted bucket returns 429 only for bodies at or under the cap. Profile owner
 policy runs after the cap; other moderator write authentication runs before
 buffering, read once, without rotation.
 
-`POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
-(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
+`POST /events`, `PATCH /events/:key` and the five `POST /events/:key/` actions
+(`publish`, `cancel`, `duplicate`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
 cap before the shared throttle and moderator authentication. Oversized advertised
 or streamed bodies return 413 without throttle rows or session reads, even when
 the throttle budget is exhausted. At or under the cap, requests still run the
@@ -35,7 +35,7 @@ first, oversized or not; at or under the cap, moderator posts still spend one
 throttle hit before validation and the store.
 
 Admin lifecycle actions (`POST /admin/events/:key/publish`, `/cancel`,
-`/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
+`/duplicate`, `/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
 (`POST /admin/queue/failed/:id/redispatch`) run the wire cap first instead: an
 oversized moderator body returns 413 with zero admin-write throttle spend and no
 store work, and stays 413 when the budget is already spent.

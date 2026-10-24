@@ -255,6 +255,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |
+| `POST /admin/events/:key/duplicate` | moderator | admin: duplicate as draft |
 | `POST /admin/events/:key/publish` | moderator | admin: publish |
 | `POST /admin/featured` | moderator | admin: featured create |
 | `POST /admin/featured/:id` | moderator | admin: featured update |
@@ -266,6 +267,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /csp-reports` | public | csp-reports: no-store violation sink |
 | `POST /events` | moderator | events: draft create |
 | `POST /events/:key/cancel` | moderator | events: cancel |
+| `POST /events/:key/duplicate` | moderator | events: duplicate as draft |
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
 | `POST /logout/everywhere` | public | app: whole-live-set revoke for the acting member + origin check |

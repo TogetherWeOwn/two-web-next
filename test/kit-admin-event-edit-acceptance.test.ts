@@ -6,12 +6,17 @@
 // wall-clock fill across DST folds and gaps, the full status-transition
 // admission table, duplicate reads/rows/params, audit-failure refusal with
 // no roster leak, and the no-JS form semantics a browser without scripts
-// relies on. Hermetic by construction: the resolver deps are fakes and the
-// page pins are source-text, because the root Vitest suite cannot compile
-// .svelte. No database, staging or production data is touched.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+// relies on. Hermetic by construction: resolver reads use fixtures. Duplicate
+// form assertions compile and execute the real Svelte SSR page for each status;
+// the older structural pins below still inspect source text. No database,
+// staging or production data is touched.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import {
   resolveKitEventEdit,
@@ -395,6 +400,85 @@ const loadSource = readFileSync(
   "utf8",
 );
 
+describe("acceptance: Kit duplicate form submits to duplicate, never cancel", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url).href);
+  let scratch = "";
+  let renderPage: (data: { view: KitEventEditView }) => string;
+
+  beforeAll(async () => {
+    scratch = mkdtempSync(
+      join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "kit-duplicate-form-"),
+    );
+    const webRequire = createRequire(join(root, "web/package.json"));
+    const { compile } = webRequire("svelte/compiler") as {
+      compile(source: string, options: Record<string, unknown>): { js: { code: string } };
+    };
+    const entry = join(scratch, "entry.mjs");
+    writeFileSync(
+      entry,
+      `import { render } from "svelte/server";
+import Page from ${JSON.stringify(join(root, "web/src/routes/admin/events/[key]/+page.svelte"))};
+export function renderPage(data) { return render(Page, { props: { data } }).body; }`,
+    );
+    const outfile = join(scratch, "bundle.mjs");
+    await build({
+      entryPoints: [entry],
+      outfile,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "warning",
+      tsconfigRaw: { compilerOptions: {} },
+      absWorkingDir: root,
+      nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+      alias: { "#lib": join(root, "web/src/lib") },
+      plugins: [
+        {
+          name: "kit-duplicate-form-ssr",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+              contents: compile(readFileSync(path, "utf8"), {
+                generate: "server",
+                dev: false,
+                filename: path,
+              }).js.code,
+              loader: "js",
+              resolveDir: dirname(path),
+            }));
+          },
+        },
+      ],
+    });
+    renderPage = (await import(pathToFileURL(outfile).href)).renderPage;
+  });
+
+  afterAll(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  });
+
+  // Mutant: change only the page's duplicate form action to /cancel. Form
+  // counts stay identical, but each executed status branch must fail here.
+  it.each(["draft", "published", "cancelled"] as const)(
+    "%s renders Duplicate as draft inside its own POST /duplicate form",
+    async (status) => {
+      const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+      const view = await okView({}, { get: async () => ({ ...baseRow, eventKey: key, status }) });
+      const html = renderPage({ view });
+      const duplicateForms = [...html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/g)]
+        .map(([form]) => form)
+        .filter((form) => /<button\b[^>]*>[\s\S]*?Duplicate as draft[\s\S]*?<\/button>/.test(form));
+      expect(duplicateForms).toHaveLength(1);
+      const form = duplicateForms[0]!;
+      const openingTag = form.slice(0, form.indexOf(">") + 1);
+      expect(openingTag).toContain('method="post"');
+      expect(openingTag).toContain(`action="/admin/events/${key}/duplicate"`);
+      expect(openingTag).not.toContain(`/admin/events/${key}/cancel`);
+      expect(form).toMatch(/<button\b[^>]*type="submit"[^>]*>/);
+      expect(form).toContain('data-testid="duplicate-event"');
+    },
+  );
+});
+
 describe("acceptance: duplicate query params resolve first-wins in the load", () => {
   it("the load keeps the first value per key, never the last duplicate", () => {
     expect(loadSource).toContain("if (!(k in raw)) raw[k] = v;");
@@ -410,13 +494,13 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // Five forms: edit update, publish, cancel, RSVP toggle, roster search.
-    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(4);
+    // Six forms: edit update, publish, cancel, duplicate, RSVP toggle, roster search.
+    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
+    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
     expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);
     // Every button submits its form; nothing depends on a click handler.
-    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(5);
+    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(6);
+    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
     expect(pageSource).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
     // Sorting and paging are plain links a no-JS browser can follow.
