@@ -218,7 +218,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       const body = signed.html.match(
         /<div\b[^>]*data-testid="privacy-policy"[^>]*>([\s\S]*?)<\/div>/,
       )?.[1];
-      expect(body?.replace(/<!---->/g, "")).toBe(renderPolicyMarkdown(POLICY_MARKDOWN));
+      expect(body?.replace(/<!--[\s\S]*?-->/g, "")).toBe(renderPolicyMarkdown(POLICY_MARKDOWN));
       expect(fetches).toBe(0);
       if (twin === "Kit") expect(fixture.csr).toBe(false);
     });
