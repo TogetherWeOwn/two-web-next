@@ -11,7 +11,22 @@ export {
   featuredEmptyText,
 } from "./featured-list-query";
 export type RosterSort = "status" | "answered";
-export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
+/** RSVP-answer facet: exact allowlist values; "" reads as All. */
+export type RosterStatus = "" | "going" | "waitlisted" | "maybe" | "not_going";
+export const ROSTER_STATUSES: { value: RosterStatus; label: string }[] = [
+  { value: "", label: "All" },
+  { value: "going", label: "Going" },
+  { value: "waitlisted", label: "Waitlisted" },
+  { value: "maybe", label: "Maybe" },
+  { value: "not_going", label: "Not going" },
+];
+export type RosterQuery = {
+  q: string;
+  status: RosterStatus;
+  sort: RosterSort;
+  order: SortOrder;
+  page: number;
+};
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
 export type ActivityLogQuery = { subject: string; causer: string; page: number };
@@ -39,8 +54,20 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
     /^[1-9]\d*$/.test(params.roster_page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
+  // The answer facet is an exact allowlist match on the raw value: no
+  // trim/NUL/length normalization, so padded, NUL-suffixed or overlong
+  // values read as All rather than as a nearby status.
+  const rawStatus = params.roster_status ?? "";
+  const status: RosterStatus =
+    rawStatus === "going" ||
+    rawStatus === "waitlisted" ||
+    rawStatus === "maybe" ||
+    rawStatus === "not_going"
+      ? rawStatus
+      : "";
   return {
     q: boundFreeText(withoutNul(params.roster_q).trim()),
+    status,
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
@@ -82,10 +109,36 @@ export function rosterUrl(
 ): string {
   const q = { ...query, ...patch };
   const params = new URLSearchParams({ roster_sort: q.sort, roster_order: q.order });
+  if (q.status) params.set("roster_status", q.status);
   if (q.q) params.set("roster_q", q.q);
   // Page 1 stays bare so sort/search links reset the roster to its first page.
   if (q.page > 1) params.set("roster_page", String(q.page));
   return `/admin/events/${encodeURIComponent(eventKey)}?${params}#rsvp-roster`;
+}
+
+/** Shared Hono/Kit range copy: matching responses, never seats or attendance. */
+export function rosterRangeText(rangeStart: number, rangeEnd: number, total: number): string {
+  return `Showing ${rangeStart}-${rangeEnd} of ${total} responses`;
+}
+
+/**
+ * Scoped recovery for an empty roster page. Clear drops only the roster
+ * filters (member search + answer facet), keeping normalized sort/order; the
+ * first-page link keeps the whole filtered set. Both stay null while rows
+ * render; the first-page link additionally needs a non-empty filtered total.
+ */
+export function rosterRecovery(
+  eventKey: string,
+  query: RosterQuery,
+  rowCount: number,
+  total: number,
+): { clearUrl: string | null; firstUrl: string | null } {
+  if (rowCount > 0) return { clearUrl: null, firstUrl: null };
+  return {
+    clearUrl:
+      query.q || query.status ? rosterUrl(eventKey, query, { q: "", status: "", page: 1 }) : null,
+    firstUrl: total > 0 ? rosterUrl(eventKey, query, { page: 1 }) : null,
+  };
 }
 
 export function joinAttemptsUrl(query: JoinAttemptsQuery, page: number): string {
@@ -104,7 +157,10 @@ export function activityLogUrl(query: ActivityLogQuery, page: number): string {
 
 /** Zero-row copy for the RSVP roster on the event edit page. */
 export function rosterEmptyText(query: RosterQuery): string {
-  return query.q ? "No RSVPs match this member search." : "No RSVPs yet.";
+  if (query.q && query.status) return "No RSVPs match these roster filters.";
+  if (query.q) return "No RSVPs match this member search.";
+  if (query.status) return "No RSVPs match this answer status.";
+  return "No RSVPs yet.";
 }
 
 const SNOWFLAKE_ID = /^\d{10,25}$/;
