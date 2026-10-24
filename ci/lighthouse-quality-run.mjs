@@ -42,7 +42,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { sampleMatrix, evidenceLines } = require("./lighthouse-samples.cjs");
+const {
+  sampleMatrix,
+  evidenceLines,
+  checkFixtureDirectory,
+  parseCheckFixtureArgs,
+  invalidArgumentsResult,
+} = require("./lighthouse-samples.cjs");
 
 const QUALITY_DIR = ".lighthouseci/quality";
 const LHCI_DIR = ".lighthouseci";
@@ -267,6 +273,23 @@ export async function main(
     log = console.log,
   } = {},
 ) {
+  // Read-only fixture verification: no collection, writes or archives.
+  // Any check-shaped flag enters strict validation; unknown or malformed
+  // check flags fail here with invalid_arguments before anything else runs.
+  const wantsCheck = argv.some(
+    (a) => a === "--check-fixture" || a === "--check-fixtures" || a === "--format",
+  );
+  if (wantsCheck) {
+    const parsed = parseCheckFixtureArgs(argv.filter((a) => a !== "--selftest"));
+    if (!parsed.ok) {
+      log(JSON.stringify(invalidArgumentsResult("desktop")));
+      return 2;
+    }
+    const { collect } = expectedLhrs({ env });
+    const result = checkFixtureDirectory(parsed.dir, collect, "desktop");
+    log(JSON.stringify(result));
+    return result.code === "collection_complete" ? 0 : 1;
+  }
   const { collect, expected, runsPerRoute, mode } = expectedLhrs({ env });
   const extraArgs = argv.filter((a) => a !== "--selftest");
   mkdirSync(join(logFile, ".."), { recursive: true });
@@ -345,7 +368,8 @@ export async function main(
   return 1;
 }
 
-function selftest() {
+async function selftest() {
+  const { navigationMetadata } = await import("../test/lighthouse-navigation-fixtures.mjs");
   // expectedLhrs reads the real configs (no network): fixture mode lists 8
   // routes (one is the fixture event), the staging deployed mode lists 7,
   // both at 3 runs each.
@@ -377,8 +401,11 @@ function selftest() {
 
   // loadLhrs counts only parsed reports carrying categories.
   const dir = mkdtempSync(join(tmpdir(), "lh-quality-"));
-  const lhr = (url) => ({
+  const lhr = (url, deployed = false) => ({
+    ...navigationMetadata("desktop", { deployed }),
     requestedUrl: url,
+    finalUrl: url,
+    finalDisplayedUrl: url,
     categories: Object.fromEntries(
       ["performance", "accessibility", "best-practices", "seo"].map((id) => [id, { score: 1 }]),
     ),
@@ -439,6 +466,7 @@ function selftest() {
     const lhci = join(caseDir, ".lighthouseci");
     const qdir = join(lhci, "quality");
     mkdirSync(qdir, { recursive: true });
+    const deployed = Boolean(env.QUALITY_ORIGIN);
     let calls = 0;
     const run = async () => {
       calls += 1;
@@ -450,12 +478,15 @@ function selftest() {
       step.urls.forEach((url, i) => {
         writeFileSync(
           join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
-          JSON.stringify(lhr(url)),
+          JSON.stringify(lhr(url, deployed)),
         );
       });
       for (const route of new Set(step.urls.map(routeOf))) {
         const slug = route === "/" ? "root" : route.replaceAll("/", "_");
-        writeFileSync(join(qdir, `${slug}-report.json`), JSON.stringify(lhr(`https://h${route}`)));
+        writeFileSync(
+          join(qdir, `${slug}-report.json`),
+          JSON.stringify(lhr(`https://h${route}`, deployed)),
+        );
       }
       const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
       return {
@@ -480,103 +511,104 @@ function selftest() {
   const stagingUrls = urlsFor(staging);
   const stagingEnv = { env: { QUALITY_ORIGIN: "https://next.togetherweown.com" } };
 
-  (async () => {
-    // Green first attempt: no retry, no diagnosis, exit 0.
-    {
-      const { code, calls, caseDir } = await runCase([{ exitCode: 0, urls: fixtureUrls }]);
-      assert.equal(code, 0);
-      assert.equal(calls, 1);
-      assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
-    }
-    // Stale evidence from an earlier invocation never counts: a leftover
-    // mobile-run LHR plus old quality reports are cleared before attempt 1.
-    {
-      const probe = mkdtempSync(join(tmpdir(), "lh-quality-stale-"));
-      const lhci = join(probe, ".lighthouseci");
-      const qdir = join(lhci, "quality");
-      mkdirSync(qdir, { recursive: true });
-      writeFileSync(join(lhci, "lhr-9.json"), JSON.stringify(lhr("https://h/stale/")));
-      writeFileSync(join(qdir, "stale-report.json"), JSON.stringify(lhr("https://h/stale/")));
-      const code = await main([], {
-        env: {},
-        run: async () => ({ exitCode: 0, output: "stub green" }),
-        qualityDir: qdir,
-        lhciDir: lhci,
-        logFile: join(probe, "collect.log"),
-        diagnosisFile: join(probe, "diagnosis.md"),
-      });
-      assert.equal(code, 1);
-      assert.match(readFileSync(join(probe, "diagnosis.md"), "utf8"), /COLLECT FAILURE/);
-      assert.equal(loadCollectedLhrs(lhci).length, 0);
-    }
-    // A spawn failure becomes a failed attempt (not a crash): short evidence
-    // retries once, then COLLECT FAILURE keeps the last exit code.
-    {
-      const { code, calls, caseDir } = await runCase([
-        { reject: "spawn /nope ENOENT" },
-        { exitCode: 0, urls: fixtureUrls },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /failed to start/);
-    }
-    // Transient short failure then green: exactly one retry, exit 0.
-    {
-      const { code, calls } = await runCase([
-        { exitCode: 1, urls: fixtureUrls.slice(0, 4) },
-        { exitCode: 0, urls: fixtureUrls },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-    }
-    // Full evidence plus the evaluated-assertion marker on the staging shape
-    // (21 runs deduped to 7 quality files): real breach, NO retry,
-    // BUDGET BREACH. This is the PR #1021 review finding, pinned.
-    {
-      const { code, calls, caseDir } = await runCase(
-        [{ exitCode: 1, urls: stagingUrls, assertFailed: true }],
-        stagingEnv,
-      );
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), /BUDGET BREACH/);
-    }
-    // Full evidence but no assertion verdict (upload/config blew up): NO
-    // retry, and the verdict must NOT claim a floor breached.
-    {
-      const { code, calls, caseDir } = await runCase([{ exitCode: 1, urls: fixtureUrls }]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
-      assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
-      assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
-    }
-    // Short twice: COLLECT FAILURE, last exit code preserved, tail recorded.
-    {
-      const { code, calls, caseDir } = await runCase([
-        { exitCode: 2, urls: [], note: "NO_NAVSTART boom" },
-        { exitCode: 3, urls: fixtureUrls.slice(0, 6), note: "chrome crash boom" },
-      ]);
-      assert.equal(code, 3);
-      assert.equal(calls, 2);
-      const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
-      assert.match(diagnosis, /COLLECT FAILURE/);
-      assert.match(diagnosis, /chrome crash boom/);
-      assert.match(diagnosis, /attempt 1: exit 2, 0 LHRs/);
-      assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
-      assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /stub attempt 1/);
-    }
-    console.log("lighthouse-quality-run selftest: ok");
-  })().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  // Green first attempt: no retry, no diagnosis, exit 0.
+  {
+    const { code, calls, caseDir } = await runCase([{ exitCode: 0, urls: fixtureUrls }]);
+    assert.equal(code, 0);
+    assert.equal(calls, 1);
+    assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
+  }
+  // Stale evidence from an earlier invocation never counts: a leftover
+  // mobile-run LHR plus old quality reports are cleared before attempt 1.
+  {
+    const probe = mkdtempSync(join(tmpdir(), "lh-quality-stale-"));
+    const lhci = join(probe, ".lighthouseci");
+    const qdir = join(lhci, "quality");
+    mkdirSync(qdir, { recursive: true });
+    writeFileSync(join(lhci, "lhr-9.json"), JSON.stringify(lhr("https://h/stale/")));
+    writeFileSync(join(qdir, "stale-report.json"), JSON.stringify(lhr("https://h/stale/")));
+    const code = await main([], {
+      env: {},
+      run: async () => ({ exitCode: 0, output: "stub green" }),
+      qualityDir: qdir,
+      lhciDir: lhci,
+      logFile: join(probe, "collect.log"),
+      diagnosisFile: join(probe, "diagnosis.md"),
+    });
+    assert.equal(code, 1);
+    assert.match(readFileSync(join(probe, "diagnosis.md"), "utf8"), /COLLECT FAILURE/);
+    assert.equal(loadCollectedLhrs(lhci).length, 0);
+  }
+  // A spawn failure becomes a failed attempt (not a crash): short evidence
+  // retries once, then COLLECT FAILURE keeps the last exit code.
+  {
+    const { code, calls, caseDir } = await runCase([
+      { reject: "spawn /nope ENOENT" },
+      { exitCode: 0, urls: fixtureUrls },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /failed to start/);
+  }
+  // Transient short failure then green: exactly one retry, exit 0.
+  {
+    const { code, calls } = await runCase([
+      { exitCode: 1, urls: fixtureUrls.slice(0, 4) },
+      { exitCode: 0, urls: fixtureUrls },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+  }
+  // Full evidence plus the evaluated-assertion marker on the staging shape
+  // (21 runs deduped to 7 quality files): real breach, NO retry,
+  // BUDGET BREACH. This is the PR #1021 review finding, pinned.
+  {
+    const { code, calls, caseDir } = await runCase(
+      [{ exitCode: 1, urls: stagingUrls, assertFailed: true }],
+      stagingEnv,
+    );
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), /BUDGET BREACH/);
+  }
+  // Full evidence but no assertion verdict (upload/config blew up): NO
+  // retry, and the verdict must NOT claim a floor breached.
+  {
+    const { code, calls, caseDir } = await runCase([{ exitCode: 1, urls: fixtureUrls }]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+    assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
+    assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
+  }
+  // Short twice: COLLECT FAILURE, last exit code preserved, tail recorded.
+  {
+    const { code, calls, caseDir } = await runCase([
+      { exitCode: 2, urls: [], note: "NO_NAVSTART boom" },
+      { exitCode: 3, urls: fixtureUrls.slice(0, 6), note: "chrome crash boom" },
+    ]);
+    assert.equal(code, 3);
+    assert.equal(calls, 2);
+    const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+    assert.match(diagnosis, /COLLECT FAILURE/);
+    assert.match(diagnosis, /chrome crash boom/);
+    assert.match(diagnosis, /attempt 1: exit 2, 0 LHRs/);
+    assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
+    assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /stub attempt 1/);
+  }
+  console.log("lighthouse-quality-run selftest: ok");
 }
 
 // Gated on being the entry point: ci/lighthouse-origin-run.mjs imports the
 // helpers above, and must never trigger this selftest (or a main run) as a
 // side effect of that import.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (process.argv.includes("--selftest")) selftest();
-  else process.exitCode = await main(process.argv.slice(2));
+  if (process.argv.includes("--selftest")) {
+    try {
+      await selftest();
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+  } else process.exitCode = await main(process.argv.slice(2));
 }
