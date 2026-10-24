@@ -9,6 +9,7 @@ import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
+import { PREVIOUS_PUBLISHED_POLICIES } from "../privacy-history";
 import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
 import { RULES, RULES_INTRO } from "../rules-content";
@@ -38,6 +39,13 @@ export interface MdEvent {
   goingOccupancy: number | null;
   /** Published or past: drafts/cancelled never reach the detail builder. */
   status: "published" | "past";
+  /** Public host + joining details, when the row carries them (same column
+   * names as the public event row so the route mapper's spread carries them).
+   * Optional for older row fixtures; builders treat absent/blank as "render
+   * nothing extra". */
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
 }
 
 /** Lineup line with an occupancy-based full signal. The attributable count
@@ -81,6 +89,39 @@ export function mdText(value: string): string {
 }
 
 const mdInlineText = (value: string): string => mdText(value.replace(/\r\n|\r|\n/g, " "));
+
+/** Blank = null, missing, empty, or whitespace-only: those render no line. */
+const nonBlank = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const hostLine = (e: Pick<MdEvent, "organizer_name">): string | null => {
+  const host = nonBlank(e.organizer_name);
+  return host ? `- Host: ${mdInlineText(host)}` : null;
+};
+
+/**
+ * Public joining details as inert text: the URL rides inside
+ * `\[url\](url)`-shaped text whose escaped label brackets stop any
+ * CommonMark reader forming a link node (an author URL never becomes a
+ * followed link), while agents still read the URL after the stable
+ * `/^- Join: /` label. Both copies run through the inline escaper — the
+ * stored URL is admin-validated, not trusted: a hostile `<tag>` or newline
+ * must stay inert here exactly as in every other author field.
+ * Byte-identical to the stored URL on well-formed links. Instructions ride
+ * the same line as escaped text.
+ */
+const joinLine = (e: Pick<MdEvent, "join_url" | "join_instructions">): string | null => {
+  const url = nonBlank(e.join_url);
+  const text = nonBlank(e.join_instructions);
+  if (!url && !text) return null;
+  const parts = [
+    url ? `\\[${mdInlineText(url)}\\](${mdInlineText(url)})` : null,
+    text ? mdInlineText(text) : null,
+  ].filter((part): part is string => part !== null);
+  return `- Join: ${parts.join(" ")}`;
+};
 
 const sourceLine = (appUrl: string, path: string): string =>
   `> Canonical page: ${canonicalUrl(appUrl, path)} · Markdown alternate: ${canonicalUrl(appUrl, `${path}.md`)}`;
@@ -157,6 +198,14 @@ export function mdPrivacy(appUrl: string): string {
     "",
     POLICY_MARKDOWN.trimEnd(),
     "",
+    "## Previous published versions",
+    "",
+    "Historical snapshots kept in the site's public history. These are not the current policy.",
+    "",
+    ...PREVIOUS_PUBLISHED_POLICIES.map(
+      (entry) => `- [Version ${entry.version} on GitHub (public repository)](${entry.href})`,
+    ),
+    "",
     leafFooter(appUrl),
     "",
   ].join("\n");
@@ -199,6 +248,8 @@ function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   ];
   if (e.game) out.push(`- Game: ${mdInlineText(e.game)}`);
   if (e.location) out.push(`- Where: ${mdInlineText(e.location)}`);
+  const host = hostLine(e);
+  if (host) out.push(host);
   const lineup = lineupLine(e);
   if (lineup) out.push(lineup);
   out.push(`- Markdown: ${canonicalUrl(appUrl, `/e/${e.eventKey}.md`)}`);
@@ -230,6 +281,11 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
   const lineup = lineupLine(e);
+  const host = hostLine(e);
+  // The HTML detail gates "How to join" to published/draft rows; past events
+  // show no joining section, so neither does their Markdown alternate. The
+  // Host line is ungated on both sides.
+  const join = e.status === "past" ? null : joinLine(e);
   return [
     `# ${mdInlineText(e.title)}`,
     "",
@@ -240,6 +296,8 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     `- Ends: ${mdDetailInstant(e.endsAt, e.timezone)} (${mdZoneLabel(e.timezone)})`,
     ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
+    ...(host ? [host] : []),
+    ...(join ? [join] : []),
     ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
     "",

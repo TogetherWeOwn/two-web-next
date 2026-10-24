@@ -6,7 +6,12 @@
  * theme and utilities layers the shell uses. */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+/* Utility classes live in Kit components, not prose in server helpers.
+ * Head-only metadata has no utility classes and also stays out of detection. */
+@source "./**/*.svelte";
+@source not "./lib/SiteMetadata.svelte";
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that
