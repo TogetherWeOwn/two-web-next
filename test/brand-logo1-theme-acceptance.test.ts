@@ -788,7 +788,24 @@ describe("favicon, manifest and OG (BRAND-SYSTEM §6 wiring)", () => {
     expect(source).toContain("og:image");
     expect(source).toContain("twitter:image");
     expect(source).toContain("summary_large_image");
-    expect(source).toContain("og-1200x630.png");
+    // The literal asset is owned by the shared SEO helper, not this component.
+    expect(read("src/seo.ts")).toContain('SHARE_IMAGE_PATH = "/og-1200x630.png"');
+    for (const canonical of [
+      "https://next.example.test/about",
+      "https://share.example.test/e/fixture",
+    ]) {
+      const html = kit.renderMeta({ title: "Fixture", theme: "home", canonical });
+      const image = `${new URL(canonical).origin}/og-1200x630.png`;
+      const values = (attribute: string, key: string) =>
+        [...html.matchAll(/<meta\s+[^>]*>/g)]
+          .map(([tag]) => tag)
+          .filter((tag) => tag.includes(`${attribute}="${key}"`))
+          .map((tag) => tag.match(/content="([^"]*)"/)?.[1]);
+      expect(values("property", "og:image")).toEqual([image]);
+      expect(values("property", "og:image:alt")).toEqual(["Together We Own community logo"]);
+      expect(values("name", "twitter:image")).toEqual([image]);
+      expect(values("name", "twitter:card")).toEqual(["summary_large_image"]);
+    }
   });
 
   it("Kit SiteMetadata keeps pages without canonical free of share images", async () => {
