@@ -11,6 +11,7 @@ import {
   eventsRss,
   isWireInstant,
   latestWireUpdatedAt,
+  parseFeedGameScope,
 } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
@@ -64,7 +65,10 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const rows = await listFeed(db, ["published"]);
+    // Same status scope as the ICS collection: cancelled rows ship marked
+    // (`Cancelled: ` title prefix plus the one-line description note), so RSS
+    // subscribers never keep a stale "it's on" entry.
+    const rows = await listFeed(db, ["published", "cancelled"]);
     const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
     if (skippedUpdatedAt > 0) {
       console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
@@ -81,10 +85,16 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
   app.get("/events.ics", async (c) => {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
+    // Scope validation precedes any read and any conditional success: a
+    // malformed scope refuses instead of 304ing, with no reflected input.
+    const scope = parseFeedGameScope(c.req.query("game"));
+    if (scope === undefined) {
+      return c.text("Invalid game filter.", 400, { "cache-control": "no-store" });
+    }
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const rows = await listFeed(db, ["published", "cancelled"]);
-    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL), {
+    const rows = await listFeed(db, ["published", "cancelled"], new Date(), scope);
+    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL, scope), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
