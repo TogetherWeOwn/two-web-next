@@ -186,8 +186,11 @@ function unknownStatusReason(status, qaAuthToken) {
   return `unknown test status: ${cleaned}`.slice(0, MAX_REASON_LENGTH);
 }
 
-function collection(owner, key, addDiagnostic) {
-  if (!Object.hasOwn(owner, key)) return [];
+function collection(owner, key, addDiagnostic, required = false) {
+  if (!Object.hasOwn(owner, key)) {
+    if (required) addDiagnostic("report_invalid_shape");
+    return [];
+  }
   if (Array.isArray(owner[key])) return owner[key];
   addDiagnostic("report_invalid_shape");
   return [];
@@ -200,14 +203,14 @@ function collectTests(suites, out, addDiagnostic, parents = []) {
       continue;
     }
     const path = [...parents, typeof suite.title === "string" ? suite.title : ""];
-    for (const spec of collection(suite, "specs", addDiagnostic)) {
+    for (const spec of collection(suite, "specs", addDiagnostic, true)) {
       if (!isRecord(spec)) {
         addDiagnostic("report_invalid_shape");
         continue;
       }
       const file = typeof spec.file === "string" ? spec.file : "";
       const title = typeof spec.title === "string" ? spec.title : "";
-      for (const test of collection(spec, "tests", addDiagnostic)) {
+      for (const test of collection(spec, "tests", addDiagnostic, true)) {
         if (!isRecord(test)) {
           addDiagnostic("report_invalid_shape");
           continue;

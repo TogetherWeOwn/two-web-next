@@ -5,13 +5,16 @@ import {
   closeSync,
   constants,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
+  readlinkSync,
   readSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   formatLedgerMarkdown,
@@ -62,6 +65,47 @@ function readReport(reportPath) {
   }
 }
 
+function canonicalRolePath(input) {
+  // Resolve static aliases between roles before any write, including symlinks
+  // whose targets do not exist yet. Best effort: unreadable segments fall back
+  // to the resolved string. Callers keep paths stable during execution.
+  let abs = resolve(input);
+  const seen = new Set();
+  for (let depth = 0; depth < 10; depth++) {
+    if (seen.has(abs)) break;
+    seen.add(abs);
+    let entry;
+    try {
+      entry = lstatSync(abs);
+    } catch {
+      break;
+    }
+    if (!entry.isSymbolicLink()) break;
+    let link;
+    try {
+      link = readlinkSync(abs);
+    } catch {
+      break;
+    }
+    abs = resolve(dirname(abs), link);
+  }
+  let cursor = abs;
+  const suffix = [];
+  for (;;) {
+    try {
+      const real = realpathSync(cursor);
+      if (suffix.length === 0) return real;
+      suffix.reverse();
+      return join(real, ...suffix);
+    } catch {
+      const parent = dirname(cursor);
+      if (parent === cursor) return abs;
+      suffix.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
 export function runGate({
   reportPath = REPORT_DEFAULT,
   ledgerJsonPath = LEDGER_JSON_DEFAULT,
@@ -75,6 +119,9 @@ export function runGate({
   const paths = [reportPath, ledgerJsonPath, ledgerMdPath, stepSummaryPath]
     .filter(Boolean)
     .map((path) => resolve(path));
+  const canonicals = [reportPath, ledgerJsonPath, ledgerMdPath, stepSummaryPath]
+    .filter(Boolean)
+    .map((path) => canonicalRolePath(path));
   // stat follows symlinks; device/inode identity also catches hard-linked files.
   const identities = paths.flatMap((path) => {
     try {
@@ -85,7 +132,11 @@ export function runGate({
       return [];
     }
   });
-  if (new Set(paths).size !== paths.length || new Set(identities).size !== identities.length) {
+  if (
+    new Set(paths).size !== paths.length ||
+    new Set(canonicals).size !== canonicals.length ||
+    new Set(identities).size !== identities.length
+  ) {
     stderr.write("output_unwritable: choose distinct local input, receipt and summary paths.\n");
     return 2;
   }
@@ -100,12 +151,24 @@ export function runGate({
     inputError,
   };
   let summary = summarizeJourneys(report, options);
+  const isWritableRegularOutput = (path) => {
+    try {
+      const existing = statSync(resolve(path));
+      return existing.isFile();
+    } catch {
+      return true;
+    }
+  };
   const writeReceipts = () => {
     let failed = false;
     for (const [path, content] of [
       [ledgerJsonPath, `${JSON.stringify(summary, null, 2)}\n`],
       [ledgerMdPath, `${formatLedgerMarkdown(summary)}\n`],
     ]) {
+      if (!isWritableRegularOutput(path)) {
+        failed = true;
+        continue;
+      }
       try {
         mkdirSync(dirname(resolve(path)), { recursive: true });
         writeFileSync(resolve(path), content);
@@ -119,10 +182,14 @@ export function runGate({
   if (!written) summary = summarizeJourneys(report, { ...options, outputError: true });
   let summaryWritten = true;
   if (stepSummaryPath) {
-    try {
-      appendFileSync(resolve(stepSummaryPath), `\n${formatLedgerMarkdown(summary)}\n`);
-    } catch {
+    if (!isWritableRegularOutput(stepSummaryPath)) {
       summaryWritten = false;
+    } else {
+      try {
+        appendFileSync(resolve(stepSummaryPath), `\n${formatLedgerMarkdown(summary)}\n`);
+      } catch {
+        summaryWritten = false;
+      }
     }
   }
   if (!written || !summaryWritten) {

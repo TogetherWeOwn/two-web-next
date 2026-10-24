@@ -267,10 +267,13 @@ same Markdown to `GITHUB_STEP_SUMMARY` when set. Valid arguments with distinct,
 writable regular output paths receive both receipts **even when input cannot
 be read or parsed**. Help is effect-free and needs no report or configuration.
 Invalid arguments and colliding input/output/summary paths are refused (exit 2)
-without writing. The pre-write check compares resolved paths and existing-file
+without writing. The pre-write check compares resolved paths, canonicalized
+targets (nearest existing ancestors plus dangling final symlinks, so symlinked
+parents and not-yet-existing symlink aliases are caught) and existing-file
 device/inode identities, including symbolic and hard links. Keep local paths
 stable during execution; this is not protection against concurrent path replacement.
-A filesystem output failure also exits 2, emits only a fixed
+A filesystem output failure, including an existing non-regular receipt or
+summary destination, also exits 2, emits only a fixed
 `output_unwritable` diagnostic, and marks any writable companion non-pass; no
 promise is made that an unwritable destination receives a file.
 
@@ -318,9 +321,10 @@ Bounds (defined once in `REPORT_LIMITS` in `e2e/staging/journey-ledger.mjs`):
 reads at most the byte cap plus one sentinel byte, including a file that grows.
 The library preflights the entire parsed value iteratively, including ignored
 metadata; cycles, excessive depth/node count or aggregate string/key bytes
-reject the input before collection. Missing collections are empty; explicitly
-null/non-array collections and non-object items are shape faults. Valid siblings
-are still retained on shape faults. On row-cap overflow, retained rows are
+reject the input before collection. Missing optional collections (suites,
+errors, results, annotations) are empty; a missing specs or tests collection,
+an explicitly null/non-array collection and non-object items are shape faults.
+Valid siblings are still retained on shape faults. On row-cap overflow, retained rows are
 partial and the gate fails. Each display/reason field is at most 200 characters;
 source diagnostic strings over 2,048 characters are withheld whole (not
 truncated before redaction). No raw metadata or runner diagnostics expand output volume. Existing known-pattern

@@ -2,7 +2,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -240,4 +242,173 @@ test("CLI invalid flags fail with fixed usage diagnostics, not arguments or stac
     assert.match(child.stderr, /^invalid_arguments:/);
     assert.doesNotMatch(child.stderr, /fixture-canary|\n\s+at /);
   }
+});
+
+test("absent specs or tests collections fail closed while retaining good siblings", () => {
+  const good = spec("good journey");
+  const cases = [
+    {
+      suites: [{ title: "good suite", specs: [good] }, { title: "truncated suite" }],
+      errors: [],
+    },
+    {
+      suites: [
+        {
+          title: "good suite",
+          specs: [good, { file: "e2e/staging/auth.spec.ts", title: "truncated spec" }],
+        },
+      ],
+      errors: [],
+    },
+  ];
+  for (const bad of cases) {
+    const summary = summarizeJourneys(bad);
+    assert.equal(summary.verdict, "fail");
+    assert.equal(summary.counts.total, 1);
+    assert.ok(code(summary, "report_invalid_shape"));
+    assert.equal(summary.journeys[0].name, "good journey [chromium]");
+  }
+});
+
+test("CLI exits 2 on absent specs or tests without raw stacks", (t) => {
+  const good = spec("good journey");
+  const cases = [
+    {
+      suites: [{ title: "good suite", specs: [good] }, { title: "truncated suite" }],
+      errors: [],
+    },
+    {
+      suites: [
+        {
+          title: "good suite",
+          specs: [good, { file: "e2e/staging/auth.spec.ts", title: "truncated spec" }],
+        },
+      ],
+      errors: [],
+    },
+  ];
+  for (const bad of cases) {
+    const paths = scratch(t);
+    writeFileSync(paths.reportPath, JSON.stringify(bad));
+    assert.equal(runGate(paths), 2);
+    const ledger = JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8"));
+    assert.equal(ledger.verdict, "fail");
+    assert.ok(code(ledger, "report_invalid_shape"));
+    assert.doesNotMatch(paths.output(), /\n\s+at /);
+  }
+});
+
+test("dangling symlink output alias is refused before any write", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  symlinkSync(paths.ledgerMdPath, paths.ledgerJsonPath);
+  assert.equal(runGate(paths), 2);
+  assert.equal(
+    paths.output(),
+    "output_unwritable: choose distinct local input, receipt and summary paths.\n",
+  );
+  assert.equal(existsSync(paths.ledgerMdPath), false);
+  assert.ok(lstatSync(paths.ledgerJsonPath).isSymbolicLink());
+});
+
+test("symlinked parent directories aliasing the same output are refused", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  const realDir = join(paths.dir, "real");
+  mkdirSync(realDir);
+  const parentA = join(paths.dir, "parent-a");
+  const parentB = join(paths.dir, "parent-b");
+  symlinkSync(realDir, parentA);
+  symlinkSync(realDir, parentB);
+  const jsonPath = join(parentA, "receipt");
+  const mdPath = join(parentB, "receipt");
+  assert.equal(runGate({ ...paths, ledgerJsonPath: jsonPath, ledgerMdPath: mdPath }), 2);
+  assert.equal(
+    paths.output(),
+    "output_unwritable: choose distinct local input, receipt and summary paths.\n",
+  );
+  assert.equal(existsSync(join(realDir, "receipt")), false);
+});
+
+test("step-summary parent symlink aliasing the JSON receipt is refused", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  const realDir = join(paths.dir, "real-summary");
+  mkdirSync(realDir);
+  const jsonPath = join(realDir, "ledger.json");
+  const summaryParent = join(paths.dir, "summary-parent");
+  symlinkSync(realDir, summaryParent);
+  const summaryPath = join(summaryParent, "ledger.json");
+  assert.equal(runGate({ ...paths, ledgerJsonPath: jsonPath, stepSummaryPath: summaryPath }), 2);
+  assert.equal(
+    paths.output(),
+    "output_unwritable: choose distinct local input, receipt and summary paths.\n",
+  );
+  assert.equal(existsSync(jsonPath), false);
+});
+
+test("existing non-regular receipt output exits 2 without discarding the companion", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  assert.equal(runGate({ ...paths, ledgerJsonPath: "/dev/null" }), 2);
+  assert.match(paths.output(), /output_unwritable/);
+  assert.doesNotMatch(paths.output(), /verdict: pass/);
+  const companion = readFileSync(paths.ledgerMdPath, "utf8");
+  assert.match(companion, /output_unwritable/);
+  assert.match(companion, /Verdict: \*\*fail\*\*/);
+});
+
+test("FIFO output exits 2 instead of hanging the gate", (t) => {
+  const paths = scratch(t);
+  writeFileSync(paths.reportPath, JSON.stringify(report()));
+  const fifoPath = join(paths.dir, "fifo.json");
+  const mkfifo = spawnSync("mkfifo", [fifoPath], { timeout: 5000 });
+  assert.equal(mkfifo.status, 0, "mkfifo must succeed on the test runner");
+  const child = spawnSync(
+    process.execPath,
+    [
+      new URL("../../ci/check-staging-journeys.mjs", import.meta.url).pathname,
+      "--report",
+      paths.reportPath,
+      "--out-json",
+      fifoPath,
+      "--out-md",
+      paths.ledgerMdPath,
+    ],
+    { cwd: paths.dir, encoding: "utf8", timeout: 5000, env: { PATH: process.env.PATH } },
+  );
+  assert.equal(child.signal, null, "CLI must exit normally, not from a timeout signal");
+  assert.equal(child.status, 2);
+  assert.match(child.stderr, /output_unwritable/);
+  const companion = readFileSync(paths.ledgerMdPath, "utf8");
+  assert.match(companion, /output_unwritable/);
+  assert.match(companion, /Verdict: \*\*fail\*\*/);
+});
+
+test("journey IDs distinguish suite ancestry and survive suite reorder", () => {
+  const makeSpec = () => ({
+    file: "e2e/staging/auth.spec.ts",
+    title: "same journey",
+    tests: [{ projectName: "chromium", status: "expected", results: [], annotations: [] }],
+  });
+  const summary = summarizeJourneys({
+    suites: [
+      { title: "suite A", specs: [makeSpec()] },
+      { title: "suite B", specs: [makeSpec()] },
+    ],
+    errors: [],
+  });
+  assert.equal(summary.journeys.length, 2);
+  assert.notEqual(summary.journeys[0].id, summary.journeys[1].id);
+  const reordered = summarizeJourneys({
+    suites: [
+      { title: "suite B", specs: [makeSpec()] },
+      { title: "suite A", specs: [makeSpec()] },
+    ],
+    errors: [],
+  });
+  assert.deepEqual(
+    new Set(reordered.journeys.map((row) => row.id)),
+    new Set(summary.journeys.map((row) => row.id)),
+  );
 });
