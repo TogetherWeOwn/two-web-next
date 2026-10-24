@@ -217,7 +217,7 @@ export const EventsCalendarPage: FC<{
           gameFilter={gameFilter}
         />
 
-        <CalendarHead state={state} appUrl={appUrl} />
+        <CalendarHead state={state} appUrl={appUrl} gameFilter={gameFilter} />
 
         <CalendarSearchForm
           state={state}
