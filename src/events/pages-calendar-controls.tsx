@@ -100,7 +100,10 @@ export const CalendarHead: FC<{ state: CalendarState; appUrl: string }> = ({ sta
         </a>
       </div>
       <p>
-        <a href={pastEventsUrl(1, state.q)} data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
+        <a
+          href={pastEventsUrl(1, state.q, state.game ?? "")}
+          data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}
+        >
           {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
         </a>{" "}
         <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>

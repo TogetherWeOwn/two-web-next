@@ -170,6 +170,37 @@ export async function listPublishedGames(db: Db): Promise<string[]> {
   return rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
 }
 
+/** Distinct archive-visible games for the archive facet: explicit `past` rows
+ * (even with a recorded future end) plus ended `published` rows; drafts,
+ * cancelled and future-only rows never suggest. One LIMIT-bound read per
+ * render. Case folds in SQL (`DISTINCT ON lower(trim(game))`), so the
+ * suggestion dedup is the same trim + case-insensitive equivalence the game
+ * predicate matches — including the omission sentinel: a full 101-row window
+ * means a 101st distinct game exists. */
+export async function listArchiveGames(
+  db: Db,
+  now = new Date(),
+): Promise<{ games: string[]; omitted: boolean }> {
+  const fold = sql`lower(trim(${events.game}))`;
+  const rows = await db
+    .selectDistinctOn([fold], { game: sql<string>`trim(${events.game})` })
+    .from(events)
+    .where(
+      and(
+        or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))),
+        sql`${events.game} is not null`,
+        sql`trim(${events.game}) <> ''`,
+      ),
+    )
+    .orderBy(fold, sql`trim(${events.game})`)
+    .limit(EVENTS_DISTINCT_GAMES_LIMIT + 1);
+  const games = rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
+  return {
+    games: games.slice(0, EVENTS_DISTINCT_GAMES_LIMIT),
+    omitted: games.length > EVENTS_DISTINCT_GAMES_LIMIT,
+  };
+}
+
 /** Invalid list-page numbers retain the page-one fallback, like the archive —
  * including overflow, where the offset would stop being a safe integer. */
 export function normalizeUpcomingPage(page: number): number {
@@ -602,11 +633,16 @@ export async function listPast(
   page: number,
   now = new Date(),
   q: string | null = null,
+  game: string | null = null,
 ): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
   page = normalizePastPage(page);
+  // One archive-visible game/text predicate shared verbatim by the count and
+  // the rows below, before paging; the game match is the same trim +
+  // case-insensitive exact authority the schedule facet uses.
   const archived = and(
     or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))),
     searchCondition(q),
+    gameCondition(game),
   );
   const [total] = await db.select({ n: count() }).from(events).where(archived);
   const totalPages = Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE);

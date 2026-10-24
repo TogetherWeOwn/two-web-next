@@ -1,7 +1,7 @@
 // Browse context is navigation only: no redirect, auth grant or persistent state.
 import type { ArchiveContext } from "./attendee-paths";
 import { normalizePastPage } from "./past-page";
-import { MAX_QUERY_LENGTH, matchQuery } from "./search-log";
+import { MAX_QUERY_LENGTH, matchGame, matchQuery } from "./search-log";
 
 export function archiveContext(search: string): ArchiveContext | null {
   // URLSearchParams repairs malformed percent/UTF-8 input. Refuse it instead
@@ -15,12 +15,19 @@ export function archiveContext(search: string): ArchiveContext | null {
   const params = new URLSearchParams(search);
   const pages = params.getAll("archivePage");
   const queries = params.getAll("archiveQuery");
-  if (pages.length !== 1 || queries.length > 1) return null;
+  const games = params.getAll("archiveGame");
+  if (pages.length !== 1 || queries.length > 1 || games.length > 1) return null;
   const rawPage = pages[0]!;
   if (!/^[1-9]\d{0,15}$/.test(rawPage)) return null;
   const page = Number(rawPage);
   if (normalizePastPage(page) !== page) return null;
   const rawQuery = queries[0] ?? "";
   if ([...rawQuery].length > MAX_QUERY_LENGTH) return null;
-  return { page, q: matchQuery(rawQuery) ?? "" };
+  const rawGame = games[0] ?? "";
+  // Same raw bound as the archive filter; NUL is refused, never stripped.
+  if ([...rawGame].length > MAX_QUERY_LENGTH || rawGame.includes("\0")) return null;
+  const game = matchGame(rawGame);
+  return game === null
+    ? { page, q: matchQuery(rawQuery) ?? "" }
+    : { page, q: matchQuery(rawQuery) ?? "", game };
 }

@@ -4,10 +4,11 @@
  * existing import paths keep working.
  */
 
-export const pastEventsUrl = (page: number, q = ""): string => {
+export const pastEventsUrl = (page: number, q = "", game = ""): string => {
   const params = new URLSearchParams();
   if (page > 1) params.set("page", String(page));
   if (q) params.set("q", q);
+  if (game.trim() !== "") params.set("game", game);
   const search = params.toString();
   return `/events/past${search ? `?${search}` : ""}`;
 };

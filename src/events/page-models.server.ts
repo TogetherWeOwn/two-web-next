@@ -47,6 +47,17 @@ export interface CalendarPageInput {
   jumpRequested: boolean;
   month: string | null;
   queryTooLong: boolean;
+  /** Raw `game` exceeds the 255-code-point bound (checked before normalization). */
+  gameTooLong: boolean;
+  /** `game` carries NUL or conflicting duplicate values. */
+  gameRefused: boolean;
+  /** Conflicting duplicate `q` values were supplied. */
+  queryConflicting: boolean;
+}
+
+/** Conflicting repeats: identical values are one intent restated, distinct values refuse. */
+function hasConflicting(values: readonly string[]): boolean {
+  return new Set(values).size > 1;
 }
 
 /** Normalize bounded URL state before a framework-specific route loads data. */
@@ -58,8 +69,13 @@ export function resolveCalendarInput(input: {
   page?: string | null;
   event?: string | null;
   month?: string | null;
+  /** All raw `game` values; callers that omit it keep first-wins behavior. */
+  games?: readonly string[] | null;
+  /** All raw `q` values; callers that omit it keep first-wins behavior. */
+  qs?: readonly string[] | null;
 }): CalendarPageInput {
   const q = input.q ?? "";
+  const game = input.game ?? "";
   const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
   const searching = !queryTooLong && matchQuery(q) !== null;
   const view = searching ? "list" : input.view === "calendar" ? "calendar" : "list";
@@ -68,7 +84,7 @@ export function resolveCalendarInput(input: {
 
   return {
     q,
-    game: input.game ?? "",
+    game,
     searching,
     view,
     past: input.past === "1",
@@ -77,6 +93,11 @@ export function resolveCalendarInput(input: {
     jumpRequested: rawJumpKey !== "",
     month: input.month ?? null,
     queryTooLong,
+    gameTooLong: [...game].length > MAX_QUERY_LENGTH,
+    gameRefused:
+      game.includes("\0") ||
+      hasConflicting(input.games ?? (input.game == null ? [] : [input.game])),
+    queryConflicting: hasConflicting(input.qs ?? (input.q == null ? [] : [input.q])),
   };
 }
 

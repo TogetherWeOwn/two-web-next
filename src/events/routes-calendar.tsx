@@ -18,9 +18,14 @@ import {
   writeAnonCache,
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
-import { listPast, normalizePastPage } from "./reads";
-import { matchQuery } from "./search-log";
-import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
+import { listArchiveGames, listPast, normalizePastPage } from "./reads";
+import { matchGame, matchQuery, resolveArchiveGameFilter } from "./search-log";
+import {
+  EventsCalendarPage,
+  EventsSearchTooLongPage,
+  PastEventsBadFilterPage,
+  PastEventsPage,
+} from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
 export function registerCalendarRoutes(
@@ -228,12 +233,29 @@ export function registerCalendarRoutes(
   });
 
   app.get("/events/past", async (c) => {
-    const input = resolveCalendarInput({ q: c.req.query("q") });
+    // One parse: first-wins values plus the full duplicate-sensitive lists.
+    const params = new URL(c.req.url).searchParams;
+    const input = resolveCalendarInput({
+      q: params.get("q"),
+      game: params.get("game"),
+      games: params.getAll("game"),
+      qs: params.getAll("q"),
+    });
     if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");
       return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} archive />, 422);
     }
+    // Game admission refuses before the guard, DB and cache, like the query
+    // bound above: overlong, NUL-bearing and conflicting-duplicate games, and
+    // conflicting duplicate queries. A branded 400, twin-agreed with Kit.
+    if (input.gameTooLong || input.gameRefused || input.queryConflicting) {
+      c.header("cache-control", "no-store, private");
+      return c.html(<PastEventsBadFilterPage />, 400);
+    }
     const q = matchQuery(input.q);
+    // Blank games are the ordinary archive (same rows, keys and cache entry);
+    // any other valid game filters, even when no row matches it.
+    const filtering = matchGame(input.game) !== null;
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
@@ -242,18 +264,19 @@ export function registerCalendarRoutes(
         ? eventsUnavailable(c)
         : databaseUnavailable(c);
     }
-    const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
+    const page = normalizePastPage(Number.parseInt(params.get("page") ?? "1", 10));
     // Anonymous shared entry (N6 retire): the archive renders no session, no
-    // flash and no RSVP controls. Only search-free cookieless renders share bytes.
-    // Only data pages settle — empty and out-of-range renders stay uncached
-    // so a fresh archive never pins a stale "never ran" state, and keys stay
-    // bounded.
+    // flash and no RSVP controls. Only unfiltered cookieless renders share
+    // bytes. Only data pages settle — empty and out-of-range renders stay
+    // uncached so a fresh archive never pins a stale "never ran" state, and
+    // keys stay bounded.
     const pastEligible = isAnonCacheEligible({
       method: c.req.method,
       hasCookie: c.req.header("cookie") !== undefined,
       hasSession: false,
       searching: input.searching,
       flashed: false,
+      filtering,
     });
     const pastSource = pastEligible ? anonCacheSource(c.env) : null;
     const pastKey = pastEligible ? anonPastKey(c.req.method, page) : null;
@@ -271,12 +294,18 @@ export function registerCalendarRoutes(
     // Same retire-generation guard as `/events`: an edit that commits while
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
-    const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
-    c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
+    const now = new Date();
+    const { games, omitted: gamesOmitted } = await listArchiveGames(db, now);
+    const gameFilter = resolveArchiveGameFilter(games, input.game);
+    const { rows, hasMore, totalPages } = await listPast(db, page, now, q, gameFilter);
+    c.header(
+      "cache-control",
+      input.searching || filtering ? "private, no-store" : "public, max-age=300",
+    );
     // Browsing renders are public and shared, like the Kit twin: name the
     // Cookie variance so shared caches key anonymous and signed-in shells
-    // apart. Searching renders stay private no-store with no Vary.
-    if (!input.searching) c.header("vary", "Cookie");
+    // apart. Searching/filtered renders stay private no-store with no Vary.
+    if (!input.searching && !filtering) c.header("vary", "Cookie");
     const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
@@ -285,6 +314,9 @@ export function registerCalendarRoutes(
         totalPages={totalPages}
         appUrl={c.env.APP_URL}
         q={q ?? ""}
+        games={games}
+        game={gameFilter ?? ""}
+        gamesOmitted={gamesOmitted}
       />,
     );
     // Buffer before the final generation comparison (see /events above): a

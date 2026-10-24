@@ -16,6 +16,8 @@ export function attendeePageHref(eventKey: string, page: number): string {
 export interface ArchiveContext {
   page: number;
   q: string;
+  /** Normalized archive game filter; absent/blank means unfiltered. */
+  game?: string;
 }
 
 /** Only normalized archive state travels with a detail/roster link, never a return URL. */
@@ -30,6 +32,7 @@ export function archiveEventHref(
   const params = new URLSearchParams(search);
   params.set("archivePage", String(archive.page));
   if (archive.q) params.set("archiveQuery", archive.q);
+  if (archive.game) params.set("archiveGame", archive.game);
   return `${base}?${params}`;
 }
 

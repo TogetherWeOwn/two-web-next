@@ -29,6 +29,31 @@ export function matchQuery(raw: string | null | undefined): string | null {
   return t === "" ? null : t;
 }
 
+/** Archive game input: trimmed original text (no collapse/lowercase).
+ * null = blank = unfiltered. Unlike text search, NUL is preserved here so
+ * admission refuses it (400) instead of silently matching a stripped game. */
+export function matchGame(raw: string | null | undefined): string | null {
+  const t = normalizeNewlines(raw ?? "").trim();
+  return t === "" ? null : t;
+}
+
+/**
+ * Resolve the raw archive `game` input against the archive-visible suggestion
+ * list. Trim + case-insensitive exact, like the schedule facet — but an
+ * unknown (or beyond-cap) game is retained as a zero-match filter, never
+ * degraded to unfiltered: suggestions are not the matching authority.
+ * The canonical stored form wins so `?game=chess` selects "Chess".
+ */
+export function resolveArchiveGameFilter(
+  games: readonly string[],
+  raw: string | null | undefined,
+): string | null {
+  const want = matchGame(raw);
+  if (want === null) return null;
+  const folded = want.toLowerCase();
+  return games.find((game) => game.toLowerCase() === folded) ?? want;
+}
+
 /** Analytics form: collapse whitespace runs, lowercase, cap at 255 chars. null = blank. */
 export function normalizeQuery(raw: string | null | undefined): string | null {
   const n = stripNul(raw).trim().replace(/\s+/gu, " ").toLowerCase();
