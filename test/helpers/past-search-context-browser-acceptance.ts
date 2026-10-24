@@ -138,7 +138,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
           const { page } = await documentFor(twin, [row], "orbital");
           const [card] = await cards(page);
           expect(card?.title).toBe(title);
-          expect(card?.href).toBe("/e/archive-match-1");
+          expect(card?.href).toBe("/e/archive-match-1?archivePage=1&archiveQuery=orbital");
           expect(card?.injected).toBe(0);
           expect(card?.excerpts).toEqual([]);
           expect(card?.titleMarks).toEqual(["ORBITAL"]);
@@ -151,7 +151,9 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         const { page } = await documentFor(twin, [archiveRow(1, { title, description: null })], q);
         const [card] = await cards(page);
         expect(card?.title).toBe(title);
-        expect(card?.href).toBe("/e/archive-match-1");
+        expect(card?.href).toBe(
+          "/e/archive-match-1?archivePage=1&archiveQuery=%3Csvg+onload%3D%22alert%281%29%22%3E",
+        );
         expect(card?.injected).toBe(0);
         expect(card?.titleMarks).toEqual([q]);
       });
@@ -169,7 +171,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         );
         const [card] = await cards(page);
         expect(card?.title).toBe("A different-looking title");
-        expect(card?.href).toBe("/e/archive-match-1");
+        expect(card?.href).toBe("/e/archive-match-1?archivePage=1&archiveQuery=orbital");
         expect(card?.titleMarks).toEqual([]);
         expect(card?.excerpts).toEqual([{ text: "Before ORBITAL after.", marks: ["ORBITAL"] }]);
       });
@@ -446,7 +448,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
       expect.soft(result[0]?.excerpts).toHaveLength(1);
       expect.soft(result[0]?.excerpts[0]?.text).toContain("Teammates ORBITAL regroup 1.");
       expect.soft(result[0]?.excerpts[0]?.marks).toEqual(["ORBITAL"]);
-      expect.soft(result[0]?.href).toBe("/e/archive-match-1");
+      expect.soft(result[0]?.href).toBe("/e/archive-match-1?archivePage=2&archiveQuery=orbital");
       expect.soft(new URL(page.url()).searchParams.get("q")).toBe("orbital");
       const canonical = await page.locator('link[rel="canonical"]').getAttribute("href");
       expect.soft(new URL(canonical!).searchParams.get("q")).toBe("orbital");
