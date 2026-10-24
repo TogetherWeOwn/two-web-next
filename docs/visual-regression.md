@@ -73,9 +73,9 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    copies without an actual, and unreadable sources or existing targets also
    refuse before any baseline is written.
 
-   Preview with `node ci/visual-accept.mjs <artifact-root> --dry-run`, or add
-   `--format json` for the version-1 suite/item/error report and next action.
-   Apply uses the same validated plan with `node ci/visual-accept.mjs
+   Preview with `node ci/visual-accept.mjs --dry-run <artifact-root>`, or add
+   `--format json` for the versioned verdict with the dry-run plan and next
+   action. Apply uses the same validated plan with `node ci/visual-accept.mjs
    <artifact-root>`. Validate flags and the entire bounded plan before creating
    any directory or writing any destination. Input roots must be real
    directories; reject symlinks at the root, in its ancestry and among
@@ -92,6 +92,20 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    directories (`test-results-kit-visual/`, `test-results-kit-parity/`, and
    `__screenshots-kit__/`) are excluded; use the
    [Kit acceptance guide](kit-parity-gates.md#visual-gates) for those images.
+
+   Both accept scripts take `[--dry-run] [--format json] <artifact-dir>`.
+   `--dry-run` prints the full plan (destinations and sources, skipped sources
+   with a reason, the collision verdict), writes nothing, and exits as the real
+   run would. `--format json` prints one versioned verdict
+   (`version`, `tool`, `mode`, `ok`, `code`, `next_action`, `destinations`,
+   `sources`, plus the dry-run `plan` when previewing). Any other flag, a
+   missing or extra positional, or a missing directory exits 2 before the
+   artifact is read or a baseline written. Refusals exit 1. Output names files
+   by baseline filename or artifact-relative path, never an absolute path or
+   file bytes. Stable `code` values: `OK`, `UNKNOWN_FLAG`, `MISSING_ARG`,
+   `EXTRA_ARGS`, `ARTIFACT_NOT_FOUND`, `NO_CANDIDATES`, `NO_CHANGES` (Hono
+   only), `COLLISION`, `STALE_COPY_CONFLICT`, `IO_ERROR`, `SOURCE_SYMLINK`,
+   `DESTINATION_SYMLINK`, `ARTIFACT_LIMIT`; each comes with a `next_action`.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 

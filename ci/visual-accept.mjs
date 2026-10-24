@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Accept new visual baselines from a browser-smoke failure artifact:
-//   node ci/visual-accept.mjs <unzipped e2e-failure artifact dir> [--dry-run] [--format json]
+//   node ci/visual-accept.mjs [--dry-run] [--format json] <unzipped e2e-failure artifact dir>
+// --dry-run prints the plan and writes nothing; --format json prints one
+// versioned verdict. Any other flag exits 2 with a stable code before the
+// artifact is read (ci/visual-accept-cli.mjs lists the codes).
 // Copies every `*-actual.png` under the exact test-results-visual/ suite (a
 // changed page) over the matching committed baseline, and every new baseline
 // the run wrote under e2e/visual/__screenshots__/ (a page with no baseline
@@ -16,16 +19,17 @@
 // its stale artifact copy. Do not delete the newer checkout baseline to force
 // acceptance.
 //
-// Preview with `node ci/visual-accept.mjs <artifact-root> --dry-run`, or add
-// `--format json` for the version-1 suite/item/error report and next action.
-// Apply uses the same validated plan with `node ci/visual-accept.mjs
+// Preview with `node ci/visual-accept.mjs --dry-run <artifact-root>`, or add
+// `--format json` for the versioned verdict with the dry-run plan and next
+// action. Apply uses the same validated plan with `node ci/visual-accept.mjs
 // <artifact-root>`. Validate flags and the entire bounded plan before creating
 // any directory or writing any destination. Input roots must be real
 // directories; reject symlinks at the root, in its ancestry and among
 // discovered descendants, including cycles. Reject linked destination files,
 // the destination root and linked ancestors. Keep resolved sources and
 // destinations inside their intended roots, and apply the source bytes cached
-// during preflight. Any boundary refusal leaves existing destinations and
+// during preflight. Any boundary refusal (SOURCE_SYMLINK,
+// DESTINATION_SYMLINK, ARTIFACT_LIMIT) leaves existing destinations and
 // outside files unchanged. This assumes no concurrent hostile filesystem
 // writer; apply-time disk errors are not an atomic rollback guarantee.
 //
@@ -42,32 +46,32 @@
 // conflict refuses the full plan before writes, as do unreadable candidates.
 // Suite directories are exact segments relative to the artifact root, so the
 // extraction folder's own name cannot change the plan.
-import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runCli } from "./visual-accept-cli.mjs";
 import {
-  argvWantsJson,
   BoundaryError,
-  boundedDiagnostic,
-  buildJsonReport,
-  buildPlanItems,
-  CODE_INVALID_ARGUMENTS,
-  CODE_NO_CANDIDATES,
-  CODE_PLAN_COLLISION,
-  CODE_STALE_COPY,
+  CODE_DESTINATION_SYMLINK,
   collectCandidatesBounded,
-  nextActionFor,
-  parseCliArgs,
-  preflightWritesBounded,
-  resolveDestinationsBounded,
-  safeDestName,
-  SUITE_HONO,
-  validateArtifactRoot,
+  safeRelativePath,
   validateDestinationRoot,
 } from "./visual-accept-policy.mjs";
 
 const MAX_DESTINATIONS_SHOWN = 5;
 const MAX_SOURCES_SHOWN = 5;
+
+// Fixed skip reasons shared by the CLI plan, dry run and JSON output.
+export const SKIP_SUPERSEDED = "superseded by reviewed actual";
+export const SKIP_DUPLICATE = "byte-identical duplicate";
+export const SKIP_UNCHANGED = "identical to checkout baseline";
+export const STALE_COPY_CODE = "STALE_COPY_CONFLICT";
+
+// Artifact-relative display path with forward slashes: diagnostics never carry
+// the absolute extraction directory.
+export function displayPath(root, path) {
+  return relative(root, path).split(sep).join("/");
+}
 
 // Maps one artifact file to its baseline destination filename, or null when
 // the file is not an admitted baseline candidate. Naming is unchanged:
@@ -109,39 +113,94 @@ export function collectCandidates(root) {
   return collectCandidatesBounded(rootAbs, destinationName);
 }
 
+// One representative per distinct byte content, in first-seen order.
+function distinctByBytes(sources) {
+  const seen = [];
+  for (const source of sources) {
+    if (!seen.some((entry) => entry.bytes.equals(source.bytes))) {
+      seen.push(source);
+    }
+  }
+  return seen;
+}
+
 // Resolves every destination to a single winning source. Returns `{ resolved,
-// droppedStale, duplicates }`: `resolved` holds candidates with cached bytes
-// in destination order, `droppedStale` counts committed copies superseded by a
-// reviewed actual, and `duplicates` lists destinations with more than one
-// genuinely different source. Sorted by destination for a stable diagnostic.
-// Shared with Kit via the bounded policy; unreadable sources throw
-// SOURCE_UNREADABLE with a safe relative path.
-export function resolveDestinations(candidates, artifactRootAbs) {
-  // When no root is supplied (legacy callers), resolve relative to the first
-  // candidate's directory so safe paths still name the file without absolutes.
-  const rootAbs = artifactRootAbs ?? (candidates[0] ? dirname(candidates[0].src) : resolve("."));
-  return resolveDestinationsBounded(candidates, rootAbs);
+// droppedStale, duplicates, skipped }`: `resolved` holds candidates with cached
+// bytes in destination order, `droppedStale` counts committed copies superseded
+// by a reviewed actual, `duplicates` lists destinations with more than one
+// genuinely different source, and `skipped` names every source that does not
+// feed a write with a fixed reason (stale copy superseded, byte-identical
+// duplicate). Sorted by destination for a stable diagnostic.
+export function resolveDestinations(candidates) {
+  const byDest = new Map();
+  for (const candidate of candidates) {
+    const sources = byDest.get(candidate.dest) ?? [];
+    // Read even superseded copies before writing anything. Keep the bytes so
+    // the apply phase never needs to re-read a source from the artifact.
+    sources.push({ ...candidate, bytes: readFileSync(candidate.src) });
+    byDest.set(candidate.dest, sources);
+  }
+  const resolved = [];
+  let droppedStale = 0;
+  const duplicates = [];
+  const skipped = [];
+  for (const dest of [...byDest.keys()].sort()) {
+    const sources = [...byDest.get(dest)].sort((a, b) =>
+      a.src < b.src ? -1 : a.src > b.src ? 1 : 0,
+    );
+    const actuals = sources.filter((source) => source.actual);
+    if (actuals.length > 0) {
+      // Reviewed actuals supersede stale committed copies of this destination.
+      droppedStale += sources.length - actuals.length;
+      for (const source of sources) {
+        if (!source.actual) skipped.push({ src: source.src, dest, reason: SKIP_SUPERSEDED });
+      }
+      const winners = distinctByBytes(actuals);
+      if (winners.length > 1) {
+        duplicates.push({ dest, sources: actuals.map((source) => source.src) });
+      } else {
+        resolved.push(winners[0]);
+        for (const source of actuals) {
+          if (source !== winners[0])
+            skipped.push({ src: source.src, dest, reason: SKIP_DUPLICATE });
+        }
+      }
+    } else {
+      const winners = distinctByBytes(sources);
+      if (winners.length > 1) {
+        duplicates.push({ dest, sources: sources.map((source) => source.src) });
+      } else {
+        resolved.push(winners[0]);
+        for (const source of sources) {
+          if (source !== winners[0])
+            skipped.push({ src: source.src, dest, reason: SKIP_DUPLICATE });
+        }
+      }
+    }
+  }
+  return { resolved, droppedStale, duplicates, skipped };
 }
 
 // Bounded diagnostic: names colliding destinations and their sources without
-// dumping an unbounded artifact listing and without disclosing absolute roots.
-export function formatCollisionDiagnostic(duplicates) {
+// dumping an unbounded artifact listing. With `root`, sources print relative to
+// the artifact root instead of as absolute paths.
+export function formatCollisionDiagnostic(duplicates, root) {
+  const show = (source) => (root === undefined ? source : displayPath(root, source));
   const total = duplicates.reduce((sum, { sources }) => sum + sources.length, 0);
   const lines = [
     `Refusing visual baseline acceptance: ${duplicates.length} destination(s) ` +
       `have multiple sources (${total} candidate(s)); no baselines written.`,
   ];
   for (const { dest, sources } of duplicates.slice(0, MAX_DESTINATIONS_SHOWN)) {
-    const safeSources = sources.map((src) => safeDestName(basename(String(src))));
-    const shown = safeSources.slice(0, MAX_SOURCES_SHOWN).join(", ");
+    const shown = sources.slice(0, MAX_SOURCES_SHOWN).map(show).join(", ");
     const more =
       sources.length > MAX_SOURCES_SHOWN ? ` (+${sources.length - MAX_SOURCES_SHOWN} more)` : "";
-    lines.push(`  ${safeDestName(dest)} <- ${shown}${more}`);
+    lines.push(`  ${dest} <- ${shown}${more}`);
   }
   if (duplicates.length > MAX_DESTINATIONS_SHOWN) {
     lines.push(`  ... and ${duplicates.length - MAX_DESTINATIONS_SHOWN} more destination(s)`);
   }
-  return boundedDiagnostic(lines.join("\n"));
+  return lines.join("\n");
 }
 
 // Check every local target before applying either suite's plan. Only an
@@ -149,193 +208,208 @@ export function formatCollisionDiagnostic(duplicates) {
 // copies are additions or identical no-ops, never replacement authority.
 // Rejects linked destination files/roots/ancestors and confinement escapes
 // before any mkdir or write.
-export function preflightWrites(resolved, destDir) {
-  const destAbs = resolve(destDir);
-  return preflightWritesBounded(resolved, destAbs, destAbs);
-}
-
-// Build the full validated plan without writing. Shared authority for dry-run
-// and apply: identical admission, bounds, symlink, collision, stale-copy, and
-// cached-bytes handling. Throws BoundaryError on any refusal; returns
-// `{ candidates, resolved, droppedStale, writes, items }` on success. Empty
-// plans (no admitted candidates) return zero items for the caller to refuse as
-// NO_CANDIDATES without writing.
-export function planAcceptance(artifactDir, destDir) {
-  const artifactAbs = validateArtifactRoot(resolve(artifactDir));
+// Returns `{ writes, unchanged }`; `unchanged` holds candidates whose bytes
+// already match the checkout. A stale copy conflict throws with `.dest` and
+// `.visualAcceptCode`.
+export function preflightPlan(resolved, destDir) {
   const destAbs = resolve(destDir);
   validateDestinationRoot(destAbs);
-  const candidates = collectCandidatesBounded(artifactAbs, destinationName);
-  const { resolved, droppedStale, duplicates } = resolveDestinationsBounded(
-    candidates,
-    artifactAbs,
-  );
+  const writes = [];
+  const unchanged = [];
+  for (const candidate of resolved) {
+    // Destination names are basenames by construction; refuse anything that
+    // would escape the intended destination root.
+    if (
+      typeof candidate.dest !== "string" ||
+      candidate.dest === "" ||
+      candidate.dest === "." ||
+      candidate.dest === ".." ||
+      candidate.dest.includes("/") ||
+      candidate.dest.includes("\\")
+    ) {
+      throw new BoundaryError(CODE_DESTINATION_SYMLINK, ".", "Destination escapes its root.");
+    }
+    const target = join(destAbs, candidate.dest);
+    if (relative(destAbs, target).startsWith("..")) {
+      throw new BoundaryError(CODE_DESTINATION_SYMLINK, ".", "Destination escapes its root.");
+    }
+    let targetStat = null;
+    try {
+      targetStat = lstatSync(target);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (targetStat !== null && targetStat.isSymbolicLink()) {
+      const safe = safeRelativePath(destAbs, target);
+      throw new BoundaryError(
+        CODE_DESTINATION_SYMLINK,
+        safe,
+        `Destination file is a symlink: ${safe}.`,
+      );
+    }
+    let current = null;
+    if (targetStat !== null) {
+      current = readFileSync(target);
+    }
+    if (current !== null) {
+      if (current.equals(candidate.bytes)) {
+        unchanged.push(candidate);
+        continue;
+      }
+      if (!candidate.actual) {
+        const error = new Error(
+          `Refusing stale artifact copy conflict for ${candidate.dest}: checkout baseline differs; no baselines written. Review a matching actual or use a current artifact.`,
+        );
+        error.visualAcceptCode = STALE_COPY_CODE;
+        error.dest = candidate.dest;
+        throw error;
+      }
+    }
+    writes.push({ ...candidate, target });
+  }
+  return { writes, unchanged };
+}
+
+export function preflightWrites(resolved, destDir) {
+  return preflightPlan(resolved, destDir).writes;
+}
+
+function boundaryPlan(error, sources = 0, destinations = 0) {
+  return {
+    verdict: "boundary",
+    sources,
+    destinations,
+    dropped: 0,
+    writes: [],
+    skipped: [],
+    duplicates: [],
+    conflict: null,
+    boundary: { code: error.code, path: error.path ?? "." },
+  };
+}
+
+// Read-only plan for one suite: collect, resolve, collision and stale-copy
+// preflight, with no filesystem writes. `verdict` is one of ok, no_candidates,
+// collision, stale_copy_conflict, boundary. Counts: `sources` candidate files,
+// `destinations` distinct destination names. Boundary violations (symlinked
+// sources or destinations, traversal-budget breaches) become a `boundary`
+// verdict with a fixed code; unreadable files throw.
+export function planBaselines(artifactDir, destDir, collect = collectCandidates) {
+  let candidates;
+  try {
+    candidates = collect(artifactDir);
+  } catch (error) {
+    if (error instanceof BoundaryError) return boundaryPlan(error);
+    throw error;
+  }
+  const plan = {
+    verdict: "ok",
+    sources: candidates.length,
+    destinations: 0,
+    dropped: 0,
+    writes: [],
+    skipped: [],
+    duplicates: [],
+    conflict: null,
+    boundary: null,
+  };
+  if (candidates.length === 0) {
+    plan.verdict = "no_candidates";
+    return plan;
+  }
+  const { resolved, droppedStale, duplicates, skipped } = resolveDestinations(candidates);
+  plan.destinations = resolved.length + duplicates.length;
+  plan.dropped = droppedStale;
+  plan.skipped = skipped;
   if (duplicates.length > 0) {
-    throw new BoundaryError(
-      CODE_PLAN_COLLISION,
-      safeDestName(duplicates[0].dest),
-      formatCollisionDiagnostic(duplicates),
-    );
+    plan.verdict = "collision";
+    plan.duplicates = duplicates;
+    return plan;
   }
-  if (resolved.length === 0) {
-    return { candidates, resolved, droppedStale, writes: [], items: [] };
+  try {
+    const { writes, unchanged } = preflightPlan(resolved, destDir);
+    plan.writes = writes;
+    for (const { src, dest } of unchanged) {
+      plan.skipped.push({ src, dest, reason: SKIP_UNCHANGED });
+    }
+  } catch (error) {
+    if (error instanceof BoundaryError)
+      return boundaryPlan(error, candidates.length, resolved.length);
+    if (error.visualAcceptCode !== STALE_COPY_CODE) throw error;
+    plan.verdict = "stale_copy_conflict";
+    plan.conflict = error;
+    return plan;
   }
-  const writes = preflightWritesBounded(resolved, destAbs, artifactAbs);
-  const items = buildPlanItems(SUITE_HONO, resolved);
-  return { candidates, resolved, droppedStale, writes, items };
+  plan.skipped.sort((a, b) =>
+    a.dest < b.dest ? -1 : a.dest > b.dest ? 1 : a.src < b.src ? -1 : a.src > b.src ? 1 : 0,
+  );
+  return plan;
+}
+
+// Applies an `ok` plan: bytes were cached during planning, so nothing is
+// re-read from the artifact. `write(target, bytes)` is injectable for Kit.
+// Refusal verdicts never reach the write loop; plans without writes are a
+// no-op and never create the destination directory.
+export function applyPlan(plan, destDir, write = (target, bytes) => writeFileSync(target, bytes)) {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
+    throw new Error(`Refusing to apply a ${plan.verdict} plan; no baselines written.`);
+  }
+  if (plan.writes.length > 0) mkdirSync(destDir, { recursive: true });
+  for (const entry of plan.writes) write(entry.target, entry.bytes, entry);
 }
 
 // Two-phase acceptance: preflight all sources and local targets, then apply.
 // This is not rollback for apply-time filesystem failures.
 export function acceptBaselines(artifactDir, destDir) {
-  const { resolved, droppedStale, writes } = planAcceptance(artifactDir, destDir);
-  if (resolved.length === 0) return { written: 0, dropped: 0 };
-  if (writes.length > 0) mkdirSync(resolve(destDir), { recursive: true });
-  for (const { bytes, target } of writes) {
-    writeFileSync(target, bytes);
+  const plan = planBaselines(artifactDir, destDir);
+  if (plan.verdict === "collision") {
+    throw new Error(formatCollisionDiagnostic(plan.duplicates));
   }
-  return { written: writes.length, dropped: droppedStale };
+  if (plan.verdict === "stale_copy_conflict") throw plan.conflict;
+  if (plan.verdict === "boundary") {
+    throw new BoundaryError(
+      plan.boundary.code,
+      plan.boundary.path,
+      `Refusing visual baseline acceptance: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written.`,
+    );
+  }
+  applyPlan(plan, destDir);
+  return { written: plan.writes.length, dropped: plan.dropped };
 }
 
-function emitJsonAndExit(suite, { items, errors, next_action }, exitCode) {
-  const { text } = buildJsonReport({ suite, items, errors, next_action });
-  process.stdout.write(`${text}\n`);
-  process.exit(exitCode);
-}
+const HONO_DEST_DIR = "e2e/visual/__screenshots__";
 
-function runCli(argv) {
-  let parsed;
-  try {
-    parsed = parseCliArgs(argv);
-  } catch (error) {
-    const code = error instanceof BoundaryError ? error.code : CODE_INVALID_ARGUMENTS;
-    if (argvWantsJson(argv)) {
-      emitJsonAndExit(
-        SUITE_HONO,
-        {
-          items: [],
-          errors: [{ code, path: "." }],
-          next_action: nextActionFor(code),
-        },
-        2,
-      );
+// Hono suite adapter for the shared CLI (ci/visual-accept-cli.mjs).
+export const HONO_ADAPTER = {
+  tool: "visual-accept",
+  script: "ci/visual-accept.mjs",
+  destLabel: HONO_DEST_DIR,
+  // The documented run exits 1 when it writes nothing (empty or all unchanged).
+  nothingWrittenFails: true,
+  plan: (artifact) => planBaselines(artifact, HONO_DEST_DIR),
+  apply: (plan) => applyPlan(plan, HONO_DEST_DIR),
+  refusalMessage: (plan, root) => {
+    if (plan.verdict === "collision") return formatCollisionDiagnostic(plan.duplicates, root);
+    if (plan.verdict === "boundary")
+      return `Refusing visual baseline acceptance: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written.`;
+    return plan.conflict.message;
+  },
+  successLines: (plan) => {
+    const lines = [`accepted ${plan.writes.length} baseline(s) into ${HONO_DEST_DIR}`];
+    if (plan.dropped > 0) {
+      lines.push(`dropped ${plan.dropped} stale copy(ies) superseded by *-actual.png`);
     }
-    console.error(boundedDiagnostic(error instanceof Error ? error.message : String(error)));
-    console.error("usage: node ci/visual-accept.mjs <artifact-dir> [--dry-run] [--format json]");
-    process.exit(2);
-  }
-  const dest = "e2e/visual/__screenshots__";
-  try {
-    const plan = planAcceptance(parsed.artifactRoot, join(process.cwd(), dest));
-    if (plan.resolved.length === 0) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_HONO,
-          {
-            items: [],
-            errors: [{ code: CODE_NO_CANDIDATES, path: "." }],
-            next_action: nextActionFor(CODE_NO_CANDIDATES),
-          },
-          1,
-        );
-      }
-      console.error("visual-accept: no baseline candidates in artifact; no baselines written.");
-      process.exit(1);
-    }
-    if (parsed.dryRun) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_HONO,
-          {
-            items: plan.items,
-            errors: [],
-            next_action:
-              `Run without --dry-run to apply ${plan.items.length} validated item(s).`.slice(
-                0,
-                256,
-              ),
-          },
-          0,
-        );
-      }
-      console.log(
-        boundedDiagnostic(
-          `would accept ${plan.writes.length} baseline(s) into ${dest} (${plan.items.length} item(s) validated, ${plan.droppedStale} stale dropped); no writes (dry-run)`,
-        ),
-      );
-      process.exit(0);
-    }
-    if (plan.writes.length > 0) mkdirSync(join(process.cwd(), dest), { recursive: true });
-    for (const { bytes, target } of plan.writes) {
-      writeFileSync(target, bytes);
-    }
-    if (parsed.formatJson) {
-      // Success report carries the same stable item IDs as dry-run.
-      emitJsonAndExit(
-        SUITE_HONO,
-        {
-          items: plan.items,
-          errors: [],
-          next_action:
-            `Accepted ${plan.writes.length} baseline(s); commit the intentional changes.`.slice(
-              0,
-              256,
-            ),
-        },
-        0,
-      );
-    }
-    if (plan.writes.length === 0) {
-      console.log(`accepted 0 baseline(s) into ${dest} (all identical, no writes)`);
-      if (plan.droppedStale > 0) {
-        console.log(`dropped ${plan.droppedStale} stale copy(ies) superseded by *-actual.png`);
-      }
-      process.exit(0);
-    }
-    console.log(`accepted ${plan.writes.length} baseline(s) into ${dest}`);
-    if (plan.droppedStale > 0) {
-      console.log(`dropped ${plan.droppedStale} stale copy(ies) superseded by *-actual.png`);
-    }
-    process.exit(0);
-  } catch (error) {
-    if (error instanceof BoundaryError && error.code === CODE_STALE_COPY) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_HONO,
-          {
-            items: [],
-            errors: [{ code: error.code, path: error.path }],
-            next_action: nextActionFor(error.code),
-          },
-          1,
-        );
-      }
-      console.error(
-        boundedDiagnostic(
-          `Refusing stale artifact copy conflict for ${error.path}: checkout baseline differs; no baselines written. Review a matching actual or use a current artifact.`,
-        ),
-      );
-      process.exit(1);
-    }
-    if (error instanceof BoundaryError) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_HONO,
-          {
-            items: [],
-            errors: [{ code: error.code, path: error.path }],
-            next_action: nextActionFor(error.code),
-          },
-          1,
-        );
-      }
-      console.error(boundedDiagnostic(error.message));
-      process.exit(1);
-    }
-    console.error(boundedDiagnostic(error instanceof Error ? error.message : String(error)));
-    process.exit(1);
-  }
-}
+    return lines;
+  },
+};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runCli(process.argv.slice(2));
+  const { status, stdout, stderr } = runCli(HONO_ADAPTER, process.argv.slice(2));
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  process.exitCode = status;
 }

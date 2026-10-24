@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 // Accept reviewed Kit baselines from an unzipped failure artifact:
-//   node ci/kit-visual-accept.mjs <unzipped artifact dir> [--dry-run] [--format json]
+//   node ci/kit-visual-accept.mjs [--dry-run] [--format json] <unzipped artifact dir>
 // Only Kit suite directories relative to that root establish ownership; root
 // names and substring-lookalike folders never admit Hono images into Kit.
 // Reviewed actuals can replace checkout bytes. Artifact baseline copies can
 // only add absent files or match existing bytes; stale copies refuse the full
 // plan before any write. Inspect the failure images before accepting them.
 //
-// Use `node ci/kit-visual-accept.mjs <artifact-root> [--dry-run] [--format
-// json]` for Kit-only acceptance. Actual replacement authority comes only from
+// Use `node ci/kit-visual-accept.mjs [--dry-run] [--format json] <artifact-root>`
+// for Kit-only acceptance. Actual replacement authority comes only from
 // the existing exact `test-results-kit-visual` or `test-results-kit-parity`
 // segments inside the artifact; baseline copies retain the existing
 // `e2e/visual/__screenshots-kit__` path. Hono and unrelated/lookalike
 // screenshots have no Kit replacement authority. The extraction folder's name
-// is not a suite marker. Hono and Kit share one bounded filesystem/plan policy
-// and the same version-1 reporting/error conventions, with stable `hono`/`kit`
-// suite identity and stable effective-item IDs.
+// is not a suite marker. Flags may sit before or after the positional:
+// --dry-run prints the plan and writes nothing, --format json prints one
+// versioned verdict, and any other flag exits 2 with a stable code before the
+// artifact is read (ci/visual-accept-cli.mjs lists the codes).
 //
 // Dry-run is read-only and validates the same authority as apply. Reject
 // source symlinks (including root/ancestor links, descendants and cycles) and
@@ -30,26 +31,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  argvWantsJson,
-  BoundaryError,
-  boundedDiagnostic,
-  buildJsonReport,
-  buildPlanItems,
-  CODE_INVALID_ARGUMENTS,
-  CODE_NO_CANDIDATES,
-  CODE_PLAN_COLLISION,
-  collectCandidatesBounded,
-  nextActionFor,
-  parseCliArgs,
-  preflightWritesBounded,
-  resolveDestinationsBounded,
-  safeDestName,
-  SUITE_KIT,
-  validateArtifactRoot,
-  validateDestinationRoot,
-} from "./visual-accept-policy.mjs";
-import { preflightWrites, resolveDestinations } from "./visual-accept.mjs";
+import { applyPlan, planBaselines } from "./visual-accept.mjs";
+import { runCli } from "./visual-accept-cli.mjs";
+import { collectCandidatesBounded } from "./visual-accept-policy.mjs";
 
 export const KIT_SCREENSHOT_DIR = "e2e/visual/__screenshots-kit__";
 export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
@@ -74,64 +58,30 @@ export function collectCandidates(root) {
   return collectCandidatesBounded(rootAbs, destinationName);
 }
 
-// Re-export the shared resolvers for backward compatibility; Kit now plans
-// through the bounded policy below.
-export { preflightWrites, resolveDestinations };
-
-function planKitAcceptance(artifactDir, destDirAbs) {
-  const artifactAbs = validateArtifactRoot(resolve(artifactDir));
-  validateDestinationRoot(destDirAbs);
-  const candidates = collectCandidatesBounded(artifactAbs, destinationName);
-  if (candidates.length === 0) {
-    return { candidates, resolved: [], droppedStale: 0, writes: [], items: [], empty: true };
-  }
-  const { resolved, droppedStale, duplicates } = resolveDestinationsBounded(
-    candidates,
-    artifactAbs,
-  );
-  if (duplicates.length > 0) {
-    throw new BoundaryError(
-      CODE_PLAN_COLLISION,
-      safeDestName(duplicates[0].dest),
-      `different sources map to ${safeDestName(duplicates[0].dest)}`,
-    );
-  }
-  if (resolved.length === 0) {
-    return { candidates, resolved, droppedStale, writes: [], items: [], empty: true };
-  }
-  const writes = preflightWritesBounded(resolved, destDirAbs, artifactAbs);
-  const items = buildPlanItems(SUITE_KIT, resolved);
-  return { candidates, resolved, droppedStale, writes, items, empty: false };
-}
+const MAX_NAMES_SHOWN = 20;
 
 export function acceptBaselines(
   artifactDir,
   { cwd = process.cwd(), copy, mkdir = mkdirSync } = {},
 ) {
-  const destDir = join(resolve(cwd), KIT_SCREENSHOT_DIR);
-  let plan;
-  try {
-    plan = planKitAcceptance(artifactDir, destDir);
-  } catch (error) {
-    const code = error instanceof BoundaryError ? error.code : "SOURCE_UNREADABLE";
-    const path = error instanceof BoundaryError ? error.path : ".";
-    const detail =
-      error instanceof Error
-        ? boundedDiagnostic(error.message).slice(0, 200)
-        : String(error).slice(0, 200);
+  const destDir = join(cwd, KIT_SCREENSHOT_DIR);
+  const plan = planKit(artifactDir, destDir);
+  if (plan.verdict === "no_candidates") {
+    return { ok: false, message: NO_CANDIDATES_MESSAGE };
+  }
+  if (plan.verdict === "collision") {
     return {
       ok: false,
-      message: `kit-visual-accept: refusing: ${detail}; no baselines written`,
-      code,
-      path,
+      message: `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`,
     };
   }
-  if (plan.empty) {
+  if (plan.verdict === "stale_copy_conflict") {
+    return { ok: false, message: `kit-visual-accept: ${plan.conflict.message}` };
+  }
+  if (plan.verdict === "boundary") {
     return {
       ok: false,
-      message: "kit-visual-accept: no baseline candidates in artifact",
-      code: CODE_NO_CANDIDATES,
-      path: ".",
+      message: `kit-visual-accept: refusing: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written`,
     };
   }
   if (plan.writes.length > 0) mkdir(destDir, { recursive: true });
@@ -139,135 +89,43 @@ export function acceptBaselines(
     if (copy) copy(src, target);
     else writeFileSync(target, bytes);
   }
-  return {
-    ok: true,
-    accepted: plan.writes.map(({ dest }) => dest),
-    items: plan.items,
-    dropped: plan.droppedStale,
-  };
+  return { ok: true, accepted: plan.writes.map(({ dest }) => dest) };
 }
 
-function emitJsonAndExit(suite, { items, errors, next_action }, exitCode) {
-  const { text } = buildJsonReport({ suite, items, errors, next_action });
-  process.stdout.write(`${text}\n`);
-  process.exit(exitCode);
-}
+const NO_CANDIDATES_MESSAGE = "kit-visual-accept: no baseline candidates in artifact";
 
-function runCli(argv) {
-  let parsed;
-  try {
-    parsed = parseCliArgs(argv);
-  } catch (error) {
-    const code = error instanceof BoundaryError ? error.code : CODE_INVALID_ARGUMENTS;
-    if (argvWantsJson(argv)) {
-      emitJsonAndExit(
-        SUITE_KIT,
-        {
-          items: [],
-          errors: [{ code, path: "." }],
-          next_action: nextActionFor(code),
-        },
-        2,
-      );
-    }
-    console.error(boundedDiagnostic(error instanceof Error ? error.message : String(error)));
-    console.error(
-      "Usage: node ci/kit-visual-accept.mjs <unzipped artifact dir> [--dry-run] [--format json]",
-    );
-    process.exitCode = 2;
-    return;
-  }
-  const destDir = join(process.cwd(), KIT_SCREENSHOT_DIR);
-  try {
-    const plan = planKitAcceptance(parsed.artifactRoot, destDir);
-    if (plan.empty) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_KIT,
-          {
-            items: [],
-            errors: [{ code: CODE_NO_CANDIDATES, path: "." }],
-            next_action: nextActionFor(CODE_NO_CANDIDATES),
-          },
-          1,
-        );
-      }
-      console.error("kit-visual-accept: no baseline candidates in artifact");
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.dryRun) {
-      if (parsed.formatJson) {
-        emitJsonAndExit(
-          SUITE_KIT,
-          {
-            items: plan.items,
-            errors: [],
-            next_action:
-              `Run without --dry-run to apply ${plan.items.length} validated item(s).`.slice(
-                0,
-                256,
-              ),
-          },
-          0,
-        );
-      }
-      console.log(
-        boundedDiagnostic(
-          `kit-visual-accept: would accept ${plan.writes.length} Kit baseline(s) (${plan.items.length} item(s) validated); no writes (dry-run)`,
-        ),
-      );
-      process.exitCode = 0;
-      return;
-    }
-    if (plan.writes.length > 0) mkdirSync(destDir, { recursive: true });
-    for (const { bytes, target } of plan.writes) {
-      writeFileSync(target, bytes);
-    }
-    if (parsed.formatJson) {
-      emitJsonAndExit(
-        SUITE_KIT,
-        {
-          items: plan.items,
-          errors: [],
-          next_action:
-            `Accepted ${plan.writes.length} Kit baseline(s); commit the intentional changes.`.slice(
-              0,
-              256,
-            ),
-        },
-        0,
-      );
-    }
-    console.log(
-      boundedDiagnostic(
-        `kit-visual-accept: accepted ${plan.writes.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${plan.writes.map(({ dest }) => dest).join(", ")}`,
-      ),
-    );
-    process.exitCode = 0;
-  } catch (error) {
-    const code = error instanceof BoundaryError ? error.code : "SOURCE_UNREADABLE";
-    const path = error instanceof BoundaryError ? error.path : ".";
-    if (parsed.formatJson) {
-      emitJsonAndExit(
-        SUITE_KIT,
-        {
-          items: [],
-          errors: [{ code, path }],
-          next_action: nextActionFor(code),
-        },
-        1,
-      );
-    }
-    console.error(
-      boundedDiagnostic(
-        `kit-visual-accept: ${error instanceof Error ? error.message : String(error)}`,
-      ),
-    );
-    process.exitCode = 1;
-  }
-}
+const planKit = (artifactDir, destDir) => planBaselines(artifactDir, destDir, collectCandidates);
+
+// Kit suite adapter for the shared CLI (ci/visual-accept-cli.mjs).
+export const KIT_ADAPTER = {
+  tool: "kit-visual-accept",
+  script: "ci/kit-visual-accept.mjs",
+  destLabel: KIT_SCREENSHOT_DIR,
+  // The documented run exits 0 when every candidate already matches.
+  nothingWrittenFails: false,
+  noCandidatesMessage: NO_CANDIDATES_MESSAGE,
+  plan: (artifact) => planKit(artifact, join(process.cwd(), KIT_SCREENSHOT_DIR)),
+  apply: (plan) => applyPlan(plan, join(process.cwd(), KIT_SCREENSHOT_DIR)),
+  refusalMessage: (plan) => {
+    if (plan.verdict === "collision")
+      return `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`;
+    if (plan.verdict === "boundary")
+      return `kit-visual-accept: refusing: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written`;
+    return `kit-visual-accept: ${plan.conflict.message}`;
+  },
+  successLines: (plan) => {
+    const names = plan.writes.map(({ dest }) => dest);
+    const shown = names.slice(0, MAX_NAMES_SHOWN).join(", ");
+    const more = names.length > MAX_NAMES_SHOWN ? ` (+${names.length - MAX_NAMES_SHOWN} more)` : "";
+    return [
+      `kit-visual-accept: accepted ${names.length} Kit baselines into ${KIT_SCREENSHOT_DIR}: ${shown}${more}`,
+    ];
+  },
+};
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  runCli(process.argv.slice(2));
+  const { status, stdout, stderr } = runCli(KIT_ADAPTER, process.argv.slice(2));
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  process.exitCode = status;
 }

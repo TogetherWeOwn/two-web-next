@@ -26,7 +26,7 @@ expect Hono for the right reason.
 | `GET /admin/events` | `web/src/routes/admin/events/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared bounded `listEvents` helper with a classified-outage 503 mapping, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; only this GET migrates — `POST /admin/events`, `/new` and `/:key` stay Hono-owned, so the row forms keep submitting to the unchanged Hono handlers) | events/list (`admin.events.index`, bridged moderator viewer; subject-free `events` + `going-counts` reads, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, empty `buildEventCreateView` with the Hono 422 values/errors shape, private no-store, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands; only this GET migrates — `POST /admin/events` stays Hono-owned, so draft-first creation, weekly recurrence (max 52), wall-time/timezone validation, body cap, throttle, error aggregation, retained values and the 303 keep one authority, and the guarded `/admin/events/create` legacy redirect stays Hono) | events/view (`admin.events.create`, bridged moderator viewer; no store read on fresh GET, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/create` | none (exact disabled manifest pin, no Kit handler; the guarded legacy redirect stays Hono-owned so the `:key` pattern cannot capture `/create` once enabled) | — (no declaration; Hono-owned) | Hono (`enabled: false`) |
-| `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
+| `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/facet/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
 | `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Kit (`enabled: true`) |
 | `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Kit (`enabled: true`) |
 | `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
@@ -263,21 +263,21 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
   (`test-results-kit-visual/`, `test-results-kit-parity/`,
   `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
-  artifact. Use `node ci/kit-visual-accept.mjs <artifact-root> [--dry-run]
-  [--format json]` for Kit-only acceptance. Actual replacement authority comes
+  artifact. Use `node ci/kit-visual-accept.mjs [--dry-run] [--format json]
+  <artifact-root>` for Kit-only acceptance. Actual replacement authority comes
   only from the existing exact `test-results-kit-visual` or
   `test-results-kit-parity` segments inside the artifact; baseline copies
   retain the existing `e2e/visual/__screenshots-kit__` path. Hono and
   unrelated/lookalike screenshots have no Kit replacement authority. The
-  extraction folder's name is not a suite marker. Hono and Kit share one
-  bounded filesystem/plan policy and the same version-1 reporting/error
-  conventions, with stable `hono`/`kit` suite identity and stable
-  effective-item IDs. The Kit visual config has its own Playwright output
-  directory so the later parity run cannot clear visual actuals before artifact
-  upload. When an actual and its stale committed baseline share a destination,
-  the reviewed actual wins; distinct actuals still refuse. Inspect every
-  expected, actual and diff image in the failed run's artifact before running
-  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>`. Suite ownership uses
+  extraction folder's name is not a suite marker. The Kit visual config has
+  its own Playwright output directory so the later parity run cannot clear
+  visual actuals before artifact upload. When an actual and its stale
+  committed baseline share a destination, the reviewed actual wins; distinct
+  actuals still refuse. Inspect every expected, actual and diff image in the
+  failed run's artifact before running
+  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>` (add `--dry-run` to
+  preview the plan, `--format json` for a versioned verdict; unknown flags exit
+  2 before any read, see `docs/visual-regression.md`). Suite ownership uses
   exact directory segments relative to that root: extraction folder names and
   substring-lookalike folders do not admit or exclude images. Copies under
   `__screenshots-kit__/` can add absent baselines or match existing bytes

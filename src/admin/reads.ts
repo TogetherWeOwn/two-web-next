@@ -39,13 +39,23 @@ export type RosterEntry = {
 export async function listRoster(
   db: Db,
   eventKey: string,
-  query: RosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
+  query: RosterQuery = { q: "", status: "", sort: "answered", order: "desc", page: 1 },
 ): Promise<{ rows: RosterEntry[]; total: number }> {
   const page = Number.isSafeInteger(query.page) && query.page > 0 ? query.page : 1;
   const search: SQL | undefined = query.q
     ? ilike(users.username, `%${escapeLikeTerm(query.q)}%`)
     : undefined;
-  const conds = search ? and(eq(events.eventKey, eventKey), search) : eq(events.eventKey, eventKey);
+  // The allowlisted answer facet joins the same normalized predicate the
+  // count and the page share, before paging. Condition order is pinned:
+  // event, status, member search (see the roster-count classifier shapes).
+  const facet: SQL | undefined = query.status ? eq(rsvps.status, query.status) : undefined;
+  const conds = facet
+    ? search
+      ? and(eq(events.eventKey, eventKey), facet, search)
+      : and(eq(events.eventKey, eventKey), facet)
+    : search
+      ? and(eq(events.eventKey, eventKey), search)
+      : eq(events.eventKey, eventKey);
   const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
   const order = query.order === "asc" ? asc(column) : desc(column);
   const countRows = await nonSensitiveRead("roster-count", () => {
