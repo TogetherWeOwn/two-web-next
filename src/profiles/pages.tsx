@@ -27,7 +27,12 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
-import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
+import {
+  MEMBER_MILESTONES_CAP,
+  MEMBER_MILESTONES_VISIBLE,
+  type MemberStats,
+  type Milestone,
+} from "./stats";
 import {
   PROFILE_BIO_COUNT_ID,
   PROFILE_BIO_HINT_COPY,
@@ -81,6 +86,21 @@ export const statsDate = (date: Date) =>
     year: "numeric",
     timeZone: "UTC",
   });
+// Disclosure label for the older loaded rows. Both twins share this helper so
+// the count wording cannot drift. "Loaded" is deliberate: the remainder is the
+// already-loaded window, never the member's lifetime history.
+export const milestoneDisclosureLabel = (olderCount: number) =>
+  `Show ${olderCount} older loaded ${olderCount === 1 ? "milestone" : "milestones"}`;
+
+const MilestoneItem: FC<{ milestone: Milestone }> = ({ milestone }) => (
+  <li>
+    <div>
+      <strong>{statsLabel(milestone.type)}</strong>
+      {milestone.detail ? <p>{milestone.detail}</p> : null}
+    </div>
+    <time datetime={milestone.occurredAt.toISOString()}>{statsDate(milestone.occurredAt)}</time>
+  </li>
+);
 
 // Recovery is an explicit safe GET to the same profile, never a background
 // retry or an automatic reload: over an unsaved editor the link warns that
@@ -179,19 +199,25 @@ const MemberStatsBlock: FC<{
             <p class="profile-hint">Showing the newest {MEMBER_MILESTONES_CAP} milestones.</p>
           ) : null}
           {stats.milestones.length > 0 ? (
-            <ol class="profile-milestones">
-              {stats.milestones.map((milestone) => (
-                <li>
-                  <div>
-                    <strong>{statsLabel(milestone.type)}</strong>
-                    {milestone.detail ? <p>{milestone.detail}</p> : null}
-                  </div>
-                  <time datetime={milestone.occurredAt.toISOString()}>
-                    {statsDate(milestone.occurredAt)}
-                  </time>
-                </li>
-              ))}
-            </ol>
+            <>
+              <ol class="profile-milestones">
+                {stats.milestones.slice(0, MEMBER_MILESTONES_VISIBLE).map((milestone) => (
+                  <MilestoneItem milestone={milestone} />
+                ))}
+              </ol>
+              {stats.milestones.length > MEMBER_MILESTONES_VISIBLE ? (
+                <details class="profile-milestones-disclosure">
+                  <summary>
+                    {milestoneDisclosureLabel(stats.milestones.length - MEMBER_MILESTONES_VISIBLE)}
+                  </summary>
+                  <ol class="profile-milestones" start={MEMBER_MILESTONES_VISIBLE + 1}>
+                    {stats.milestones.slice(MEMBER_MILESTONES_VISIBLE).map((milestone) => (
+                      <MilestoneItem milestone={milestone} />
+                    ))}
+                  </ol>
+                </details>
+              ) : null}
+            </>
           ) : (
             <p>No milestones yet.</p>
           )}
