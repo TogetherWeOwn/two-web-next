@@ -236,6 +236,10 @@ for (const twin of ["Hono", "Kit"]) {
       const inventoryIndex = queries.findIndex((q) => /from "events"[\s\S]*order by/i.test(q.sql));
       expect(timeoutIndex).toBeGreaterThanOrEqual(0);
       expect(inventoryIndex).toBeGreaterThan(timeoutIndex);
+      // The new persisted-scope lookup must not precede the bound either;
+      // bounding only the eventual page query leaves a stalled resolver open.
+      const firstEventRead = queries.findIndex((q) => /from "events"/i.test(q.sql));
+      expect(firstEventRead).toBeGreaterThan(timeoutIndex);
       expect(queries[timeoutIndex].params).toEqual(["2000ms", "2000ms"]);
       const q = queries[inventoryIndex];
       const limit = /\blimit \$(\d+)/i.exec(q.sql);
