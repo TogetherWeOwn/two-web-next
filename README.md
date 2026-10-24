@@ -261,6 +261,7 @@ to execute the same Chromium proof.
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
 | `test/profile-composition-browser.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-composition-browser.test.ts` |
