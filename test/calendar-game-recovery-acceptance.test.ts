@@ -74,6 +74,8 @@ for (const twin of GAME_TWINS) {
         it(`A1.8 ${view} q=${JSON.stringify(q)} offers a truthful broader GET with matching label`, async () => {
           const f = gameRecoveryFixture({ empty: true });
           const path = `/events?view=${view}&month=2099-05&past=1&game=Chess&q=${encodeURIComponent(q)}`;
+          // Nonblank text search uses list view, even when the request asks for calendar.
+          const effectiveView = q.trim() ? "list" : view;
           const html = await (await f.render(twin, path)).text();
           const links = broadeningLinks(emptyRegion(html));
           const gameClear = links.filter(
@@ -86,8 +88,9 @@ for (const twin of GAME_TWINS) {
           for (const link of gameClear) {
             const target = new URL(link.href, GAME_ORIGIN);
             expect(target.pathname).toBe("/events");
-            expect(target.searchParams.get("view") ?? "list").toBe(view);
-            if (view === "calendar") expect(target.searchParams.get("month")).toBe("2099-05");
+            expect(target.searchParams.get("view") ?? "list").toBe(effectiveView);
+            if (effectiveView === "calendar")
+              expect(target.searchParams.get("month")).toBe("2099-05");
             expect(target.searchParams.get("past")).toBe("1");
             expect(target.searchParams.get("page") ?? "1").toBe("1");
             if (
