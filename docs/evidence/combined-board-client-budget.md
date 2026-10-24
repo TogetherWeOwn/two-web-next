@@ -743,3 +743,73 @@ No user-facing page differs from the merged base. Prior-head green CI/review
 is not approval of the new head; all exact-head merge gates remain mandatory.
 Rollback reverts only this new history/evidence reconciliation relative to
 the merged base; it must not undo the independent allocation from #1686.
+
+## Eleventh base-conflict reconciliation: consume canonical dependency repair, no new allowance
+
+On 2026-10-24 GitHub confirmed a live conflict on `b2bbe5d56` against pinned
+main `4e9bf0a5d` (two commits: #1716 and #1712). Only
+`ci/kit-perf-budget.json` conflicts. All numeric ceilings are byte-equal on
+all three sides, so the resolution is history-only: base comment verbatim,
+then main's unique tail, then the prerequisite's unique record once. Each
+tail was verified absent from the opposite side and each record appears
+exactly once in the merged comment. Every numeric ceiling equals the merged
+base, including the independently merged server gzip allocation **333312 B**
+from #1686. The obsolete client increase stays withdrawn.
+
+The merge queue had ejected the prior head for the shared dependency-audit
+failure: newly published high-severity advisories reject the old locks.
+#1716 is the canonical repair (patched Lighthouse BiDi/Zod chain, patched
+body-parser majors, Undici 7.30.1 in both lockfiles). This prerequisite
+consumes it verbatim: root/web lockfiles, manifests and
+`test/performance-ci.test.ts` are taken exactly as merged main, with no
+allowance, exception, source, test, baseline, checker or CI-wiring change
+authored here. The `#1712` RSVP evidence file is likewise main's verbatim
+file. The historical per-file TSV is unchanged.
+
+Red-before/green-after with the unchanged `npm run deps:audit` gate: the
+pre-merge locks exit 1 with **10** root and **4** web high-severity rows
+(Zod, body-parser and Undici families); the merged tree exits 0 with zero
+blocked findings in either lockfile. Dependency-audit selftests **56/56**
+pass on the merged tree.
+
+This is a conflict repair, not refreshed feature-union admission. The frozen
+feature overlay was not rebuilt. The old one-file/370-gzip-byte breach
+remains pinned to `d6a65b4fa`, not asserted for this new base. Separately
+merged allocations are not proof that the source feature's exact union fits.
+Keep the source feature/server HOLD until its own then-current union and
+independent CI/review satisfy the gates. No source feature ref was modified
+or pushed.
+
+With Node `v24.22.1` and fresh locked root/web `npm ci --include=dev`
+installs, two actual-tree `npm --prefix web run build` runs both pass
+`node ci/check-kit-perf.mjs`:
+
+| Group | Actual prerequisite tree | Unchanged merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 245331/99255 B | 251904/101632 B |
+| Client JS files | 53 | 54 |
+| Server JS raw/gzip | 1129530/328710 B | 1203200/333312 B |
+| Server JS files | 117 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2878/1024 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 | 0 required |
+
+A repeat build of the same tree reports server gzip 328711 B instead of
+328710 B: plus-or-minus 1 B of gzip nondeterminism between identical-tree
+builds, with thousands of bytes of margin on every ceiling. Both builds
+exit 0. CSS gzip is exactly at its unchanged ceiling: zero margin is
+reported, not loosened. Startup 60000 ms is configuration, not measured
+latency. Unchanged checker selftests **6/6**, checker tests **13/13**,
+parity suites **67/67**, config selftests **34/34**, gate selftest **6/6**,
+bundle selftest **34/34**, parity citations **12/12**, inventory
+**1151/1151**, and the merged-base performance suite **43/43** pass. Lint,
+root/CI typecheck, asset drift, Hono bundle budget, floor guard, docs
+links (**130 Markdown files**) and the internal-ref ratchet pass. No
+acceptance test files were edited. Full `npm run check`, fresh feature
+acceptance, browser/visual/quality gates, startup latency and staging were
+not rerun. No user-facing page differs from the merged base. Prior-head
+green CI/review is not approval of the new head; all exact-head merge gates
+remain mandatory. Rollback reverts only this new history/evidence
+reconciliation relative to the merged base; it must not undo the
+independent allocation from #1686 or the canonical repair from #1716.
