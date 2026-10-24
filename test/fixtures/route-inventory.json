@@ -506,6 +506,11 @@
   },
   {
     "method": "POST",
+    "path": "/logout/everywhere",
+    "auth": "public"
+  },
+  {
+    "method": "POST",
     "path": "/mcp",
     "auth": "public"
   },

@@ -64,10 +64,14 @@ const FEATURED_WRITE_CAP_FIRST = new Set([
   "POST /admin/featured/:id/delete",
 ]);
 
-// Logout and QA login refuse oversized bodies before the shared throttle:
-// cap-first, not throttle-first. The QA identity/token gate still runs before
-// the cap.
-const AUTH_CAP_FIRST = new Set(["POST /logout", "POST /auth/qa/:identity"]);
+// Logout (both single and everywhere) and QA login refuse oversized bodies
+// before the shared throttle: cap-first, not throttle-first. The QA
+// identity/token gate still runs before the cap.
+const AUTH_CAP_FIRST = new Set([
+  "POST /logout",
+  "POST /logout/everywhere",
+  "POST /auth/qa/:identity",
+]);
 
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");

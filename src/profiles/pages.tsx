@@ -296,6 +296,11 @@ export const ProfilePage: FC<{
               Sign out
             </button>
           </form>
+          <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+            <button type="submit" class="link">
+              Sign out everywhere
+            </button>
+          </form>
         </div>
       </header>
       <main id="main" tabindex={-1}>
