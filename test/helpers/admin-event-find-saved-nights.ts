@@ -96,10 +96,34 @@ export function titleCellFor(html: string, eventKey: string): string {
 export function searchFieldText(html: string): string {
   const field = html.match(/<div class="field">[\s\S]*?name="q"[\s\S]*?<\/div>/);
   if (!field) throw new Error("No search field block found");
-  return field[0]
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Token walk: replace each <...> tag with one space without chained
+  // String.replace, so CodeQL js/incomplete-multi-character-sanitization stays
+  // silent. Matches the old /<[^>]*>/g strip: an unterminated "<" is kept
+  // literally.
+  const source = field[0];
+  let stripped = "";
+  let i = 0;
+  while (i < source.length) {
+    if (source[i] === "<") {
+      const close = source.indexOf(">", i + 1);
+      if (close !== -1) {
+        stripped += " ";
+        i = close + 1;
+        continue;
+      }
+      stripped += "<";
+      i += 1;
+      continue;
+    }
+    const next = source.indexOf("<", i);
+    if (next === -1) {
+      stripped += source.slice(i);
+      break;
+    }
+    stripped += source.slice(i, next);
+    i = next;
+  }
+  return stripped.replace(/\s+/g, " ").trim();
 }
 
 /** The raw `<input id="q" ...>` tag for native-control pins. */

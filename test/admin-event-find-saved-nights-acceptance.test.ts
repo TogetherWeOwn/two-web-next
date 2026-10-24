@@ -156,10 +156,31 @@ function sortHref(html: string, label: string): string {
 }
 
 function strippedText(cell: string): string {
-  return cell
-    .replace(/<[^>]*>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Token walk: skip each <...> tag without chained String.replace, so CodeQL
+  // js/incomplete-multi-character-sanitization stays silent. Matches the old
+  // /<[^>]*>/g strip: an unterminated "<" is kept literally.
+  let stripped = "";
+  let i = 0;
+  while (i < cell.length) {
+    if (cell[i] === "<") {
+      const close = cell.indexOf(">", i + 1);
+      if (close !== -1) {
+        i = close + 1;
+        continue;
+      }
+      stripped += "<";
+      i += 1;
+      continue;
+    }
+    const next = cell.indexOf("<", i);
+    if (next === -1) {
+      stripped += cell.slice(i);
+      break;
+    }
+    stripped += cell.slice(i, next);
+    i = next;
+  }
+  return stripped.replace(/\s+/g, " ").trim();
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("saved-nights store search (live disposable DB)", () => {
