@@ -20,12 +20,13 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../islands/contracts";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 
-const Card: FC<{ e: PublicEvent }> = ({ e }) => {
+const Card: FC<{ e: PublicEvent; archive: ArchiveContext }> = ({ e, archive }) => {
   // Same compact host line as the upcoming CalCard: trimmed public organizer,
   // already on the row (no new read); blank/missing renders no node.
   const host = (e.organizer_name ?? "").trim();
@@ -34,7 +35,7 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => {
       <ScheduleDate date={e.startsAt} zone={e.timezone} />
       <div class="schedule-info">
         <h2>
-          <a href={`/e/${e.eventKey}`}>{e.title}</a>
+          <a href={archiveEventHref(e.eventKey, archive)}>{e.title}</a>
         </h2>
         {/* Upcoming-card shape (time · zone · location): the zone always
             renders, the location only when the row has one. */}
@@ -127,7 +128,7 @@ export const PastEventsPage: FC<{
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} />
+          <Card e={e} archive={{ page, q }} />
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
