@@ -625,18 +625,23 @@ describe("performance CI", () => {
     }
   });
 
-  it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
+  it("pins the patched Puppeteer graph only under Lighthouse", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
-    // GHSA-c475-qrg2-pj4r: retain the patched FTP client in LHCI's proxy chain.
+    // GHSA-c475-qrg2-pj4r: LHCI's real proxy chain still needs patched FTP.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
-    // The engine floor supports the ESM-only browser helper. Upgrade Puppeteer
-    // only under Lighthouse, whose BiDi consumer now declares Zod 4 itself.
+    // The verified Node floor supports the browser helper's ESM entry point.
     expect(pkg.engines.node).toBe("^22.23.0 || >=24");
-    expect(pkg.overrides.lighthouse).toEqual({ "puppeteer-core": "25.16.0" });
-    expect(pkg.dependencies.zod).toBe("4.6.7");
-    // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
+    expect(pkg.overrides["lighthouse"]).toEqual({ "puppeteer-core": "25.16.0" });
+    // Puppeteer 25 no longer declares proxy-agent. Do not force its obsolete
+    // dependency or force Zod 4 into the older BiDi parser's Zod 3 contract.
+    expect(pkg.overrides).not.toHaveProperty("puppeteer-core");
+    expect(pkg.overrides).not.toHaveProperty("zod");
+  });
+
+  it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
+    // Resolve from each real consumer, not an unrelated hoisted root package.
     const loaded = spawnSync(
       process.execPath,
       [
@@ -650,15 +655,6 @@ describe("performance CI", () => {
       const require = createRequire(import.meta.url);
       const lhciRequire = createRequire(require.resolve("@lhci/cli/package.json"));
       assert.equal(require("@lhci/cli/package.json").version, "0.15.1");
-      assert.equal(lhciRequire("lighthouse/package.json").version, "12.6.1");
-      const lighthouseRequire = createRequire(lhciRequire.resolve("lighthouse/package.json"));
-      assert.equal(lighthouseRequire("puppeteer-core/package.json").version, "25.16.0");
-      const puppeteerRequire = createRequire(lighthouseRequire.resolve("puppeteer-core/package.json"));
-      assert.equal(puppeteerRequire("chromium-bidi/package.json").version, "157.0.8090-0");
-      const bidiRequire = createRequire(puppeteerRequire.resolve("chromium-bidi/package.json"));
-      assert.equal(puppeteerRequire("chromium-bidi/package.json").dependencies.zod, "^4.6.5");
-      assert.equal(bidiRequire("zod/package.json").version, "4.6.7");
-      assert.equal(bidiRequire.resolve("zod"), require.resolve("zod"));
       const tmp = lhciRequire("tmp");
       assert.equal(lhciRequire("tmp/package.json").version, "0.2.7");
       const file = tmp.fileSync({ postfix: ".html" });
@@ -668,30 +664,45 @@ describe("performance CI", () => {
         assert.ok(existsSync(file.name));
       } finally { file.removeCallback(); }
       assert.equal(existsSync(file.name), false);
+      const lighthouseRequire = createRequire(lhciRequire.resolve("lighthouse/package.json"));
+      assert.equal(lhciRequire("lighthouse/package.json").version, "12.6.1");
+      const puppeteer = lighthouseRequire("puppeteer-core/package.json");
+      assert.equal(puppeteer.version, "25.16.0");
+      assert.equal(puppeteer.dependencies["@puppeteer/browsers"], "3.2.6");
+      assert.equal(puppeteer.dependencies["chromium-bidi"], "157.0.8090-0");
+      assert.equal(Object.hasOwn(puppeteer.dependencies, "proxy-agent"), false);
+      const puppeteerRequire = createRequire(lighthouseRequire.resolve("puppeteer-core/package.json"));
+      assert.equal(puppeteerRequire("@puppeteer/browsers/package.json").version, "3.2.6");
+      // CJS and ESM consumers must both load the actual overridden toolchain.
       assert.equal(typeof lighthouseRequire("puppeteer-core").connect, "function");
       assert.equal(typeof (await import(pathToFileURL(lighthouseRequire.resolve("puppeteer-core")).href)).connect, "function");
+      assert.equal(typeof puppeteerRequire("@puppeteer/browsers").launch, "function");
+      assert.equal(typeof (await import(pathToFileURL(puppeteerRequire.resolve("@puppeteer/browsers")).href)).launch, "function");
       assert.equal(typeof (await import(pathToFileURL(lhciRequire.resolve("lighthouse")).href)).default, "function");
-      // Exercise the actual BiDi parser: importing Puppeteer alone leaves Zod lazy.
-      const parserUrl = pathToFileURL(puppeteerRequire.resolve(
-        "chromium-bidi/out/Default/gen/src/bidiTab/BidiParser.js"));
-      const { BidiParser } = await import(parserUrl.href);
-      const parser = new BidiParser();
-      assert.deepEqual(parser.parseGetTreeParams({ maxDepth: 1 }), { maxDepth: 1 });
-      assert.throws(() => parser.parseGetTreeParams({ maxDepth: -1 }));
-      // LHCI retains the proxy/FTP chain; Puppeteer no longer owns proxy-agent
-      // as a direct dependency. Its browser helper declares an optional peer,
-      // which npm ls validates separately from this module-loading contract.
-      assert.equal(puppeteerRequire("puppeteer-core/package.json").dependencies["proxy-agent"], undefined);
-      const browsers = puppeteerRequire("@puppeteer/browsers/package.json");
-      assert.equal(browsers.version, "3.2.6");
-      assert.equal(browsers.peerDependencies["proxy-agent"], ">=8.0.1");
-      assert.equal(browsers.peerDependenciesMeta["proxy-agent"].optional, true);
-      let proxyRequire = lhciRequire;
-      for (const name of ["proxy-agent", "pac-proxy-agent", "get-uri"]) {
-        proxyRequire = createRequire(proxyRequire.resolve(name + "/package.json"));
+      const bidi = puppeteerRequire("chromium-bidi/package.json");
+      assert.equal(bidi.version, "157.0.8090-0");
+      assert.equal(bidi.dependencies.zod, "^4.6.5");
+      const bidiRequire = createRequire(puppeteerRequire.resolve("chromium-bidi/package.json"));
+      assert.equal(bidiRequire("zod/package.json").version, "4.6.7");
+      // A real parser call catches a superficially clean but incompatible Zod override.
+      const parser = await import(pathToFileURL(bidiRequire.resolve(
+        "./out/Default/gen/src/protocol-parser/protocol-parser.js")).href);
+      const navigation = { context: "fixture-context", url: "https://fixture.invalid/", wait: "complete" };
+      assert.deepEqual(parser.BrowsingContext.parseNavigateParams(navigation), navigation);
+      for (const invalid of [{ ...navigation, url: 123 }, { url: navigation.url }, { ...navigation, wait: "invalid" }]) {
+        assert.throws(() => parser.BrowsingContext.parseNavigateParams(invalid),
+          error => error.error === "invalid argument");
       }
-      assert.equal(proxyRequire("basic-ftp/package.json").version, "6.2.1");
-      assert.equal(typeof proxyRequire("basic-ftp").Client, "function");
+      // Only traverse declared dependency edges. Hoisting can make proxy-agent
+      // resolvable from Puppeteer even though Puppeteer no longer depends on it.
+      let req = lhciRequire;
+      for (const name of ["proxy-agent", "pac-proxy-agent", "get-uri"]) {
+        assert.equal(typeof req("./package.json").dependencies[name], "string");
+        req = createRequire(req.resolve(name + "/package.json"));
+      }
+      assert.equal(typeof req("./package.json").dependencies["basic-ftp"], "string");
+      assert.equal(req("basic-ftp/package.json").version, "6.2.1");
+      assert.equal(typeof req("basic-ftp").Client, "function");
     `,
       ],
       { encoding: "utf8", timeout: 20000 },
