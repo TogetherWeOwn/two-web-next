@@ -267,6 +267,8 @@ const baseScheduleData = (overrides: Record<string, unknown> = {}): Record<strin
   now: new Date("2030-01-01T20:00:00Z"),
   totalPages: 1,
   emptyState: "never",
+  games: [],
+  gameFilter: null,
   robots: undefined,
   discordFailed: false,
   member: false,

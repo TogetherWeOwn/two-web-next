@@ -15,6 +15,8 @@
   var feedback = root.querySelector("[data-cal-feedback]");
   var input = root.querySelector('[data-testid="events-search"]');
   var form = input && input.closest("form");
+  var gameField = root.querySelector('select[name="game"]');
+  var gameRevision = 0;
   var LIVE_TESTIDS = [
     "events-view-status",
     "events-search-status",
@@ -269,6 +271,8 @@
     hideRecovery();
     var inputAtStart = input.value;
     var inputRevisionAtStart = inputRevision;
+    var gameAtStart = gameField && gameField.value;
+    var gameRevisionAtStart = gameRevision;
     var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
@@ -435,6 +439,17 @@
         var sourceInput = page.querySelector('[data-testid="events-search"]');
         if (sourceInput) input.value = sourceInput.getAttribute("value") || "";
       }
+      // The persistent select owns its intent independently of text edits,
+      // including changing away and back while a history read is in flight.
+      if (
+        opts.syncInput &&
+        gameField &&
+        gameField.value === gameAtStart &&
+        gameRevision === gameRevisionAtStart
+      ) {
+        var sourceGame = page.querySelector('select[name="game"]');
+        if (sourceGame) gameField.value = sourceGame.value;
+      }
       var canonicalLink = document.querySelector('link[rel="canonical"]');
       var ogUrl = document.querySelector('meta[property="og:url"]');
       if (canonicalLink) canonicalLink.href = canonical.href;
@@ -480,13 +495,21 @@
   }
 
   // The URL for a settled search: the raw input value (blank means no search),
-  // the drawer stays as it was, and the search forces the list view — so
-  // view/month params are dropped, matching the server's calendarUrl().
+  // the drawer stays as it was, the game facet rides along, and the search
+  // forces the list view — so view/month params are dropped, matching the
+  // server's calendarUrl(). The facet reads the live select (like the input
+  // reads its live value), falling back to the address bar where the form
+  // has no select yet.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
-    if (new URL(window.location.href).searchParams.get("past") === "1") {
+    var current = new URL(window.location.href).searchParams;
+    if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
+    }
+    var game = gameField ? gameField.value : current.get("game");
+    if (game !== null && game !== undefined && String(game).trim() !== "") {
+      url.searchParams.set("game", String(game).trim());
     }
     return url;
   }
@@ -547,14 +570,9 @@
   // reschedules that same timer, so it cannot double-submit).
   var composing = false;
 
-  function scheduleSearch() {
-    inputRevision += 1;
-    cancelDebounce();
-    // Typing supersedes a failed intent at once, not when the next fetch
-    // starts; composition schedules nothing but still drops the recovery.
-    hideRecovery();
-    // Typing supersedes a search immediately, not just when the next fetch starts.
-    // Explicit navigation may still commit while newer text remains in the box.
+  // Text or game intent revokes an ordinary search before its response commits.
+  // Explicit navigation stays alive, preserving each field's independent edits.
+  function cancelSearch() {
     if (active && activeIsSearch) {
       active.abort();
       active = null;
@@ -562,6 +580,15 @@
       // Revoked owners cannot release loading inherited from navigation in finally.
       setLoading(false);
     }
+  }
+
+  function scheduleSearch() {
+    inputRevision += 1;
+    cancelDebounce();
+    // Typing supersedes a failed intent at once, not when the next fetch
+    // starts; composition schedules nothing but still drops the recovery.
+    hideRecovery();
+    cancelSearch();
     if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
@@ -583,6 +610,12 @@
     if (event && event.isComposing) composing = true;
     scheduleSearch();
   });
+
+  if (gameField)
+    gameField.addEventListener("change", function () {
+      gameRevision += 1;
+      cancelSearch();
+    });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -626,7 +659,7 @@
     });
   }
 
-  // The month-jump form is a native GET form (view + past ride as hidden
+  // The month-jump form is a native GET form (view + game + past ride as hidden
   // fields), so a jump works without this file. With it, submit reuses the
   // fragment flow: the chosen month commits exactly like a month step, focus
   // landing in the new form — or back on the origin submitter on failure.
@@ -638,7 +671,7 @@
   function jumpUrl(formEl) {
     var url = new URL("/events", window.location.origin);
     url.searchParams.set("view", "calendar");
-    ["month", "past"].forEach(function (name) {
+    ["month", "game", "past"].forEach(function (name) {
       var field = formEl.querySelector('[name="' + name + '"]');
       if (field && field.value) url.searchParams.set(name, field.value);
     });
