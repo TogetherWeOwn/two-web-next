@@ -221,6 +221,7 @@ export function kitProfileDeps() {
       return { ...store, async find(id) { reads.push("find:" + id); return store.find(id); } };
     },
     async statsFor(id) { reads.push("stats:" + id); return null; },
+    async historyFor(id) { reads.push("history:" + id); return null; },
   };
 }
 `,
@@ -348,7 +349,13 @@ describe.each(cases)(
 
     it("keeps the same bounded local reads and private cache policy", async () => {
       const result = await render();
-      expect(result.reads).toEqual(["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`]);
+      // The owner's self-view adds exactly one bounded history read; other
+      // renders keep the original read sequence untouched.
+      expect(result.reads).toEqual(
+        owner
+          ? ["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`, `history:${MEMBER_ID}`]
+          : ["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`],
+      );
       expect(result.headers).toEqual({ "cache-control": "private, no-store" });
       expect(fetch).not.toHaveBeenCalled();
     });

@@ -7,6 +7,7 @@ import type { Db } from "../db/index";
 import type { Env } from "../env";
 import type { checkJoinThrottle } from "../join/service";
 import type { SessionStore } from "../sessions";
+import type { AttendedHistory } from "./history";
 import type { MemberStatsSource } from "./stats";
 import type { ProfileStore } from "./store";
 
@@ -18,6 +19,7 @@ export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
   stats?: MemberStatsSource;
+  history?: (memberId: string) => Promise<AttendedHistory | null>;
   accessLog?: AccessSink;
   /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;

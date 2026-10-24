@@ -107,6 +107,9 @@ type LoadSeam = {
   resolveKitProfile: typeof resolveKitProfile;
   storeFor: () => Promise<ReturnType<typeof createMemoryProfileStore>>;
   statsFor: (id: string) => Promise<null>;
+  // No-attendance twin: the participation matrix never seeds events, so the
+  // history section stays hidden and these renders pin the history-free bytes.
+  historyFor: (id: string) => Promise<null>;
 };
 type Loader = (event: LoadEvent, seam: LoadSeam) => Promise<Record<string, unknown>>;
 const loaders = new Map<boolean, Promise<Loader>>();
@@ -266,6 +269,7 @@ export async function participationFixture(
             statsReads.push(id);
             return null;
           },
+          historyFor: async () => null,
         },
       );
       const render = await compileView();

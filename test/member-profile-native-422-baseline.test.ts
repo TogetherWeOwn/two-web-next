@@ -28,6 +28,7 @@ import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { registerProfileParticipationBrowserCases } from "./helpers/profile-participation-browser";
+import { registerProfileAttendedHistoryBrowserCases } from "./helpers/profile-attended-history-browser";
 
 const ID = "100000000000000001";
 const env = {
@@ -185,6 +186,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   "native 422 baseline in a real browser",
   () => {
     registerProfileParticipationBrowserCases();
+    registerProfileAttendedHistoryBrowserCases();
     let browser: Browser;
     const contexts: BrowserContext[] = [];
     const servers: Server[] = [];

@@ -140,7 +140,9 @@ export async function readOwnedMemberStats(
 
 const stringOrNull = (value: unknown): string | null =>
   typeof value === "string" && value !== "" ? value : null;
-const dateOrNull = (value: unknown): Date | null => {
+// Shared with the attended-history reader: raw reads return instants as text
+// on some driver paths, so both readers coerce Date-or-string defensively.
+export const dateOrNull = (value: unknown): Date | null => {
   if (!(value instanceof Date) && (typeof value !== "string" || value === "")) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isFinite(date.getTime()) ? date : null;

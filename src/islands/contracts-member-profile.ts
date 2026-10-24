@@ -39,6 +39,11 @@ export const PROFILE_UNCERTAIN_TESTID = "profile-uncertain";
 export const PROFILE_SAVE_THROTTLED_TESTID = "profile-save-throttled";
 /** Polite status shown while a save is unsettled; the form carries aria-busy meanwhile. */
 export const PROFILE_PENDING_TESTID = "profile-pending";
+/** Self-view attended history (both twins): section, count, truncation hint, empty state. */
+export const PROFILE_ATTENDED_TESTID = "profile-attended";
+export const PROFILE_ATTENDED_COUNT_TESTID = "profile-attended-count";
+export const PROFILE_ATTENDED_MORE_TESTID = "profile-attended-more";
+export const PROFILE_ATTENDED_EMPTY_TESTID = "profile-attended-empty";
 
 /**
  * Owned client deadline for a profile save, covering fetch plus
