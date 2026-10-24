@@ -387,7 +387,22 @@ export async function readRoster(
 export function rosterHtml(html: string) {
   const section = html.match(/<section\b[^>]*\bid="rsvp-roster"[\s\S]*?<\/section>/)?.[0];
   if (!section) throw new Error("real route did not render the RSVP roster");
-  return section.replace(/<!--[^]*?-->/g, "");
+  // Strip Svelte hydration comments by walking comment tokens: a comment
+  // ends at the first `-->`. No regex rewrite, so CodeQL
+  // incomplete-multi-character-sanitization does not apply.
+  let out = "";
+  let index = 0;
+  while (index < section.length) {
+    const start = section.indexOf("<!--", index);
+    if (start === -1) {
+      out += section.slice(index);
+      break;
+    }
+    out += section.slice(index, start);
+    const end = section.indexOf("-->", start + 4);
+    index = end === -1 ? section.length : end + 3;
+  }
+  return out;
 }
 export const text = (html: string) =>
   html
