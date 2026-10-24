@@ -1,5 +1,12 @@
 // Query state for the smaller admin tables. Raw sort keys never reach SQL.
 
+// Local shape gate for values that NAME an event key without routing to one
+// (the activity-log event scope). Mirrors src/events/keys.ts ULID_KEY/SEED_KEY
+// without importing it: table-list is reachable from the featured
+// current-source proof, and importing keys would pull src/qa.ts into that
+// scope. Admitting the seed shape in a read filter cannot widen anything:
+// the scope is an exact-equality conjunction applied before paging.
+
 export type ListParams = Record<string, string | undefined>;
 export type SortOrder = "asc" | "desc";
 export {
@@ -29,7 +36,25 @@ export type RosterQuery = {
 };
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
-export type ActivityLogQuery = { subject: string; causer: string; page: number };
+export type ActivityLogQuery = {
+  subject: string;
+  causer: string;
+  page: number;
+  /** Exact event-key scope; present only when a valid scope was admitted. */
+  event?: string;
+  /** Present only when a present-but-malformed scope must fail explicitly. */
+  eventInvalid?: true;
+};
+
+/** Branded invalid-scope failure: explicit 422, never silent unscoped rows. */
+export function invalidActivityLogScope(): Error & { status: number } {
+  return Object.assign(new Error("Invalid event scope"), { status: 422 });
+}
+const ULID_KEY_SHAPE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+const SEED_KEY_SHAPE = /^seed-calendar-(0[1-9]|[1-4][0-9]|50)$/;
+const eventKeyShaped = (key: string): boolean =>
+  ULID_KEY_SHAPE.test(key) || SEED_KEY_SHAPE.test(key);
+
 export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
@@ -95,11 +120,25 @@ export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
     /^[1-9]\d*$/.test(params.page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
-  return {
+  const query: ActivityLogQuery = {
     subject: boundFreeText(withoutNul(params.subject).trim()),
     causer: boundFreeText(withoutNul(params.causer).trim()),
     page: validPage ? page : 1,
   };
+  // One bounded exact-event scope. Absent-or-blank reads as unscoped (no scope
+  // UI); a key-shaped value is admitted verbatim for an exact match (no case
+  // normalization: a lowercase ULID is well-formed but matches nothing, like
+  // any unknown key); anything else present is flagged so the route fails
+  // explicitly instead of silently rendering unscoped rows as scoped. Duplicate
+  // `event` params cannot reach this single-value shape: each boundary counts
+  // them first (Hono c.req.queries, Kit getAll) and fails on more than one.
+  const rawEvent = params.event;
+  const cleanEvent = rawEvent === undefined ? "" : withoutNul(rawEvent).trim();
+  if (cleanEvent !== "") {
+    if (eventKeyShaped(cleanEvent)) query.event = cleanEvent;
+    else query.eventInvalid = true;
+  }
+  return query;
 }
 
 export function rosterUrl(
@@ -152,7 +191,18 @@ export function activityLogUrl(query: ActivityLogQuery, page: number): string {
   const params = new URLSearchParams({ page: String(page) });
   if (query.subject) params.set("subject", query.subject);
   if (query.causer) params.set("causer", query.causer);
+  if (query.event) params.set("event", query.event);
   return `/admin/activity-log?${params}`;
+}
+
+/** Scope-removal target: keeps unrelated valid filters, resets to page 1. */
+export function activityLogUnscopedUrl(query: ActivityLogQuery): string {
+  return activityLogUrl({ subject: query.subject, causer: query.causer, page: 1 }, 1);
+}
+
+/** Saved-editor history link: scoped to the persisted key, page 1 bare. */
+export function eventActivityLogUrl(eventKey: string): string {
+  return `/admin/activity-log?event=${encodeURIComponent(eventKey)}`;
 }
 
 /** Zero-row copy for the RSVP roster on the event edit page. */
@@ -173,5 +223,6 @@ export function formatActivityCauser(causerId: string | null): string {
 
 /** Zero-row copy for the activity-log viewer. */
 export function activityLogEmptyText(query: ActivityLogQuery): string {
+  if (query.event) return "No recorded changes for this event.";
   return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";
 }

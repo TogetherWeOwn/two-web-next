@@ -6,6 +6,7 @@ import {
   ACTIVITY_LOG_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
   ROSTER_PAGE_SIZE,
+  invalidActivityLogScope,
   parseActivityLogQuery,
   parseJoinAttemptsQuery,
   type RosterQuery,
@@ -185,24 +186,30 @@ const activityLogColumns = {
 /**
  * Paginated activity rows, newest first. `subject` matches the subject
  * type/id or description (substring); `causer` matches the causer snowflake
- * (substring). The retrieved causer snowflakes are the access-log subjects:
- * a page that names moderators writes one access-log row, and a failed
- * access-log write fails closed in the guard's boundary. System rows with a
- * null/non-snowflake causer contribute no subject, like pre-identity join
- * attempts. Imported rows keep legacy internal causer IDs (docs/data-import.md):
- * they render with an explicit legacy label and never become access-log
- * subjects, because the guard only accepts snowflakes and inventing a member
- * subject would be worse than logging none.
+ * (substring); `event` narrows to exactly one saved event (subjectType Event
+ * AND exact subjectId match, never a substring simulation). The retrieved
+ * causer snowflakes are the access-log subjects: a page that names moderators
+ * writes one access-log row, and a failed access-log write fails closed in
+ * the guard's boundary. System rows with a null/non-snowflake causer
+ * contribute no subject, like pre-identity join attempts. Imported rows keep
+ * legacy internal causer IDs (docs/data-import.md): they render with an
+ * explicit legacy label and never become access-log subjects, because the
+ * guard only accepts snowflakes and inventing a member subject would be worse
+ * than logging none.
  */
 export async function listActivityLog(
   db: Db,
-  opts: { subject?: string; causer?: string; page?: number },
+  opts: { subject?: string; causer?: string; event?: string; eventInvalid?: true; page?: number },
 ): Promise<ActivityLogViewerRow[]> {
   const parsed = parseActivityLogQuery({
     subject: opts.subject,
     causer: opts.causer,
+    event: opts.event,
     page: String(opts.page ?? 1),
   });
+  // Fail closed before any database work: an invalid scope can never silently
+  // read as unscoped, and no row is retrieved to declare subjects from.
+  if (opts.eventInvalid || parsed.eventInvalid) throw invalidActivityLogScope();
   // One transaction behind the shared transaction-local lock/statement
   // bound, so a stalled table cancels server-side and the caller refuses
   // only after the transaction settles. Causers are declared from the
@@ -210,6 +217,11 @@ export async function listActivityLog(
   const rows = await db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
     const conds: SQL[] = [];
+    if (parsed.event) {
+      // Event writes record subjectType Event plus the row's eventKey (never
+      // the numeric id): the exact-equality pair below is the whole scope.
+      conds.push(eq(activityLog.subjectType, "Event"), eq(activityLog.subjectId, parsed.event));
+    }
     if (parsed.subject) {
       const term = `%${escapeLikeTerm(parsed.subject)}%`;
       conds.push(

@@ -31,6 +31,7 @@ import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { eventKeyAllowed } from "../events/keys";
 import {
+  eventActivityLogUrl,
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
   ROSTER_STATUSES,
@@ -114,6 +115,8 @@ export type KitEventEditView = {
   key: string;
   title: string;
   status: string;
+  /** Scoped activity-log URL for the persisted key (the Hono twin's link). */
+  recordedChangesUrl: string;
   values: KitEventEditValues;
   errors: Record<string, string>;
   hasErrors: boolean;
@@ -239,6 +242,7 @@ export async function resolveKitEventEdit(
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      recordedChangesUrl: eventActivityLogUrl(row.eventKey),
       values: {
         title: row.title,
         game: row.game ?? "",
