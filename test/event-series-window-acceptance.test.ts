@@ -3,8 +3,9 @@
 // Acceptance: a parent series edit applies independent start/end deltas to
 // future occurrences. If a delta would leave any affected future occurrence
 // ending at or before it starts, the whole edit must be refused with the
-// existing ends_at validation response — atomically, with no shifted rows,
-// no audit rows, no waitlist promotions and no dispatched write-backs.
+// ends_at validation response naming the blocking occurrence's public key —
+// atomically, with no shifted rows, audit rows, waitlist promotions or dispatched
+// write-backs. A parent or nonoffending sibling key is not that diagnostic.
 //
 // Concrete counterexample: parent 20:00-22:00, an individually shortened
 // future occurrence 20:00-20:30, then the parent end moves to 21:00. The
@@ -161,7 +162,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
       endsAt: "2099-11-18T22:00:00Z",
     };
 
-    it("refuses the shortened-child edit atomically: no rows, audits, promotions or write-backs", async () => {
+    function endsAtDiagnostic(html: string) {
+      // The rest of the page legitimately contains the parent/form identities.
+      const match = html.match(/<p\b[^>]*data-testid="error-ends_at"[^>]*>([\s\S]*?)<\/p>/);
+      expect(match).not.toBeNull();
+      return match![1]!;
+    }
+
+    function identifiesShortenedChild(diagnostic: string, parentKey: string) {
+      // Soft pins let rollback and no-dispatch assertions execute on a red run.
+      expect.soft(diagnostic).toContain(SHORTENED.eventKey);
+      expect.soft(diagnostic).not.toContain(parentKey);
+      expect.soft(diagnostic).not.toContain(SIBLING.eventKey);
+    }
+
+    it("identifies the shortened child atomically: no rows, audits, promotions or write-backs", async () => {
       const [parent] = await seedSeries([SHORTENED, SIBLING]);
       await db.insert(rsvps).values([
         { eventId: parent!.id, userId: "100000000000000301", status: "going" },
@@ -176,7 +191,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         capacity: "2",
       });
       expect(res.status).toBe(422);
-      expect(await res.text()).toContain(END_AFTER_START);
+      identifiesShortenedChild(endsAtDiagnostic(await res.text()), parent!.eventKey);
       expect(await snapshot()).toEqual(before);
       expect(dispatchWriteBack).not.toHaveBeenCalled();
     });
@@ -192,7 +207,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         ends_at: "2099-11-04 21:00",
       });
       expect(res.status).toBe(422);
-      expect(await res.text()).toContain(END_AFTER_START);
+      identifiesShortenedChild(endsAtDiagnostic(await res.text()), parent!.eventKey);
       expect(await snapshot()).toEqual(before);
       expect(dispatchWriteBack).not.toHaveBeenCalled();
     });
@@ -205,24 +220,61 @@ describe.skipIf(!process.env.DATABASE_URL)(
         starts_at: "2099-11-04 21:30",
       });
       expect(res.status).toBe(422);
-      expect(await res.text()).toContain(END_AFTER_START);
+      identifiesShortenedChild(endsAtDiagnostic(await res.text()), parent!.eventKey);
       expect(await snapshot()).toEqual(before);
       expect(dispatchWriteBack).not.toHaveBeenCalled();
     });
 
-    it("refuses the same edit over JSON PATCH with the ends_at field error and no writes", async () => {
-      const [parent] = await seedSeries([SHORTENED, SIBLING]);
-      const before = await snapshot();
-      const res = await patch(parent!.eventKey, { ends_at: "2099-11-04 21:00" });
-      expect(res.status).toBe(422);
-      expect(await res.json()).toEqual({
-        error: "invalid",
-        fields: { ends_at: END_AFTER_START },
-        request_id: res.headers.get("x-request-id"),
+    it.each([
+      ["inverted", SHORTENED.endsAt, { ends_at: "2099-11-04 21:00" }],
+      ["zero-length", "2099-11-11T21:00:00Z", { ends_at: "2099-11-04 21:00" }],
+      ["start-only", SHORTENED.endsAt, { starts_at: "2099-11-04 21:30" }],
+    ])(
+      "JSON PATCH identifies the %s blocking child with no writes",
+      async (_label, end, changes) => {
+        const [parent] = await seedSeries([{ ...SHORTENED, endsAt: end }, SIBLING]);
+        const before = await snapshot();
+        const res = await patch(parent!.eventKey, changes);
+        expect(res.status).toBe(422);
+        const body = (await res.json()) as { fields: { ends_at: string } };
+        expect(body).toEqual({
+          error: "invalid",
+          fields: { ends_at: expect.any(String) },
+          request_id: res.headers.get("x-request-id"),
+        });
+        identifiesShortenedChild(body.fields.ends_at, parent!.eventKey);
+        expect(await snapshot()).toEqual(before);
+        expect(sent).toEqual([]);
+        expect(dispatchWriteBack).not.toHaveBeenCalled();
+      },
+    );
+
+    for (const surface of ["native Save", "JSON PATCH"] as const) {
+      it.each([
+        ["inverted", "2099-11-04 19:00"],
+        ["zero-length", FORM.starts_at],
+      ])(`${surface}: invalid %s parent window keeps its own validation`, async (_label, end) => {
+        const [parent] = await seedSeries([SHORTENED, SIBLING]);
+        const before = await snapshot();
+        const res =
+          surface === "JSON PATCH"
+            ? await patch(parent!.eventKey, { ends_at: end })
+            : await post(`/events/${parent!.eventKey}`, { ...FORM, ends_at: end });
+        expect(res.status).toBe(422);
+        if (surface === "JSON PATCH") {
+          expect(await res.json()).toEqual({
+            error: "invalid",
+            fields: { ends_at: END_AFTER_START },
+            request_id: res.headers.get("x-request-id"),
+          });
+        } else {
+          expect(endsAtDiagnostic(await res.text())).toBe(END_AFTER_START);
+        }
+        expect(await snapshot()).toEqual(before);
+        expect(sent).toEqual([]);
+        expect(dispatchWriteBack).not.toHaveBeenCalled();
       });
-      expect(await snapshot()).toEqual(before);
-      expect(sent).toEqual([]);
-    });
+    }
 
     it("still applies a valid delta to every future occurrence and promotes the waiter", async () => {
       const [parent] = await seedSeries([SHORTENED, SIBLING]);
