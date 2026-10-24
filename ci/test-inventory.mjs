@@ -306,7 +306,10 @@ function collectWorkflowFiles(root) {
 
 // Script names CI actually runs, transitively: a workflow `npm run a` marks
 // `a` invoked, and `a`'s own `npm run b` marks `b`. Anything else in
-// package.json is a local helper, not a CI run.
+// package.json is a local helper, not a CI run. Workflow text is scanned
+// comment-stripped (a commented-out step is not a run), and an `npm run`
+// with forwarded `--` arguments fails closed when the target runs
+// `playwright test` (the gate cannot expand forwarded file filters).
 function invokedScriptNames(scripts, workflowText) {
   const invoked = new Set();
   const queue = [];
@@ -319,8 +322,27 @@ function invokedScriptNames(scripts, workflowText) {
       }
     }
   };
-  scan(workflowText);
+  const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
+  scan(stripped);
   while (queue.length) scan(scripts[queue.shift()] ?? "");
+  const runsPlaywright = (name, seen = new Set()) => {
+    if (seen.has(name)) return false;
+    seen.add(name);
+    const body = scripts[name] ?? "";
+    if (/\bplaywright\s+test\b/.test(body)) return true;
+    for (const m of body.matchAll(/npm\s+run(?:-script)?\s+([A-Za-z0-9_:\-./]+)/g)) {
+      if (runsPlaywright(m[1], seen)) return true;
+    }
+    return false;
+  };
+  for (const m of stripped.matchAll(/npm\s+run(?:-script)?\s+([A-Za-z0-9_:\-./]+)\s+--(\s|$)/g)) {
+    const name = m[1];
+    if (Object.hasOwn(scripts, name) && runsPlaywright(name)) {
+      assert.fail(
+        `workflow forwards arguments to ${name} (npm run ${name} -- ...): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
+      );
+    }
+  }
   return invoked;
 }
 
@@ -607,7 +629,18 @@ function parseProjectObject(objClean, objCode, configPath) {
       `${configPath} has a project spread this gate cannot expand: name testDir/testMatch/testIgnore explicitly`,
     );
     const colon = entryCode.indexOf(":");
-    if (colon === -1) continue;
+    if (colon === -1) {
+      const shorthand = entryCode.trim();
+      if (shorthand === "testDir")
+        assert.fail(
+          `${configPath} has a project testDir this gate cannot parse: use a plain string literal`,
+        );
+      if (shorthand === "testMatch" || shorthand === "testIgnore")
+        assert.fail(
+          `${configPath} has a project ${shorthand} this gate cannot parse: use a string or an array of strings`,
+        );
+      continue;
+    }
     const key = entryCode.slice(0, colon).trim();
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore") continue;
     const valueClean = objClean.slice(start, end).slice(colon + 1);
@@ -630,11 +663,10 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
   const text = readFileSync(join(root, configRel), "utf8");
   const imports = parseConfigImports(text, configPath);
   const { clean, code } = findDefineConfigBody(text, configPath);
-  const bases = [];
-  let testDir = null;
-  let testMatch = null;
-  let testIgnore = null;
-  let projects = null;
+  // Source-ordered ops: spreads and explicit keys apply in the order they
+  // appear, like the object literal Playwright evaluates (`{...base, k: v}`
+  // differs from `{k: v, ...base}` when base sets k).
+  const ops = [];
   for (const { start, end } of splitTopLevel(code)) {
     const entryCode = code.slice(start, end);
     if (!entryCode.trim()) continue;
@@ -654,17 +686,35 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
         candidate.endsWith(".config.ts"),
         `${configPath} spreads ...${id} from a non-config file (${candidate})`,
       );
-      bases.push(parsePlaywrightConfig(root, candidate, seen));
+      ops.push({ kind: "spread", parsed: parsePlaywrightConfig(root, candidate, seen) });
       continue;
     }
     const colon = entryCode.indexOf(":");
-    if (colon === -1) continue;
+    if (colon === -1) {
+      const shorthand = entryCode.trim();
+      if (shorthand === "testDir")
+        assert.fail(
+          `${configPath} has a testDir this gate cannot parse: use a plain string literal`,
+        );
+      if (shorthand === "testMatch" || shorthand === "testIgnore")
+        assert.fail(
+          `${configPath} has a ${shorthand} this gate cannot parse: use a string or an array of strings`,
+        );
+      if (shorthand === "projects")
+        assert.fail(`${configPath} has projects this gate cannot parse: use an array of objects`);
+      continue;
+    }
     const key = entryCode.slice(0, colon).trim();
     if (key !== "testDir" && key !== "testMatch" && key !== "testIgnore" && key !== "projects")
       continue;
     const valueClean = clean.slice(start, end).slice(colon + 1);
     const valueCode = entryCode.slice(colon + 1);
-    if (key === "testDir") testDir = parsePlainString(valueClean, configPath, "testDir");
+    if (key === "testDir")
+      ops.push({
+        kind: "key",
+        key,
+        value: parsePlainString(valueClean, configPath, "testDir"),
+      });
     else if (key === "projects") {
       const open = valueCode.indexOf("[");
       assert.ok(
@@ -676,7 +726,7 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
         valueCode.slice(close + 1).trim() === "",
         `${configPath} has projects this gate cannot parse: trailing content after the array`,
       );
-      projects = [];
+      const parsedProjects = [];
       for (const part of splitTopLevel(valueCode.slice(open + 1, close))) {
         const pCode = valueCode.slice(open + 1, close).slice(part.start, part.end);
         if (!pCode.trim()) continue;
@@ -687,7 +737,7 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
         );
         const pClose = matchBracket(pCode, pOpen, `${configPath} project`);
         const pClean = valueClean.slice(open + 1, close).slice(part.start, part.end);
-        projects.push(
+        parsedProjects.push(
           parseProjectObject(
             pClean.slice(pOpen + 1, pClose),
             pCode.slice(pOpen + 1, pClose),
@@ -695,23 +745,26 @@ function parsePlaywrightConfig(root, configRel, seen = new Set()) {
           ),
         );
       }
+      ops.push({ kind: "key", key, value: parsedProjects });
     } else {
-      const parsed = parseTestMatchValue(valueClean, valueCode, configPath, key);
-      if (key === "testMatch") testMatch = parsed;
-      else testIgnore = parsed;
+      ops.push({
+        kind: "key",
+        key,
+        value: parseTestMatchValue(valueClean, valueCode, configPath, key),
+      });
     }
   }
   const merged = { testDir: null, testMatch: null, testIgnore: null, projects: null };
-  for (const base of bases) {
-    if (base.testDir !== null) merged.testDir = base.testDir;
-    if (base.testMatch !== null) merged.testMatch = base.testMatch;
-    if (base.testIgnore !== null) merged.testIgnore = base.testIgnore;
-    if (base.projects !== null) merged.projects = base.projects;
+  for (const op of ops) {
+    if (op.kind === "spread") {
+      if (op.parsed.testDir !== null) merged.testDir = op.parsed.testDir;
+      if (op.parsed.testMatch !== null) merged.testMatch = op.parsed.testMatch;
+      if (op.parsed.testIgnore !== null) merged.testIgnore = op.parsed.testIgnore;
+      if (op.parsed.projects !== null) merged.projects = op.parsed.projects;
+    } else {
+      merged[op.key] = op.value;
+    }
   }
-  if (testDir !== null) merged.testDir = testDir;
-  if (testMatch !== null) merged.testMatch = testMatch;
-  if (testIgnore !== null) merged.testIgnore = testIgnore;
-  if (projects !== null) merged.projects = projects;
   seen.delete(configRel);
   return merged;
 }
@@ -796,18 +849,17 @@ function isFileUnderDir(file, dir) {
   return dir === "." || file === dir || file.startsWith(`${dir}/`);
 }
 
-// Playwright matches testMatch/testIgnore against the file path; whether the
-// basis is testDir-relative or repo-relative is version-dependent, so a
-// pattern matching either basis counts. Lenient toward reachable, never
-// toward orphans: a file any Playwright would run still passes.
-function patternMatchesFile(patterns, file, testDir) {
-  const candidates = [file];
-  if (testDir !== "." && file.startsWith(`${testDir}/`))
-    candidates.push(file.slice(testDir.length + 1));
-  else if (testDir === ".") candidates.push(file);
+// Playwright's createFileMatcher (1.64.1 pin) prefixes `**/` to any string
+// pattern not starting with it and matches with minimatch
+// `{ nocase: true, dot: true }` against the absolute path. The repo-relative
+// path stands in for the absolute (`**/` absorbs the repo prefix); matching
+// is case-insensitive. `*` already matches dots via `[^/]*`, so no dot-flag
+// equivalent is needed.
+function patternMatchesFile(patterns, file) {
   return patterns.some((p) => {
-    const re = globToRegExp(p);
-    return candidates.some((c) => re.test(c));
+    const effective = p.startsWith("**/") ? p : `**/${p}`;
+    const re = new RegExp(globToRegExp(effective).source, "i");
+    return re.test(file);
   });
 }
 
@@ -823,12 +875,12 @@ function configMatchesFile(parsed, configRel, file) {
     );
     const matchPatterns = testMatch.flatMap((p) => expandBraces(p, configRel));
     assertSupportedPlaywrightPatterns(matchPatterns, configRel);
-    if (!patternMatchesFile(matchPatterns, file, testDir)) return false;
+    if (!patternMatchesFile(matchPatterns, file)) return false;
     const testIgnore = project.testIgnore ?? parsed.testIgnore ?? [];
     if (!testIgnore.length) return true;
     const ignorePatterns = testIgnore.flatMap((p) => expandBraces(p, configRel));
     assertSupportedPlaywrightPatterns(ignorePatterns, configRel);
-    return !patternMatchesFile(ignorePatterns, file, testDir);
+    return !patternMatchesFile(ignorePatterns, file);
   });
 }
 
@@ -893,7 +945,20 @@ function collectSpecImports(root, file) {
     return cut === -1 ? line : line.slice(0, cut);
   });
   const specs = new Set();
+  // Type-only imports are erased at compile time and load nothing, so they
+  // are not reachability edges. A multiline `import type { ... } from "..."`
+  // skips through its closing `from` line; inline `{ type X }` specifiers
+  // still load the module and are kept.
+  let inTypeImport = false;
   for (const line of lines) {
+    if (/^\s*(?:import|export)\s+type\b/.test(line)) {
+      if (!/\bfrom\s*(['"])[^'"]+\1/.test(line)) inTypeImport = true;
+      continue;
+    }
+    if (inTypeImport) {
+      if (/\bfrom\s*(['"])[^'"]+\1/.test(line)) inTypeImport = false;
+      continue;
+    }
     for (const re of [
       /\bfrom\s*(['"])([^'"]+)\1/g,
       /\bimport\s*(['"])([^'"]+)\1/g,
@@ -1887,6 +1952,256 @@ function selftest() {
       assert.equal(JSON.parse(strict.stdout).code, "PLAYWRIGHT_SPEC_ORPHAN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright commented-out npm run step does not invoke its script", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { "e2e:cmt": "playwright test --config playwright.cmt.config.ts" },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      # - run: npm run e2e:cmt\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.cmt.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/a.spec.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Playwright createFileMatcher parity: `**/` is prefixed when absent and
+  // matching is case-insensitive. A nested `staging/**` ignore must prune,
+  // a differently-cased ignore must prune, and a basename testMatch must
+  // reach a nested file.
+  check("playwright matcher prefixes **/ and ignores case", () => {
+    const setup = (dir, configBody, files) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.m.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.m.config.ts"),
+        `import { defineConfig } from "@playwright/test";\nexport default defineConfig({ ${configBody} });\n`,
+      );
+      for (const f of files) {
+        mkdirSync(join(dir, dirname(f)), { recursive: true });
+        writeFileSync(
+          join(dir, f),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+      }
+    };
+    const cases = [
+      {
+        name: "nested staging ignore",
+        config: 'testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "staging/**"',
+        files: ["e2e/a.spec.ts", "e2e/kit/staging/x.spec.ts"],
+        orphans: ["e2e/kit/staging/x.spec.ts"],
+      },
+      {
+        name: "cased ignore",
+        config: 'testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore: "**/Staging/**"',
+        files: ["e2e/a.spec.ts", "e2e/staging/x.spec.ts"],
+        orphans: ["e2e/staging/x.spec.ts"],
+      },
+      {
+        name: "basename match",
+        config: 'testDir: "./e2e", testMatch: "a.spec.ts"',
+        files: ["e2e/sub/a.spec.ts", "e2e/other.spec.ts"],
+        orphans: ["e2e/other.spec.ts"],
+      },
+    ];
+    for (const c of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        setup(dir, c.config, c.files);
+        assert.deepEqual(playwrightInventory(dir).orphans, c.orphans, c.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright shorthand selection keys fail closed", () => {
+    const bodies = [
+      'const testDir = "./e2e/only";\nexport default defineConfig({ testDir, testMatch: "**/*.spec.ts" })',
+      'export default defineConfig({ testDir: "./e2e", testMatch })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", testIgnore })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects })',
+      'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts", projects: [{ name: "p", testDir }] })',
+    ];
+    for (const body of bodies) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.sh.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.sh.config.ts"),
+          `import { defineConfig } from "@playwright/test";\n${body};\n`,
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "a.spec.ts"),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+        assert.throws(() => playwrightInventory(dir), /cannot parse/, body);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // A spread after an explicit key wins in JavaScript, so the gate applies
+  // entries in source order: here base's visual-only testMatch overwrites
+  // the earlier spec-only one.
+  check("playwright spread after explicit key applies in source order", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.ord.config.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.base2.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.visual.ts" });\n',
+      );
+      writeFileSync(
+        join(dir, "playwright.ord.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nimport base from "./playwright.base2.config";\nexport default defineConfig({ testMatch: "**/*.spec.ts", ...base });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      writeFileSync(
+        join(dir, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      writeFileSync(
+        join(dir, "e2e", "b.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/a.spec.ts"]);
+      assert.deepEqual(
+        reachable.map((r) => r.file),
+        ["e2e/b.visual.ts"],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("playwright type-only imports are not reachability edges", () => {
+    const typeLines = [
+      'import type { X } from "./suite.visual";',
+      'export type { X } from "./suite.visual";',
+      'import type {\n X\n} from "./suite.visual";',
+    ];
+    for (const typeLine of typeLines) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.ty.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.ty.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "entry", "entry.spec.ts"),
+          `${typeLine}\nimport { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+        );
+        writeFileSync(
+          join(dir, "e2e", "entry", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+        );
+        assert.deepEqual(playwrightInventory(dir).orphans, ["e2e/entry/suite.visual.ts"], typeLine);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright npm run -- forwarded args fail closed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { e2e: "playwright test --config playwright.fwd.config.ts" },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run e2e -- e2e/a.spec.ts\n",
+      );
+      writeFileSync(
+        join(dir, "playwright.fwd.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(dir, "e2e"), { recursive: true });
+      for (const name of ["a", "b"]) {
+        writeFileSync(
+          join(dir, "e2e", `${name}.spec.ts`),
+          'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+        );
+      }
+      assert.throws(() => playwrightInventory(dir), /cannot expand/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // Control: forwarded args to a non-Playwright script stay out of scope.
+    const control = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+    try {
+      writeFileSync(
+        join(control, "package.json"),
+        JSON.stringify({ scripts: { lint: "eslint ." } }),
+      );
+      mkdirSync(join(control, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(control, ".github", "workflows", "ci.yml"),
+        "name: ci\njobs:\n  t:\n    steps:\n      - run: npm run lint -- --fix\n      - run: npx playwright test --config playwright.fwd2.config.ts\n",
+      );
+      writeFileSync(
+        join(control, "playwright.fwd2.config.ts"),
+        'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+      );
+      mkdirSync(join(control, "e2e"), { recursive: true });
+      writeFileSync(
+        join(control, "e2e", "a.spec.ts"),
+        'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+      );
+      assert.deepEqual(playwrightInventory(control).orphans, []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(control, { recursive: true, force: true });
     }
   });
 

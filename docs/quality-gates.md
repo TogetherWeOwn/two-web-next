@@ -45,8 +45,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The same
   step gates Playwright specs: every `e2e/**/*.spec.ts` and
   `e2e/**/*.visual.ts` must match a CI-referenced config's
-  testDir/testMatch/testIgnore (honoring workflow file filters) or be
-  imported transitively by such a spec. `--json` prints the Playwright
+  testDir/testMatch and not be excluded by testIgnore (honoring workflow
+  file filters) or be imported transitively by such a spec. `--json` prints the Playwright
   summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
   `next_action`). The step runs `npm run test:inventory -- --strict` with
   no `continue-on-error`; the `--selftest` stays hermetic (fixture trees
