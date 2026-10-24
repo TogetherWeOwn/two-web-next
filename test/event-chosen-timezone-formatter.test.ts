@@ -5,19 +5,44 @@
 // eventRangeInChosenTimezone(start, end, zone) in assets/event-device-timezone.ts
 // (shared with the device-only contract) or in assets/event-chosen-timezone.ts.
 // Either location satisfies these tests; the device-only export must keep working.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
+import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as deviceModule from "../assets/event-device-timezone";
+
+const WORKTREE = fileURLToPath(new URL("../", import.meta.url));
 
 type RangeFormatter = (start: unknown, end: unknown, zone: unknown) => string;
 
 async function loadDedicated(): Promise<Record<string, unknown> | null> {
+  // The dedicated source is optional until the Builder creates it. Bundle it
+  // into a scratch file and import the bundle URL: a missing entry fails the
+  // build, caught below, so the probe stays absent-tolerant without a static
+  // specifier the timeout ledger must resolve or tsc must find.
+  const scratch = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "chosen-timezone-dedicated-",
+    ),
+  );
   try {
-    // Variable path avoids static resolution: the dedicated source is optional
-    // until the Builder creates it, and the shared module is preferred.
-    const dedicatedPath = "../assets/event-chosen-timezone";
-    return (await import(dedicatedPath)) as Record<string, unknown>;
+    const outfile = join(scratch, "dedicated.mjs");
+    await build({
+      entryPoints: [join(WORKTREE, "assets/event-chosen-timezone.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "silent",
+      outfile,
+    });
+    return (await import(pathToFileURL(outfile).href)) as Record<string, unknown>;
   } catch {
     return null;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 
