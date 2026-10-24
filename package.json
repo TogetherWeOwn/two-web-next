@@ -19,6 +19,7 @@
     "lint": "biome ci . --error-on-warnings",
     "format": "biome format --write .",
     "check": "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run ledger:timeouts:selftest && npm run ledger:timeouts && npm run test && node --test ci/a11y-*.test.mjs ci/visual-accept.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
+    "check:hono-payloads": "node ci/check-hono-payloads.mjs",
     "check:offline": "node ci/offline-check.mjs",
     "check:machine-contract": "node --import tsx ci/check-machine-contract.mjs",
     "migration:rights": "node ci/migration-runtime-rights.mjs",
@@ -114,14 +115,15 @@
     "yaml": "2.9.1"
   },
   "overrides": {
+    "undici": "7.30.1",
     "@lhci/cli": {
       "tmp": "0.2.7",
       "@puppeteer/browsers": "3.2.3"
     },
     "basic-ftp": "6.2.1",
     "sharp": "0.35.5",
-    "puppeteer-core": {
-      "proxy-agent": "6.5.0"
+    "lighthouse": {
+      "puppeteer-core": "25.16.0"
     }
   },
   "engines": {
