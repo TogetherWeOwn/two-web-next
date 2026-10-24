@@ -18,11 +18,12 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // no event handlers: every control is a plain GET form, sort/paging link or
 // POST form to the Hono-owned mutation endpoints, so the page works with
 // JavaScript disabled, exactly like the Hono panel. The pause review below
-// is inlined, not a shared component: a shared chunk would breach the
-// client file-count ceiling. Its copy mirrors src/admin/rsvp-review.ts and
-// the parity test fails on drift.
+// arrives as pre-rendered server HTML via load data (the same
+// src/admin/rsvp-review.ts renderer Hono mirrors), injected via {@html}:
+// inlined literals or a shared component would breach the client gzip and
+// file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText } = $derived(data);
+const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
 const now = new Date();
 </script>
 
@@ -158,16 +159,7 @@ const now = new Date();
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {#if r.rsvpOpen}
-                    <details class="rsvp-review" data-testid="rsvp-pause-review">
-                      <summary aria-label={`Review pause: ${r.title}`}>Review pause</summary>
-                      <p>Saved event: <strong>{r.title}</strong></p>
-                      <p class="rsvp-review-id">ID: {r.eventKey}</p>
-                      <p>Pausing closes signups and freezes the waitlist line. Reopening settles waitlist vacancies.</p>
-                      <p>To keep RSVPs open, close this review using Review pause again. Opening or closing this review changes nothing.</p>
-                      <form method="post" action={`/admin/events/${r.eventKey}/rsvp-pause`}>
-                        <button type="submit" class="btn" data-testid="rsvp-pause">Pause RSVPs</button>
-                      </form>
-                    </details>
+                    {@html pauseReviews[r.eventKey] ?? ""}
                   {:else}
                     <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
                       <button type="submit" class="link" data-testid="rsvp-reopen">

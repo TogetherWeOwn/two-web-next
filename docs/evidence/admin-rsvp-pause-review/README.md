@@ -17,9 +17,12 @@ saved-row fixtures in `test/helpers/admin-rsvp-pause-review.ts`; browser
 document and asset requests are intercepted locally and non-GET requests are
 blocked during capture. The screenshot transport supplies UTF-8 content type
 and the Kit document wrapper's language, rather than changing page source to
-satisfy an audit. The Kit review is inlined in both pages rather than shared
-through a component (a shared chunk breaches the client file-count ceiling);
-the rendered markup, classes and copy are identical on both renderers.
+satisfy an audit. The Kit review arrives as pre-rendered server HTML via load
+data, injected through {@html} (inlined literals or a shared component would
+breach the client gzip and file-count ceilings after the main merge); the
+rendered markup, classes and copy are identical on both renderers, and the
+sheets below — captured against the inlined revision — remain pixel-accurate
+for the current head, whose acceptance suites pin the same rendered output.
 
 All 24 underlying screenshots were opened for inspection. The four sheets
 compose those screenshots without scaling. Capture observed zero mutation

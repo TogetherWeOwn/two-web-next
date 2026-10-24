@@ -19,9 +19,10 @@ import type { PageProps } from "./$types";
 // text-limit and editor islands enhance it when JavaScript runs. There is
 // deliberately no removal affordance anywhere on this resource, and this
 // port adds none: the guarded /admin/events/:key/edit legacy redirect stays
-// Hono-owned too. The pause review is inlined, not a shared component: a
-// shared chunk would breach the client file-count ceiling. Its copy mirrors
-// src/admin/rsvp-review.ts and the parity test fails on drift.
+// Hono-owned too. The pause review arrives as pre-rendered server HTML via
+// load data (the same src/admin/rsvp-review.ts renderer Hono mirrors),
+// injected via {@html}: inlined literals or a shared component would breach
+// the client gzip and file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
 const view = $derived(data.view);
 const values = $derived(view.values ?? {});
@@ -223,16 +224,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </form>
       {/if}
       {#if view.rsvpAction === "rsvp-pause"}
-        <details class="rsvp-review" data-testid="rsvp-pause-review">
-          <summary aria-label={`Review pause: ${view.title}`}>Review pause</summary>
-          <p>Saved event: <strong>{view.title}</strong></p>
-          <p class="rsvp-review-id">ID: {view.key}</p>
-          <p>Pausing closes signups and freezes the waitlist line. Reopening settles waitlist vacancies.</p>
-          <p>To keep RSVPs open, close this review using Review pause again. Opening or closing this review changes nothing.</p>
-          <form method="post" action={`/admin/events/${view.key}/rsvp-pause`}>
-            <button type="submit" class="btn" data-testid="rsvp-pause">Pause RSVPs</button>
-          </form>
-        </details>
+        {@html view.pauseReviewHtml ?? ""}
       {:else if view.rsvpAction === "rsvp-reopen"}
         <form method="post" action={`/admin/events/${view.key}/rsvp-reopen`}>
           <button type="submit" class="link" data-testid="rsvp-reopen">Reopen RSVPs</button>
