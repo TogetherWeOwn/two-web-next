@@ -1,51 +1,23 @@
 #!/usr/bin/env node
 // OWASP ZAP baseline gate (docs/zap-baseline.md).
-//   node ci/zap-gate.mjs <zap traditional-json report> [budget json]
-// Fails on any High alert, and on Medium/Low alert counts above the committed
-// budget in ci/zap-budget.json (null = not yet enforced, counts reported only).
-// Budgets only ratchet down; raising one is its own reviewed PR.
-// Fail-closed: missing/malformed scan evidence, unknown risk codes and invalid
-// budgets fail instead of passing. High alerts are never ignorable.
-// The repo is public: the summary names alerts and counts only, never the
-// affected URLs, parameters or evidence, and the full report is never uploaded.
-import { appendFileSync, readFileSync } from "node:fs";
+//   node ci/zap-gate.mjs <report.json> [budget.json] [--format json|markdown]
+// High is never exemptible. Budgets only ratchet down; raising one is its own PR.
+// Only validated structured evidence decides the gate and one-rescan eligibility.
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import {
+  budgetBreaches,
+  canonicalInteger,
+  createVerdict,
+  MAX_ALERTS,
+  MAX_ERRORS,
+  pluginIdentity,
+  publicLabel,
+  readJsonFile,
+  validateBudget,
+} from "./zap-verdict.mjs";
 
 const RISK = { 3: "High", 2: "Medium", 1: "Low", 0: "Informational" };
-const VALID_RISKS = new Set([0, 1, 2, 3]);
-
-function safeId(value, fallback) {
-  const s = String(value ?? fallback ?? "").slice(0, 32);
-  return s.trim() === "" ? String(fallback ?? "unknown").slice(0, 32) : s;
-}
-
-function parseRisk(raw) {
-  // Accept only integer 0-3 as number or numeric string. Reject missing,
-  // booleans, empty strings, floats and out-of-range codes fail closed.
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw === "boolean") return null;
-  if (typeof raw === "string" && raw.trim() === "") return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || !VALID_RISKS.has(n)) return null;
-  // Reject float-like strings ("2.0") that coerce to int but are not clean codes.
-  if (typeof raw === "string" && String(n) !== raw.trim()) {
-    // Allow leading zeros? ZAP emits "3", "2", "1", "0" only; be strict.
-    return null;
-  }
-  return n;
-}
-
-function parseCount(raw, instancesLength) {
-  if (raw === undefined || raw === null) {
-    return instancesLength ?? 1;
-  }
-  if (typeof raw === "boolean") return null;
-  if (typeof raw === "string" && raw.trim() === "") return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) return null;
-  if (typeof raw === "string" && String(n) !== raw.trim()) return null;
-  return n;
-}
 
 function parseHttpUri(raw) {
   // Do not coerce values, resolve relative paths, or let URL repair whitespace
@@ -66,136 +38,118 @@ function parseHttpUri(raw) {
   }
 }
 
-function validateBudget(budget, failures) {
-  if (!budget || typeof budget !== "object" || Array.isArray(budget)) {
-    failures.push("invalid budget: budget must be an object with maxMedium and maxLow");
-    return { valid: false, ignoreByPlugin: new Map() };
-  }
-  let valid = true;
-  for (const key of ["maxMedium", "maxLow"]) {
-    const v = budget[key];
-    if (v === null) continue; // Explicit report-only, still supported.
-    if (!Number.isInteger(v) || v < 0) {
-      failures.push(`invalid budget: ${key} must be null or a non-negative integer`);
-      valid = false;
-    }
-  }
-  const ignoreByPlugin = new Map();
-  if (budget.ignore === undefined) return { valid, ignoreByPlugin };
-  if (!Array.isArray(budget.ignore)) {
-    failures.push("invalid budget: ignore must be an array");
-    return { valid: false, ignoreByPlugin: new Map() };
-  }
-  for (let i = 0; i < budget.ignore.length; i++) {
-    const entry = budget.ignore[i];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      failures.push(`invalid budget: ignore entry ${i} must be an object`);
-      valid = false;
-      continue;
-    }
-    const rawPid = entry.pluginId;
-    if (rawPid === undefined || rawPid === null || String(rawPid).trim() === "") {
-      failures.push(`invalid budget: ignore entry ${i} needs a pluginId`);
-      valid = false;
-      continue;
-    }
-    if (typeof entry.why !== "string" || entry.why.trim() === "") {
-      failures.push(`invalid budget: ignore entry ${i} needs a why`);
-      valid = false;
-      continue;
-    }
-    if (entry.uriPrefix !== undefined && typeof entry.uriPrefix !== "string") {
-      failures.push(`invalid budget: ignore entry ${i} uriPrefix must be a string`);
-      valid = false;
-      continue;
-    }
-    const key = String(rawPid);
-    if (!ignoreByPlugin.has(key)) ignoreByPlugin.set(key, []);
-    ignoreByPlugin.get(key).push(entry);
-  }
-  return { valid, ignoreByPlugin };
-}
-
 export function summarize(report, budget) {
   const failures = [];
-  const { ignoreByPlugin } = validateBudget(budget, failures);
-
+  const errors = [];
   const alerts = [];
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    failures.push("invalid scan evidence: report must be an object with a site array");
-    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures, siteCount: 0 };
+  let siteCount = 0;
+  let errorsTruncated = false;
+  const fail = (code, message, site_index, alert_index) => {
+    if (errors.length >= MAX_ERRORS) {
+      errorsTruncated = true;
+      return;
+    }
+    errors.push({ code, ...(site_index === undefined ? {} : { site_index, alert_index }) });
+    failures.push(message);
+  };
+  const finish = () => {
+    const result = createVerdict(alerts, errors, budget);
+    if (result.counts[3]) {
+      failures.push(`${result.counts[3]} High alert type(s); High is never allowed`);
+    }
+    for (const { risk, key, max } of budgetBreaches(result.counts, budget)) {
+      failures.push(`${result.counts[risk]} ${RISK[risk]} alert type(s) > budget ${key}=${max}`);
+    }
+    return {
+      ...result,
+      failures,
+      siteCount,
+      errors_truncated: errorsTruncated,
+      evidence_complete: errors.length === 0,
+    };
+  };
+  const ignoreByPlugin = validateBudget(budget, fail);
+  if (
+    !report ||
+    typeof report !== "object" ||
+    Array.isArray(report) ||
+    !Array.isArray(report.site) ||
+    report.site.length > MAX_ALERTS
+  ) {
+    fail("invalid_report", "invalid scan evidence: report must hold a bounded site array");
+    return finish();
   }
-  if (!Array.isArray(report.site)) {
-    failures.push("invalid scan evidence: report must be an object with a site array");
-    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures, siteCount: 0 };
-  }
-  const siteCount = report.site.length;
+  siteCount = report.site.length;
+  let seen = 0;
   for (let si = 0; si < report.site.length; si++) {
     const site = report.site[si];
     if (!site || typeof site !== "object" || Array.isArray(site) || !Array.isArray(site.alerts)) {
-      failures.push(`invalid scan evidence: site ${si} must hold an alerts array`);
+      fail("invalid_site", `invalid scan evidence: site[${si}] must hold an alerts array`, si);
       continue;
+    }
+    seen += site.alerts.length;
+    if (seen > MAX_ALERTS) {
+      fail("evidence_limit", `invalid scan evidence: site[${si}] exceeds the alert limit`, si);
+      break;
     }
     for (let ai = 0; ai < site.alerts.length; ai++) {
       const alert = site.alerts[ai];
+      const invalid = (code, detail) =>
+        fail(code, `invalid scan evidence: site[${si}] alerts[${ai}] ${detail}`, si, ai);
       if (!alert || typeof alert !== "object" || Array.isArray(alert)) {
-        failures.push(`invalid scan evidence: site ${si} alert ${ai} is malformed`);
+        invalid("invalid_alert", "is malformed");
         continue;
       }
-      const rawPid = alert.pluginid ?? alert.alertRef;
-      if (rawPid === undefined || rawPid === null || String(rawPid).trim() === "") {
-        failures.push(`invalid scan evidence: site ${si} alert ${ai} is missing plugin identity`);
+      const pluginId = pluginIdentity(
+        alert.pluginid === undefined ? alert.alertRef : alert.pluginid,
+      );
+      if (pluginId === null) {
+        invalid("invalid_identity", "needs a canonical plugin identity");
         continue;
       }
-      const pluginId = String(rawPid);
-      const label = safeId(pluginId, `site ${si} alert ${ai}`);
-      const risk = parseRisk(alert.riskcode);
-      if (risk === null) {
-        failures.push(`invalid scan evidence: alert ${label} has an unknown risk code`);
+      const risk = canonicalInteger(alert.riskcode);
+      if (risk === null || risk > 3) {
+        invalid("invalid_risk", "has an unknown risk code");
         continue;
       }
-      if (
-        "instances" in alert &&
-        alert.instances !== undefined &&
-        !Array.isArray(alert.instances)
-      ) {
-        failures.push(`invalid scan evidence: alert ${label} has malformed instances`);
+      if (alert.instances !== undefined && !Array.isArray(alert.instances)) {
+        invalid("invalid_instances", "has malformed instances");
         continue;
       }
-      const instances = Array.isArray(alert.instances) ? alert.instances : undefined;
+      const instances = alert.instances;
       if (
         instances &&
         instances.some((inst) => !inst || typeof inst !== "object" || Array.isArray(inst))
       ) {
-        failures.push(`invalid scan evidence: alert ${label} has malformed instances`);
+        invalid("invalid_instances", "has malformed instances");
         continue;
       }
-      const count = parseCount(alert.count ?? alert.instances?.length ?? 1, undefined);
+      const count = canonicalInteger(alert.count);
       if (count === null) {
-        failures.push(`invalid scan evidence: alert ${label} has an invalid count`);
+        invalid("invalid_count", "needs a declared safe integer count");
         continue;
       }
-      const name = String(alert.name ?? alert.alert ?? "unknown").slice(0, 200);
-
+      const row = {
+        alert_id: `zap-${pluginId}`,
+        plugin_id: pluginId,
+        pluginId, // Existing programmatic summarizer consumers.
+        name: publicLabel(pluginId),
+        risk,
+        count,
+      };
       // High alerts are never ignorable: scoped or unscoped ignores do not apply.
       if (risk === 3) {
-        alerts.push({ pluginId, name, risk, count });
+        alerts.push(row);
         continue;
       }
-
       const entries = ignoreByPlugin.get(pluginId) ?? [];
-      // Unscoped entries ignore the whole alert (legacy behavior, Medium/Low only).
       if (entries.some((entry) => !entry.uriPrefix)) continue;
-      // Scoped subtraction needs a declared count and a complete instance list.
-      // Reject inconsistent evidence rather than silently losing unseen residuals.
-      if (entries.length > 0 && Array.isArray(instances) && instances.length > 0) {
-        if (
-          !["string", "number"].includes(typeof alert.count) ||
-          !Number.isSafeInteger(count) ||
-          count !== instances.length
-        ) {
-          failures.push(
-            `invalid scan evidence: site ${si} alert ${ai} needs a complete declared instance count for scoped exemption`,
+      // Preserve the same-origin, pathname and complete declared-count proofs.
+      if (entries.length > 0 && instances?.length > 0) {
+        if (count !== instances.length) {
+          invalid(
+            "incomplete_instances",
+            "needs a complete declared instance count for scoped exemption",
           );
           continue;
         }
@@ -210,82 +164,126 @@ export function summarize(report, budget) {
           );
         });
         if (remaining.length === 0) continue;
-        alerts.push({ pluginId, name, risk, count: remaining.length });
+        alerts.push({ ...row, count: remaining.length });
         continue;
       }
-      alerts.push({
-        pluginId,
-        name,
-        risk,
-        count,
-      });
+      alerts.push(row);
     }
   }
-  const counts = { 3: 0, 2: 0, 1: 0, 0: 0 };
-  for (const a of alerts) counts[a.risk] = (counts[a.risk] ?? 0) + 1;
-  if (counts[3] > 0) failures.push(`${counts[3]} High alert type(s); High is never allowed`);
-  for (const [risk, key] of [
-    [2, "maxMedium"],
-    [1, "maxLow"],
-  ]) {
-    const max = budget?.[key];
-    if (
-      max !== null &&
-      max !== undefined &&
-      Number.isInteger(max) &&
-      max >= 0 &&
-      counts[risk] > max
-    ) {
-      failures.push(`${counts[risk]} ${RISK[risk]} alert type(s) > budget ${key}=${max}`);
-    }
-  }
-  return { alerts, counts, failures, siteCount };
+  return finish();
 }
 
-export function markdown({ alerts, counts, failures, siteCount }) {
-  const rows = alerts
-    .sort((a, b) => b.risk - a.risk || a.name.localeCompare(b.name))
-    .map((a) => `| ${RISK[a.risk] ?? a.risk} | ${a.pluginId} | ${a.name} | ${a.count} |`);
-  const scanned =
-    Number.isInteger(siteCount) && siteCount >= 0 ? `Scanned ${siteCount} site(s)` : null;
+export function markdown({
+  alerts,
+  counts,
+  failures,
+  siteCount,
+  evidence_complete,
+  errors_truncated,
+}) {
+  const rows = [...alerts]
+    .sort((a, b) => b.risk - a.risk || a.plugin_id.localeCompare(b.plugin_id))
+    .slice(0, 25)
+    .map((a) => `| ${RISK[a.risk]} | ${a.plugin_id} | ${a.name} | ${a.count} |`);
   return [
     "## ZAP baseline (staging, passive)",
     "",
     `High ${counts[3]} · Medium ${counts[2]} · Low ${counts[1]} · Info ${counts[0]} (alert types)`,
-    ...(scanned ? [scanned] : []),
+    `Scanned ${siteCount} site(s)`,
+    ...(evidence_complete === false
+      ? ["Evidence incomplete: counts cover validated rows only."]
+      : []),
     "",
-    failures.length ? `**FAIL:** ${failures.join("; ")}` : "**PASS**",
+    failures.length ? `**FAIL:** ${failures.slice(0, 10).join("; ")}` : "**PASS**",
+    ...(failures.length > 10 || errors_truncated
+      ? ["Additional fixed diagnostics omitted; consult the JSON verdict."]
+      : []),
     "",
     "| Risk | Plugin | Alert | Instances |",
     "| --- | --- | --- | --- |",
     ...rows,
+    ...(alerts.length > 25 ? ["Additional alert rows omitted; consult the JSON verdict."] : []),
     "",
   ].join("\n");
 }
 
+function publicVerdict(result) {
+  const { failures: _failures, siteCount, alerts, ...rest } = result;
+  return {
+    ...rest,
+    site_count: siteCount,
+    alerts: alerts.map(({ pluginId: _pluginId, ...row }) => row),
+  };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [reportPath, budgetPath = "ci/zap-budget.json"] = process.argv.slice(2);
-  if (!reportPath) {
-    console.error("usage: node ci/zap-gate.mjs <report.json> [budget.json]");
-    process.exit(2);
+  const args = process.argv.slice(2);
+  const paths = [];
+  let format = "markdown";
+  let seenFormat = false;
+  let invalidArgs = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--format" && !seenFormat) {
+      seenFormat = true;
+      format = args[++i];
+      if (!["json", "markdown"].includes(format)) invalidArgs = true;
+    } else if (args[i].startsWith("-")) {
+      invalidArgs = true;
+    } else {
+      paths.push(args[i]);
+    }
   }
-  let report;
-  let budget;
-  try {
-    report = JSON.parse(readFileSync(reportPath, "utf8"));
-  } catch {
-    console.error("invalid scan evidence: report file is missing or not valid JSON");
-    process.exit(1);
+  let result;
+  let exit;
+  if (invalidArgs || paths.length < 1 || paths.length > 2) {
+    result = {
+      ...summarize({ site: [] }, { maxMedium: null, maxLow: null }),
+      verdict: "FAIL",
+      retryable: false,
+      error_code: "invalid_arguments",
+      next_action: "check_usage",
+      errors: [{ code: "invalid_arguments" }],
+      failures: [
+        "usage: node ci/zap-gate.mjs <report.json> [budget.json] [--format json|markdown]",
+      ],
+    };
+    exit = 2;
+  } else {
+    let report;
+    let budget;
+    try {
+      report = readJsonFile(paths[0]);
+      budget = readJsonFile(paths[1] ?? "ci/zap-budget.json");
+      result = summarize(report, budget);
+    } catch {
+      result = summarize(null, { maxMedium: null, maxLow: null });
+    }
+    exit = result.verdict === "PASS" ? 0 : 1;
   }
-  try {
-    budget = JSON.parse(readFileSync(budgetPath, "utf8"));
-  } catch {
-    console.error("invalid budget: budget file is missing or not valid JSON");
-    process.exit(1);
+  let md = markdown(result);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    try {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
+    } catch {
+      if (exit !== 2) {
+        result = {
+          ...result,
+          ...createVerdict(
+            result.alerts,
+            [...result.errors.slice(0, MAX_ERRORS - 1), { code: "summary_unavailable" }],
+            null,
+          ),
+          failures: [...result.failures, "invalid scan evidence: summary output unavailable"],
+          evidence_complete: false,
+        };
+        md = markdown(result);
+        exit = 1;
+      }
+      console.error("ZAP summary unavailable; repair the summary destination before continuing.");
+    }
   }
-  const result = summarize(report, budget);
-  const md = markdown(result);
-  console.log(md);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
-  process.exit(result.failures.length ? 1 : 0);
+  const jsonRequested =
+    format === "json" || args.some((arg, i) => arg === "--format" && args[i + 1] === "json");
+  console.log(jsonRequested ? JSON.stringify(publicVerdict(result)) : md);
+  process.exit(exit);
 }
