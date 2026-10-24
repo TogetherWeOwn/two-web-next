@@ -70,6 +70,28 @@ export function archive(total, appUrl) {
   const db = drizzle(async (sql, params) => {
     if (sql.startsWith('select count(*) from "events"')) return { rows: [[total]] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (sql.toLowerCase().includes("distinct on")) {
+      // listArchiveGames: one single-column window over the fixture rows with
+      // the read's own equivalence (trim + case-fold dedup, archive
+      // visibility against the bound now, localeCompare order, LIMIT-bound
+      // including the omission sentinel). Plain "select distinct" (the
+      // schedule facet) never reaches this branch.
+      const nowParam = params.find((p) => typeof p === "string" && Number.isNaN(Number(p)) && !Number.isNaN(Date.parse(p)));
+      const now = nowParam === undefined ? new Date() : new Date(nowParam);
+      const seen = new Set();
+      const games = [];
+      for (const row of rows) {
+        if (!(row.status === "past" || (row.status === "published" && row.endsAt < now))) continue;
+        const game = typeof row.game === "string" ? row.game.trim() : "";
+        if (!game) continue;
+        const key = game.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        games.push(game);
+      }
+      games.sort((a, b) => a.localeCompare(b));
+      return { rows: games.slice(0, Number(params.at(-1))).map((game) => [game]) };
+    }
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     const limit = Number(params.at(hasOffset ? -2 : -1));
@@ -453,12 +475,33 @@ async function unitParity() {
           capacity: row.capacity,
         };
       });
+      // The loader would serve listArchiveGames over these same fixture rows,
+      // so project the identical window for the Kit props (same predicate as
+      // the fake's "distinct on" branch above; the byte-equality check below
+      // fails closed if the two derivations ever drift apart).
+      const parityNow = new Date();
+      const seenParityGames = new Set();
+      const parityGames = [];
+      for (const row of rows) {
+        if (!(row.status === "past" || (row.status === "published" && row.endsAt < parityNow)))
+          continue;
+        const game = typeof row.game === "string" ? row.game.trim() : "";
+        if (!game) continue;
+        const key = game.toLowerCase();
+        if (seenParityGames.has(key)) continue;
+        seenParityGames.add(key);
+        parityGames.push(game);
+      }
+      parityGames.sort((a, b) => a.localeCompare(b));
       const kitHtml = renderPage({
         rows: kitRows,
         page,
         hasMore: page === 1 && total > pageSize,
         totalPages,
         appUrl: APP_URL,
+        games: parityGames.slice(0, 100),
+        game: "",
+        gamesOmitted: parityGames.length > 100,
       });
       console.log(`--- Kit ${path} ---`);
       expectArchive(kitHtml, { keys, pager });
