@@ -41,7 +41,6 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
   ATTENDEE_PAGE_SIZE,
-  attendeePageHref,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -59,6 +58,9 @@ import {
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {
@@ -148,6 +150,8 @@ export interface KitEventDetailModel {
   /** Validated roster-refresh href: the bare page path on page 1,
    * `?attendees=N` on a valid N > 1, never raw query text. */
   attendeesRefreshHref: string;
+  /** Navigation-only archive return, absent on direct visits. */
+  archiveReturn?: { href: string; label: string } | null;
   /** Meta robots + x-robots-tag value for draft/past rows; null when indexable. */
   robots: string | null;
   /** Rooted .md alternate path; drafts have no Markdown view. */
@@ -417,6 +421,7 @@ export async function resolveKitEventDetail(
       // Native attendee page from the query (?attendees=<n>), same strict
       // fallback as the served handler: malformed values stay on page 1.
       const attendeePage = parseAttendeePageParam(new URLSearchParams(search).get("attendees"));
+      const archive = archiveContext(search);
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
@@ -463,11 +468,15 @@ export async function resolveKitEventDetail(
         page: attendeePage,
         prevHref:
           attendeePage > 1
-            ? attendeePageHref(event.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+            ? archiveEventHref(
+                event.eventKey,
+                archive,
+                attendees.length === 0 ? 1 : attendeePage - 1,
+              )
             : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
-            ? attendeePageHref(event.eventKey, attendeePage + 1)
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
             : null,
       };
       // RSVP closure is decided once here, on the server render instant, with
@@ -513,10 +522,9 @@ export async function resolveKitEventDetail(
           rsvpClosed,
           canonical: pageCanonical,
           path: pagePath,
-          // Stale-roster refresh keeps the validated attendee page (page 1
-          // stays bare); never the raw query, so foreign params and malformed
-          // values fall back to the bare event path.
-          attendeesRefreshHref: attendeePageHref(event.eventKey, attendeePage),
+          // Keep validated roster/archive state only, never raw query text.
+          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
           // every viewer, so only link it where it answers 200.

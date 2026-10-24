@@ -14,6 +14,10 @@ import {
   RSVP_FULL_COPY,
   RSVP_GOING_TESTID,
   RSVP_GUEST_CTA_COPY,
+  RSVP_MAYBE_COPY,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_COPY,
+  RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_COPY,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_COPY,
@@ -67,6 +71,8 @@ const closed = $derived(model.rsvpClosed);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
+const isMaybe = $derived(model.answer?.status === "maybe");
+const soft = $derived(isMaybe || model.answer?.status === "not_going");
 const signIn = $derived(loginUrl(model.joinReturnTo));
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
@@ -103,13 +109,17 @@ const lineup = $derived(
         rel={previous ? "prev" : "next"}
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
-        {previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}
+        <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
+        <time datetime={event.datetime}>{event.whenText}</time>
+        {#if event.location}
+          <span class="event-related-location">{event.location}</span>
+        {/if}
       </a>
     {/if}
   {/snippet}
   {#if neighbors && (neighbors.previous || neighbors.next)}
     <nav
-      class={series ? undefined : "event-pagination"}
+      class="event-pagination"
       aria-label={series ? "Series events" : "More events"}
       data-testid={series ? "event-series-nav" : "event-pagination"}
     >
@@ -143,7 +153,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
+    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
@@ -247,6 +257,20 @@ const lineup = $derived(
               {@render rsvpButton("going", WAITLIST_CLAIM_TESTID, RSVP_WAITLIST_CLAIM_COPY)}
             {/if}
             {@render rsvpButton("withdraw", WAITLIST_LEAVE_TESTID, RSVP_WAITLIST_LEAVE_COPY)}
+          {:else if soft}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the soft-answer notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
+            <p role="status" tabindex={-1} data-testid={isMaybe ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}>
+              {isMaybe ? RSVP_MAYBE_COPY : RSVP_NOT_GOING_COPY}
+            </p>
+            {#if !model.rsvpOpen}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else if full}
+              {@render rsvpButton("waitlisted", WAITLIST_JOIN_TESTID, RSVP_WAITLIST_JOIN_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else}
+              {@render rsvpButton("going", RSVP_GOING_TESTID, RSVP_CTA_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {/if}
           {:else if !model.rsvpOpen}
             <!-- paused with no answer: the notice above is the whole state -->
           {:else if full}
