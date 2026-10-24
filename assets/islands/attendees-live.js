@@ -61,31 +61,44 @@
     return null;
   }
 
-  // Current attendee page for this view, from ?attendees=N only (no other
-  // query state is copied). Returns "" on page one or when unreadable so the
-  // refresh keeps the default URL. Strict like the server
-  // (parseAttendeePageParam in src/events/reads.ts): the raw value must be a
-  // positive integer in full, and its offset arithmetic must stay exact, so
-  // suffixed ("2x"), fractional ("2.9"), padded ("02") and unsafe values all
-  // fall back to the page-one refresh instead of a page the server never
-  // rendered.
+  // Attendee parsing mirrors parseAttendeePageParam: only full positive
+  // integers with exact offset arithmetic; malformed values stay on page one.
+  // Forward bounded scalar archive state on this read only (255 code points,
+  // like MAX_QUERY_LENGTH). The server remains the archive admission authority.
   var ATTENDEE_PAGE_SIZE = 100;
-  function pageQuery() {
-    var raw = null;
+  function rosterQuery() {
+    var result = new URLSearchParams();
     try {
-      var search = typeof location !== "undefined" && location.search ? location.search : "";
+      var search = typeof location !== "undefined" ? location.search || "" : "";
       var params = new URLSearchParams(search);
-      raw = params.get("attendees");
+      var raw = params.get("attendees");
+      var page = Number(raw);
+      if (
+        /^[1-9]\d*$/.test(raw || "") &&
+        Number.isSafeInteger(page) &&
+        Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE) &&
+        page > 1
+      )
+        result.set("attendees", raw);
+      // Never repair malformed Unicode or collapse duplicate archive fields.
+      decodeURIComponent(search);
+      var pages = params.getAll("archivePage");
+      var queries = params.getAll("archiveQuery");
+      if (
+        pages.length === 1 &&
+        queries.length <= 1 &&
+        pages[0].length <= 16 &&
+        Array.from(queries[0] || "").length <= 255
+      ) {
+        result.set("archivePage", pages[0]);
+        if (queries.length) result.set("archiveQuery", queries[0]);
+      }
     } catch (_searchUnreadable) {
-      // Fall through to "": an unreadable query keeps the default page-one
-      // refresh instead of firing nothing.
+      // Keep the independently parsed attendee page; absent archive context
+      // returns to All events rather than inventing another search.
     }
-    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) return "";
-    var page = Number(raw);
-    if (!Number.isSafeInteger(page)) return "";
-    if (!Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE)) return "";
-    if (page <= 1) return "";
-    return "?attendees=" + raw;
+    var query = result.toString();
+    return query ? "?" + query : "";
   }
 
   function findSection(doc) {
@@ -453,7 +466,7 @@
       credentials: "same-origin",
     };
     if (controller) options.signal = controller.signal;
-    fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
+    fetch("/e/" + encodeURIComponent(state.key) + rosterQuery(), options).then(
       function (res) {
         // Fence stale attempts: only the attempt that owns the current
         // counter may settle. Late headers from a timed-out or superseded
