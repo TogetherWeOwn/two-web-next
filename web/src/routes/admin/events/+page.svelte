@@ -17,9 +17,13 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // strings from the load, exactly as the Hono page emits them. No island and
 // no event handlers: every control is a plain GET form, sort/paging link or
 // POST form to the Hono-owned mutation endpoints, so the page works with
-// JavaScript disabled, exactly like the Hono panel.
+// JavaScript disabled, exactly like the Hono panel. The pause review below
+// arrives as pre-rendered server HTML via load data (the same
+// src/admin/rsvp-review.ts renderer Hono mirrors), injected via {@html}:
+// inlined literals or a shared component would breach the client gzip and
+// file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText } = $derived(data);
+const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
 const now = new Date();
 </script>
 
@@ -154,12 +158,15 @@ const now = new Date();
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
-                  {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
-                  <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
-                    <button type="submit" class="link" data-testid={action}>
-                      {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
-                    </button>
-                  </form>
+                  {#if r.rsvpOpen}
+                    {@html pauseReviews[r.eventKey] ?? ""}
+                  {:else}
+                    <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
+                      <button type="submit" class="link" data-testid="rsvp-reopen">
+                        Reopen RSVPs
+                      </button>
+                    </form>
+                  {/if}
                 {/if}
               </td>
             </tr>
