@@ -148,13 +148,23 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
     await unchanged(added.etag);
   });
 
-  it("does not invalidate empty RSS for drafts, cancelled or already expired events", async () => {
+  it("does not invalidate empty RSS for drafts or already expired events", async () => {
     const empty = await read();
     await insert({ eventKey: "01J0000000000000000000DRF1", status: "draft" });
-    await insert({ eventKey: "01J0000000000000000000CAN1", status: "cancelled" });
     await insert({ endsAt: new Date("2026-10-01T11:59:59Z") });
     vi.setSystemTime(new Date("2026-10-01T12:01:00Z"));
     expect(await read()).toEqual(empty);
     await unchanged(empty.etag);
+  });
+
+  it("invalidates empty RSS for an eligible cancelled event, marked unmistakably", async () => {
+    const empty = await read();
+    await insert({ eventKey: "01J0000000000000000000CAN1", status: "cancelled" });
+    const populated = await read(empty.etag);
+    expect(populated.etag).not.toBe(empty.etag);
+    expect(populated.body).toContain("01J0000000000000000000CAN1");
+    expect(populated.body).toContain("<title>Cancelled: RSS event</title>");
+    expect(populated.body).toContain("This event has been cancelled.");
+    await unchanged(populated.etag);
   });
 });

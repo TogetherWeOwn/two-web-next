@@ -68,6 +68,8 @@ const baseData = () => ({
   now: new Date("2026-10-13T12:00:00Z"),
   totalPages: 1,
   emptyState: null,
+  games: [],
+  gameFilter: null,
   robots: undefined,
   discordFailed: false,
   member: false,
@@ -156,11 +158,11 @@ describe("Kit calendar island mount parity", () => {
     // The failure copy rides in an attribute, so the apostrophe is HTML-escaped.
     expect(rendered.body).toContain("data-load-error=");
     expect(rendered.body).toContain("refresh the events — try again.");
-    // Stable zones: head/actions/miss/content swap, everything else persists.
-    for (const zone of ["head", "actions", "miss", "content"]) {
+    // Stable zones: head/actions/miss/content/subscribe swap, everything else persists.
+    for (const zone of ["head", "actions", "miss", "content", "subscribe"]) {
       expect(rendered.body).toContain(`data-cal-zone="${zone}"`);
     }
-    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss"]);
+    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss", "subscribe"]);
     expect(rendered.body).toContain("data-cal-feedback");
     // A real row renders the list card instead of the out-of-range note.
     expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
@@ -291,22 +293,22 @@ describe("Kit calendar shared URL model", () => {
     expect(input.searching).toBe(true);
     expect(input.view).toBe("list");
     expect(input.q).toBe(" chess ");
-    expect(calendarUrl({ view: "list", month: "2026-10", q: "chess", past: false, page: 1 })).toBe(
-      "/events?q=chess",
-    );
+    expect(
+      calendarUrl({ view: "list", month: "2026-10", q: "chess", game: "", past: false, page: 1 }),
+    ).toBe("/events?q=chess");
   });
 
   it("addresses month steps and bookmark jumps through the same params", () => {
-    expect(calendarUrl({ view: "calendar", month: "2026-10", q: "", past: false, page: 1 })).toBe(
-      "/events?view=calendar&month=2026-10",
-    );
+    expect(
+      calendarUrl({ view: "calendar", month: "2026-10", q: "", game: "", past: false, page: 1 }),
+    ).toBe("/events?view=calendar&month=2026-10");
     expect(calendarJumpUrl(false, "ev-1")).toBe("/events?event=ev-1#event-ev-1");
     expect(calendarJumpUrl(true, "ev-1")).toBe("/events?event=ev-1&past=1#event-ev-1");
   });
 
   it("passes bookmark jumps to the model with the raw return-to intact", async () => {
     const modelForFn = vi.fn(async () => ({
-      state: { view: "list" as const, month: "2026-10", q: "", past: true, page: 1 },
+      state: { view: "list" as const, month: "2026-10", q: "", game: "", past: true, page: 1 },
       upcoming: [],
       past: [],
       zone: "Europe/London",
@@ -314,6 +316,8 @@ describe("Kit calendar shared URL model", () => {
       emptyState: null,
       robots: "noindex, follow",
       discordFailed: false,
+      games: [],
+      gameFilter: null,
     }));
     const setHeaders = vi.fn();
     const data = await loadEventsPage({
@@ -346,7 +350,7 @@ describe("Kit calendar fragment auth lineage", () => {
     const deleteJoinCookie = vi.fn();
     const setHeaders = vi.fn();
     const modelForFn = vi.fn(async () => ({
-      state: { view: "calendar" as const, month: "2026-10", q: "", past: false, page: 1 },
+      state: { view: "calendar" as const, month: "2026-10", q: "", game: "", past: false, page: 1 },
       upcoming: [],
       past: [],
       zone: "Europe/London",
@@ -354,6 +358,8 @@ describe("Kit calendar fragment auth lineage", () => {
       emptyState: null,
       robots: undefined,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
     }));
     const data = await loadEventsPage({
       env,
@@ -391,7 +397,7 @@ describe("Kit calendar fragment auth lineage", () => {
 
   it("forwards month and page turns to the Kit model", async () => {
     const modelForFn = vi.fn(async () => ({
-      state: { view: "calendar" as const, month: "2026-10", q: "", past: false, page: 2 },
+      state: { view: "calendar" as const, month: "2026-10", q: "", game: "", past: false, page: 2 },
       upcoming: [],
       past: [],
       zone: "Europe/London",
@@ -399,6 +405,8 @@ describe("Kit calendar fragment auth lineage", () => {
       emptyState: null,
       robots: undefined,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
     }));
     await loadEventsPage({
       env,

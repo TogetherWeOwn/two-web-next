@@ -209,8 +209,10 @@ samples each; the parser rejects smaller sample counts) mints exactly one QA ses
 `__Host-two_session` cookie with rotation like the browser journeys, and
 asserts status 200 **plus** authenticated content (signed-in account chrome on
 the detail page, administration nav on the admin list — a published event
-answers 200 to guests too, so status alone is not session proof) before it
-measures. Ceilings are calibrated (see below) fail-closed budgets for the local worker. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
+answers 200 to guests too, so status alone is not session proof). The measured
+latency ends at response **headers**, not at body completion. Content validation
+still must pass for a green journey. Ceilings are calibrated (see below)
+fail-closed budgets for the local worker. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
 `--selftest`: good fixtures pass, slow samples and cookie-stripped guest
 bodies fail, malformed budgets fail closed) runs in the `check` job; the
 live gate runs in browser-smoke and fails `e2e-ok` with it. Cookie stripped (`--mutant no-cookie`) goes red:
@@ -218,9 +220,86 @@ the detail renders the guest banner and the admin list bounces to sign-in.
 Local verification (hermetic only):
 
 ```sh
+node ci/check-auth-perf.mjs --help
 npm run auth-perf:selftest
-node --test ci/check-auth-perf.test.mjs
+node --test ci/check-auth-perf*.test.mjs
 ```
+
+`--dry-run` is an alias for the fixture-only `--selftest`. These modes ignore
+live configuration, use no credentials and cannot dispatch requests. Unknown
+flags and mixed fixture/mutant flags exit 2 before any fetch. No flags retain the
+existing live mode; `--mutant no-cookie` retains the live negative control.
+Run live mode only through the authorized browser-smoke fixture workflow,
+never as a staging/production database test or a credential diagnostic.
+`AUTH_PERF_URL` must be HTTPS (or HTTP on `127.0.0.1`), without userinfo, query
+or fragment. Redirects stay manual; identities and grants do not change.
+
+### Settlement and receipt contract
+
+Each login/read has **one 15-second deadline** for fetch and body together,
+enforced independently of AbortSignal cooperation. The deadline bounds probe
+settlement, not server work or an abort-ignoring adapter's eventual completion.
+Refused/failed/timed-out responses request best-effort cancellation without
+awaiting cleanup; late responses are also disposed and cannot change a receipt.
+Successful QA login needs only 204 headers and its session cookie; it never
+reads a login body. Reads cap the decoded response at **1 MiB**, counting bytes
+while consuming Fetch byte streams. Invalid stream chunks fail body reading
+rather than being coerced into HTML. Text-only injected adapters enforce the UTF-8 cap after their
+text promise resolves (they cannot provide an incremental allocation bound).
+Neither bound changes the calibrated 500/1000 ms **header-latency** budgets.
+
+The live writer emits `test-results/auth-perf-ledger.json` and
+`test-results/auth-perf-ledger.md` even on early login/configuration refusal.
+Receipts are deterministic for identical observations, with no wall-clock
+stamp, response URL/body, credential, cookie, or raw exception text:
+
+- `version: 2`, `verdict: pass|fail`, and `counts: {total, passed, failed}`.
+- `journeys` in budget order, with stable `id`/`name` (`member-rsvp`,
+  `moderator-admin`), `status: passed|failed`, `reason`, `error`, `samples` and
+  `medianMs` (null when no headers were measured).
+- `measurements` retains each planned slot: `id: <journey>:<zero-based index>`,
+  `state: measured|unmeasured`, `elapsedMs` (header time, or null), and `error`.
+  A body failure **retains** its measured header latency. A request that never
+  yields headers invents no sample. Later unattempted slots are unmeasured,
+  and a completed earlier journey survives a later login failure. An unreadable
+  budget cannot define sample slots, so configuration-failure measurements are
+  empty in that case.
+- `error` is null or `{code, retryable, next_action}`. Markdown includes the same
+  journey/sample IDs, measurement states, errors, and remediation. Retryable
+  describes the fault, never authorizes automatic retries or new credentials.
+- Existing imported `summarize()`/`writeLedger()` v1 callers remain compatible;
+  only live receipts opt into v2.
+
+| Error code | Retryable | Recovery |
+| --- | --- | --- |
+| `transport_timeout` | true | Check transport availability; fetch or body exceeded the same deadline. |
+| `transport_error` | true | Check transport configuration/availability; never substitute credentials. |
+| `body_read_failed` | true | Check response delivery. |
+| `body_too_large` | false | Investigate response size; keep the cap. |
+| `login_refused` | false | Verify the QA seam with its authorized maintainer; no credential retry. |
+| `missing_cookie` | false | Verify QA session issuance; do not re-login. |
+| `http_refused` | false | Inspect authenticated route availability/access; do not re-login. |
+| `unexpected_content` | false | Inspect the authenticated HTML contract. |
+| `budget_exceeded` | false | Investigate header latency; keep the budgets. |
+| `probe_not_started` | false | Resolve the preceding failure before a new probe. |
+| `invalid_configuration` | false | Fix the budget/documented settings; no fetch was sent. |
+| `output_write_failed` | false | Restore writable output; treat receipts as incomplete, never artifact success. |
+| `probe_failed` | false | Unexpected CLI failure: run the hermetic verification and inspect the implementation. |
+
+Exit 0 requires both journeys and both output writes to pass. Journey failures
+exit 1; configuration/login failures exit 2. Output-write failures return nonzero
+with a bounded `output_write_failed` diagnostic, never filesystem exception text
+or a success line. The secret-shaped ledger refusal remains mandatory and also
+compares known QA and observed cookie values (including JSON-escaped forms)
+before any write. A secret-guard refusal produces **no new receipts**, preserving
+the pre-write refusal contract. Filesystem writes are not a two-file transaction:
+a write failure can leave partial or previous files. Consumers must require the
+current command's exit 0 and both artifacts before reporting success; never use
+old or partial files to override a nonzero exit. The tool does not delete existing
+receipts on failure. The injected fetch/clock suites compare synthetic QA/cookie/URL canaries against console and
+both artifacts, prove timeout/cleanup/size/error paths and rotation, and keep
+live requests unreachable in fixture/wrong-flag modes. None needs npm packages,
+a network, database, QA login, deployment, or new secret access.
 
 ### Calibration evidence
 
@@ -301,6 +380,84 @@ see `watch-summary.md`), or an unclassified step failure (full evidence, no
 assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
 The `watch-summary.md` medians table is followed by a per-sample table with
 every run's values for every route, including passes.
+
+Every finished mobile attempt (successful, failed or short) also snapshots all
+per-sample `lhr-*.json` files and `assertion-results.json`, when present, into
+`.lighthouseci/mobile-attempts/attempt-N/` before any retry or desktop cleanup.
+Its `manifest.json` schema version 1 records the mobile profile, attempt number,
+original process exit, file inventory and assertion filename (or `unknown`).
+Malformed files are preserved as evidence, never repaired or counted as valid.
+The existing summaries and marginal-retry archive remain unchanged. Desktop
+accounting reads only its fresh top-level LHRs, never these mobile archives.
+
+For deployed mobile collection, an informative, unscored `main-document-timing`
+audit reads the same already-collected main resource as `server-response-time`.
+Each archived LHR's `audits["main-document-timing"].details` contains schema
+version 1, UTC request timestamp, validated `requestId` / `cfRay`, protocol,
+`edgeColo` from the response ray suffix, `servingRevision`, CDP `timingMs`
+(DNS/connect/TLS/send/receive-header offsets), and `serverWaitMs`
+(`receiveHeadersStart - sendEnd`, matching the native audit). Missing or invalid
+fields are `unknown`. The served revision is currently unknown: a checkout SHA
+is not evidence of the revision that served the response. Existing `fetchTime`
+and requested URL identify each LHR; the new diagnostic fields contain no URL,
+query values, arbitrary headers, credentials, response bodies or raw CDP log.
+No additional navigation or probe is made. The audit has no category weight,
+assertion, or role in sample quotas, budget values or retry decisions.
+
+To investigate, use **all three mobile samples for a route**, not the
+performance-selected upload in `reports/`. Join validated request IDs and
+timestamps to existing `http.request` telemetry only when already accessible;
+that telemetry's `duration_ms`, `colo` and release identify Worker execution.
+Browser server wait includes network/edge time and is **not** Worker duration.
+No accessible matching telemetry means unknown, not evidence of network noise.
+Inspect the next naturally executed staging artifact after merge; do not dispatch
+a workflow, deploy, or add telemetry authority to obtain it. Preservation is not
+a latency repair: the 600ms server-response median gate stays unchanged and red
+for a 754.261ms median. Rollback removes only the archive call, informative audit
+and its config argument, never a budget or failure check.
+
+Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile
+then desktop, separate attempts, three samples per planned route, corrupted and
+missing sample evidence, the field allowlist, unchanged resolved Lighthouse
+configuration/scoring, and the real LHCI median assertion.
+
+### Independent navigation admission and fixture verification
+
+A sample is one independent configuration-matched navigation, not one JSON
+file. Admission keys each report by its canonical requested URL plus its
+navigation timestamp (`fetchTime`). The same navigation reused via duplicate
+objects, separately parsed copies or renamed files fills one quota slot;
+distinct navigations with equal scores remain valid. Required native fields:
+`gatherMode: navigation`, a full UTC ISO `fetchTime`, an explicit
+`requestedUrl`, positive finite `timing.total` with `timing.entries`, and
+resolved `configSettings` matching the selected desktop or mobile profile
+(form factor, screen emulation, throttling method and values, selected
+categories, skipped audits). Missing or wrong-mode reports cannot satisfy
+quotas. Per-request URL accounting and same-origin redirects are preserved;
+unplanned or foreign requests never substitute for a planned route. This is
+admission validation, not proof against fabricated LHR metadata.
+
+Rejected reports carry bounded stable codes (`duplicate_navigation`,
+`invalid_identity`, `invalid_timing`, `settings_mismatch`, `invalid_report`,
+`unplanned_request`, `invalid_redirect`) with positive counts plus a safe
+`next_action`. Diagnostics and versioned JSON expose counts only, never report
+bodies, query values, headers, snippets or absolute paths. Route quotas,
+floors, budgets, separate-attempt archives and the single retry are unchanged;
+two short attempts never combine into a complete one.
+
+Read-only verification (no collection, network, writes or archives):
+
+```sh
+node ci/lighthouse-origin-run.mjs https://togetherweown.com --check-fixture <directory> --format json
+QUALITY_ORIGIN=https://togetherweown.com node ci/lighthouse-quality-run.mjs --check-fixture <directory> --format json
+```
+
+Both emit one JSON object via the log seam (`schemaVersion: 1`, `profile`,
+`code`, `complete`, per-URL `rows`, `rejectionCounts`, `next_action`).
+`collection_complete` exits 0, `incomplete_collection` exits 1,
+`invalid_arguments` exits 2 before any collection or network action. Only
+top-level `lhr-*.json` files are read; nested attempt archives never fill
+quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%

@@ -18,8 +18,12 @@ machine-shaped error payload.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
-change the session requirement or guest 401 responses on `/events.json` or
-`/events/:key`, the existing write/auth budgets, or `/up` readiness.
+change the existing write/auth budgets or `/up` readiness. The session-adjacent
+reads `/auth/status`, `/auth/recover`, `/events.json` and `/events/:key` share the
+same bucket for GET and HEAD: the guard runs before their session, cookie and
+event-store work, so exhausted callers get the shared 429 while admitted responses
+(including guest 401s on both JSON event routes) are unchanged. The detail JSON
+route also charges canonical-key redirects before any session lookup.
 The sitemap is admitted before database setup and its event scan; its static-only
 200 fallback on a database outage is unchanged. The database-free `/robots.txt`
 and `/openapi.json` routes remain unguarded.
@@ -44,6 +48,14 @@ private`; it is not reflected, logged or silently truncated. This matches the
 existing search-analytics field maximum. One-character searches remain supported;
 blank queries still mean no search. Existing trimming, NUL stripping and literal
 LIKE wildcard escaping remain unchanged for accepted queries.
+
+The `game` scope on `/events.ics` is limited to **100 Unicode code points**
+after trimming, and refuses CR/LF plus control/invisible characters. An invalid
+scope returns the static 400 body `Invalid game filter.` with
+`Cache-Control: no-store`, before any event read or conditional 304; the input
+is not reflected or logged. Blank means the unfiltered collection; a valid
+unknown game returns an empty scoped calendar with a truthful label, never all
+games. RSS, per-event downloads and the past archive ignore `game`.
 
 ## Cost and failure behavior
 
@@ -89,8 +101,11 @@ fixture value against the Hono one.
 `test/public-event-read-admission.test.ts` exercises the real route guards and
 admission statements with local SQL/Drizzle doubles. It pins the shared budget,
 pre-read denials, JSON/HTML/HEAD/island responses, client separation, window expiry,
-feed cache/304 behavior, untouched JSON authentication and query boundaries,
-including supplementary Unicode and a multi-kilobyte query.
+feed cache/304 behavior, admitted JSON authentication and query boundaries,
+including supplementary Unicode and a multi-kilobyte query. Signed-cookie detail
+GET/HEAD cases mount the production app and pin zero session/event-store calls
+under exhaustion, one hit per admitted read or canonical redirect, and fail-open
+limiter outages.
 `test/feed-throttle-429.test.ts` pins plain-text 429 bodies and headers on the
 real RSS, ICS and event Markdown routes across Accept variants, with
 unexhausted-budget controls. Existing throttle connection and concurrency suites

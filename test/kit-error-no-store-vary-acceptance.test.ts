@@ -1074,7 +1074,10 @@ describe("binding and dispatch locks", () => {
 
   it.each([
     ["season grammar", /if \(!parseSeasonParam\(.*\)\) \{[\s\S]*?error\(\d+, "[^"]*"\);/],
-    ["signal vocabulary", /if \(!SIGNALS\.includes\(.*\)\) \{[\s\S]*?error\(\d+, "[^"]*"\);/],
+    [
+      "signal vocabulary",
+      /if \(!isHotzoneSignal\(params\.signal\)\) \{[\s\S]*?error\(\d+, "[^"]*"\);/,
+    ],
   ])("RED: hotzone signal binding %s pre-check arm sets its own no-store", (_name, arm) => {
     // Each pre-check arm bypasses the helper, so it must carry its own
     // setHeaders: scope to the arm's block, not a window before the anchor.

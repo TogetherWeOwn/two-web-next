@@ -6,27 +6,34 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
-import { attendeePageHref } from "./attendee-paths";
-import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
+import type {
+  EventAttendee,
+  EventLink,
+  EventNeighbors,
+  EventSeriesContext,
+  PublicEvent,
+  ViewerRsvp,
+} from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-const fmtWithOffset = (d: Date, tz: string): string => {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: tz,
-      timeZoneName: "longOffset",
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-};
+import { formatEventWhen as fmtWithOffset } from "./date-format";
+
+const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
+  <>
+    {Number.isFinite(event.startsAt.getTime()) ? (
+      <>
+        {" "}
+        <time datetime={event.startsAt.toISOString()}>
+          {fmtWithOffset(event.startsAt, event.timezone)}
+        </time>
+      </>
+    ) : null}
+    {event.location ? <span class="event-related-location">{event.location}</span> : null}
+  </>
+);
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -43,9 +50,12 @@ export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
   related: EventLink[];
+  /** Series run context; null (or omitted) for standalone events, which render exactly as today. */
+  series?: EventSeriesContext | null;
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
+  archive?: ArchiveContext | null;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -63,8 +73,10 @@ export const EventPage: FC<{
   e,
   neighbors,
   related,
+  series = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
+  archive,
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -94,6 +106,7 @@ export const EventPage: FC<{
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
+      backLink={archiveReturnLink(archive)}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -167,6 +180,14 @@ export const EventPage: FC<{
             <dt>Hosted by</dt>
             <dd>
               <p data-testid="event-organizer">{e.organizer_name}</p>
+            </dd>
+          </div>
+        ) : null}
+        {series && series.hosts.length > 0 ? (
+          <div>
+            <dt>Series hosts</dt>
+            <dd>
+              <p data-testid="event-series-hosts">{series.hosts.join(", ")}</p>
             </dd>
           </div>
         ) : null}
@@ -330,7 +351,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
+              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees
@@ -348,16 +369,38 @@ export const EventPage: FC<{
         dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
       <div class="event-discovery">
+        {series && (series.previous || series.next) ? (
+          <nav class="event-pagination" aria-label="Series events" data-testid="event-series-nav">
+            {series.previous ? (
+              <a
+                href={`/e/${series.previous.eventKey}`}
+                rel="prev"
+                data-testid="event-series-previous"
+              >
+                <span>← Previous in series: {series.previous.title}</span>
+                <DestinationPreview event={series.previous} />
+              </a>
+            ) : null}{" "}
+            {series.next ? (
+              <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
+                <span>Next in series: {series.next.title} →</span>
+                <DestinationPreview event={series.next} />
+              </a>
+            ) : null}
+          </nav>
+        ) : null}
         {neighbors.previous || neighbors.next ? (
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
-                ← Previous event: {neighbors.previous.title}
+                <span>← Previous event: {neighbors.previous.title}</span>
+                <DestinationPreview event={neighbors.previous} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
-                Next event: {neighbors.next.title} →
+                <span>Next event: {neighbors.next.title} →</span>
+                <DestinationPreview event={neighbors.next} />
               </a>
             ) : null}
           </nav>

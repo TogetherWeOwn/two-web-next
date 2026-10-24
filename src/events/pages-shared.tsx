@@ -93,6 +93,7 @@ const EventDetailShell: FC<
     account?: boolean;
     markdownAlternate?: string;
     siteJsonLd?: string;
+    backLink?: { href: string; label: string } | null;
   }>
 > = ({
   title,
@@ -104,6 +105,7 @@ const EventDetailShell: FC<
   account,
   markdownAlternate,
   siteJsonLd,
+  backLink,
   children,
 }) => (
   <Layout
@@ -118,7 +120,7 @@ const EventDetailShell: FC<
     <SiteHeader session={session} active="event" loginReturnTo={loginReturnTo} account={account} />
     <main id="main" tabindex={-1}>
       <nav class="event-back" aria-label="Event calendar">
-        <a href="/events">← All events</a>
+        <a href={backLink?.href ?? "/events"}>{backLink?.label ?? "← All events"}</a>
       </nav>
       {children}
       {siteJsonLd ? (

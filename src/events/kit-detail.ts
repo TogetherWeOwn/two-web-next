@@ -35,14 +35,14 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { isValidZone } from "./date-format";
+import { formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
   ATTENDEE_PAGE_SIZE,
-  attendeePageHref,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
@@ -52,10 +52,15 @@ import {
   type EventAttendee,
   type EventLink,
   type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
+  type SeriesEventRef,
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {
@@ -63,6 +68,10 @@ export interface KitEventDetailStore {
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
   neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
   relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
+  /** Series run read. Optional so existing fakes keep compiling: the resolver
+   * falls back to the shared read, which skips standalone events with zero
+   * queries and fails open everywhere else. */
+  seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
   /** Bounded attendee window for one native page: the page plus the first row
    * of the next page (lookahead, never rendered) that powers Next. */
   attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
@@ -97,6 +106,15 @@ export interface KitEventDetailLink {
   whenText: string;
   datetime: string;
   location: string | null;
+}
+
+/** Series run context for the detail view: the hosts behind the run plus the
+ * adjacent published/past nights. Null for standalone or oversized imported
+ * runs, which render with no series markup on either renderer. */
+export interface KitEventDetailSeries {
+  hosts: string[];
+  previous: KitEventDetailLink | null;
+  next: KitEventDetailLink | null;
 }
 
 export interface KitEventDetailModel {
@@ -135,6 +153,8 @@ export interface KitEventDetailModel {
   /** Validated roster-refresh href: the bare page path on page 1,
    * `?attendees=N` on a valid N > 1, never raw query text. */
   attendeesRefreshHref: string;
+  /** Navigation-only archive return, absent on direct visits. */
+  archiveReturn?: { href: string; label: string } | null;
   /** Meta robots + x-robots-tag value for draft/past rows; null when indexable. */
   robots: string | null;
   /** Rooted .md alternate path; drafts have no Markdown view. */
@@ -161,6 +181,7 @@ export interface KitEventDetailModel {
   waitlistPosition: number | null;
   neighbors: { previous: KitEventDetailLink | null; next: KitEventDetailLink | null };
   related: KitEventDetailLink[];
+  series: KitEventDetailSeries | null;
   /** Guests-only join pitch; signed-in viewers never see it. */
   showJoinPitch: boolean;
   joinReturnTo: string;
@@ -247,6 +268,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getEventFn: (db, key) => getPublicEvent(db, key),
     neighborsFn: (db, event) => getEventNeighbors(db, event),
     relatedFn: (db, event) => listRelatedEvents(db, event),
+    seriesFn: (db, event) => getEventSeriesContext(db, event),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -270,23 +292,8 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   };
 }
 
-/** Hero wall time: the served page's long-offset format, ISO on a bad zone. */
-export function formatEventWhen(startsAt: Date, timezone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: timezone,
-      timeZoneName: "longOffset",
-    }).format(startsAt);
-  } catch {
-    return startsAt.toISOString();
-  }
-}
+// Preserve the read-model export used by existing Kit callers.
+export { formatEventWhen } from "./date-format";
 
 function toLink(link: EventLink): KitEventDetailLink {
   // Discovery instants use the served long-offset detail format (the hero
@@ -417,6 +424,7 @@ export async function resolveKitEventDetail(
       // Native attendee page from the query (?attendees=<n>), same strict
       // fallback as the served handler: malformed values stay on page 1.
       const attendeePage = parseAttendeePageParam(new URLSearchParams(search).get("attendees"));
+      const archive = archiveContext(search);
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
@@ -433,9 +441,16 @@ export async function resolveKitEventDetail(
         (related) => related,
         (): EventLink[] => [],
       );
-      const [neighbors, related, attendeeRows, position, answer] = await Promise.all([
+      const seriesSettled = (
+        store.seriesFn ? store.seriesFn(db, event) : getEventSeriesContext(db, event)
+      ).then(
+        (series) => series,
+        (): EventSeriesContext | null => null,
+      );
+      const [neighbors, related, series, attendeeRows, position, answer] = await Promise.all([
         neighborsSettled,
         relatedSettled,
+        seriesSettled,
         member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
@@ -456,11 +471,15 @@ export async function resolveKitEventDetail(
         page: attendeePage,
         prevHref:
           attendeePage > 1
-            ? attendeePageHref(event.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+            ? archiveEventHref(
+                event.eventKey,
+                archive,
+                attendees.length === 0 ? 1 : attendeePage - 1,
+              )
             : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
-            ? attendeePageHref(event.eventKey, attendeePage + 1)
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
             : null,
       };
       // RSVP closure is decided once here, on the server render instant, with
@@ -509,10 +528,9 @@ export async function resolveKitEventDetail(
           rsvpClosed,
           canonical: pageCanonical,
           path: pagePath,
-          // Stale-roster refresh keeps the validated attendee page (page 1
-          // stays bare); never the raw query, so foreign params and malformed
-          // values fall back to the bare event path.
-          attendeesRefreshHref: attendeePageHref(event.eventKey, attendeePage),
+          // Keep validated roster/archive state only, never raw query text.
+          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
           // every viewer, so only link it where it answers 200.
@@ -538,6 +556,13 @@ export async function resolveKitEventDetail(
             next: neighbors.next ? toLink(neighbors.next) : null,
           },
           related: related.map(toLink),
+          series: series
+            ? {
+                hosts: series.hosts,
+                previous: series.previous ? toLink(series.previous) : null,
+                next: series.next ? toLink(series.next) : null,
+              }
+            : null,
           showJoinPitch: !viewer,
           // The sign-in return keeps the query string, exactly as served;
           // the join pitch and related-join links use the bare page path.
