@@ -90,7 +90,7 @@ describe("admin free-text filter length bound (no DB)", () => {
         roster_order: "asc",
         roster_page: "3",
       }),
-    ).toEqual({ q: "", sort: "status", order: "asc", page: 3 });
+    ).toEqual({ q: "", status: "", sort: "status", order: "asc", page: 3 });
     expect(parseJoinAttemptsQuery({ q: huge, outcome: "denied", page: "2" })).toEqual({
       outcome: "denied",
       q: "",
