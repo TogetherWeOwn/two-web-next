@@ -1,6 +1,11 @@
 // Query state for the smaller admin tables. Raw sort keys never reach SQL.
 
-import { eventKeyShaped } from "../events/keys";
+// Local shape gate for values that NAME an event key without routing to one
+// (the activity-log event scope). Mirrors src/events/keys.ts ULID_KEY/SEED_KEY
+// without importing it: table-list is reachable from the featured
+// current-source proof, and importing keys would pull src/qa.ts into that
+// scope. Admitting the seed shape in a read filter cannot widen anything:
+// the scope is an exact-equality conjunction applied before paging.
 
 export type ListParams = Record<string, string | undefined>;
 export type SortOrder = "asc" | "desc";
@@ -30,6 +35,11 @@ export type ActivityLogQuery = {
 export function invalidActivityLogScope(): Error & { status: number } {
   return Object.assign(new Error("Invalid event scope"), { status: 422 });
 }
+const ULID_KEY_SHAPE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+const SEED_KEY_SHAPE = /^seed-calendar-(0[1-9]|[1-4][0-9]|50)$/;
+const eventKeyShaped = (key: string): boolean =>
+  ULID_KEY_SHAPE.test(key) || SEED_KEY_SHAPE.test(key);
+
 export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
