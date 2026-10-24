@@ -53,7 +53,7 @@ function adminWriteReturn(path: string): string | null {
     "/featured": "/admin/featured/new",
   };
   if (candidates[rest]) return candidates[rest];
-  let match = rest.match(/^\/events\/([^/]+)\/(publish|cancel|rsvp-pause|rsvp-reopen)$/);
+  let match = rest.match(/^\/events\/([^/]+)\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/);
   if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";
   match = rest.match(/^\/events\/([^/]+)$/);
   if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";

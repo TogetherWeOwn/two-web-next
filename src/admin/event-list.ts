@@ -62,9 +62,17 @@ export function eventListUrl(query: EventListQuery, changes: Partial<EventListQu
   return `/admin/events?${params}`;
 }
 
-/** Zero-row copy for the events table: filtered empties say so, like featured. */
+/** Query is normalized by parseEventListQuery before reaching the page. */
+export function eventListHasFilters(query: EventListQuery): boolean {
+  return Boolean(query.q || query.status || query.series || query.fill || query.rsvp_open);
+}
+
+export function eventListClearUrl(query: EventListQuery): string {
+  return eventListUrl(query, { q: "", status: "", series: "", fill: "", rsvp_open: "", page: 1 });
+}
+
+/** A successful empty later page says nothing about the inventory as a whole. */
 export function eventEmptyText(query: EventListQuery): string {
-  return query.q || query.status || query.series || query.fill || query.rsvp_open
-    ? "No events match these filters."
-    : "No events yet.";
+  if (query.page > 1) return "No results on this page.";
+  return eventListHasFilters(query) ? "No events match these filters." : "No events yet.";
 }

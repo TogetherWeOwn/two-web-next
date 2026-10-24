@@ -178,7 +178,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rss moderator parity (agent-testdb)"
     expect(memberBody).toBe(guestBody);
     expect(moderatorBody).toBe(guestBody);
     expect(guestBody).toContain(PUB);
-    for (const key of [DRAFT, CANCELLED]) expect(guestBody).not.toContain(key);
+    expect(guestBody).not.toContain(DRAFT);
+    // Cancelled rows ship marked, like the ICS collection's STATUS:CANCELLED.
+    expect(guestBody).toContain(CANCELLED);
+    expect(guestBody).toContain("<title>Cancelled: Cancelled night</title>");
     // lastBuildDate is the published max, not the draft's newer stamp.
     expect(channelLastBuildDate(guestBody)).toBe("Wed, 01 Jul 2026 12:00:00 +0000");
     expectUtcInstant(channelLastBuildDate(guestBody), new Date("2026-07-01T12:00:00Z"));
