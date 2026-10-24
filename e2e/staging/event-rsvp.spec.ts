@@ -141,7 +141,9 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
         const rss = await anonymous.get("/events.rss");
         expect(rss.status()).toBe(200);
         expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
-        expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
+        // Staging edge appends `no-transform` (challenge-platform injection
+        // suppression); origin still sends `max-age=300, public`.
+        expect(rss.headers()["cache-control"]).toBe("max-age=300, public, no-transform");
         expect(rss.headers()["set-cookie"] ?? null).toBeNull();
         const rssBody = await rss.text();
         // Match the owned item's identity, never an arbitrary ambient feed key.
@@ -152,7 +154,8 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
         const ics = await anonymous.get(`/events/${eventKey}.ics`);
         expect(ics.status()).toBe(200);
         expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
-        expect(ics.headers()["cache-control"]).toBe("max-age=300, private");
+        // Same staging edge transform as the collection feeds above.
+        expect(ics.headers()["cache-control"]).toBe("max-age=300, private, no-transform");
         expect(ics.headers()["content-disposition"]).toBe(`attachment; filename="${eventKey}.ics"`);
         expect(ics.headers()["set-cookie"] ?? null).toBeNull();
         const body = await ics.text();
