@@ -17,6 +17,7 @@ import {
   decodedText,
   emptyRegion,
   gameRecoveryFixture,
+  gameRow,
 } from "./helpers/calendar-game-recovery";
 
 vi.mock("../src/events/search-log", async (original) => ({
@@ -191,6 +192,27 @@ for (const twin of GAME_TWINS) {
       expect(html).toMatch(/<option\b[^>]*value=""[^>]*selected/);
       expect(f.queries.every(({ sql }) => /^select\b/i.test(sql))).toBe(true);
       expect(recordSearch).not.toHaveBeenCalled();
+    });
+
+    it("A1.7 calendar game-scoped miss suppresses the unscoped month sentence", async () => {
+      const f = gameRecoveryFixture({ upcomingRows: [gameRow(2, "Go")] });
+      const html = await (
+        await f.render(twin, "/events?view=calendar&month=2099-05&game=Chess")
+      ).text();
+      expect(html).toContain('data-testid="events-empty-search"');
+      expect(html).not.toContain('data-testid="calendar-month-empty"');
+      expect(decodedText(emptyRegion(html))).toContain("Chess");
+    });
+
+    it("A1.7 calendar month miss with matches elsewhere keeps the month sentence, not a game miss", async () => {
+      const f = gameRecoveryFixture({
+        upcomingRows: [gameRow(1, "Chess", false, "2099-05")],
+      });
+      const html = await (
+        await f.render(twin, "/events?view=calendar&month=2099-06&game=Chess")
+      ).text();
+      expect(html).not.toContain('data-testid="events-empty-search"');
+      expect(html).toContain('data-testid="calendar-month-empty"');
     });
   });
 }
