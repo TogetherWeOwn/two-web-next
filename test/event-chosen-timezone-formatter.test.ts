@@ -197,6 +197,142 @@ describe("event chosen timezone range formatter acceptance", () => {
     expect(out).toMatch(/02:00|2:00\s*am/i);
   });
 
+  // Endpoint attribution: every labelled endpoint must carry its own date, wall
+  // time and offset, in start-then-end order. Expected texts are hand-computed
+  // from the IANA rules (not produced by the formatter under test) and checked
+  // segment by segment so a swapped label or swapped instants fails loudly.
+  const ENDPOINT_CASES = [
+    {
+      name: "ordinary summer span in New York",
+      start: "2026-07-15T19:00:00.000Z",
+      end: "2026-07-15T21:00:00.000Z",
+      zone: "America/New_York",
+      startText: "Wednesday, 15 July 2026 at 15:00 GMT-04:00",
+      endText: "Wednesday, 15 July 2026 at 17:00 GMT-04:00",
+    },
+    {
+      name: "Tokyo date rollover",
+      start: "2026-07-15T23:30:00.000Z",
+      end: "2026-07-16T01:30:00.000Z",
+      zone: "Asia/Tokyo",
+      startText: "Thursday, 16 July 2026 at 08:30 GMT+09:00",
+      endText: "Thursday, 16 July 2026 at 10:30 GMT+09:00",
+    },
+    {
+      name: "autumn fold: same wall time, EDT then EST",
+      start: "2026-11-01T05:30:00.000Z",
+      end: "2026-11-01T06:30:00.000Z",
+      zone: "America/New_York",
+      startText: "Sunday, 1 November 2026 at 01:30 GMT-04:00",
+      endText: "Sunday, 1 November 2026 at 01:30 GMT-05:00",
+    },
+    {
+      name: "spring gap: EST then EDT",
+      start: "2026-03-08T06:30:00.000Z",
+      end: "2026-03-08T07:30:00.000Z",
+      zone: "America/New_York",
+      startText: "Sunday, 8 March 2026 at 01:30 GMT-05:00",
+      endText: "Sunday, 8 March 2026 at 03:30 GMT-04:00",
+    },
+    {
+      name: "Kathmandu quarter-hour offset with rollover",
+      start: "2026-07-15T19:00:00.000Z",
+      end: "2026-07-15T21:00:00.000Z",
+      zone: "Asia/Kathmandu",
+      startText: "Thursday, 16 July 2026 at 00:45 GMT+05:45",
+      endText: "Thursday, 16 July 2026 at 02:45 GMT+05:45",
+    },
+    {
+      name: "chosen dates differ across local midnight",
+      start: "2026-07-16T02:00:00.000Z",
+      end: "2026-07-16T06:00:00.000Z",
+      zone: "America/New_York",
+      startText: "Wednesday, 15 July 2026 at 22:00 GMT-04:00",
+      endText: "Thursday, 16 July 2026 at 02:00 GMT-04:00",
+    },
+    {
+      name: "same zone as the host",
+      start: "2026-07-15T19:00:00.000Z",
+      end: "2026-07-15T21:00:00.000Z",
+      zone: "Europe/London",
+      startText: "Wednesday, 15 July 2026 at 20:00 GMT+01:00",
+      endText: "Wednesday, 15 July 2026 at 22:00 GMT+01:00",
+    },
+  ] as const;
+
+  function splitEndpoints(out: string) {
+    const match = /^In ([^:]+): starts (.+); ends (.+)\.$/.exec(out);
+    expect(match, `range must read "In <zone>: starts <start>; ends <end>.", got: ${out}`).not.toBe(
+      null,
+    );
+    return { zone: match![1], start: match![2], end: match![3] };
+  }
+
+  it.each(ENDPOINT_CASES)("$name binds each labelled endpoint to its own instant", async (c) => {
+    const out = await formatRange(c.start, c.end, c.zone);
+    const parts = splitEndpoints(out);
+    expect(parts.zone).toBe(c.zone);
+    expect(parts.start, "text after 'starts' must describe the start instant").toBe(c.startText);
+    expect(parts.end, "text after 'ends' must describe the end instant").toBe(c.endText);
+    expect(out).toBe(`In ${c.zone}: starts ${c.startText}; ends ${c.endText}.`);
+    expect(out.indexOf("starts")).toBeLessThan(out.indexOf("ends"));
+  });
+
+  it("a reversed pair labels the earlier argument as the start, not the earlier instant", async () => {
+    // The formatter is positional: it never sorts, so swapped inputs swap the labels.
+    const out = await formatRange(
+      "2026-07-15T21:00:00.000Z",
+      "2026-07-15T19:00:00.000Z",
+      "America/New_York",
+    );
+    const parts = splitEndpoints(out);
+    expect(parts.start).toBe("Wednesday, 15 July 2026 at 17:00 GMT-04:00");
+    expect(parts.end).toBe("Wednesday, 15 July 2026 at 15:00 GMT-04:00");
+  });
+
+  // Surrounding whitespace is ignored (docs/event-device-timezone.md). The label
+  // shows the clean identifier and the output equals the unpadded expectation.
+  it.each([
+    [" America/New_York ", "America/New_York"],
+    ["\tAsia/Tokyo\n", "Asia/Tokyo"],
+    ["   Europe/London", "Europe/London"],
+    ["Asia/Kathmandu  ", "Asia/Kathmandu"],
+  ])("ignores surrounding whitespace in %j", async (padded, clean) => {
+    const expected = ENDPOINT_CASES.find((c) => c.zone === clean)!;
+    const out = await formatRange(expected.start, expected.end, padded);
+    expect(out).toBe(`In ${clean}: starts ${expected.startText}; ends ${expected.endText}.`);
+    expect(out).toBe(await formatRange(expected.start, expected.end, clean));
+    expect(out).not.toMatch(/: {2}| {2}:|\t|\n/);
+  });
+
+  it("surrounding whitespace never rescues an otherwise invalid identifier", async () => {
+    for (const zone of [" Mars/Olympus_Mons ", "  Not/AZone!!\t", " Europe/../London "]) {
+      expectUnavailable(
+        await formatRange("2026-07-15T19:00:00.000Z", "2026-07-15T21:00:00.000Z", zone),
+        "",
+      );
+    }
+  });
+
+  it.each(["   ", "\t\n", " \u00a0 "])(
+    "refuses a whitespace-only zone %j without fabricating times",
+    async (zone) => {
+      expectUnavailable(
+        await formatRange("2026-07-15T19:00:00.000Z", "2026-07-15T21:00:00.000Z", zone),
+        "",
+      );
+    },
+  );
+
+  it("refuses internal whitespace inside an identifier", async () => {
+    const out = await formatRange(
+      "2026-07-15T19:00:00.000Z",
+      "2026-07-15T21:00:00.000Z",
+      "America/ New_York",
+    );
+    expectUnavailable(out, "");
+  });
+
   it("ignores the device zone and formats the explicit chosen zone", async () => {
     // Device reads Tokyo; the chosen request names New York. A device-zone leak
     // would render 04:00+09:00 instead of 15:00-04:00.

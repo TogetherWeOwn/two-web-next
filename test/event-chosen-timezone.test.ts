@@ -37,6 +37,7 @@ interface BrowserElement {
   textContent: string | null;
   tagName: string;
   closest(selector: string): BrowserElement | null;
+  querySelector(selector: string): BrowserElement | null;
   checkVisibility(options: { checkVisibilityCSS: boolean }): boolean;
 }
 declare const window: typeof globalThis;
@@ -67,9 +68,12 @@ type View = (typeof VIEWS)[number];
 
 // Literal expectations are independently calculated, not produced by app date helpers.
 // Device differs from chosen in every case: a device-zone leak fails the time pin.
+// chosenStart/chosenEnd are the exact text each labelled endpoint must carry.
 const CASES = [
   {
     name: "London summer range to New York",
+    chosenStart: "Wednesday, 15 July 2026 at 15:00 GMT-04:00",
+    chosenEnd: "Wednesday, 15 July 2026 at 17:00 GMT-04:00",
     start: "2026-07-15T19:00:00.000Z",
     end: "2026-07-15T21:00:00.000Z",
     host: "Europe/London",
@@ -86,6 +90,8 @@ const CASES = [
   },
   {
     name: "next calendar day in Tokyo",
+    chosenStart: "Thursday, 16 July 2026 at 08:30 GMT+09:00",
+    chosenEnd: "Thursday, 16 July 2026 at 10:30 GMT+09:00",
     start: "2026-07-15T23:30:00.000Z",
     end: "2026-07-16T01:30:00.000Z",
     host: "America/New_York",
@@ -102,6 +108,8 @@ const CASES = [
   },
   {
     name: "autumn fold span shows one wall time with two offsets",
+    chosenStart: "Sunday, 1 November 2026 at 01:30 GMT-04:00",
+    chosenEnd: "Sunday, 1 November 2026 at 01:30 GMT-05:00",
     start: "2026-11-01T05:30:00.000Z",
     end: "2026-11-01T06:30:00.000Z",
     host: "Europe/London",
@@ -118,6 +126,8 @@ const CASES = [
   },
   {
     name: "spring gap-adjacent span skips the missing hour",
+    chosenStart: "Sunday, 8 March 2026 at 01:30 GMT-05:00",
+    chosenEnd: "Sunday, 8 March 2026 at 03:30 GMT-04:00",
     start: "2026-03-08T06:30:00.000Z",
     end: "2026-03-08T07:30:00.000Z",
     host: "Europe/London",
@@ -134,6 +144,8 @@ const CASES = [
   },
   {
     name: "Kathmandu quarter-hour with rollover",
+    chosenStart: "Thursday, 16 July 2026 at 00:45 GMT+05:45",
+    chosenEnd: "Thursday, 16 July 2026 at 02:45 GMT+05:45",
     start: "2026-07-15T19:00:00.000Z",
     end: "2026-07-15T21:00:00.000Z",
     host: "Europe/London",
@@ -150,6 +162,8 @@ const CASES = [
   },
   {
     name: "same zone stays explicitly chosen-labelled",
+    chosenStart: "Wednesday, 15 July 2026 at 20:00 GMT+01:00",
+    chosenEnd: "Wednesday, 15 July 2026 at 22:00 GMT+01:00",
     start: "2026-07-15T19:00:00.000Z",
     end: "2026-07-15T21:00:00.000Z",
     host: "Europe/London",
@@ -166,6 +180,8 @@ const CASES = [
   },
   {
     name: "different chosen dates across midnight",
+    chosenStart: "Wednesday, 15 July 2026 at 22:00 GMT-04:00",
+    chosenEnd: "Thursday, 16 July 2026 at 02:00 GMT-04:00",
     start: "2026-07-16T02:00:00.000Z",
     end: "2026-07-16T06:00:00.000Z",
     host: "Europe/London",
@@ -731,6 +747,37 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         expect(requests, "activation must not make any request, including telemetry").toEqual([]);
       };
     }
+    function splitChosenStatus(status: string) {
+      const match = /^In ([^:]+): starts (.+); ends (.+)\.$/.exec(status.trim());
+      expect(
+        match,
+        `status must read "In <zone>: starts <start>; ends <end>.", got: ${status}`,
+      ).not.toBe(null);
+      return { zone: match![1], start: match![2], end: match![3] };
+    }
+    // The whole chosen-zone row is JS-only: with scripts off, nothing of it is visible.
+    async function chosenRowVisibility(page: Page) {
+      return page.evaluate(() => {
+        const mount = document.querySelector("[data-event-chosen-timezone]");
+        const row = mount?.closest("div") ?? null;
+        const parts: Record<string, BrowserElement | null> = {
+          row,
+          label: document.querySelector('label[for="chosen-timezone-input"]'),
+          heading: row?.querySelector("dt") ?? null,
+          input: document.querySelector('[data-testid="event-chosen-timezone-input"]'),
+          examples: document.querySelector('[data-testid="event-chosen-timezone-examples"]'),
+          button: document.querySelector('[data-testid="event-chosen-timezone-button"]'),
+          status: document.querySelector('[data-testid="event-chosen-timezone-status"]'),
+        };
+        const found: Record<string, boolean> = {};
+        const visible: Record<string, boolean> = {};
+        for (const [name, node] of Object.entries(parts)) {
+          found[name] = node !== null;
+          visible[name] = node?.checkVisibility({ checkVisibilityCSS: true }) ?? false;
+        }
+        return { found, visible, rowText: row?.textContent ?? "" };
+      });
+    }
     async function fillChosen(page: Page, zone: string) {
       const input = page.getByTestId(INPUT_TESTID);
       expect(await input.count(), "missing labelled chosen-zone input").toBe(1);
@@ -773,6 +820,58 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         // CONTROL only: host schedule and calendar links survive without JS.
         // The chosen-controls-hidden pin lives in the server contract, which is
         // RED until the Builder serves the mount.
+        expect(errors).toEqual([]);
+      });
+      it(`${view}: real no-JS browser hides the whole chosen-zone row, label and examples`, async () => {
+        for (const range of [CASES[0], CASES[2]]) {
+          const { page, errors } = await open(view, range, undefined, false);
+          const row = await chosenRowVisibility(page);
+          // Every part is served (so the hiding assertion is not vacuous)...
+          expect(row.found).toEqual({
+            row: true,
+            label: true,
+            heading: true,
+            input: true,
+            examples: true,
+            button: true,
+            status: true,
+          });
+          expect(row.rowText).toContain("Timezone (IANA identifier)");
+          // ...and none of it is visible without JS: no orphaned label or examples.
+          expect(row.visible).toEqual({
+            row: false,
+            label: false,
+            heading: false,
+            input: false,
+            examples: false,
+            button: false,
+            status: false,
+          });
+          const body = await page.locator("body").innerText();
+          expect(body).not.toContain("Compare in another timezone");
+          expect(body).not.toContain("Timezone (IANA identifier)");
+          expect(body).not.toContain("e.g. Europe/London");
+          expect(body).not.toContain("Compare times");
+          // Original controls stay true: host schedule and calendar links remain visible.
+          expect(await page.locator(`time[datetime="${range.start}"]`).first().isVisible()).toBe(
+            true,
+          );
+          expect(errors).toEqual([]);
+        }
+      });
+      it(`${view}: with JS the whole chosen-zone row is revealed together`, async () => {
+        const { page, errors } = await open(view, CASES[0]);
+        await expect
+          .poll(async () => (await chosenRowVisibility(page)).visible)
+          .toEqual({
+            row: true,
+            label: true,
+            heading: true,
+            input: true,
+            examples: true,
+            button: true,
+            status: true,
+          });
         expect(errors).toEqual([]);
       });
       it(`${view}: page load does not convert, steal focus, or change the machine instant`, async () => {
@@ -826,12 +925,62 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           expect(status).toContain(range.chosen);
           expect(status).toMatch(range.startTime);
           expect(status).toMatch(range.endTime);
+          // Endpoint attribution: the text after each label carries that instant's
+          // own date, wall time and offset. Swapped labels or instants fail here.
+          const endpoints = splitChosenStatus(status);
+          expect(endpoints.zone).toBe(range.chosen);
+          expect(endpoints.start, "text after 'starts' is the start instant").toBe(
+            range.chosenStart,
+          );
+          expect(endpoints.end, "text after 'ends' is the end instant").toBe(range.chosenEnd);
+          expect(endpoints.start).toMatch(range.startDate);
+          expect(endpoints.start).toMatch(range.startTime);
+          expect(endpoints.start).toMatch(range.startOffset);
+          expect(endpoints.end).toMatch(range.endDate);
+          expect(endpoints.end).toMatch(range.endTime);
+          expect(endpoints.end).toMatch(range.endOffset);
           expect(await page.getByTestId(STATUS_TESTID).getAttribute("role")).toBe("status");
           expect(await page.getByTestId(STATUS_TESTID).getAttribute("aria-live")).toBe("polite");
           expect(
             await page.evaluate(() => document.activeElement?.tagName),
             "announcement must not move focus",
           ).toBe("BUTTON");
+          expect(await invariant(page, range)).toEqual(initial);
+          expect(await context.cookies()).toEqual(cookies);
+          await assertNoEffects();
+          expect(errors).toEqual([]);
+        });
+      }
+      for (const [range, padded] of [
+        [CASES[0], " America/New_York "],
+        [CASES[2], "\tAmerica/New_York  "],
+        [CASES[1], "  Asia/Tokyo"],
+      ] as const) {
+        it(`${view}: ignores surrounding whitespace in ${JSON.stringify(padded)} (${range.name})`, async () => {
+          const { page, context, errors } = await open(view, range);
+          const initial = await invariant(page, range);
+          const cookies = await context.cookies();
+          const assertNoEffects = await guardSideEffects(page);
+          await fillChosen(page, padded);
+          expect(
+            await page.getByTestId(INPUT_TESTID).inputValue(),
+            "padding reaches the handler",
+          ).toBe(padded);
+          // Typing alone never converts, and the padded entry is never rewritten or submitted.
+          expect(await page.getByTestId(STATUS_TESTID).innerText()).toBe("");
+          await activateChosen(page);
+          await expect
+            .poll(() => page.getByTestId(STATUS_TESTID).innerText())
+            .toContain(range.chosen);
+          const status = await page.getByTestId(STATUS_TESTID).innerText();
+          expect(status).toBe(
+            `In ${range.chosen}: starts ${range.chosenStart}; ends ${range.chosenEnd}.`,
+          );
+          const endpoints = splitChosenStatus(status);
+          expect(endpoints.start).toBe(range.chosenStart);
+          expect(endpoints.end).toBe(range.chosenEnd);
+          // No automatic conversion: the host values and the entered text are unchanged.
+          expect(await page.getByTestId(INPUT_TESTID).inputValue()).toBe(padded);
           expect(await invariant(page, range)).toEqual(initial);
           expect(await context.cookies()).toEqual(cookies);
           await assertNoEffects();
