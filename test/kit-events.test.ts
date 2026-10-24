@@ -147,7 +147,7 @@ describe("Kit events list response parity", () => {
   });
 
   it("skips the session store read for cookie-bearing requests", async () => {
-    const sessionFor = vi.fn(async () => ({ member: true, moderator: false }));
+    const sessionFor = vi.fn(async () => ({ username: "kit-member", member: true, moderator: false }));
     const withCookie = () =>
       request("https://example.test/events", { headers: { cookie: "session=opaque" } });
     let renders = 0;
@@ -195,7 +195,7 @@ describe("Kit events list response parity", () => {
       renders++;
       return cachedResponse();
     };
-    const sessionFor = async () => ({ member: true, moderator: false });
+    const sessionFor = async () => ({ username: "kit-member", member: true, moderator: false });
     await dispatchEventsRequest(request(), env, resolve, { sessionFor, now: 1000 });
     await dispatchEventsRequest(request(), env, resolve, { sessionFor, now: 2000 });
 
