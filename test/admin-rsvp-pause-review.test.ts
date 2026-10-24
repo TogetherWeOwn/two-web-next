@@ -11,10 +11,12 @@
 // - Reopen keeps its current direct one-click POST (no review wrapper).
 // - This is accident-prevention UI, not a server-enforced gate: no token,
 //   nonce, route, or backend confirmation state is asserted here.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  ATTRIBUTE_BREAKOUT_TARGET,
   DIRTY_TARGET,
   OTHER_KEY,
+  SAVED_TARGET,
   SURFACES,
   compileKitPauseReview,
   kitReviewData,
@@ -28,23 +30,33 @@ import {
 let kit: Awaited<ReturnType<typeof compileKitPauseReview>>;
 beforeAll(async () => {
   kit = await compileKitPauseReview();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
 }, 60000);
-afterAll(() => kit?.close());
+afterAll(() => {
+  vi.useRealTimers();
+  kit?.close();
+});
 
 async function render(
   presentation: Presentation,
   surface: Surface,
-  opts: { rsvpOpen?: boolean; status?: string; rejectedSave?: boolean } = {},
+  opts: {
+    rsvpOpen?: boolean;
+    status?: string;
+    rejectedSave?: boolean;
+    title?: string;
+    endsAt?: Date;
+  } = {},
 ) {
   const open = opts.rsvpOpen ?? true;
   const status = opts.status ?? "published";
   const rejected = opts.rejectedSave ?? false;
+  const title = opts.title ?? SAVED_TARGET;
+  const options = { rsvpOpen: open, status, rejectedSave: rejected, title, endsAt: opts.endsAt };
   return presentation === "hono"
-    ? renderHonoReview(surface, { rsvpOpen: open, status, rejectedSave: rejected })
-    : kit.render(
-        surface,
-        await kitReviewData(surface, { rsvpOpen: open, status, rejectedSave: rejected }),
-      );
+    ? renderHonoReview(surface, options)
+    : kit.render(surface, await kitReviewData(surface, options));
 }
 
 function reviewFor(html: string, action: string) {
@@ -52,6 +64,16 @@ function reviewFor(html: string, action: string) {
   const matching = reviews.filter((review) => review.includes(`action="${action}"`));
   expect(matching, `one native review must contain the existing ${action} form`).toHaveLength(1);
   return matching[0]!;
+}
+
+function summaryLabel(review: string) {
+  const label = review.match(/<summary\b[^>]*\baria-label="([^"]*)"/)?.[1];
+  expect(label, "review summary must have an aria-label").toBeDefined();
+  return label!
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function formsFor(html: string, action: string) {
@@ -95,6 +117,15 @@ for (const presentation of ["hono", "kit"] as const) {
         expect(review).toContain("&amp;");
         expect(review).not.toContain("<img src=x");
         expect(review).not.toContain(DIRTY_TARGET);
+        expect(summaryLabel(review)).toBe(`Review pause: ${SAVED_TARGET}`);
+      });
+
+      it(`${surface}: quoted attribute-breakout title keeps the complete review label`, async () => {
+        const review = reviewFor(
+          await render(presentation, surface, { title: ATTRIBUTE_BREAKOUT_TARGET }),
+          pauseActionFor(surface),
+        );
+        expect(summaryLabel(review)).toBe(`Review pause: ${ATTRIBUTE_BREAKOUT_TARGET}`);
       });
 
       it(`${surface}: review states signups close and the line freezes`, async () => {
@@ -152,6 +183,22 @@ for (const presentation of ["hono", "kit"] as const) {
           }
         }
       });
+    }
+
+    for (const endsAt of ["2030-01-01T11:59:59.999Z", "2030-01-01T12:00:00Z"]) {
+      for (const rsvpOpen of [true, false]) {
+        it(`published endsAt=${endsAt} rsvpOpen=${rsvpOpen}: neither surface offers pause or reopen`, async () => {
+          for (const surface of SURFACES) {
+            const html = await render(presentation, surface, {
+              status: "published",
+              rsvpOpen,
+              endsAt: new Date(endsAt),
+            });
+            expect(html).not.toContain(`action="${pauseActionFor(surface)}"`);
+            expect(html).not.toContain(`action="${reopenActionFor(surface)}"`);
+          }
+        });
+      }
     }
 
     it("positive control: paused rows offer reopen on both surfaces", async () => {

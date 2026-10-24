@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import {
+  ATTRIBUTE_BREAKOUT_TARGET,
   REVIEW_ROOT,
   SAVED_TARGET,
   SURFACES,
@@ -32,6 +33,7 @@ type FixtureOptions = {
   responseStatus?: number;
   rejectedSave?: boolean;
   rsvpOpen?: boolean;
+  title?: string;
 };
 
 async function openFixture(
@@ -49,10 +51,18 @@ async function openFixture(
   const rsvpOpen = options.rsvpOpen ?? true;
   const html =
     presentation === "hono"
-      ? renderHonoReview(surface, { rsvpOpen, rejectedSave: options.rejectedSave })
+      ? renderHonoReview(surface, {
+          rsvpOpen,
+          rejectedSave: options.rejectedSave,
+          title: options.title,
+        })
       : kit.render(
           surface,
-          await kitReviewData(surface, { rsvpOpen, rejectedSave: options.rejectedSave }),
+          await kitReviewData(surface, {
+            rsvpOpen,
+            rejectedSave: options.rejectedSave,
+            title: options.title,
+          }),
         );
   const mutations: { path: string; body: string }[] = [];
   const documents: string[] = [];
@@ -110,7 +120,7 @@ async function openFixture(
   return { page, context, mutations, documents };
 }
 
-async function nativeReview(page: Page, surface: Surface) {
+async function nativeReview(page: Page, surface: Surface, title = SAVED_TARGET) {
   const form = page.locator(`form[action="${pauseActionFor(surface)}"]`);
   await expect(form).toHaveCount(1);
   const review = page.locator("details").filter({ has: form });
@@ -120,6 +130,8 @@ async function nativeReview(page: Page, surface: Surface) {
   const summary = review.locator(":scope > summary");
   await expect(summary).toHaveCount(1);
   await expect(summary).toHaveAccessibleName(/review|pause/i);
+  await expect(summary).toHaveAttribute("aria-label", `Review pause: ${title}`);
+  await expect(summary).toHaveAccessibleName(`Review pause: ${title}`);
   const final = form.getByRole("button", {
     includeHidden: true,
     name: /pause.*rsvp|confirm.*pause/i,
@@ -141,6 +153,39 @@ for (const presentation of ["hono", "kit"] as const) {
         await expect(f.page.locator("body")).toContainText(SAVED_TARGET);
         if (surface !== "event-list") {
           await expect(f.page.locator('input[name="title"]')).toHaveValue(SAVED_TARGET);
+        }
+        expect(f.mutations).toEqual([]);
+      } finally {
+        await f.context.close();
+      }
+    });
+
+    test(`${presentation} ${surface}: quoted title cannot inject review attributes, elements or handlers`, async ({
+      browser,
+    }) => {
+      const f = await openFixture(browser, presentation, surface, {
+        title: ATTRIBUTE_BREAKOUT_TARGET,
+      });
+      try {
+        const form = f.page.locator(`form[action="${pauseActionFor(surface)}"]`);
+        const review = f.page.locator("details").filter({ has: form });
+        const summary = review.locator(":scope > summary");
+        await expect(summary).toHaveCount(1);
+        await expect(summary).not.toHaveAttribute("data-injected");
+        await expect(f.page.locator("[data-injected]")).toHaveCount(0);
+        await expect(review.locator("img, script, iframe, object, embed")).toHaveCount(0);
+        const handlers = await review.evaluate((node) =>
+          [node, ...node.querySelectorAll("*")].flatMap((element) =>
+            element.getAttributeNames().filter((name) => /^on/i.test(name)),
+          ),
+        );
+        expect(handlers).toEqual([]);
+        await nativeReview(f.page, surface, ATTRIBUTE_BREAKOUT_TARGET);
+        await expect(review).toContainText(ATTRIBUTE_BREAKOUT_TARGET);
+        if (surface === "event-edit") {
+          await expect(f.page.locator('input[name="title"]')).toHaveValue(
+            ATTRIBUTE_BREAKOUT_TARGET,
+          );
         }
         expect(f.mutations).toEqual([]);
       } finally {

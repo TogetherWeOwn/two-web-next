@@ -16,6 +16,8 @@ import type { EventListRow } from "../../src/admin/store";
 export const REVIEW_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 // Gitleaks-allowlisted fixture ULIDs (see .gitleaks.toml): reuse only these.
 export const SAVED_TARGET = 'Saved <img src=x onerror="alert(1)"> & "Friday"';
+export const ATTRIBUTE_BREAKOUT_TARGET =
+  'Saved " data-injected="yes" onmouseover="alert(1)"><img data-injected="yes" src=x onerror="alert(1)"> & "Friday"';
 export const DIRTY_TARGET = "Unsaved editor headline";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 export const OTHER_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -63,12 +65,23 @@ export const resultFor = (surface: Surface) => `/admin/events/${EVENT_KEY}`;
 
 export function renderHonoReview(
   surface: Surface,
-  opts: { rsvpOpen?: boolean; status?: string; rejectedSave?: boolean } = {},
+  opts: {
+    rsvpOpen?: boolean;
+    status?: string;
+    rejectedSave?: boolean;
+    title?: string;
+    endsAt?: Date;
+  } = {},
 ) {
-  const { rsvpOpen = true, status = "published", rejectedSave = false } = opts;
-  const row = { ...savedEvent, status, rsvpOpen };
+  const {
+    rsvpOpen = true,
+    status = "published",
+    rejectedSave = false,
+    title = SAVED_TARGET,
+  } = opts;
+  const row = { ...savedEvent, status, rsvpOpen, title, endsAt: opts.endsAt ?? savedEvent.endsAt };
   const values = {
-    title: rejectedSave ? DIRTY_TARGET : SAVED_TARGET,
+    title: rejectedSave ? DIRTY_TARGET : title,
     game: "Chess",
     description: "Bring a friend.",
     starts_at: "2030-01-10 20:00",
@@ -92,10 +105,21 @@ export function renderHonoReview(
 
 export async function kitReviewData(
   surface: Surface,
-  opts: { rsvpOpen?: boolean; status?: string; rejectedSave?: boolean } = {},
+  opts: {
+    rsvpOpen?: boolean;
+    status?: string;
+    rejectedSave?: boolean;
+    title?: string;
+    endsAt?: Date;
+  } = {},
 ) {
-  const { rsvpOpen = true, status = "published", rejectedSave = false } = opts;
-  const row = { ...savedEvent, status, rsvpOpen };
+  const {
+    rsvpOpen = true,
+    status = "published",
+    rejectedSave = false,
+    title = SAVED_TARGET,
+  } = opts;
+  const row = { ...savedEvent, status, rsvpOpen, title, endsAt: opts.endsAt ?? savedEvent.endsAt };
   if (surface === "event-list") {
     return buildEventListView(parseEventListQuery({}), [
       row,
