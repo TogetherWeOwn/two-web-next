@@ -4,6 +4,7 @@
 // database — importing this module must never connect to anything.
 
 import { SUBSCRIPTION_GUIDANCE } from "./events/subscription-copy";
+import { faqLastReviewed } from "./faq-last-reviewed";
 
 export const FAQS: Array<{
   section: string;
@@ -183,6 +184,17 @@ export const FAQS: Array<{
 // The Kit page renders this shape server-side: the questions, answer
 // semantics and section anchors stay byte-identical across renderers because
 // every renderer reads this module, never a pasted copy.
-export function faqPageData(appUrl: string): { appUrl: string; faqs: typeof FAQS } {
-  return { appUrl, faqs: FAQS };
+export type FaqPageData = {
+  appUrl: string;
+  faqs: typeof FAQS;
+  lastReviewed: ReturnType<typeof faqLastReviewed>;
+};
+
+// The Kit load function only reorders the same reads as the Hono handler
+// (src/static-leaves.tsx): APP_URL plus the config stamp, mapped through the
+// shared validator so an empty or unparseable value hides the stamp. Kept here
+// (not in the Kit route) so the root suite can pin it without importing
+// SvelteKit or worker code.
+export function faqPageData(appUrl: string, raw?: string | undefined): FaqPageData {
+  return { appUrl, faqs: FAQS, lastReviewed: faqLastReviewed(raw) };
 }

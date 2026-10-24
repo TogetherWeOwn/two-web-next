@@ -6,7 +6,12 @@ import { FAQS } from "../faq-content";
 // Re-exported so existing importers (the Markdown alternate) keep working.
 export { FAQS };
 
-export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
+// The stamp carries both the machine date and the human label: crawlers read
+// datetime, members read words. Mirrors the /rules stamp treatment.
+export const Faq: FC<{ appUrl: string; lastReviewed: { iso: string; label: string } | null }> = ({
+  appUrl,
+  lastReviewed,
+}) => (
   <Leaf
     title="FAQ — Together We Own"
     canonical={canonicalUrl(appUrl, "/faq")}
@@ -18,6 +23,11 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a
       moderator.
     </p>
+    {lastReviewed ? (
+      <p data-testid="faq-last-reviewed" class="strap">
+        Last reviewed <time datetime={lastReviewed.iso}>{lastReviewed.label}</time>
+      </p>
+    ) : null}
     <nav aria-label="FAQ topics">
       <p>Jump to a topic</p>
       <div class="facts rank-stack">

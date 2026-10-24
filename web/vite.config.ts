@@ -39,7 +39,18 @@ export default defineConfig({
                   name: "site-shell",
                   test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/(?:SiteHeader|ErrorShell)\.svelte)$/,
                 },
-                { name: "admin", test: /\/src\/admin\// },
+                // Both native admin boundaries repeat the same recovery markup.
+                // Co-compress them with their pure shell and URL helper on SSR.
+                {
+                  name: "admin-errors",
+                  test: /\/web\/src\/(?:lib\/(?:AdminShell\.svelte|admin-read-retry\.ts)|routes\/admin\/(?:join-attempts\/)?\+error\.svelte)$/,
+                },
+                // Compress Kit's home and admin markup with the Hono renderers
+                // rather than using separate gzip streams for mirrored pages.
+                {
+                  name: "admin",
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                },
                 // Co-compress the Kit profile view with its Hono markup twin.
                 {
                   name: "profiles",

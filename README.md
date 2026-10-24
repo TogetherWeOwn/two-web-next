@@ -35,12 +35,19 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive and calendar feeds are not game-filtered.
+the separate past-event archive is not game-filtered. The calendar collection
+`/events.ics` accepts the same `?game=` scope: on a filtered schedule the
+Subscribe link, the `.ics` download and the copyable feed URL all carry the
+committed game, and the calendar label names it. Blank means every game; a valid
+unknown game yields an empty scoped calendar, never all games.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
-for matching rules, empty-state recovery and cache boundaries.
+for matching rules, empty-state recovery and cache boundaries. Archive cards retain
+the query and page when opening an event, including in another tab; the detail
+page's [archive return link](docs/archive-detail-return.md) takes you back to those
+results without changing the event's canonical or share URLs.
 
 ## Moderator guides
 
@@ -141,6 +148,11 @@ npx vitest run test/machine-docs-followable-links-acceptance.test.ts test/ai-fri
 ```
 
 ## Coverage ratchet
+
+For added-line coverage, JSON receipts and the hermetic fixture check, see the
+[patch coverage CLI](docs/quality-gates.md#patch-coverage-cli) or run
+`node ci/patch-coverage.mjs --help`. The 80% patch floor remains WARN by default;
+missing or malformed coverage evidence fails in every mode.
 
 ```sh
 # Choose a fresh, unused numeric suffix for each run.
@@ -250,6 +262,7 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
