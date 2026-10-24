@@ -158,11 +158,11 @@ describe("Kit calendar island mount parity", () => {
     // The failure copy rides in an attribute, so the apostrophe is HTML-escaped.
     expect(rendered.body).toContain("data-load-error=");
     expect(rendered.body).toContain("refresh the events — try again.");
-    // Stable zones: head/actions/miss/content swap, everything else persists.
-    for (const zone of ["head", "actions", "miss", "content"]) {
+    // Stable zones: head/actions/miss/content/subscribe swap, everything else persists.
+    for (const zone of ["head", "actions", "miss", "content", "subscribe"]) {
       expect(rendered.body).toContain(`data-cal-zone="${zone}"`);
     }
-    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss"]);
+    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss", "subscribe"]);
     expect(rendered.body).toContain("data-cal-feedback");
     // A real row renders the list card instead of the out-of-range note.
     expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);

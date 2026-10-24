@@ -268,7 +268,9 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   When an actual and its stale committed baseline share a destination, the
   reviewed actual wins; distinct actuals still refuse. Inspect every expected,
   actual and diff image in the failed run's artifact before running
-  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>`. Suite ownership uses
+  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>` (add `--dry-run` to
+  preview the plan, `--format json` for a versioned verdict; unknown flags exit
+  2 before any read, see `docs/visual-regression.md`). Suite ownership uses
   exact directory segments relative to that root: extraction folder names and
   substring-lookalike folders do not admit or exclude images. Copies under
   `__screenshots-kit__/` can add absent baselines or match existing bytes
