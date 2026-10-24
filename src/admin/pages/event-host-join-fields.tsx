@@ -1,6 +1,11 @@
 // Shared SSR fields for the Hono and Kit edit forms. Rendering these on the
 // server keeps identical labels, escaping and error wiring without shipping
 // duplicate field templates in Kit's unhydrated structural client node.
+// Per-file JSX runtime: Kit SSR fixtures bundle this module with esbuild
+// outside the root tsconfig, so state the same automatic runtime here
+// (react-jsx + hono/jsx, exactly as tsconfig.json) instead of relying on it.
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 import { Field, val } from "./shell";
 
 export function EventNotesField({
