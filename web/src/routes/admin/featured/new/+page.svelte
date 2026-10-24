@@ -1,6 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { adminSaveStatus } from "../../../../../../src/admin/save-status";
 
 // Markup contract of FeaturedFormPage mode="new"
 // (src/admin/pages/featured-form.tsx): the POST destination, every Hono
@@ -78,7 +77,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <a href="/admin/featured">Cancel</a>
     </div>
   </form>
-  {@html adminSaveStatus}
+  {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
 </section>
 {@html island}
 </AdminShell>
