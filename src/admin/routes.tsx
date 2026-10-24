@@ -39,7 +39,13 @@ import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evi
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
-import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import {
+  editUrlWithOrigin,
+  EVENT_PAGE_SIZE,
+  INVENTORY_RETURN_PARAM,
+  parseEventListQuery,
+  parseInventoryOrigin,
+} from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
@@ -80,6 +86,8 @@ import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
+import { alertRequestError } from "../alerts";
+import { OUTAGE_RETRY_AFTER_SECONDS } from "../error-responses";
 import {
   ActivityLogPage,
   AdminDashboard,
@@ -114,6 +122,19 @@ async function parsedForm(c: Context<Vars>): Promise<Record<string, unknown> | n
   }
 }
 
+// Inventory-return context (U3): an unparseable carrier resolves to null, so
+// direct/bookmarked flows keep their exact existing behavior. Hono's
+// query(key) is first-wins while its default body parse keeps the last
+// duplicate; either way the allowlisted inventory parser normalizes or
+// refuses the single value it receives, so hostile duplicates stay safe.
+function queryOrigin(c: Context<Vars>): string | null {
+  return parseInventoryOrigin(c.req.query(INVENTORY_RETURN_PARAM));
+}
+
+function formOrigin(values: Record<string, unknown>): string | null {
+  return parseInventoryOrigin(values[INVENTORY_RETURN_PARAM]);
+}
+
 function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
   c.set("access", decl);
 }
@@ -136,9 +157,28 @@ function errorPage(
   status: 404 | 422 | 503,
   heading: string,
   detail?: string,
+  origin: string | null = null,
 ) {
   c.status(status);
-  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+  return bufferedMemberHtml(
+    c,
+    <ErrorPage heading={heading} detail={detail} origin={origin} />,
+    status,
+  );
+}
+
+// A classified outage during an inventory-originated write keeps the shared
+// 503 posture (Retry-After, private no-store, leak-free alert) and adds the
+// results-recovery link; without an origin the caller rethrows to the
+// existing boundary instead, so direct flows are byte-identical.
+function originUnavailable(c: Context<Vars>, route: string, err: unknown, origin: string) {
+  alertRequestError(err, {
+    method: "POST",
+    route,
+    requestId: c.get("requestId"),
+  });
+  c.header("Retry-After", String(OUTAGE_RETRY_AFTER_SECONDS));
+  return errorPage(c, 503, "Admin temporarily unavailable", undefined, origin);
 }
 
 function writeUnavailable(c: Context<Vars>) {
@@ -451,6 +491,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        origin={queryOrigin(c)}
       />,
     );
   });
@@ -470,6 +511,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
+      // The return carrier rides the form but never enters the write input:
+      // parseEventForm picks its known fields, so origin cannot change the
+      // parsed write, actor, key, or confirmation/version carriers.
+      const origin = formOrigin(values);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -485,7 +530,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  origin={origin}
+                />,
+              ),
             values,
           );
         }
@@ -500,7 +553,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
-        return c.redirect(`/admin/events/${row.eventKey}`, 303);
+        return c.redirect(editUrlWithOrigin(row.eventKey, origin), 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
@@ -508,9 +561,20 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  origin={origin}
+                />,
+              ),
             values,
           );
+        }
+        if (isDatabaseUnavailable(err) && origin) {
+          return originUnavailable(c, "/admin/events/:key", err, origin);
         }
         throw err;
       }
@@ -529,6 +593,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (!db) return writeUnavailable(c);
         const key = c.req.param("key");
         if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+        // The list and edit lifecycle forms carry the inventory origin; a body
+        // that refuses to parse keeps the pre-existing write behavior with no
+        // origin rather than refusing the transition.
+        const lifecycleValues = await parsedForm(c);
+        const origin = lifecycleValues ? formOrigin(lifecycleValues) : null;
         try {
           const actor = c.get("adminActor");
           const { row, writeBack } =
@@ -541,7 +610,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   action === "publish" ? "published" : "cancelled",
                 );
           if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
-          return c.redirect(`/admin/events/${row.eventKey}`, 303);
+          return c.redirect(origin ?? `/admin/events/${row.eventKey}`, 303);
         } catch (err) {
           if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
           if (err instanceof ValidationError) {
@@ -556,7 +625,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                 c,
                 err,
                 (errors, v) =>
-                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+                  c.html(
+                    <EventFormPage
+                      mode="edit"
+                      row={row}
+                      values={v}
+                      errors={errors}
+                      origin={origin}
+                    />,
+                  ),
                 eventValues(row),
               );
             }
@@ -565,7 +642,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               422,
               "That transition is not allowed",
               err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              origin,
             );
+          }
+          if (isDatabaseUnavailable(err) && origin) {
+            return originUnavailable(c, `/admin/events/:key/${action}`, err, origin);
           }
           throw err;
         }

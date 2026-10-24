@@ -1,6 +1,7 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
+import { INVENTORY_RETURN_PARAM } from "../../../../../../src/admin/event-list";
 import type { PageProps } from "./$types";
 
 // Markup contract of EventFormPage mode="edit"
@@ -36,6 +37,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 <AdminShell title={`Edit ${view.title}`}>
 <section>
   <h1>Edit {view.title}</h1>
+  {#if view.origin}
+    <p>
+      <a href={view.origin}>Back to these event results</a>
+    </p>
+  {/if}
   {#if hasErrors}
     <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
       <p>Check the highlighted fields and try again.</p>
@@ -58,6 +64,9 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-editor=""
     data-event-draft={hasErrors ? "" : undefined}
   >
+    {#if view.origin}
+      <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+    {/if}
     <div class="field">
       <label for="f-title">Title</label>
       <input
@@ -197,7 +206,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     {/if}
     <div class="actions">
       <button type="submit" class="btn" data-testid="save-event">Save</button>
-      <a href="/admin/events">Cancel</a>
+      {#if view.origin}
+        <a href={view.origin}>Cancel</a>
+      {:else}
+        <a href="/admin/events">Cancel</a>
+      {/if}
     </div>
   </form>
   <section aria-label="Status">
@@ -205,16 +218,25 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <div class="actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
+          {#if view.origin}
+            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+          {/if}
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
         </form>
       {/if}
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
+          {#if view.origin}
+            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+          {/if}
           <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
         </form>
       {/if}
       {#if view.rsvpAction}
         <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
+          {#if view.origin}
+            <input type="hidden" name={INVENTORY_RETURN_PARAM} value={view.origin} />
+          {/if}
           <button type="submit" class="link" data-testid={view.rsvpAction}>
             {view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
           </button>

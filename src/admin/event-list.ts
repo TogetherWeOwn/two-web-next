@@ -68,3 +68,45 @@ export function eventEmptyText(query: EventListQuery): string {
     ? "No events match these filters."
     : "No events yet.";
 }
+
+// Inventory-return context (U3): the single carrier that threads the
+// normalized events inventory through row/edit links and form submissions.
+// The value is always a same-path /admin/events URL; anything else falls
+// back to the existing direct behavior (never an arbitrary redirect).
+export const INVENTORY_RETURN_PARAM = "return_to";
+// Same bound as the public joining link: a longer carrier is refused, so a
+// hostile value can never smuggle an overlong redirect through normalization.
+const INVENTORY_RETURN_MAX_LENGTH = 2048;
+
+/**
+ * Normalize a carried inventory origin to its canonical inventory href.
+ * Unknown, duplicate (first wins), overlong-search, or out-of-enum members
+ * normalize through the same allowlisted parser as the list itself; external,
+ * protocol-relative, wrong-path, hash-bearing, or overlong carriers return
+ * null so callers keep their existing direct fallback.
+ */
+export function parseInventoryOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (value.length === 0 || value.length > INVENTORY_RETURN_MAX_LENGTH) return null;
+  if (!value.startsWith("/admin/events")) return null;
+  const rest = value.slice("/admin/events".length);
+  if (rest !== "" && !rest.startsWith("?")) return null;
+  let url: URL;
+  try {
+    url = new URL(value, "https://inventory-return.invalid");
+  } catch {
+    return null;
+  }
+  if (url.hash) return null;
+  const raw: Record<string, string> = {};
+  for (const [name, member] of url.searchParams) {
+    if (!(name in raw)) raw[name] = member;
+  }
+  return eventListUrl(parseEventListQuery(raw));
+}
+
+/** The edit href for a row, carrying the normalized inventory when known. */
+export function editUrlWithOrigin(eventKey: string, origin: string | null): string {
+  const base = `/admin/events/${eventKey}`;
+  return origin ? `${base}?${INVENTORY_RETURN_PARAM}=${encodeURIComponent(origin)}` : base;
+}

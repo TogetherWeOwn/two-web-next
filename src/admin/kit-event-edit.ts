@@ -30,6 +30,7 @@ import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { eventKeyAllowed } from "../events/keys";
+import { INVENTORY_RETURN_PARAM, parseInventoryOrigin } from "./event-list";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -96,6 +97,8 @@ export type KitEventEditView = {
   key: string;
   title: string;
   status: string;
+  /** Normalized inventory href from the return carrier; null keeps the direct fallback. */
+  origin: string | null;
   values: KitEventEditValues;
   errors: Record<string, string>;
   hasErrors: boolean;
@@ -220,6 +223,10 @@ export async function resolveKitEventEdit(
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      // Pure inventory-origin read: no extra query or audit, exactly like the
+      // Hono edit handler's queryOrigin. The load already collapsed duplicate
+      // carriers first-wins into rawQuery.
+      origin: parseInventoryOrigin(rawQuery[INVENTORY_RETURN_PARAM]),
       values: {
         title: row.title,
         game: row.game ?? "",
