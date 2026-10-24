@@ -448,8 +448,12 @@ retain their times. Shifted published/cancelled children attempt asynchronous
 Discord write-back even when the edited parent is draft or past. For example,
 saving new times on a draft parent can move a published future child and enqueue
 its Discord update. This does not change the children's statuses or confirm
-Discord delivery. Check affected occurrences after saving. There is no bulk
-series cancel or repeat-rule editor.
+Discord delivery. Check affected occurrences after saving: on a saved parent or
+child editor, **Review occurrences in this series** opens the event inventory
+scoped to that saved recurrence — parent plus children across every stored
+status, oldest first — with the other filters still available and **All events**
+returning to the full list. A standalone event has no series, so it offers no
+such action. There is no bulk series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 

@@ -5,6 +5,7 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  eventScopeRecoveryText,
   type EventSort,
 } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -19,7 +20,7 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // POST form to the Hono-owned mutation endpoints, so the page works with
 // JavaScript disabled, exactly like the Hono panel.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText } = $derived(data);
+const { query, rows, hasNext, emptyText, scope, scopeHeadingHtml } = $derived(data);
 const now = new Date();
 </script>
 
@@ -50,10 +51,21 @@ const now = new Date();
 
 <AdminShell title="Events">
 <section aria-labelledby="events-heading">
-  <h1 id="events-heading">Events</h1>
+  <h1 id="events-heading">{#if scopeHeadingHtml}{@html scopeHeadingHtml}{:else}Events{/if}</h1>
+  {#if scope}
+    <p>
+      <a href="/admin/events">All events</a>
+    </p>
+  {/if}
+  {#if scope && scope.status !== "ok"}
+    <p class="hint" data-testid="series-scope-recovery">{eventScopeRecoveryText(scope.status)}</p>
+  {/if}
   <form method="get" action="/admin/events" class="filters">
     <input type="hidden" name="sort" value={query.sort} />
     <input type="hidden" name="order" value={query.order} />
+    {#if query.series_event}
+      <input type="hidden" name="series_event" value={query.series_event} />
+    {/if}
     <div class="field">
       <label for="q">Search</label>
       <input id="q" name="q" type="search" value={query.q} />

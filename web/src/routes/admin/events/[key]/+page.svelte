@@ -195,6 +195,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     {#if view.seriesNote}
       <p class="hint" data-testid="series-info">{view.seriesNote}</p>
     {/if}
+    {#if view.seriesReviewHref}
+      <p class="hint" data-testid="series-review">
+        Saved occurrences: <a href={view.seriesReviewHref}>Review occurrences in this series</a>
+      </p>
+    {/if}
     <div class="actions">
       <button type="submit" class="btn" data-testid="save-event">Save</button>
       <a href="/admin/events">Cancel</a>

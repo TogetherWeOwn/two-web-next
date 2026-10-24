@@ -204,6 +204,14 @@ export const EventFormFields: FC<{
             occurrences by the same amount.
           </p>
         ) : null}
+        {mode === "edit" && row && (row.parentEventId !== null || row.recurrenceFrequency) ? (
+          <p class="hint" data-testid="series-review">
+            Saved occurrences:{" "}
+            <a href={`/admin/events?series_event=${row.eventKey}`}>
+              Review occurrences in this series
+            </a>
+          </p>
+        ) : null}
         <div class="actions">
           <button type="submit" class="btn" data-testid="save-event">
             {mode === "new" ? "Create draft" : "Save"}

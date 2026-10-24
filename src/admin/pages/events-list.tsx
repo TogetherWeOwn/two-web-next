@@ -1,13 +1,14 @@
 // Admin events-list screen (split from pages.tsx; zero behavior change).
 
 import type { FC } from "hono/jsx";
-import type { EventListRow } from "../store";
+import type { EventListRow, EventListScope } from "../store";
 import { goingCountText } from "../../islands/contracts";
 import {
   eventEmptyText,
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  eventScopeRecoveryText,
   type EventListQuery,
   type EventSort,
 } from "../event-list";
@@ -54,17 +55,31 @@ const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
   </td>
 );
 
-export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({
-  rows,
-  query,
-  hasNext,
-}) => (
+export const EventsPage: FC<{
+  rows: EventListRow[];
+  query: EventListQuery;
+  hasNext: boolean;
+  scope?: EventListScope | null;
+}> = ({ rows, query, hasNext, scope }) => (
   <Shell title="Events">
     <section>
-      <h1>Events</h1>
+      <h1>{scope?.status === "ok" ? <>Events in this series: {scope.parentTitle}</> : "Events"}</h1>
+      {scope ? (
+        <p>
+          <a href="/admin/events">All events</a>
+        </p>
+      ) : null}
+      {scope && scope.status !== "ok" ? (
+        <p class="hint" data-testid="series-scope-recovery">
+          {eventScopeRecoveryText(scope.status)}
+        </p>
+      ) : null}
       <form method="get" action="/admin/events" class="filters">
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
+        {query.series_event ? (
+          <input type="hidden" name="series_event" value={query.series_event} />
+        ) : null}
         <div class="field">
           <label for="q">Search</label>
           <input id="q" name="q" type="search" value={query.q} />
