@@ -92,6 +92,10 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await expect(target.locator("xpath=ancestor-or-self::li")).toContainText(
             RULE_COPY[position]![0],
           );
+          const item = target.locator("xpath=ancestor-or-self::li");
+          // --surface resolves to #222430 (public/theme.css .base-theme); the
+          // addressed card must paint it, not the .card reset transparent bg.
+          await expect(item).toHaveCSS("background-color", "rgb(34, 36, 48)");
           expect(
             await appearance(target),
             "the addressed rule needs a visible target treatment",
