@@ -19,6 +19,9 @@ export type Env = AgentEventsEnv & {
   // Optional: surfaces the "Last updated" stamp on /rules (YYYY-MM-DD). Empty or unparseable
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
+  // Optional: surfaces the "Last reviewed" stamp on /faq (YYYY-MM-DD). Empty or unparseable
+  // hides the stamp instead of 500ing, mirroring /rules.
+  FAQ_LAST_REVIEWED?: string;
   // Hyperdrive → shared Postgres for web reads, agent events, sessions,
   // roster writes and /up. DATABASE_URL overrides it for local/dev use. An
   // optional AGENT_DB binding overrides the store for agent-event ingress only.

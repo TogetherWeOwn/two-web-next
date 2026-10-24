@@ -142,6 +142,11 @@ npx vitest run test/machine-docs-followable-links-acceptance.test.ts test/ai-fri
 
 ## Coverage ratchet
 
+For added-line coverage, JSON receipts and the hermetic fixture check, see the
+[patch coverage CLI](docs/quality-gates.md#patch-coverage-cli) or run
+`node ci/patch-coverage.mjs --help`. The 80% patch floor remains WARN by default;
+missing or malformed coverage evidence fails in every mode.
+
 ```sh
 # Choose a fresh, unused numeric suffix for each run.
 export TEST_DB="two_web_next_tog1234567890123456"

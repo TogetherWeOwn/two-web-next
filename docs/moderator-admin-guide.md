@@ -158,8 +158,29 @@ bounds expire with the transaction without changing pooled connection defaults.
 If an inventory statement times out, the read transaction rolls back before
 the existing private, no-store 503 outage response is returned. A refused
 inventory never renders as an empty list: wait briefly, then reload the page.
+On a Kit admin read error, **Retry loading** repeats the current GET, keeping its
+filters and page. It does not resubmit a form or retry automatically. Missing-row
+404 pages keep their list/dashboard exits instead; malformed page state also
+falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
+
+## Recover an empty event or featured list
+
+On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
+search or filter is applied, even when rows are visible. It clears all filters
+and returns to page 1 while keeping the current sort and direction. It does
+not change any event or featured slot.
+
+A successful empty page 1 says **No events yet.** or **No featured content yet.**
+when unfiltered, or says no content matches the filters when filtered. Use
+**Clear filters** to broaden a no-match search.
+
+An empty page after page 1 says **No results on this page.** This does not mean
+the whole inventory is empty. Choose **First page of these results** to keep
+the current filters and sort and return directly to page 1; **Previous** still
+moves back one page. Both recovery links work by keyboard and without JavaScript.
+An unavailable read is still an outage, not an empty list; follow the guidance above.
 
 ## Correct a rejected draft
 
@@ -587,7 +608,8 @@ link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
 Missing request IDs appear as a dash. Detail links only resolve attempts within
 the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or retry control. Cancelled consent, expired state
+page. There is no edit, delete or join-replay control; **Retry loading** on a failed
+read only reloads this viewer. Cancelled consent, expired state
 and failures before identity exchange can record a null Discord ID; those attempts
 remain visible with an empty Discord cell (a dash in detail), without inventing a
 member subject. Request/source fields are still diagnostics, not proof of anonymity.
