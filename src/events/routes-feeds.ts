@@ -65,7 +65,10 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const rows = await listFeed(db, ["published"]);
+    // Same status scope as the ICS collection: cancelled rows ship marked
+    // (`Cancelled: ` title prefix plus the one-line description note), so RSS
+    // subscribers never keep a stale "it's on" entry.
+    const rows = await listFeed(db, ["published", "cancelled"]);
     const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
     if (skippedUpdatedAt > 0) {
       console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
