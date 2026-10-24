@@ -129,7 +129,7 @@ describe("resolveKitFeaturedList", () => {
     });
     expect(outcome).toMatchObject({ kind: "ok", rows: [], hasNext: false });
     if (outcome.kind !== "ok") throw new Error("expected ok");
-    expect(outcome.emptyText).toBe("No featured content matches these filters.");
+    expect(outcome.emptyText).toBe("No results on this page.");
   });
 
   it("leaves the published filter absent when unselected, like the Hono spread", async () => {
