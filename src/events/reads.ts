@@ -34,6 +34,8 @@ import {
 } from "../islands/contracts";
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
+import { normalizePastPage } from "./past-page";
+export { normalizePastPage } from "./past-page";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -594,13 +596,6 @@ export async function listCalendarPast(
   return Object.assign(visible, { mayBeTruncated: truncated });
 }
 
-/** Invalid HTML archive pages/offsets retain the page-one fallback. */
-export function normalizePastPage(page: number): number {
-  return Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger((page - 1) * PAGE_SIZE)
-    ? page
-    : 1;
-}
-
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
 export async function listPast(
   db: Db,
@@ -1124,16 +1119,25 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. */
 export async function listFeed(
   db: Db,
   statuses: ("published" | "cancelled")[],
   now = new Date(),
+  game: string | null = null,
 ): Promise<Array<typeof events.$inferSelect>> {
+  const gameClause = gameCondition(game);
   const rows = await db
     .select()
     .from(events)
-    .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
+    .where(
+      and(
+        ...(gameClause ? [gameClause] : []),
+        inArray(events.status, statuses),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+      ),
+    )
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("feed", rows.length);
