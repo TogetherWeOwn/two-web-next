@@ -261,7 +261,10 @@ function smokeCommand(root) {
 //   file matching any project runs.
 // - A spec is indirectly reachable when a reachable spec imports it,
 //   transitively through relative ESM/CJS static imports (the Kit visual
-//   entrypoint imports its member-board-viewer suite this way).
+//   entrypoint imports its member-board-viewer suite this way). Edges are
+//   side-effect imports, re-exports and require calls: named import
+//   bindings of a spec fail closed, because Playwright's Babel elides
+//   bindings never used as values and the gate cannot verify usage.
 //
 // Config parsing is static and fail-closed, like the vitest exclude parser
 // above: plain string literals (or arrays of them) for
@@ -307,44 +310,225 @@ function collectWorkflowFiles(root) {
 // Script names CI actually runs, transitively: a workflow `npm run a` marks
 // `a` invoked, and `a`'s own `npm run b` marks `b`. Anything else in
 // package.json is a local helper, not a CI run. Workflow text is scanned
-// comment-stripped (a commented-out step is not a run), and an `npm run`
-// with forwarded `--` arguments fails closed when the target runs
+// comment-stripped (a commented-out step is not a run). Occurrences are
+// tokenized, not regex-matched, because npm config flags sit around the
+// script name: `npm run b --silent -- x` and `npm run --silent b` both run
+// `b`, and a bare `--` after any flags still forwards file filters. An
+// `npm run` with forwarded `--` arguments fails closed when the target runs
 // `playwright test` (the gate cannot expand forwarded file filters) —
 // whether the forwarding sits in the workflow or in an invoked script body
-// (`"a": "npm run b -- e2e/x.spec.ts"` is the same filter).
+// (`"a": "npm run b -- e2e/x.spec.ts"` is the same filter). `--prefix` and
+// `--workspace`/`-w` redirect the run into another package directory, which
+// the gate cannot model, so they fail closed on Playwright targets too
+// (the live `npm run check --prefix web` idiom targets non-Playwright
+// scripts and stays green); `--prefix=.` is the same directory and is
+// allowed. Bundled short flags (`-sw`) and other unmodelable tokens fail
+// closed when the target could run Playwright.
+
+// npm config flags that consume the following token as their value when
+// written without `=` (oracle: npm 11.19.1; `--prefix web b` reads package
+// json from web/, `--omit dev b` and `--include dev b` run b). Names
+// normalize like npm's parser (dash/case-insensitive), so `--log-level`
+// matches `loglevel`. Every other well-formed `--flag` is boolean: npm
+// leaves the next token alone (oracle: `--bogus b` and `--workspaces b`
+// never consume b; the latter fails on workspaces, not on scripts). `-w`
+// is npm's only value-taking short flag.
+const NPM_RUN_VALUE_FLAGS = new Set([
+  "prefix",
+  "workspace",
+  "scriptshell",
+  "loglevel",
+  "cache",
+  "userconfig",
+  "location",
+  "registry",
+  "omit",
+  "include",
+]);
+
+function npmFlagKind(token) {
+  if (token === "--") return "sep";
+  if (token === "-") return "other";
+  if (token.startsWith("--")) {
+    const body = token.slice(2);
+    if (body === "" || body.startsWith("=")) return "unknown";
+    if (body.includes("=")) return "flag";
+    const norm = body.replace(/-/g, "").toLowerCase();
+    return NPM_RUN_VALUE_FLAGS.has(norm) ? "value" : "flag";
+  }
+  if (token.startsWith("-") && token.length > 1) {
+    const body = token.slice(1);
+    if (/^[A-Za-z]$/.test(body)) return body === "w" ? "value" : "flag";
+    return "unknown";
+  }
+  return "other";
+}
+
+// Split shell text into tokens: whitespace-separated, cut at the first
+// unquoted `&`/`|`/`;` (a chained command is a separate occurrence), quotes
+// stripped. An unterminated quote runs to the cut, which can only add a
+// spurious token, never hide a `--` (loud, never a silent miss).
+function splitShellTokens(segment) {
+  const tokens = [];
+  let cur = "";
+  let quote = null;
+  const push = () => {
+    if (cur !== "") tokens.push(cur);
+    cur = "";
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "&" || c === "|" || c === ";") {
+      break;
+    } else if (/\s/.test(c)) {
+      push();
+    } else {
+      cur += c;
+    }
+  }
+  push();
+  return tokens;
+}
+
+// Every `npm run ...` occurrence in shell text: the script name npm resolves
+// (first non-flag token, with value-flags consuming the next), whether a
+// bare `--` after the name forwards arguments, whether `--prefix` or
+// `--workspace`/`-w` redirects into another package directory, and whether
+// an unmodelable token makes the parse uncertain. Backslash-newline
+// continuations join first (the shell removes them), so a `--` on the next
+// line still counts. A bare `--` before the name is skipped: oracle shows
+// `npm run -- b` still runs b.
+function parseNpmRunOccurrences(text) {
+  const out = [];
+  const joined = text.replace(/\\\r?\n/g, " ");
+  for (const m of joined.matchAll(/\bnpm\s+run(?:-script)?\b/g)) {
+    const lineEnd = joined.indexOf("\n", m.index);
+    const segment = joined.slice(m.index + m[0].length, lineEnd === -1 ? undefined : lineEnd);
+    const tokens = splitShellTokens(segment);
+    const kinds = tokens.map(npmFlagKind);
+    let name = null;
+    let forwarding = false;
+    let redirect = null;
+    let unknown = false;
+    const redirectAt = (idx) => {
+      let flag = tokens[idx];
+      let value;
+      const eq = flag.indexOf("=");
+      if (eq !== -1) {
+        value = flag.slice(eq + 1);
+        flag = flag.slice(0, eq);
+      } else if (idx + 1 < tokens.length && tokens[idx + 1] !== "--") {
+        value = tokens[idx + 1];
+      }
+      let norm = flag.replace(/^-+/, "").replace(/-/g, "").toLowerCase();
+      if (norm === "w") norm = "workspace";
+      if (norm !== "prefix" && norm !== "workspace") return;
+      if (norm === "prefix" && (value === "." || value === "./")) return;
+      redirect = { flag, value };
+    };
+    let i = 0;
+    for (; i < tokens.length; i++) {
+      const kind = kinds[i];
+      if (kind === "other") {
+        name = tokens[i];
+        i++;
+        break;
+      }
+      if (kind === "sep") continue;
+      if (kind === "unknown") {
+        unknown = true;
+        continue;
+      }
+      if (kind === "value") {
+        redirectAt(i);
+        i++;
+      }
+    }
+    for (; i < tokens.length; i++) {
+      if (kinds[i] === "sep") forwarding = true;
+      else if (kinds[i] === "value") {
+        redirectAt(i);
+        i++;
+      }
+    }
+    out.push({ name, forwarding, redirect, unknown });
+  }
+  return out;
+}
+
 function invokedScriptNames(scripts, workflowText) {
   const invoked = new Set();
   const queue = [];
-  const scan = (text) => {
-    for (const m of text.matchAll(/npm\s+run(?:-script)?\s+([A-Za-z0-9_:\-./]+)/g)) {
-      const name = m[1];
-      if (Object.hasOwn(scripts, name) && !invoked.has(name)) {
-        invoked.add(name);
-        queue.push(name);
+  // Whether a script reaches `playwright test`, directly or through nested
+  // `npm run` occurrences. `unknown` is set when a nested occurrence has an
+  // unmodelable token, so its target is uncertain: callers fail closed on
+  // unknown instead of reading it as clean.
+  const runsPlaywright = (name, seen = new Set()) => {
+    if (seen.has(name)) return { runs: false, unknown: false };
+    seen.add(name);
+    const body = scripts[name] ?? "";
+    if (/\bplaywright\s+test\b/.test(body)) return { runs: true, unknown: false };
+    let unknown = false;
+    for (const occ of parseNpmRunOccurrences(body)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      const nested = runsPlaywright(occ.name, seen);
+      if (nested.runs) return { runs: true, unknown: false };
+      if (occ.unknown || nested.unknown) unknown = true;
+    }
+    return { runs: false, unknown };
+  };
+  const scan = (text, where) => {
+    for (const occ of parseNpmRunOccurrences(text)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      if (occ.unknown) {
+        const target = runsPlaywright(occ.name);
+        if (target.runs || target.unknown) {
+          assert.fail(
+            `CI runs ${where} with an npm flag form this gate cannot parse (npm run ... ${occ.name} ...): bundled short flags and -x=y forms hide the script name; use one flag per token or teach ci/test-inventory.mjs the new form`,
+          );
+        }
+      }
+      if (!invoked.has(occ.name)) {
+        invoked.add(occ.name);
+        queue.push(occ.name);
       }
     }
   };
   const stripped = workflowText.split("\n").map(stripYamlComment).join("\n");
-  scan(stripped);
-  while (queue.length) scan(scripts[queue.shift()] ?? "");
-  const runsPlaywright = (name, seen = new Set()) => {
-    if (seen.has(name)) return false;
-    seen.add(name);
-    const body = scripts[name] ?? "";
-    if (/\bplaywright\s+test\b/.test(body)) return true;
-    for (const m of body.matchAll(/npm\s+run(?:-script)?\s+([A-Za-z0-9_:\-./]+)/g)) {
-      if (runsPlaywright(m[1], seen)) return true;
-    }
-    return false;
-  };
-  const forwardSources = [stripped, ...[...invoked].map((n) => scripts[n] ?? "")];
-  for (const text of forwardSources) {
-    for (const m of text.matchAll(/npm\s+run(?:-script)?\s+([A-Za-z0-9_:\-./]+)\s+--(\s|$)/g)) {
-      const name = m[1];
-      if (Object.hasOwn(scripts, name) && runsPlaywright(name)) {
+  scan(stripped, "a workflow step");
+  while (queue.length) {
+    const next = queue.shift();
+    scan(scripts[next] ?? "", `script "${next}"`);
+  }
+  const forwardSources = [
+    [stripped, "a workflow step"],
+    ...[...invoked].map((n) => [scripts[n] ?? "", `script "${n}"`]),
+  ];
+  for (const [text, where] of forwardSources) {
+    for (const occ of parseNpmRunOccurrences(text)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      const target = runsPlaywright(occ.name);
+      if (occ.redirect && (target.runs || target.unknown)) {
         assert.fail(
-          `CI forwards arguments to ${name} (npm run ${name} -- ...): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
+          `CI runs ${where} with ${occ.redirect.flag} (npm run ... ${occ.name}): this gate cannot model cross-directory npm runs; run the package's own script graph or teach ci/test-inventory.mjs the new form`,
         );
+      }
+      if (occ.forwarding) {
+        if (target.runs) {
+          assert.fail(
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...): this gate cannot expand forwarded playwright filters; invoke playwright test directly or teach ci/test-inventory.mjs the new form`,
+          );
+        }
+        if (target.unknown) {
+          assert.fail(
+            `CI forwards arguments to ${occ.name} (npm run ${occ.name} -- ...) and this gate cannot determine whether it runs playwright (unknown npm flag form in its script graph); disambiguate the flags or teach ci/test-inventory.mjs the new form`,
+          );
+        }
       }
     }
   }
@@ -996,6 +1180,7 @@ function collectSpecImports(root, file) {
     return cut === -1 ? line : line.slice(0, cut);
   });
   const specs = new Set();
+  const ambiguous = new Set();
   // Type-only imports are erased at compile time and load nothing, so they
   // are not reachability edges — but only the type-only part is skipped. A
   // local `export type Alias = ...` is not an import at all and scans
@@ -1003,10 +1188,25 @@ function collectSpecImports(root, file) {
   // runtime import sharing the line is still an edge); only an unterminated
   // multiline `import type { ...` / `export type { ...` skips forward to
   // its closing `from` (or `}` for a multiline local export). Inline
-  // `{ type X }` specifiers still load the module and are kept.
+  // `{ type X }` specifiers are erased too and skipped (oracle: Playwright
+  // 1.64.1 transforms with `onlyRemoveTypeImports: false`, so Babel drops
+  // inline type specifiers and any named import whose bindings are never
+  // used as values — `import { a } from "./s.visual"` with `a` unused loads
+  // nothing). Named/default/namespace `import ... from` bindings are
+  // therefore ambiguous without usage analysis: they fail closed when they
+  // resolve to a spec file, unless a side-effect import, re-export or
+  // require of the same file in this spec loads it for sure. Unmarked
+  // `export ... from` and `export * from` are kept by Babel (oracle) and
+  // stay edges, as do side-effect imports and require/dynamic-import calls.
+  // (Transitive caveat: an ambiguous import of a *helper* keeps its edge —
+  // specs import named helpers everywhere, so failing closed there would
+  // forbid ordinary code. A phantom edge needs that import to be elided AND
+  // the helper to import a spec; no helper in the tree imports a spec.)
   const fromClause = (s) => s.match(/\bfrom\s*(['"])[^'"]+\1/);
+  const stripQuotedSpans = (s) => s.replace(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/g, " ");
   let inTypeImport = false;
   let inTypeReexport = false;
+  let stmtTail = "";
   for (const line of lines) {
     let scan = line;
     if (!inTypeImport && !inTypeReexport) {
@@ -1058,19 +1258,61 @@ function collectSpecImports(root, file) {
         continue;
       }
     }
-    for (const re of [
-      /\bfrom\s*(['"])([^'"]+)\1/g,
-      /\bimport\s*(['"])([^'"]+)\1/g,
-      /\brequire\s*\(\s*(['"])([^'"]+)\1/g,
-      /\bimport\s*\(\s*(['"])([^'"]+)\1/g,
-    ]) {
-      for (const m of scan.matchAll(re)) specs.add(m[2]);
+    const tailBefore = stmtTail;
+    // Every `from "..."` belongs to the nearest preceding `import`/`export`
+    // (strings stripped, so a keyword inside a path or literal cannot
+    // misattribute the leader). With no leader the clause is unclassifiable
+    // and keeps current behavior (an edge).
+    for (const m of scan.matchAll(/\bfrom\s*(['"])([^'"]+)\1/g)) {
+      const context = stripQuotedSpans(`${tailBefore}\n${scan.slice(0, m.index)}`);
+      const leaders = [...context.matchAll(/\b(import|export)\b/g)];
+      if (!leaders.length) {
+        specs.add(m[2]);
+        continue;
+      }
+      const last = leaders[leaders.length - 1];
+      const bindings = context.slice(last.index + last[0].length);
+      // Statement-level `import/export type ... from` (mid-line, where the
+      // line-start skipper above cannot see it): the `type` modifier erases
+      // the whole clause. A bare `type` alone is a value named `type`.
+      if (/^\s*type\b/.test(bindings) && !/^\s*type\s*$/.test(bindings)) continue;
+      const hasStar = bindings.includes("*");
+      const rest = bindings
+        .replace(/\btype\s+[\w$]+(?:\s+as\s+[\w$]+)?/g, "")
+        .replace(/[,{}*\s]/g, "");
+      if (!hasStar && !/[\w$]/.test(rest)) continue; // all inline-`type`: erased.
+      if (last[1] === "import") ambiguous.add(m[2]);
+      else specs.add(m[2]);
     }
+    for (const m of scan.matchAll(/\bimport\s*(['"])([^'"]+)\1/g)) specs.add(m[2]);
+    for (const m of scan.matchAll(/\brequire\s*\(\s*(['"])([^'"]+)\1/g)) {
+      // `import X = require("./s")` loads only when X is used (oracle), so
+      // it is ambiguous like a named import; a bare require() call is an edge.
+      const context = stripQuotedSpans(`${tailBefore}\n${scan.slice(0, m.index)}`);
+      if (/import\s+(?!type\b)[\w$]+\s*=\s*$/.test(context)) ambiguous.add(m[2]);
+      else specs.add(m[2]);
+    }
+    for (const m of scan.matchAll(/\bimport\s*\(\s*(['"])([^'"]+)\1/g)) specs.add(m[2]);
+    stmtTail = `${tailBefore}\n${scan}`;
+    const semi = stmtTail.lastIndexOf(";");
+    if (semi !== -1) stmtTail = stmtTail.slice(semi + 1);
   }
   const out = [];
   for (const spec of specs) {
     const resolved = resolveRelativeImport(spec, file, root);
     if (resolved) out.push(resolved);
+  }
+  const genuine = new Set(out);
+  for (const spec of ambiguous) {
+    const resolved = resolveRelativeImport(spec, file, root);
+    if (!resolved || genuine.has(resolved)) continue;
+    if (!/\.spec\.ts$/.test(resolved) && !/\.visual\.ts$/.test(resolved)) {
+      out.push(resolved); // helper targets keep current behavior (see above).
+      continue;
+    }
+    assert.fail(
+      `${file} ambiguously imports ${resolved}: named import bindings are not side-effect edges (Playwright's Babel removes bindings never used as values); import the spec for its side effects or teach ci/test-inventory.mjs the new form`,
+    );
   }
   return out;
 }
@@ -2552,6 +2794,219 @@ function selftest() {
         }
         const expected = e.typed ? ["e2e/entry/other.visual.ts"] : [];
         assert.deepEqual(playwrightInventory(dir).orphans, expected, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright npm run flags around the script name", () => {
+    const pw = "playwright test --config playwright.fl.config.ts";
+    const entries = [
+      // A flag between the script name and `--` must not defeat the
+      // forwarding check: npm consumes its own flags and forwards the rest.
+      {
+        name: "bool flag",
+        scripts: { b: pw },
+        run: "npm run b --silent -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "equals flag",
+        scripts: { b: pw },
+        run: "npm run b --prefix=. -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "two flags",
+        scripts: { b: pw },
+        run: "npm run b --silent --ignore-scripts -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "nested forwarding with flags",
+        scripts: { a: "npm run b --silent -- e2e/x.spec.ts", b: pw },
+        run: "npm run a",
+        throws: /cannot expand/,
+      },
+      // Separate-value flags (`--prefix .`) consume the next token, before
+      // and after the name; `--prefix=.` is the same directory, so only the
+      // forwarding fails closed here, not the redirect.
+      {
+        name: "separate value after name",
+        scripts: { b: pw },
+        run: "npm run b --prefix . -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      {
+        name: "separate value before name",
+        scripts: { b: pw },
+        run: "npm run --prefix=. b -- e2e/x.spec.ts",
+        throws: /cannot expand/,
+      },
+      // `--prefix`/`--workspace` run another package's script, which the gate
+      // cannot model: fail closed on Playwright targets.
+      {
+        name: "prefix redirect",
+        scripts: { b: pw },
+        run: "npm run b --prefix web",
+        throws: /cannot model/,
+      },
+      {
+        name: "prefix redirect before name",
+        scripts: { b: pw },
+        run: "npm run --prefix web b",
+        throws: /cannot model/,
+      },
+      {
+        name: "workspace redirect",
+        scripts: { b: pw },
+        run: "npm run b --workspace web",
+        throws: /cannot model/,
+      },
+      // Controls: flags before the name still invoke it, a redirect of a
+      // non-Playwright script stays out of scope, and bundled short flags
+      // fail closed instead of misreading the script name.
+      {
+        name: "flag before name invokes",
+        scripts: { b: pw },
+        run: "npm run --silent b",
+        orphans: [],
+      },
+      {
+        name: "prefix redirect of non-playwright script",
+        scripts: { lint: "eslint ." },
+        run: "npm run lint --prefix web",
+        orphans: ["e2e/x.spec.ts", "e2e/y.spec.ts"],
+      },
+      {
+        name: "bundled short flags",
+        scripts: { b: pw },
+        run: "npm run -sw b",
+        throws: /cannot parse/,
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.fl.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e"), { recursive: true });
+        for (const name of ["x", "y"]) {
+          writeFileSync(
+            join(dir, `e2e/${name}.spec.ts`),
+            'import { test } from "@playwright/test";\ntest("x", async () => {});\n',
+          );
+        }
+        if (e.throws) assert.throws(() => playwrightInventory(dir), e.throws, e.name);
+        else assert.deepEqual(playwrightInventory(dir).orphans, e.orphans, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright ambiguous named imports of specs fail closed", () => {
+    const entries = [
+      // Named bindings are ambiguous without usage analysis (Playwright's
+      // Babel elides bindings never used as values), so they fail closed
+      // whether or not the binding looks used.
+      { name: "named import", head: 'import { a } from "./suite.visual";', expect: "throw" },
+      {
+        name: "named import used",
+        head: 'import { a } from "./suite.visual";\nconsole.log(a);',
+        expect: "throw",
+      },
+      { name: "default import", head: 'import foo from "./suite.visual";', expect: "throw" },
+      { name: "namespace import", head: 'import * as ns from "./suite.visual";', expect: "throw" },
+      {
+        name: "multiline named import",
+        head: 'import {\n a\n} from "./suite.visual";',
+        expect: "throw",
+      },
+      { name: "import-equals", head: 'import X = require("./suite.visual");', expect: "throw" },
+      // Inline `type` specifiers are erased deterministically: no edge, and
+      // no failure. Unmarked re-exports, require calls and dynamic literal
+      // imports load the module and stay edges.
+      {
+        name: "inline type-only",
+        head: 'import { type A } from "./suite.visual";',
+        expect: "orphan",
+      },
+      {
+        name: "multiline inline type-only",
+        head: 'import {\n type A\n} from "./suite.visual";',
+        expect: "orphan",
+      },
+      {
+        name: "export inline type",
+        head: 'export { type A } from "./suite.visual";',
+        expect: "orphan",
+      },
+      { name: "export named", head: 'export { a } from "./suite.visual";', expect: "reachable" },
+      { name: "export star", head: 'export * from "./suite.visual";', expect: "reachable" },
+      { name: "require call", head: 'const x = require("./suite.visual");', expect: "reachable" },
+      {
+        name: "dynamic literal import",
+        head: 'await import("./suite.visual");',
+        expect: "reachable",
+      },
+      // A mid-line `import type` after a genuine edge: the classifier (not
+      // the line-start skipper) must skip the type-only clause.
+      {
+        name: "mid-line type import after edge",
+        head: 'import "./suite.visual"; import type { T } from "./other.visual";',
+        expect: "other",
+        typed: true,
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github", "workflows", "ci.yml"),
+          "name: ci\njobs:\n  t:\n    steps:\n      - run: npx playwright test --config playwright.am.config.ts\n",
+        );
+        writeFileSync(
+          join(dir, "playwright.am.config.ts"),
+          'import { defineConfig } from "@playwright/test";\nexport default defineConfig({ testDir: "./e2e/entry", testMatch: "entry.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e", "entry"), { recursive: true });
+        writeFileSync(
+          join(dir, "e2e", "entry", "entry.spec.ts"),
+          `${e.head}\nimport { test } from "@playwright/test";\ntest("x", async () => {});\n`,
+        );
+        writeFileSync(
+          join(dir, "e2e", "entry", "suite.visual.ts"),
+          'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+        );
+        if (e.typed) {
+          writeFileSync(
+            join(dir, "e2e", "entry", "other.visual.ts"),
+            'import { test } from "@playwright/test";\ntest("z", async () => {});\n',
+          );
+        }
+        if (e.expect === "throw") {
+          assert.throws(() => playwrightInventory(dir), /ambiguously imports/, e.name);
+        } else {
+          const expected =
+            e.expect === "orphan"
+              ? ["e2e/entry/suite.visual.ts"]
+              : e.expect === "other"
+                ? ["e2e/entry/other.visual.ts"]
+                : [];
+          assert.deepEqual(playwrightInventory(dir).orphans, expected, e.name);
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
