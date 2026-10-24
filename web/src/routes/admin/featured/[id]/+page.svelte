@@ -1,11 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import {
-  FEATURED_OPEN_END_COPY,
-  FEATURED_OPEN_START_COPY,
-  FEATURED_WINDOW_RULES_COPY,
-  featuredEligibilityReasonFor,
-} from "../../../../../../src/featured-eligibility";
 import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedFormPage mode="edit"
@@ -70,13 +64,13 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
         data-status={data.view.status}
       >{data.view.status}</span>
     </p>
-    <p>{featuredEligibilityReasonFor(data.view.status)}</p>
+    <p>{data.view.eligibilityReason}</p>
     <p>
       Saved window (UTC): show from
-      {#if data.view.startsAt}<time datetime={data.view.startsAt}>{data.view.startsAt}</time>{:else if data.view.startsAtText}{data.view.startsAtText}{:else}{FEATURED_OPEN_START_COPY}{/if},
+      {#if data.view.startsAt}<time datetime={data.view.startsAt}>{data.view.startsAt}</time>{:else}{data.view.startsAtLabel}{/if},
       show until
-      {#if data.view.endsAt}<time datetime={data.view.endsAt}>{data.view.endsAt}</time>{:else if data.view.endsAtText}{data.view.endsAtText}{:else}{FEATURED_OPEN_END_COPY}{/if}.
-      {FEATURED_WINDOW_RULES_COPY}
+      {#if data.view.endsAt}<time datetime={data.view.endsAt}>{data.view.endsAt}</time>{:else}{data.view.endsAtLabel}{/if}.
+      {data.view.windowRules}
     </p>
   </section>
   <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="">

@@ -19,7 +19,13 @@
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
-import { featuredBoundDisplay } from "../featured-eligibility";
+import {
+  FEATURED_OPEN_END_COPY,
+  FEATURED_OPEN_START_COPY,
+  FEATURED_WINDOW_RULES_COPY,
+  featuredBoundDisplay,
+  featuredEligibilityReasonFor,
+} from "../featured-eligibility";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
@@ -44,6 +50,11 @@ export type KitFeaturedEditView = {
   title: string;
   values: KitFeaturedEditValues;
   status: FeaturedStatus;
+  /** Resolve shared copy server-side; even csr=false emits a structural client chunk. */
+  eligibilityReason: string;
+  startsAtLabel: string;
+  endsAtLabel: string;
+  windowRules: string;
   visible: boolean;
   startsAt: string | null;
   endsAt: string | null;
@@ -118,6 +129,7 @@ export async function resolveKitFeaturedEdit(
   // the exact saved text so the load never throws on them.
   const startBound = featuredBoundDisplay(row.startsAt, row.startsAtText);
   const endBound = featuredBoundDisplay(row.endsAt, row.endsAtText);
+  const status = featuredStatus(row, now);
   return {
     kind: "ok",
     view: {
@@ -134,7 +146,21 @@ export async function resolveKitFeaturedEdit(
         starts_at: row.startsAtText ?? "",
         ends_at: row.endsAtText ?? "",
       },
-      status: featuredStatus(row, now),
+      status,
+      eligibilityReason: featuredEligibilityReasonFor(status),
+      startsAtLabel:
+        startBound.kind === "instant"
+          ? startBound.iso
+          : startBound.kind === "text"
+            ? startBound.text
+            : FEATURED_OPEN_START_COPY,
+      endsAtLabel:
+        endBound.kind === "instant"
+          ? endBound.iso
+          : endBound.kind === "text"
+            ? endBound.text
+            : FEATURED_OPEN_END_COPY,
+      windowRules: FEATURED_WINDOW_RULES_COPY,
       visible: currentlyVisible(row, now),
       startsAt: startBound.kind === "instant" ? startBound.iso : null,
       endsAt: endBound.kind === "instant" ? endBound.iso : null,

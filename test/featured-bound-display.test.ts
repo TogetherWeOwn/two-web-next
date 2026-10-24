@@ -66,6 +66,47 @@ describe("featuredBoundDisplay", () => {
   });
 });
 
+describe("server-resolved Kit preview wording", () => {
+  // A missing or wrong server value would leave the no-JS panel incomplete;
+  // the component must not ship all possible eligibility reasons to the client.
+  it.each([
+    { row: { isPublished: false }, reason: /Not published — publication is off/ },
+    { row: { startsAt: new Date("2034-05-21T12:00:00.000Z") }, reason: /Not started/ },
+    { row: {}, reason: /Eligible —.*not proof of guest homepage delivery/ },
+    { row: { endsAt: CHECKED_AT }, reason: /Ended —.*window has closed/ },
+  ])("resolves the saved verdict wording for $reason", async ({ row, reason }) => {
+    const outcome = await resolveKitFeaturedEdit("41", {
+      db: {} as Db,
+      get: async () => savedFeatured(row),
+      now: CHECKED_AT,
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected the saved row to resolve");
+    expect(outcome.view).toMatchObject({
+      eligibilityReason: expect.stringMatching(reason),
+      windowRules: "The saved start is inclusive and the saved end is exclusive.",
+    });
+  });
+
+  it("resolves open-bound explanations on the server without replacing exact saved text", async () => {
+    const outcome = await resolveKitFeaturedEdit("41", {
+      db: {} as Db,
+      get: async () => savedFeatured({ startsAt: null, startsAtText: null }),
+      now: CHECKED_AT,
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected the saved row to resolve");
+    expect(outcome.view).toMatchObject({
+      startsAtLabel: "no start time — the window has no lower bound",
+      endsAtLabel: "2034-05-20T13:00:00.123Z",
+      startsAt: null,
+      startsAtText: null,
+      endsAt: "2034-05-20T13:00:00.123Z",
+      endsAtText: "2034-05-20 13:00:00.123000",
+    });
+  });
+});
+
 describe("saved panel with driver-undecodable bounds", () => {
   const bcRow = () =>
     savedFeatured({
