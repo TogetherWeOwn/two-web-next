@@ -42,8 +42,19 @@ dry-run builds in CI (`ci.yml` `check` job) with no size assertion.
 `ci/check-worker-bundle.mjs` gates the dry-run output `dist/worker.js`
 (raw and default-level gzip) against `ci/worker-bundle-budget.json`.
 It exits **0** when the bundle fits, **1** on breach, **2** when it cannot
-enforce (missing bundle or budget). Every failure prints a remediation
+enforce (invalid plan or missing evidence). Every failure prints a remediation
 pointer to the budget file's `$comment`. The checker never deploys.
+
+The canonical required measurement inventory is exactly `dist/worker.js`,
+defined once in `ci/bundle-inventory.mjs` and validated before the bundle is
+read. A plan that is empty, missing the canonical entry, misspelled,
+substituted, extended, or noncanonical is an invalid plan (exit 2); identity
+is fixed while numeric ceilings stay configurable in
+`ci/worker-bundle-budget.json`. `--root <dir>` selects the measurement root,
+`--format json` emits a versioned report (stable `worker.bundle` group and
+`worker.bundle.dist/worker.js` check IDs, measured bytes, fixed `error.code`
+with `next_action`), `--dry-run` is the same read-only measurement, and
+unknown flags exit 2 before any subprocess or write.
 
 Measured 2026-10-18 with wrangler 4.149.0
 (`npx wrangler deploy --dry-run --outdir dist`; the `--env production`
@@ -420,6 +431,44 @@ Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile
 then desktop, separate attempts, three samples per planned route, corrupted and
 missing sample evidence, the field allowlist, unchanged resolved Lighthouse
 configuration/scoring, and the real LHCI median assertion.
+
+### Independent navigation admission and fixture verification
+
+A sample is one independent configuration-matched navigation, not one JSON
+file. Admission keys each report by its canonical requested URL plus its
+navigation timestamp (`fetchTime`). The same navigation reused via duplicate
+objects, separately parsed copies or renamed files fills one quota slot;
+distinct navigations with equal scores remain valid. Required native fields:
+`gatherMode: navigation`, a full UTC ISO `fetchTime`, an explicit
+`requestedUrl`, positive finite `timing.total` with `timing.entries`, and
+resolved `configSettings` matching the selected desktop or mobile profile
+(form factor, screen emulation, throttling method and values, selected
+categories, skipped audits). Missing or wrong-mode reports cannot satisfy
+quotas. Per-request URL accounting and same-origin redirects are preserved;
+unplanned or foreign requests never substitute for a planned route. This is
+admission validation, not proof against fabricated LHR metadata.
+
+Rejected reports carry bounded stable codes (`duplicate_navigation`,
+`invalid_identity`, `invalid_timing`, `settings_mismatch`, `invalid_report`,
+`unplanned_request`, `invalid_redirect`) with positive counts plus a safe
+`next_action`. Diagnostics and versioned JSON expose counts only, never report
+bodies, query values, headers, snippets or absolute paths. Route quotas,
+floors, budgets, separate-attempt archives and the single retry are unchanged;
+two short attempts never combine into a complete one.
+
+Read-only verification (no collection, network, writes or archives):
+
+```sh
+node ci/lighthouse-origin-run.mjs https://togetherweown.com --check-fixture <directory> --format json
+QUALITY_ORIGIN=https://togetherweown.com node ci/lighthouse-quality-run.mjs --check-fixture <directory> --format json
+```
+
+Both emit one JSON object via the log seam (`schemaVersion: 1`, `profile`,
+`code`, `complete`, per-URL `rows`, `rejectionCounts`, `next_action`).
+`collection_complete` exits 0, `incomplete_collection` exits 1,
+`invalid_arguments` exits 2 before any collection or network action. Only
+top-level `lhr-*.json` files are read; nested attempt archives never fill
+quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%

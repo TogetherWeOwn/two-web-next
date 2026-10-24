@@ -57,6 +57,7 @@ const detailIslands = [
   "event-device-timezone",
   "rsvp-button",
   "copy-link",
+  "event-share",
   "going-count",
   "attendees-live",
 ]
@@ -83,7 +84,10 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Use the server's RSVP verdict for elapsed published rows too: status
+    // reconciliation can lag behind the event's end. Draft previews keep
+    // their spots line; the browser clock never decides closure.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled" && closed !== "past",
     announcement: null,
   }),
 );
@@ -152,7 +156,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
+    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
@@ -349,8 +353,27 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
+        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
+            type="button"
+            hidden
+            data-native-share
+            data-share-title={model.title}
+            data-share-url={model.canonical}
+            data-testid="event-share"
+          >
+            Share
+          </button>
+        {/if}
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {#if model.status === "published"}
+        <p
+          role="status"
+          aria-live="polite"
+          data-testid="event-share-status"
+          data-native-share-status
+        ></p>
+      {/if}
     </section>
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}

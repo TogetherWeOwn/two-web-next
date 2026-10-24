@@ -37,7 +37,6 @@ const START = new Date("2099-11-04T20:00:00.000Z");
 const BEFORE = new Date("2099-11-04T19:59:59.998Z");
 const CROSSED = new Date("2099-11-04T20:00:00.001Z");
 const STILL_FUTURE = new Date("2099-11-04T19:59:59.999Z");
-const END_ERROR = "The end is after the start.";
 const FORM = {
   title: "Series lock boundary",
   game: "Chess",
@@ -254,7 +253,11 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
         expect(body.request_id).toBe(res.headers.get("x-request-id"));
         return { status: 422, fields: body.fields };
       }
-      expect(await res.text()).toContain(END_ERROR);
+      // Read only the field diagnostic, not parent/sibling data elsewhere in HTML.
+      const html = await res.text();
+      const match = html.match(/<p\b[^>]*data-testid="error-ends_at"[^>]*>([\s\S]*?)<\/p>/);
+      expect(match).not.toBeNull();
+      return { status: 422, fields: { ends_at: match![1]! } };
     }
     return { status: res.status };
   }
@@ -402,10 +405,12 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
         expect(writeBackKeys(surface, result)).toEqual([later.eventKey, near.eventKey].sort());
       });
 
-      it("a started child does not hide a later-future inversion: the entire edit still rolls back", async () => {
-        const { parent, near } = await seed(
+      it("identifies the later-future inversion, not the child that started during the wait", async () => {
+        // Both short children would invert before the wait; only later is still
+        // eligible after the held near-child lock is released across its start.
+        const { parent, near, later } = await seed(
           "published",
-          "2099-11-04T22:00:00Z",
+          "2099-11-04T20:30:00Z",
           "2099-11-11T20:30:00Z",
         );
         const before = await snapshot();
@@ -413,7 +418,10 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
           edit(surface, parent.eventKey, SHORTEN),
         );
         expect(result.status).toBe(422);
-        if (surface !== "native Save") expect(result.fields).toEqual({ ends_at: END_ERROR });
+        expect(result.fields).toEqual({ ends_at: expect.any(String) });
+        expect.soft(result.fields!.ends_at).toContain(later.eventKey);
+        expect.soft(result.fields!.ends_at).not.toContain(near.eventKey);
+        expect.soft(result.fields!.ends_at).not.toContain(parent.eventKey);
         expect(await snapshot()).toEqual(before);
         expect(sent).toEqual([]);
       });
@@ -424,13 +432,16 @@ describe.skipIf(!url)("series child eligibility after real lock waits (live)", (
       ])(
         "negative control: a genuinely future %s child rolls back parent, audit, waitlist and write-backs",
         async (_label, end) => {
-          const { parent, near } = await seed("published", end);
+          const { parent, near, later } = await seed("published", end);
           const before = await snapshot();
           const { result } = await whileChildLocked(near, STILL_FUTURE, () =>
             edit(surface, parent.eventKey, SHORTEN),
           );
           expect(result.status).toBe(422);
-          if (surface !== "native Save") expect(result.fields).toEqual({ ends_at: END_ERROR });
+          expect(result.fields).toEqual({ ends_at: expect.any(String) });
+          expect.soft(result.fields!.ends_at).toContain(near.eventKey);
+          expect.soft(result.fields!.ends_at).not.toContain(later.eventKey);
+          expect.soft(result.fields!.ends_at).not.toContain(parent.eventKey);
           expect(await snapshot()).toEqual(before);
           expect(sent).toEqual([]);
         },
