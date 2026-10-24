@@ -49,6 +49,14 @@ existing search-analytics field maximum. One-character searches remain supported
 blank queries still mean no search. Existing trimming, NUL stripping and literal
 LIKE wildcard escaping remain unchanged for accepted queries.
 
+The `game` scope on `/events.ics` is limited to **100 Unicode code points**
+after trimming, and refuses CR/LF plus control/invisible characters. An invalid
+scope returns the static 400 body `Invalid game filter.` with
+`Cache-Control: no-store`, before any event read or conditional 304; the input
+is not reflected or logged. Blank means the unfiltered collection; a valid
+unknown game returns an empty scoped calendar with a truthful label, never all
+games. RSS, per-event downloads and the past archive ignore `game`.
+
 ## Cost and failure behavior
 
 This reuses `src/throttle.ts` and its existing Postgres admission transaction,
