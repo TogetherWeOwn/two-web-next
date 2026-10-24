@@ -234,8 +234,19 @@ describe("subscribe controls cross-surface contract", () => {
   });
 
   it("keeps the help section identical across Hono and Kit targets", () => {
+    const blocks = new Map(
+      TRUTH_SURFACES.map((surface) => [surface, helpBlockOf(pages[surface], surface)]),
+    );
+    // The calendar head details is the load-bearing `subscribe` swapped zone
+    // for game scoping; past surfaces carry no zone (no game facet). Pin the
+    // zone per surface, then compare the zone-stripped sections byte-identical.
+    expect(blocks.get("hono-calendar")!.openTag, "calendar zone").toContain(
+      'data-cal-zone="subscribe"',
+    );
+    for (const surface of ["hono-archive", "kit-archive"] as const)
+      expect(blocks.get(surface)!.openTag, `${surface} zone`).not.toContain("data-cal-zone");
     const normalized = TRUTH_SURFACES.map((surface) =>
-      normalizeSection(helpBlockOf(pages[surface], surface).full),
+      normalizeSection(blocks.get(surface)!.full.replace(/\sdata-cal-zone="[^"]*"/g, "")),
     );
     for (const section of normalized.slice(1)) expect(section).toBe(normalized[0]);
   });
