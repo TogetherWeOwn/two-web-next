@@ -266,22 +266,21 @@ const NULLISH_COMMUNITY = { member_count: null, online_count: null, ranks: [] };
 const guidePath = `${repoRoot}docs/machine-interface.md`;
 check("guide docs/machine-interface.md exists", existsSync(guidePath));
 const guide = existsSync(guidePath) ? readFileSync(guidePath, "utf8") : "";
-if (guide) {
-  check("guide stays short (<=120 lines)", guide.split("\n").length <= 120);
-  for (const code of ["invalid_request", "not_found", "rate_limited", "unavailable", "internal"]) {
-    check(`guide names ${code}`, guide.includes(code));
-  }
-  check("guide states the 20 rows cap", /20\s+rows/.test(guide));
-  check("guide states the 32 KiB cap", guide.includes("32 KiB"));
-  check("guide names Retry-After", /retry-after/i.test(guide));
-  check("guide names a next action", /try again/i.test(guide));
-  check("guide links /mcp", guide.includes("/mcp"));
-  check("guide links /openapi.json", guide.includes("/openapi.json"));
-  check(
-    "guide names npm run check:machine-contract",
-    guide.includes("npm run check:machine-contract"),
-  );
+check("guide is nonempty", guide.trim().length > 0);
+check("guide stays short (<=120 lines)", guide.split("\n").length <= 120);
+for (const code of ["invalid_request", "not_found", "rate_limited", "unavailable", "internal"]) {
+  check(`guide names ${code}`, guide.includes(code));
 }
+check("guide states the 20 rows cap", /20\s+rows/.test(guide));
+check("guide states the 32 KiB cap", guide.includes("32 KiB"));
+check("guide names Retry-After", /retry-after/i.test(guide));
+check("guide names a next action", /try again/i.test(guide));
+check("guide links /mcp", guide.includes("/mcp"));
+check("guide links /openapi.json", guide.includes("/openapi.json"));
+check(
+  "guide names npm run check:machine-contract",
+  guide.includes("npm run check:machine-contract"),
+);
 
 const body = llmsTxt(APP_URL);
 check("llms.txt links /mcp", body.includes(`${APP_URL}/mcp`));

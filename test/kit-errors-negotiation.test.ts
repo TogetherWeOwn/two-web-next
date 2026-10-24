@@ -63,7 +63,7 @@ describe("negotiateKitError machine contracts", () => {
   it("answers JSON to event writes whatever the browser accepts", () => {
     const html = accept("text/html");
     expect(negotiateKitError(req("/events", { method: "POST", ...html }))).toBe("json");
-    for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"]) {
+    for (const action of ["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"]) {
       expect(
         negotiateKitError(
           req(`/events/01ARZ3NDEKTSV4RRFFQ69G5FAV/${action}`, { method: "POST", ...html }),

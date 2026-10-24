@@ -79,8 +79,12 @@ export const CalendarLiveRegions: FC<{
   </>
 );
 
-/** The `head` zone: list/calendar toggle plus the archive, subscribe and feed links. */
-export const CalendarHead: FC<{ state: CalendarState; appUrl: string }> = ({ state, appUrl }) => (
+/** The `head` zone: list/calendar toggle plus the archive, subscribe and feed links. The subscribe/download/help targets carry the committed game scope; unfiltered schedules keep the exact all-events URLs. */
+export const CalendarHead: FC<{
+  state: CalendarState;
+  appUrl: string;
+  gameFilter?: string | null;
+}> = ({ state, appUrl, gameFilter = null }) => (
   <>
     <div data-cal-zone="head">
       <div class="schedule-views" role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
@@ -106,13 +110,14 @@ export const CalendarHead: FC<{ state: CalendarState; appUrl: string }> = ({ sta
         >
           {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
         </a>{" "}
-        <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+        <a href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
           {EVENTS_EMPTY_COPY.subscribe}
         </a>{" "}
-        <a href={feedUrl(appUrl)}>Download calendar (.ics)</a> <a href="/events.rss">RSS feed</a>
+        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>{" "}
+        <a href="/events.rss">RSS feed</a>
       </p>
     </div>
-    {subscriptionHelp(appUrl)}
+    {subscriptionHelp(appUrl, gameFilter, true)}
   </>
 );
 
