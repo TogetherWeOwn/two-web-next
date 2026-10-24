@@ -150,3 +150,42 @@ describe("Kit event-edit page contract", () => {
     expect(load).toContain("params.key");
   });
 });
+
+// Access/joining carry-through pins: the Kit edit renders the four optional
+// Hono controls (accessibility_notes, organizer_name, join_url,
+// join_instructions) with their stored values and live text limits. The
+// acceptance suite pins names, kinds and limit substrings; these pins pair
+// each control with its own value binding and the exact limit attribute the
+// text-limits island reads, so a binding typo or an inflated limit fails
+// here. Source-text by design, like the contract above. The acceptance file
+// is deliberately left untouched (Test Author owned).
+describe("Kit event-edit access/joining carry-through pins", () => {
+  // Opening tag of the control carrying a field name; empty when absent.
+  function controlTag(name: string): string {
+    const match = source.match(new RegExp(`<(?:textarea|input)[^>]*name="${name}"[^>]*>`));
+    return match ? match[0] : "";
+  }
+
+  // Full textarea element for a field name: the value binding is element
+  // content (>{val("...")}</textarea>), not an opening-tag attribute.
+  function textareaElement(name: string): string {
+    const match = source.match(new RegExp(`<textarea[^>]*name="${name}"[^>]*>.*?</textarea>`));
+    return match ? match[0] : "";
+  }
+
+  it("binds each new control to its own stored value, not a sibling field", () => {
+    expect(textareaElement("accessibility_notes")).toContain('{val("accessibility_notes")}');
+    expect(controlTag("organizer_name")).toContain('value={val("organizer_name")}');
+    expect(controlTag("join_url")).toContain('value={val("join_url")}');
+    expect(textareaElement("join_instructions")).toContain('{val("join_instructions")}');
+  });
+
+  it("pins the exact text-limit attributes the island reads on the three limited controls", () => {
+    // Exact braces: a 10x inflation ({1000} to {10000}) must fail, and
+    // join_url carries no limit attribute, matching the Hono control.
+    expect(controlTag("accessibility_notes")).toMatch(/data-event-text-limit=\{1000\}/);
+    expect(controlTag("organizer_name")).toMatch(/data-event-text-limit=\{500\}/);
+    expect(controlTag("join_instructions")).toMatch(/data-event-text-limit=\{5000\}/);
+    expect(controlTag("join_url")).not.toContain("data-event-text-limit");
+  });
+});

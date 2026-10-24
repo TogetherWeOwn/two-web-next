@@ -71,10 +71,14 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
       title: "Game night",
       game: "Chess",
       description: "Casual play",
+      accessibility_notes: "",
       starts_at: "2026-07-01 20:00",
       ends_at: "2026-07-01 22:00",
       timezone: "Europe/London",
       location: "Hall",
+      organizer_name: "",
+      join_url: "",
+      join_instructions: "",
       capacity: "8",
     });
     expect(outcome.view.endsAt).toBe("2026-07-01T21:00:00.000Z");

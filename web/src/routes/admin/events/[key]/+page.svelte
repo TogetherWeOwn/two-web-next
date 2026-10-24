@@ -107,6 +107,32 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </div>
     <div class="field">
+      <label for="f-accessibility-notes">Accessibility notes</label>
+      <textarea
+        id="f-accessibility-notes"
+        name="accessibility_notes"
+        rows={4}
+        data-event-text-limit={1000}
+        aria-invalid={errors.accessibility_notes ? "true" : undefined}
+        aria-describedby={errors.accessibility_notes
+          ? "f-accessibility-notes-hint f-accessibility-notes-error"
+          : "f-accessibility-notes-hint"}
+      >{val("accessibility_notes")}</textarea>
+      <p id="f-accessibility-notes-hint" class="hint">
+        Optional; include only confirmed details, not personal contact information.
+      </p>
+      {#if errors.accessibility_notes}
+        <p
+          id="f-accessibility-notes-error"
+          class="error"
+          role="alert"
+          data-testid="error-accessibility_notes"
+        >
+          {errors.accessibility_notes}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
         id="f-starts-at"
@@ -173,6 +199,80 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {#if errors.location}
         <p id="f-location-error" class="error" role="alert" data-testid="error-location">
           {errors.location}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
+      <label for="f-organizer-name">Organizer display name (optional)</label>
+      <input
+        id="f-organizer-name"
+        name="organizer_name"
+        type="text"
+        value={val("organizer_name")}
+        data-event-text-limit={500}
+        aria-invalid={errors.organizer_name ? "true" : undefined}
+        aria-describedby={errors.organizer_name
+          ? "f-organizer-name-hint f-organizer-name-error"
+          : "f-organizer-name-hint"}
+      />
+      <p id="f-organizer-name-hint" class="hint">
+        Use a name the organizer has agreed to show publicly. Do not enter contact details.
+      </p>
+      {#if errors.organizer_name}
+        <p
+          id="f-organizer-name-error"
+          class="error"
+          role="alert"
+          data-testid="error-organizer_name"
+        >
+          {errors.organizer_name}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
+      <label for="f-join-url">Public joining link (optional)</label>
+      <input
+        id="f-join-url"
+        name="join_url"
+        type="url"
+        value={val("join_url")}
+        aria-invalid={errors.join_url ? "true" : undefined}
+        aria-describedby={errors.join_url
+          ? "f-join-url-hint f-join-url-error"
+          : "f-join-url-hint"}
+      />
+      <p id="f-join-url-hint" class="hint">
+        HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.
+      </p>
+      {#if errors.join_url}
+        <p id="f-join-url-error" class="error" role="alert" data-testid="error-join_url">
+          {errors.join_url}
+        </p>
+      {/if}
+    </div>
+    <div class="field">
+      <label for="f-join-instructions">Public joining instructions (optional)</label>
+      <textarea
+        id="f-join-instructions"
+        name="join_instructions"
+        rows={4}
+        data-event-text-limit={5000}
+        aria-invalid={errors.join_instructions ? "true" : undefined}
+        aria-describedby={errors.join_instructions
+          ? "f-join-instructions-hint f-join-instructions-error"
+          : "f-join-instructions-hint"}
+      >{val("join_instructions")}</textarea>
+      <p id="f-join-instructions-hint" class="hint">
+        Share only verified details that are safe for anyone to see. Do not enter contact details.
+      </p>
+      {#if errors.join_instructions}
+        <p
+          id="f-join-instructions-error"
+          class="error"
+          role="alert"
+          data-testid="error-join_instructions"
+        >
+          {errors.join_instructions}
         </p>
       {/if}
     </div>
