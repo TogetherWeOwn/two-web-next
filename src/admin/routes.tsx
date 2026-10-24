@@ -359,9 +359,22 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       action: "list",
       route: "admin.activity-log.index",
     });
+    // Scope validation refuses before any database work: a duplicated or
+    // malformed `event` value answers an explicit 422 with no rows, never
+    // silently unscoped results, and names no member for the access log. The
+    // value itself is never reflected: it may carry markup.
+    const eventValues = c.req.queries("event") ?? [];
+    const query = parseActivityLogQuery(c.req.query());
+    if (eventValues.length > 1 || query.eventInvalid) {
+      return errorPage(
+        c,
+        422,
+        "Invalid event scope",
+        "The event filter was not understood. Remove it to see all activity.",
+      );
+    }
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const query = parseActivityLogQuery(c.req.query());
     const fetched = await listActivityLog(db, query);
     const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE);
     return bufferedMemberHtml(

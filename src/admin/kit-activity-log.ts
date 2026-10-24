@@ -14,7 +14,11 @@
 // because the guard only accepts snowflakes and inventing a member subject
 // would be worse than logging none. Null causers (cron/system) render as an
 // em dash and likewise contribute no subject.
-import { ACTIVITY_LOG_PAGE_SIZE, parseActivityLogQuery } from "./table-list";
+import {
+  ACTIVITY_LOG_PAGE_SIZE,
+  invalidActivityLogScope,
+  parseActivityLogQuery,
+} from "./table-list";
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
@@ -31,7 +35,7 @@ export type KitActivityLogRow = Omit<ActivityLogViewerRow, "createdAt"> & {
 
 export type ActivityLogListFn = (
   db: Db,
-  opts: { subject?: string; causer?: string; page?: number },
+  opts: { subject?: string; causer?: string; event?: string; page?: number },
 ) => Promise<ActivityLogViewerRow[]>;
 
 export interface ActivityLogLoadArgs {
@@ -39,6 +43,10 @@ export interface ActivityLogLoadArgs {
   subjectParam: string | null;
   causerParam: string | null;
   pageParam: string | null;
+  /** First `event` value; the binding counts duplicates via `eventParamCount`. */
+  eventParam?: string | null;
+  /** Raw `event` occurrence count; more than one fails explicitly. */
+  eventParamCount?: number;
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn?: (c: { env: Env }) => Promise<Db | null>;
   listFn?: ActivityLogListFn;
@@ -80,14 +88,31 @@ export async function loadActivityLogPage({
   subjectParam,
   causerParam,
   pageParam,
+  eventParam,
+  eventParamCount,
   setHeaders,
   dbForFn = dbFor,
   listFn = listActivityLog,
 }: ActivityLogLoadArgs): Promise<{
   rows: KitActivityLogRow[];
-  query: { subject: string; causer: string; page: number };
+  query: { subject: string; causer: string; page: number; event?: string };
   hasNext: boolean;
 }> {
+  // Scope validation refuses before any database work (mirroring the Hono
+  // route): a duplicated or malformed scope throws the branded 422 with the
+  // single private, no-store set, so the shared read never runs and no rows
+  // can render. The binding passes this status through; only other failures
+  // map to the branded 503 below.
+  const query = parseActivityLogQuery({
+    subject: subjectParam ?? undefined,
+    causer: causerParam ?? undefined,
+    page: pageParam ?? undefined,
+    event: eventParam ?? undefined,
+  });
+  if ((eventParamCount !== undefined && eventParamCount > 1) || query.eventInvalid) {
+    setHeaders(PRIVATE_NO_STORE);
+    throw invalidActivityLogScope();
+  }
   let db: Db | null;
   try {
     db = await dbForFn({ env });
@@ -98,11 +123,6 @@ export async function loadActivityLogPage({
     setHeaders(PRIVATE_NO_STORE);
     throw activityLogUnavailable();
   }
-  const query = parseActivityLogQuery({
-    subject: subjectParam ?? undefined,
-    causer: causerParam ?? undefined,
-    page: pageParam ?? undefined,
-  });
   try {
     const fetched = await listFn(db, query);
     const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE).map((r) => ({

@@ -3,6 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
+import { eventActivityLogUrl } from "../table-list";
 import { RsvpAction } from "./shell";
 
 export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
@@ -32,6 +33,9 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
           </form>
         ) : null}
         <RsvpAction row={row} />
+        <a class="link" href={eventActivityLogUrl(row.eventKey)}>
+          Recorded changes for this event
+        </a>
       </div>
     </section>
   );

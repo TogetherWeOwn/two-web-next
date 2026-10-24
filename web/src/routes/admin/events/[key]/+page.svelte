@@ -227,6 +227,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           </button>
         </form>
       {/if}
+      <a class="link" href={view.recordedChangesUrl}>Recorded changes for this event</a>
     </div>
   </section>
   <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
