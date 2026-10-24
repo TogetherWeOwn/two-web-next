@@ -6,13 +6,14 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the fifteenth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `509cb40a7`;
-earlier proposals below are historical, not active allowances. The last repeated
+**Current decision after the sixteenth base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `dd841a1ae`,
+including main's own #1761 client-gzip step (not authored here); earlier
+proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 that client fits, but that union breaches server gzip and file count. The
-[fifteenth reconciliation](#fifteenth-base-conflict-reconciliation-retain-accessibility-history-limits-unchanged)
+[sixteenth reconciliation](#sixteenth-base-conflict-reconciliation-absorb-visual-accept-roster-gzip-reconcile-and-security-pin-main-side-work-limits-equal-base)
 verifies the actual prerequisite tree only, not a new feature union. Neither
 this client decision nor the prerequisite-tree build releases the source
 feature's server HOLD or proves it is ready to merge.
@@ -1084,3 +1085,72 @@ No user-facing page differs from pinned main. All exact-head CI and
 independent review gates remain required. Rollback reverts only this
 history/evidence reconciliation relative to main, not any independently
 merged allocation, dependency repair or feature.
+
+## Sixteenth base-conflict reconciliation: absorb visual-accept roster gzip-reconcile and security-pin main-side work, limits equal base
+
+On 2026-10-24 GitHub confirmed a live conflict on `4b7bf0650` against pinned
+main `dd841a1ae` (four commits: #1742 visual-accept CLI safety, #1757 RSVP
+roster status facet, #1761 inventory-return client-gzip reconcile, and #1736
+Host-admission/CSP security-pin contracts). Only `ci/kit-perf-budget.json`
+conflicts. Like the fourteenth round, numerics are not identical: main-side
+#1761 moves client `maxGzipBytes` one 256 B step, 101632 to 101888, while the
+branch head has zero numeric diffs against the merge base. Resolution takes
+main's complete JSON verbatim and appends the branch-only tail exactly once.
+Each parsed comment starts with the common-base comment; both unique tails
+were verified absent from the opposite side and occur once in the result, so
+the file equals base comment + main tail + branch record. All other 62
+main-side files are blob-equal to pinned main. The original client increase
+stays withdrawn. The historical per-file TSV is unchanged by this
+reconciliation.
+
+This is history reconciliation, not refreshed feature-union admission. No
+frozen-feature overlay was built or feature ref changed. The last repeated
+union breach remains pinned to `d6a65b4fa` (127/126 server files, 370 gzip
+bytes over), not asserted for this newer base. Keep the source feature/server
+HOLD until its own then-current union and exact-head CI/review satisfy every
+gate; this prerequisite's success is not release permission.
+
+With Node `v24.22.1`, installed locked root/web dependencies (lock SHA-256
+verified byte-identical to pinned main:
+`131c46575f340d700c1c3dd414c64d403289042b77fbaf7ec7e7a3d9449437e0` /
+`feaa492a89fb6ffe07ea4114e2111219e1f8ff4d2a99dc53fc7b7898f8be565e`)
+and two actual-tree `npm --prefix web run build` runs, unchanged
+`node ci/check-kit-perf.mjs` exits **0** both times:
+
+| Group | Actual prerequisite tree | Merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 251164/101622 B | 251904/101888 B |
+| Client JS files | 54 | 55 |
+| Server JS raw/gzip | 1151948/326918–326920 B | 1203200/333312 B |
+| Server JS files | 115 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2861/1019 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 twice | 0 required |
+
+Client-output path/hash maps match across both builds; server gzip differs by
+2 B. Client margins are 740 B raw/266 B gzip, CSS gzip 5 B. Startup
+60000 ms remains a configured bound, not measured latency.
+
+Fresh checks: checker selftests **6/6**, checker tests **13/13**, parity file
+suites **67/67**, config **34/34**, gate **6/6**, bundle selftest **34/34** and
+Hono budget pass. New-area suites for the absorbed main-side work pass without
+test edits: security-pins selftest **37/37** plus tests **16/16** and checker
+ok (4 static pins, suites 93/93), visual-accept Node tests **48/48**, and
+Vitest **204/204** across the roster-status, visual-accept-CLI,
+host-admission and inline-style suites. Floor guard is clean with selftests
+**59/59**.
+
+Lint (**1979 files**), root/CI typecheck, asset drift, inventory
+**1200/1200**, docs links (**12/12** citations, **142** Markdown files),
+ratchet unit tests **27/27** plus the base-to-head scan, and
+`npm run deps:audit` (exit **0**, zero blocked findings in both lockfiles)
+pass. `context-pack --base origin/main` errored twice locally (MCP server
+exited, no pack produced); the branch diff touches no functions (budget JSON
+comment plus this evidence file only), so no caller updates apply. Full
+`npm run check`, fresh feature acceptance, browser/visual/quality gates,
+startup latency and staging were not rerun. No user-facing page differs from
+pinned main. All exact-head CI and independent review gates remain required.
+Rollback reverts only this history/evidence reconciliation relative to main,
+not any independently merged allocation (#1761 included), dependency repair
+or feature.

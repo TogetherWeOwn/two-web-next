@@ -261,7 +261,7 @@ const kitEditData = () => ({
     rsvpAction: null,
     roster: {
       total: 1,
-      query: { q: "", sort: "answered", order: "desc", page: 1 },
+      query: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       searchAction: `/admin/events/${eventRow.eventKey}#rsvp-roster`,
       sortHeaders: [],
       entries: [{ member: "Alice", status: "going", answeredAt: at.toISOString() }],
@@ -272,6 +272,16 @@ const kitEditData = () => ({
       nextUrl: null,
       rangeStart: 1,
       rangeEnd: 1,
+      rangeText: "Showing 1-1 of 1 responses",
+      statusOptions: [
+        { value: "", label: "All", selected: true },
+        { value: "going", label: "Going", selected: false },
+        { value: "waitlisted", label: "Waitlisted", selected: false },
+        { value: "maybe", label: "Maybe", selected: false },
+        { value: "not_going", label: "Not going", selected: false },
+      ],
+      clearUrl: null,
+      firstUrl: null,
     },
   },
 });
