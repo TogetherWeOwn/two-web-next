@@ -94,6 +94,18 @@ export function checkHostSourcePin(source = file(TRUST_HOSTS_PATH)) {
       detail: "admission uses non-literal .header() argument (pin is blind)",
     };
   }
+  // Residual backstop: after removing every canonical .header("host") call,
+  // no header-access token may remain. Shape enumeration cannot list every
+  // spelling (bracket reads, bind aliases, destructuring), so anything left
+  // fails. The file is tiny and contains no other header token today.
+  const withoutAllowedReads = code.replace(/\.header\s*\(\s*["'`]host["'`]\s*\)/gi, " ");
+  if (/headers?\b/i.test(withoutAllowedReads) || /\.raw\b/i.test(withoutAllowedReads)) {
+    return {
+      id: "host-source-pin",
+      status: "fail",
+      detail: "admission uses a non-canonical header access (pin is blind)",
+    };
+  }
   const reads = extractHeaderReads(source);
   if (reads.length === 0) {
     return { id: "host-source-pin", status: "fail", detail: "no header read found (pin is blind)" };
@@ -152,16 +164,15 @@ export function checkLeafLifecycleStatic(
 export function parseAllowlist(source) {
   const block = /INLINE_CRITICAL_CSS_PATHS[^=]*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(source);
   if (!block) return null;
-  const literals = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  // Literals and residual derive from ONE comment-stripped text: a
+  // commented-out path must not satisfy the runtime allowlist.
+  const entries = stripComments(block[1]);
+  const literals = [...entries.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
   // Fail closed on non-literal Set entries: a spread, identifier,
   // single-quoted or template-literal path would otherwise be invisible to
   // the literal extractor while widening the runtime allowlist. Anything
   // besides double-quoted literals, commas and whitespace rejects the pin.
-  const rest = block[1]
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|\s)\/\/.*$/gm, "$1")
-    .replace(/"[^"]*"/g, "")
-    .replace(/[\s,]/g, "");
+  const rest = entries.replace(/"[^"]*"/g, "").replace(/[\s,]/g, "");
   if (rest.length > 0 || literals.length === 0) return null;
   return literals;
 }
@@ -177,6 +188,19 @@ export function checkInlineAllowlist(source = file(HEADERS_PATH)) {
       id: "inline-allowlist",
       status: "fail",
       detail: `allowlist is [${parsed.join(", ")}], expected [${expected.join(", ")}]`,
+    };
+  }
+  // Fail closed on post-definition widening: the identifier may only appear
+  // in its definition and direct .has() call sites. A cast .add(), aliasing
+  // or reassignment widens the runtime set while the literal stays exact.
+  const withoutDefinition = stripComments(source)
+    .replace(/INLINE_CRITICAL_CSS_PATHS[^=]*=\s*new Set\(\[[\s\S]*?\]\)/, " ")
+    .replace(/INLINE_CRITICAL_CSS_PATHS\s*\.\s*has\s*\(/g, " ");
+  if (withoutDefinition.includes("INLINE_CRITICAL_CSS_PATHS")) {
+    return {
+      id: "inline-allowlist",
+      status: "fail",
+      detail: "allowlist identifier used outside its definition and .has() calls",
     };
   }
   return { id: "inline-allowlist", status: "pass" };
@@ -409,6 +433,18 @@ function selftest() {
       .status === "fail",
     "variable header name fails",
   );
+  assert(
+    checkHostSourcePin(
+      '// deliberately ignored\nconst fwd = c.req["header"]("x-forwarded-server");\nisTrustedHost(u, [fwd ?? c.req.header("host"), urlHost])',
+    ).status === "fail",
+    "bracket header read fails",
+  );
+  assert(
+    checkHostSourcePin(
+      '// deliberately ignored\nconst readHeader = c.req.header.bind(c.req);\nisTrustedHost(u, [readHeader("x-forwarded-server") ?? c.req.header("host"), urlHost])',
+    ).status === "fail",
+    "bind-aliased header read fails",
+  );
   // Lifecycle: matching bytes pass; drifted bytes or hash fail; the input
   // list must match the generated marker or the gate is checking the wrong files.
   assert(
@@ -475,6 +511,18 @@ function selftest() {
       allowlistSource("  '/',\n  '/about',\n  '/faq',\n  '/rules',\n  '/privacy',"),
     ).status === "fail",
     "single-quoted entries fail",
+  );
+  assert(
+    checkInlineAllowlist(
+      allowlistSource('  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  // "/privacy",'),
+    ).status === "fail",
+    "commented-out path fails",
+  );
+  assert(
+    checkInlineAllowlist(
+      `${allowlistSource('  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",')}\n(INLINE_CRITICAL_CSS_PATHS as unknown as Set<string>).add("/profile");`,
+    ).status === "fail",
+    "post-definition .add widening fails",
   );
   assert(checkInlineAllowlist("no set here").status === "fail", "unparseable allowlist fails");
   // Threat evidence: both rows with both pointers pass; a missing row or a

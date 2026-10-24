@@ -64,6 +64,20 @@ async function classifyResponse(
 ): Promise<SweepOutcome> {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
+    // Defense in depth: a skipped (non-HTML) response can still carry a CSP
+    // (e.g. an unauthenticated 302). A widened style-src there means the
+    // predicate was widened behind the exact literal set.
+    const earlyCsp = res.headers.get("content-security-policy") ?? "";
+    if (earlyCsp && !ctx.allowlist.has(path)) {
+      const earlyStyleSrc = cspDirective(earlyCsp, "style-src");
+      if (earlyStyleSrc !== "'self'") {
+        return {
+          kind: "violation",
+          path,
+          detail: `non-allowlisted style-src is ${earlyStyleSrc ?? "missing"} on skipped response, expected exactly 'self'`,
+        };
+      }
+    }
     return { kind: "skipped", path, reason: `${res.status} ${contentType || "no content-type"}` };
   }
   const body = await res.text();
@@ -187,6 +201,17 @@ function canaryFixture() {
       `<!doctype html><html><head>${EXPECTED_BLOCK}<style>p{color:red}</style></head><body>extra block</body></html>`,
     );
   });
+  fixture.get("/skipped-wide", (c) => {
+    c.header(
+      "Content-Security-Policy",
+      `default-src 'self'; style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`,
+    );
+    return c.redirect("/clean", 302);
+  });
+  fixture.get("/skipped-clean", (c) => {
+    c.header("Content-Security-Policy", "default-src 'self'; style-src 'self'");
+    return c.redirect("/clean", 302);
+  });
   return fixture;
 }
 
@@ -223,6 +248,17 @@ describe("inline-style route sweep", () => {
       kind: "violation",
       detail: "allowlisted path emits an inline <style> block beyond the exact block",
     });
+  });
+
+  it("canary: a skipped non-HTML response with a widened style-src is flagged, exact 'self' stays skipped", async () => {
+    const fixture = canaryFixture();
+    const ctx = { ...SWEEP_CTX, allowlist: new Set<string>([]) };
+    expect(
+      await classifyResponse("/skipped-wide", await fixture.request("/skipped-wide"), ctx),
+    ).toMatchObject({ kind: "violation" });
+    expect(
+      await classifyResponse("/skipped-clean", await fixture.request("/skipped-clean"), ctx),
+    ).toMatchObject({ kind: "skipped" });
   });
 
   it.each(concretePaths())("route %s carries no unallowlisted inline style", async (path) => {

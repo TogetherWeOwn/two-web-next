@@ -14,9 +14,11 @@ npm run check:security-pins                  # full gate: pins plus suites
 npx vitest run test/host-admission-forwarding.test.ts test/inline-style-route-sweep.test.ts
 ```
 
-Stdout is one JSON summary (`version`, `ok`, per-check rows, and on failure
-a fixed `error_code` with a concrete `next_action`). The human one-liner goes
-to stderr. Exit 0 is pass, 1 is fail, 2 is usage.
+The default gate and `--static-only` emit one JSON summary (`version`, `ok`,
+per-check rows, and on failure a fixed `error_code` with a concrete
+`next_action`). The human one-liner goes to stderr. `--selftest` emits a
+human-readable line, and `npm run check:security-pins:selftest` also emits
+`node --test` output. Exit 0 is pass, 1 is fail, 2 is usage.
 
 ## Stable check IDs
 

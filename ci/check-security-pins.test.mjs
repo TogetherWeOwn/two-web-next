@@ -126,6 +126,18 @@ test("a spread-widened allowlist fails closed, not silently exact", () => {
   assert.match(result.detail, /does not parse/);
 });
 
+test("a commented-out path does not satisfy the allowlist", () => {
+  const narrowed = `const INLINE_CRITICAL_CSS_PATHS = new Set([\n  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  // "/privacy",\n]);`;
+  const result = checkInlineAllowlist(narrowed);
+  assert.equal(result.status, "fail");
+});
+
+test("a post-definition .add widening fails closed, not silently exact", () => {
+  const widened = `const INLINE_CRITICAL_CSS_PATHS = new Set([\n  "/",\n  "/about",\n  "/faq",\n  "/rules",\n  "/privacy",\n]);\n(INLINE_CRITICAL_CSS_PATHS as unknown as Set<string>).add("/profile");`;
+  const result = checkInlineAllowlist(widened);
+  assert.equal(result.status, "fail");
+});
+
 function runGate(args) {
   try {
     const stdout = execFileSync(process.execPath, [GATE, ...args], {
