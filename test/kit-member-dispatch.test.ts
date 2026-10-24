@@ -49,6 +49,7 @@ const authenticated = (userId: string): KitLocals => ({
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 
 const guest = (): KitLocals => ({
@@ -57,6 +58,7 @@ const guest = (): KitLocals => ({
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 
 const recording = () => {

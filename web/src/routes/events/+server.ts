@@ -5,7 +5,12 @@ import { dbFor } from "../../../../src/admin/db";
 import { discordEventsSource } from "../../../../src/events/discord-transients";
 import { loadEventsPage } from "../../../../src/kit-events";
 import { renderEventsHtml } from "../../../../src/kit-events-html";
-import { kitEventsJourneyFor, kitEventsSessionFor } from "../../../../src/kit-session";
+import {
+  isRestoredBannerEligible,
+  kitEventsJourneyFor,
+  kitEventsSessionFor,
+  readReturnJourney,
+} from "../../../../src/kit-session";
 import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 
 // Endpoint rendering, not a Svelte page: the HTML comes from the Hono
@@ -17,6 +22,13 @@ import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 export const GET: RequestHandler = async ({ request, cookies, url, setHeaders }) => {
   const collected: Record<string, string> = {};
   let consumeJoinFlash = false;
+  // The restored-write notice for the "you signed in again" banner: a
+  // read-only, signature-verified peek through the same eligibility the hook
+  // core consumes with, so render and consume can never disagree. Island
+  // fragments never render it, like the join flash they keep pending.
+  const restoredWrite = isRestoredBannerEligible(request)
+    ? (await readReturnJourney(request, env.SESSION_SECRET)).restoredWrite
+    : null;
   try {
     const data = await loadEventsPage({
       env,
@@ -36,7 +48,13 @@ export const GET: RequestHandler = async ({ request, cookies, url, setHeaders })
       // cf-ray (safeRequestId inside the alert drops anything else).
       requestId: request.headers.get("cf-ray") ?? undefined,
     });
-    const rendered = await renderEventsHtml(data, collected);
+    // Error renders never carry the banner (Hono's middleware gates on
+    // 200): the overlong-query notice rewrites to the Hono 422 downstream,
+    // so it renders banner-free and the hook preserves the notice for the
+    // next visible page.
+    const rendered = await renderEventsHtml(data, collected, {
+      restoredWrite: data.queryTooLong ? null : restoredWrite,
+    });
     const response = new Response(rendered.body, {
       status: rendered.status,
       headers: rendered.headers,

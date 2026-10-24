@@ -64,6 +64,7 @@ let {
   isModerator = false,
   appUrl,
   joinResult = null,
+  restoredWrite = null,
   errors = null,
   values = null,
 }: {
@@ -73,6 +74,14 @@ let {
   isModerator?: boolean;
   appUrl: string;
   joinResult?: JoinResult | null;
+  /** Restored-write notice from the root layout data: renders the "you
+    signed in again" banner first inside <main>, ahead of the join banner,
+    exactly as Hono's expiredWriteBanner middleware injects it. The
+    destination is never rendered, so a hostile value stays inert. Bytes are
+    twinned deliberately (never imported from the .tsx): importing the Hono
+    screen would bundle the JSX runtime into the Kit worker, and the
+    acceptance suite pins both copies byte-identical. */
+  restoredWrite?: string | null;
   errors?: Record<string, string> | null;
   values?: ProfileFormValues | null;
   // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
@@ -161,6 +170,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     </div>
   </header>
   <main id="main" tabindex="-1">
+    {#if restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}
     {#if joinResult}
       <p class="notice" role="status" data-testid="join-result">
         {#if joinResult === "added"}

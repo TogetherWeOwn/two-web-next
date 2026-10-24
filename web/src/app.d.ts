@@ -19,6 +19,7 @@ declare global {
       returnTo?: KitLocals["returnTo"];
       joinResult?: KitLocals["joinResult"];
       expiredWrite?: KitLocals["expiredWrite"];
+      restoredWrite?: KitLocals["restoredWrite"];
     }
     // Branded detail states: the /e/:key load throws the #838 state model
     // with the served status, and the route-level error page renders it. Every

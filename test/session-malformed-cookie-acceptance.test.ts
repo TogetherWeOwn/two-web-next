@@ -234,6 +234,7 @@ describe("Kit auth-status cookie writer", () => {
           returnTo: null,
           joinResult: null,
           expiredWrite: null,
+          restoredWrite: null,
         },
       });
       expect(write).toBeNull();

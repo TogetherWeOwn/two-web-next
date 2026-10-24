@@ -36,6 +36,7 @@ const destination = (nextScope: string, nextSeason = season) => {
   mainClass="events-page"
   loginReturnTo={destination(scope)}
   accountChrome={memberChrome}
+  restoredWrite={data.restoredWrite}
 >
   <p class="strap">Members only</p>
   <h1>Member leaderboard</h1>
