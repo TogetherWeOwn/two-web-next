@@ -421,6 +421,44 @@ then desktop, separate attempts, three samples per planned route, corrupted and
 missing sample evidence, the field allowlist, unchanged resolved Lighthouse
 configuration/scoring, and the real LHCI median assertion.
 
+### Independent navigation admission and fixture verification
+
+A sample is one independent configuration-matched navigation, not one JSON
+file. Admission keys each report by its canonical requested URL plus its
+navigation timestamp (`fetchTime`). The same navigation reused via duplicate
+objects, separately parsed copies or renamed files fills one quota slot;
+distinct navigations with equal scores remain valid. Required native fields:
+`gatherMode: navigation`, a full UTC ISO `fetchTime`, an explicit
+`requestedUrl`, positive finite `timing.total` with `timing.entries`, and
+resolved `configSettings` matching the selected desktop or mobile profile
+(form factor, screen emulation, throttling method and values, selected
+categories, skipped audits). Missing or wrong-mode reports cannot satisfy
+quotas. Per-request URL accounting and same-origin redirects are preserved;
+unplanned or foreign requests never substitute for a planned route. This is
+admission validation, not proof against fabricated LHR metadata.
+
+Rejected reports carry bounded stable codes (`duplicate_navigation`,
+`invalid_identity`, `invalid_timing`, `settings_mismatch`, `invalid_report`,
+`unplanned_request`, `invalid_redirect`) with positive counts plus a safe
+`next_action`. Diagnostics and versioned JSON expose counts only, never report
+bodies, query values, headers, snippets or absolute paths. Route quotas,
+floors, budgets, separate-attempt archives and the single retry are unchanged;
+two short attempts never combine into a complete one.
+
+Read-only verification (no collection, network, writes or archives):
+
+```sh
+node ci/lighthouse-origin-run.mjs https://togetherweown.com --check-fixture <directory> --format json
+QUALITY_ORIGIN=https://togetherweown.com node ci/lighthouse-quality-run.mjs --check-fixture <directory> --format json
+```
+
+Both emit one JSON object via the log seam (`schemaVersion: 1`, `profile`,
+`code`, `complete`, per-URL `rows`, `rejectionCounts`, `next_action`).
+`collection_complete` exits 0, `incomplete_collection` exits 1,
+`invalid_arguments` exits 2 before any collection or network action. Only
+top-level `lhr-*.json` files are read; nested attempt archives never fill
+quotas.
+
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
