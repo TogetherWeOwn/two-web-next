@@ -1,4 +1,5 @@
-// route-inventory: GET /events, GET /events/past
+// route-inventory: GET /events
+// route-inventory: GET /events/past
 // Acceptance: host on event cards (U3 / M266).
 //
 // Locked contract (Test Author). The Builder implements against this file;
