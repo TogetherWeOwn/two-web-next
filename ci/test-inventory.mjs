@@ -267,9 +267,10 @@ function smokeCommand(root) {
 // above: plain string literals (or arrays of them) for
 // testDir/testMatch/testIgnore, single-level `{a,b}` brace expansion,
 // `...base` spreads that resolve to a default-imported relative config, and
-// per-project overrides. RegExp testMatch, unknown `playwright test` flags,
-// dynamic imports and non-canonical paths crash loudly instead of reading
-// as reachable.
+// per-project overrides. RegExp testMatch, unknown `playwright test` flags
+// and non-canonical paths crash loudly instead of reading as reachable;
+// dynamic import specifiers are ignored as edges (a spec reachable only
+// through one is reported as an orphan).
 const PLAYWRIGHT_CHECK_ID = "playwright-spec-reachability";
 const PLAYWRIGHT_CODE_OK = "OK";
 const PLAYWRIGHT_CODE_ORPHAN = "PLAYWRIGHT_SPEC_ORPHAN";
@@ -866,7 +867,10 @@ function resolveRelativeImport(spec, importer, root) {
 
 // Static import edges out of one file: ESM `from`/`import`/`export from`,
 // plus CJS/ESM `require(`/`import(` with plain string literals. A dynamic
-// specifier fails closed: it could hide a spec edge.
+// (non-literal) specifier is not an edge: generated-asset loads such as
+// `await import(pathToFileURL(...).href)` are legitimate spec code, and the
+// gate stays fail-closed because a spec reachable only through a dynamic
+// import is reported as an orphan, not as reachable.
 //
 // Deliberately line-based with naive comment stripping, not the
 // string-aware scanner above: spec bodies hold regex literals containing
@@ -888,15 +892,6 @@ function collectSpecImports(root, file) {
     }
     return cut === -1 ? line : line.slice(0, cut);
   });
-  const stripped = lines.join("\n");
-  assert.ok(
-    !/\bimport\s*\(\s*[^'"\s)]/.test(stripped),
-    `${file} has a dynamic import() this gate cannot expand: use a plain string literal`,
-  );
-  assert.ok(
-    !/\brequire\s*\(\s*[^'"\s)]/.test(stripped),
-    `${file} has a dynamic require() this gate cannot expand: use a plain string literal`,
-  );
   const specs = new Set();
   for (const line of lines) {
     for (const re of [
@@ -1817,6 +1812,9 @@ function selftest() {
     }
   });
 
+  // A dynamic specifier is not an edge: the matched entry stays reachable
+  // (generated-asset loads are legitimate spec code), while a suite named
+  // only through a dynamic import is reported as an orphan, not reachable.
   check("playwright dynamic import fails closed", () => {
     const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
     try {
@@ -1833,9 +1831,19 @@ function selftest() {
       mkdirSync(join(dir, "e2e"), { recursive: true });
       writeFileSync(
         join(dir, "e2e", "a.spec.ts"),
-        'import { test } from "@playwright/test";\ntest("x", async () => { await import(name); });\n',
+        'import { test } from "@playwright/test";\nconst suitePath = "./suite.visual";\ntest("x", async () => { await import(suitePath); require(other); });\n',
       );
-      assert.throws(() => playwrightInventory(dir), /dynamic import/);
+      writeFileSync(
+        join(dir, "e2e", "suite.visual.ts"),
+        'import { test } from "@playwright/test";\ntest("y", async () => {});\n',
+      );
+      const { orphans, reachable } = playwrightInventory(dir);
+      assert.deepEqual(orphans, ["e2e/suite.visual.ts"]);
+      assert.ok(
+        reachable.some((r) => r.file === "e2e/a.spec.ts"),
+        "matched entry with a dynamic import should stay reachable",
+      );
+      assert.equal(playwrightJsonSummary(dir).code, "PLAYWRIGHT_SPEC_ORPHAN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
