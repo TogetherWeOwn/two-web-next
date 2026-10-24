@@ -41,6 +41,7 @@ import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { joinAttemptReturnUrl } from "./table-list";
 import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
@@ -350,7 +351,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const result = await getJoinAttempt(db, id);
     if (!result) return errorPage(c, 404, "Join attempt not found");
-    return bufferedMemberHtml(c, <JoinAttemptPage row={result.attempt} />);
+    return bufferedMemberHtml(
+      c,
+      <JoinAttemptPage row={result.attempt} returnUrl={joinAttemptReturnUrl(new URL(c.req.url))} />,
+    );
   });
 
   admin.get("/activity-log", async (c) => {

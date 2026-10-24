@@ -616,17 +616,28 @@ rows and **Previous** to return, retaining filters; **Filter** returns to page 1
 
 Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`, `rate_limited`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
-a username/substring search. Empty cells mean unavailable values, not verified
-anonymity. Source is attribution, not authenticated identity. Select an outcome
+a username/substring search. **Not recorded** means a null or blank diagnostic,
+not verified anonymity. Source is attribution, not authenticated identity. Select an outcome
 link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
-Missing request IDs appear as a dash. Detail links only resolve attempts within
-the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or join-replay control; **Retry loading** on a failed
+Nonblank values stay unchanged. Detail links only resolve attempts within
+the same 90-day window. **Back to join attempts** retains the originating outcome,
+exact-ID search and page after refresh or opening a new tab. Direct details and
+invalid return context fall back to the unfiltered first page. Only structured
+fields are carried, never a return URL: outcome is limited to 256 UTF-8 bytes,
+search to 128 code units / 512 UTF-8 bytes and the encoded context to 4096 bytes.
+Oversized context is omitted, not truncated; list/storage filter policy is unchanged.
+Duplicate, malformed or partial context is refused. URL-shaped values remain filter data.
+There is no edit, delete or join-replay control; **Retry loading** on a failed
 read only reloads this viewer. Cancelled consent, expired state
 and failures before identity exchange can record a null Discord ID; those attempts
-remain visible with an empty Discord cell (a dash in detail), without inventing a
-member subject. Request/source fields are still diagnostics, not proof of anonymity.
+remain visible as **Not recorded**, without inventing a member subject.
+Request/source fields are still diagnostics, not proof of anonymity.
+
+An empty first page distinguishes no recorded attempts in the retention window
+from no matches for active filters. An empty later page means no rows on that page,
+not an empty investigation. **First page** preserves filters; **Clear filters**
+returns to the unfiltered list. No total is inferred from an empty page.
 List and detail reads attribute every retrieved non-null Discord ID directly,
 including the list's unrendered pagination lookahead and excluding the viewer; they
 do not require a current users row or membership flag. Missing owner projections

@@ -351,7 +351,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       return response.text();
     };
     const attemptIds = (html: string) =>
-      [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)"/g)].map((m) => Number(m[1]));
+      [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)(?:\?[^"]*)?"/g)].map((m) =>
+        Number(m[1]),
+      );
     const logs = () =>
       fixture.db.select().from(memberDataAccessLogs).orderBy(memberDataAccessLogs.id);
 

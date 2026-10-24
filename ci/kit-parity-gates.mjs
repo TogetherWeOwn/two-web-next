@@ -1137,7 +1137,18 @@ export function assertJoinAttemptsContract({ label, html, headers, status, expec
     if (!html.includes(`<th scope="col">${column}</th>`))
       failures.push(`${label}: ${column} column present`);
   }
-  const hasRowLink = /href="\/admin\/join-attempts\/\d+"/.test(html);
+  // Match the whole detail destination, with optional structured context. Both
+  // renderers escape query separators; a path prefix alone is not a row link.
+  const hasRowLink = [...html.matchAll(/<a\b[^>]*\shref="([^"]*)"/g)].some(([, href]) => {
+    const detail = /^\/admin\/join-attempts\/\d+(?:\?(.+))?$/.exec(href);
+    if (!detail) return false;
+    if (!detail[1]) return true;
+    return detail[1]
+      .split(/&(?:amp;)?/)
+      .every((pair) =>
+        /^from_(?:outcome|q|page)=(?:[A-Za-z0-9_.!~*'()+-]|%[0-9A-Fa-f]{2})*$/.test(pair),
+      );
+  });
   const hasEmpty = html.includes('data-testid="join-attempts-empty"');
   if (!hasRowLink && !hasEmpty) failures.push(`${label}: attempt rows or empty state present`);
   if (!html.includes('aria-label="Join attempt pages"'))
