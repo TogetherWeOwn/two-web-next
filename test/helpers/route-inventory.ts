@@ -48,6 +48,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       (method === "POST" &&
         (path === "/events/:key/publish" ||
           path === "/events/:key/cancel" ||
+          path === "/events/:key/duplicate" ||
           path === "/events/:key/rsvp-pause" ||
           path === "/events/:key/rsvp-reopen"))
     )
