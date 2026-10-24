@@ -265,6 +265,12 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
+      - name: Calendar game subscription follows the committed schedule (intercepted fixtures, no network or DB)
+        env:
+          CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
       - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -395,6 +401,9 @@ jobs:
       - name: Kit public payload enumeration and checker selftests (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
+      - name: Security-pin contracts selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -468,6 +477,9 @@ jobs:
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
+      - name: Security-pin contracts (Host admission + CSP inline styles)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
