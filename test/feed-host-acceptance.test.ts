@@ -13,10 +13,12 @@
 // - Non-blank means `organizer_name != null` and `trim() !== ""`. Blank,
 //   whitespace-only, null or missing omits the property entirely.
 // - ICS VEVENT gains one line for non-blank hosts:
-//     ORGANIZER;CN="<escaped>":mailto:noreply@example.invalid
-//   CN is always double-quoted; inside escape `\` as `\\`, `"` as `\"` and
-//   CR/LF runs as `\n`. Comma, semicolon, colon, `<`, `>`, `&`, Unicode and
-//   200-char names round-trip literally inside the quotes. Fold with the
+//     ORGANIZER;CN="<normalized>":mailto:noreply@example.invalid
+//   CN is always double-quoted; inside `"` normalizes to `'` and runs of C0
+//   controls/DEL normalize to one space (RFC 5545 §3.1/§3.2 quoted-string is
+//   DQUOTE *QSAFE-CHAR DQUOTE with no backslash escape). Single backslash,
+//   comma, semicolon, colon, caret, `<`, `>`, `&`, Unicode and 200-char names
+//   round-trip literally inside the quotes. Fold with the
 //   existing 75-octet `fold()` so long hosts stay wire-valid. Value is always
 //   the non-routable placeholder, never member text.
 // - RSS `<item>` gains one child for non-blank hosts:
@@ -99,6 +101,12 @@ const row = (overrides: Partial<EventRow> = {}): EventRow =>
 
 const trimmed = (v: string): string => v.trim();
 
+/** Mirror of the builder CN normalization: trim, `"` to `'`, control runs to one space. */
+const normalizedCn = (v: string): string =>
+  trimmed(v)
+    .replace(/"/g, "'")
+    .replace(/[\u0000-\u001F\u007F]+/g, " ");
+
 // ---------------------------------------------------------------------------
 // Independent ICS reader: CRLF split, unfold, BEGIN/END nesting, ORGANIZER
 // params+value extraction. Hand-rolled, not the production encoder.
@@ -108,15 +116,14 @@ type IcsProp = { params: Map<string, string>; value: string };
 type IcsBlock = { name: string; props: Map<string, IcsProp[]>; children: IcsBlock[] };
 
 function decodeCnParam(raw: string): string {
-  let v = raw;
-  if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
-  // Reverse the builder escaping: \\ -> \, \" -> ", \n/\N -> newline.
-  // Order matters: backslash first via a sentinel so \\n stays literal.
-  const sentinel = "\u0000";
-  v = v.split("\\\\").join(sentinel);
-  v = v.split('\\"').join('"');
-  v = v.split("\\n").join("\n").split("\\N").join("\n");
-  return v.split(sentinel).join("\\");
+  if (!(raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')))
+    throw new Error(`CN param must be quoted: ${JSON.stringify(raw)}`);
+  const inner = raw.slice(1, -1);
+  // Strict literal extractor: QSAFE-CHAR excludes DQUOTE and controls and the
+  // grammar defines no backslash escape, so neither may appear. No decoding.
+  if (/["\u0000-\u001F\u007F]/.test(inner))
+    throw new Error(`CN param holds a forbidden char: ${JSON.stringify(raw)}`);
+  return inner;
 }
 
 function parseIcsParams(raw: string): Map<string, string> {
@@ -128,7 +135,13 @@ function parseIcsParams(raw: string): Map<string, string> {
   let quoted = false;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i]!;
-    if (ch === '"') quoted = !quoted;
+    if (ch === '"') {
+      // A DQUOTE while quoted closes the value, so it must end the params or
+      // precede the next `;`-param; anything else is a stray quote.
+      if (quoted && i + 1 < raw.length && raw[i + 1] !== ";")
+        throw new Error(`Stray DQUOTE in ICS params: ${JSON.stringify(raw)}`);
+      quoted = !quoted;
+    }
     if (ch === ";" && !quoted) {
       parts.push(cur);
       cur = "";
@@ -159,7 +172,18 @@ function parseIcs(body: string): IcsBlock {
   const root: IcsBlock = { name: "#root", props: new Map(), children: [] };
   const stack: IcsBlock[] = [root];
   for (const line of logical) {
-    const colon = line.indexOf(":");
+    // The value colon is the first `:` outside quoted params, so a colon
+    // inside a quoted CN (e.g. `A:B`) never splits the property early.
+    let colon = -1;
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (ch === '"') inQuotes = !inQuotes;
+      else if (ch === ":" && !inQuotes) {
+        colon = i;
+        break;
+      }
+    }
     expect(colon, `property without value: ${JSON.stringify(line)}`).toBeGreaterThan(0);
     const head = line.slice(0, colon);
     const semi = head.indexOf(";");
@@ -310,7 +334,7 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
       // RED on unpatched head: no ORGANIZER property is emitted.
       expect(org, "VEVENT must carry ORGANIZER for a non-blank host").toBeDefined();
       expect(org!.value).toBe(ICS_PLACEHOLDER);
-      expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(PLAIN);
+      expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(normalizedCn(PLAIN));
       // UID keeps its host suffix; ORGANIZER is the only mailto:.
       expect(events[0]!.props.get("UID")?.[0]?.value.endsWith(HOST_SUFFIX)).toBe(true);
       expect(body.split(ICS_PLACEHOLDER).length - 1).toBe(1);
@@ -359,7 +383,7 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
       const org = organizerOf(vevent!);
       expect(org, `ORGANIZER missing for ${_label}`).toBeDefined();
       expect(org!.value).toBe(ICS_PLACEHOLDER);
-      expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(trimmed(name));
+      expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(normalizedCn(name));
       // Always quoted so commas/semicolons/colons survive param parsing.
       const unfolded = body.replace(/\r\n[ \t]/g, "");
       const line = unfolded.split("\r\n").find((l) => l.startsWith("ORGANIZER"))!;
@@ -368,6 +392,46 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
       expect(unfolded.split("mailto:").length - 1).toBe(1);
     },
   );
+
+  it("pins quote/newline normalization as literals (apostrophe, single space)", () => {
+    for (const [name, literal] of [
+      [HTML_SHAPED, `<b>Host</b> & 'Friends' <script>alert(1)</script>`],
+      [NEWLINE, "Line1 Line2"],
+    ] as const) {
+      const body = eventIcs(row({ organizer_name: name }), APP_URL);
+      const [vevent] = vevents(parseIcs(body));
+      const org = organizerOf(vevent!);
+      expect(org, "ORGANIZER missing for literal-pin check").toBeDefined();
+      const decoded = decodeCnParam(org!.params.get("CN") ?? "");
+      expect(decoded).toBe(normalizedCn(name));
+      expect(decoded).toBe(literal);
+    }
+  });
+
+  it.each([
+    ["dquote", `Ada "Host" Lovelace`, "Ada 'Host' Lovelace"],
+    ["backslash", "A\\B", "A\\B"],
+    ["colon", "A:B", "A:B"],
+    ["caret", "A^nB", "A^nB"],
+  ])("normalizes %s organizer: exact CN via the strict decoder", (_label, name, expected) => {
+    const body = eventIcs(row({ organizer_name: name }), APP_URL);
+    const [vevent] = vevents(parseIcs(body));
+    const org = organizerOf(vevent!);
+    expect(org, `ORGANIZER missing for ${_label}`).toBeDefined();
+    expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(expected);
+    // Raw-byte check on the unfolded ORGANIZER line: the CN section holds no
+    // DQUOTE beyond its delimiters and no control characters.
+    const unfolded = body.replace(/\r\n[ \t]/g, "");
+    const line = unfolded.split("\r\n").find((l) => l.startsWith("ORGANIZER"))!;
+    expect(line.startsWith('ORGANIZER;CN="')).toBe(true);
+    expect(line.endsWith(`":${ICS_PLACEHOLDER}`)).toBe(true);
+    const cnSection = line.slice(
+      'ORGANIZER;CN="'.length,
+      line.length - `":${ICS_PLACEHOLDER}`.length,
+    );
+    expect(cnSection.includes('"')).toBe(false);
+    expect(/[\u0000-\u001F\u007F]/.test(cnSection)).toBe(false);
+  });
 
   it("keeps each VEVENT host independent in a mixed collection (present, blank, unicode)", () => {
     const body = eventsIcsCollection(
@@ -384,12 +448,12 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
     const byUid = new Map(events.map((v) => [v.props.get("UID")?.[0]?.value, v]));
     const first = organizerOf(byUid.get(`${KEY_A}${HOST_SUFFIX}`)!);
     expect(first, "ORGANIZER missing for first mixed host").toBeDefined();
-    expect(decodeCnParam(first!.params.get("CN") ?? "")).toBe(PLAIN);
+    expect(decodeCnParam(first!.params.get("CN") ?? "")).toBe(normalizedCn(PLAIN));
     expect(first!.value).toBe(ICS_PLACEHOLDER);
     expect(byUid.get(`${KEY_B}${HOST_SUFFIX}`)!.props.get("ORGANIZER")).toBeUndefined();
     const third = organizerOf(byUid.get(`${KEY_C}${HOST_SUFFIX}`)!);
     expect(third, "ORGANIZER missing for third mixed host").toBeDefined();
-    expect(decodeCnParam(third!.params.get("CN") ?? "")).toBe(UNICODE);
+    expect(decodeCnParam(third!.params.get("CN") ?? "")).toBe(normalizedCn(UNICODE));
     expect(third!.value).toBe(ICS_PLACEHOLDER);
     // Unfold first: folded long hosts split the placeholder across lines.
     const unfoldedMixed = body.replace(/\r\n[ \t]/g, "");
@@ -569,11 +633,11 @@ describe("feed host: routes carry the host (pg-proxy, parser-validated)", () => 
     expect(events).toHaveLength(2);
     const first = organizerOf(events[0]!);
     expect(first, "ORGANIZER missing on /events.ics first VEVENT").toBeDefined();
-    expect(decodeCnParam(first!.params.get("CN") ?? "")).toBe(PLAIN);
+    expect(decodeCnParam(first!.params.get("CN") ?? "")).toBe(normalizedCn(PLAIN));
     expect(first!.value).toBe(ICS_PLACEHOLDER);
     const second = organizerOf(events[1]!);
     expect(second, "ORGANIZER missing on /events.ics second VEVENT").toBeDefined();
-    expect(decodeCnParam(second!.params.get("CN") ?? "")).toBe(COMMA);
+    expect(decodeCnParam(second!.params.get("CN") ?? "")).toBe(normalizedCn(COMMA));
     expect(f.query).toHaveBeenCalledTimes(1);
   });
 
@@ -591,7 +655,7 @@ describe("feed host: routes carry the host (pg-proxy, parser-validated)", () => 
     const org = organizerOf(events[0]!);
     expect(org, "ORGANIZER missing on per-event ICS").toBeDefined();
     expect(org!.value).toBe(ICS_PLACEHOLDER);
-    expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(SEMICOLON);
+    expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(normalizedCn(SEMICOLON));
     expect(f.query).toHaveBeenCalledTimes(1);
   });
 
@@ -698,7 +762,7 @@ describe("feed host: routes carry the host (pg-proxy, parser-validated)", () => 
     expect(served.status).toBe(200);
     const org = organizerOf(vevents(parseIcs(await served.text()))[0]!);
     expect(org, "ORGANIZER missing on canonical redirect target").toBeDefined();
-    expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(PLAIN);
+    expect(decodeCnParam(org!.params.get("CN") ?? "")).toBe(normalizedCn(PLAIN));
     for (const path of [`/events/${KEY_B}.ics`, "/events/nope.ics"]) {
       const res = await f.request(path);
       expect(res.status, path).toBe(404);
