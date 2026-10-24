@@ -213,13 +213,6 @@ const lineup = $derived(
           {/if}
         </dd>
       </div>
-    {/if}{#if model.series && model.series.hosts.length > 0}
-      <div>
-        <dt>Series hosts</dt>
-        <dd>
-          <p data-testid="event-series-hosts">{model.series.hosts.join(", ")}</p>
-        </dd>
-      </div>
     {:else}
       <!-- Venue-less detail names the gap instead of hiding the row; list cards stay clean. -->
       <div>
@@ -228,6 +221,14 @@ const lineup = $derived(
           <p data-testid="event-venue-tbd">
             Venue TBD — check <a href="/discord">Discord</a> for updates.
           </p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.series && model.series.hosts.length > 0}
+      <div>
+        <dt>Series hosts</dt>
+        <dd>
+          <p data-testid="event-series-hosts">{model.series.hosts.join(", ")}</p>
         </dd>
       </div>
     {/if}
