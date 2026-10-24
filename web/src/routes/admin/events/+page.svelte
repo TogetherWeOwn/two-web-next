@@ -5,6 +5,8 @@ import {
   editUrlWithOrigin,
   eventListUrl,
   INVENTORY_RETURN_PARAM,
+  eventListHasFilters,
+  eventListClearUrl,
   type EventSort,
 } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -95,6 +97,11 @@ const now = new Date();
     <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
+    {#if eventListHasFilters(query)}
+      <div class="field">
+        <a href={eventListClearUrl(query)}>Clear filters</a>
+      </div>
+    {/if}
   </form>
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
@@ -168,6 +175,11 @@ const now = new Date();
       </tbody>
     </table>
   </div>
+  {#if rows.length === 0 && query.page > 1}
+    <p>
+      <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
+    </p>
+  {/if}
   <nav aria-label="Event pages" class="actions">
     {#if query.page > 1}
       <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a>
