@@ -102,16 +102,101 @@ function decodeEntities(value) {
     .replace(/&amp;/g, "&");
 }
 
+// Tag-name boundary after "<script" / "</script": only whitespace, "/" or ">"
+// ends the name, so "<scripts>" never matches. Quotes do not end a tag name
+// (the HTML parser keeps them in the name), so "<script"x">" is not a script
+// element either.
+function isTagNameBoundary(ch) {
+  return (
+    ch === undefined ||
+    ch === ">" ||
+    ch === "/" ||
+    ch === " " ||
+    ch === "\t" ||
+    ch === "\n" ||
+    ch === "\f" ||
+    ch === "\r"
+  );
+}
+
+// Offset just past the ">" of a "<script ...>" open tag at i, or -1 when the
+// position holds no script open tag. Case-insensitive on the element name only.
+function matchScriptOpen(html, i) {
+  if (html.slice(i, i + 7).toLowerCase() !== "<script") return -1;
+  if (!isTagNameBoundary(html[i + 7])) return -1;
+  const end = html.indexOf(">", i + 7);
+  return end === -1 ? -1 : end + 1;
+}
+
+function indexOfTag(html, tag, from) {
+  let i = from;
+  for (;;) {
+    i = html.indexOf("<", i);
+    if (i === -1 || i + tag.length > html.length) return -1;
+    if (html.slice(i, i + tag.length).toLowerCase() === tag) return i;
+    i += 1;
+  }
+}
+
+// Offset just past a script element's end tag: the first "</script" with a tag
+// boundary after it, through its ">". End tags may carry whitespace or
+// attributes ("</script foo>" still closes the element); without any end tag
+// the script runs to end of input, the way browsers parse it.
+function skipScriptBody(html, from) {
+  let at = from;
+  for (;;) {
+    const close = indexOfTag(html, "</script", at);
+    if (close === -1) return html.length;
+    const after = close + "</script".length;
+    if (!isTagNameBoundary(html[after])) {
+      at = after;
+      continue;
+    }
+    const end = html.indexOf(">", after);
+    return end === -1 ? html.length : end + 1;
+  }
+}
+
+// The document with HTML comments and script elements removed, found with an
+// explicit scanner instead of filter regexes. A comment runs to the first
+// "-->"; an unterminated comment runs to end of input, the way browsers
+// parse it.
+function stripNonRendered(html) {
+  const kept = [];
+  let runStart = 0;
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    let skipTo = -1;
+    if (html[i] === "<") {
+      if (html.startsWith("<!--", i)) {
+        const end = html.indexOf("-->", i + 4);
+        skipTo = end === -1 ? n : end + 3;
+      } else {
+        const body = matchScriptOpen(html, i);
+        if (body !== -1) skipTo = skipScriptBody(html, body);
+      }
+    }
+    if (skipTo === -1) {
+      i += 1;
+    } else {
+      if (i > runStart) kept.push(html.slice(runStart, i));
+      i = skipTo;
+      runStart = skipTo;
+    }
+  }
+  if (n > runStart) kept.push(html.slice(runStart));
+  return kept.join("");
+}
+
 // Raw anchor hrefs in document order. Anchors inside HTML comments and script
-// text are not real links, so those regions are removed before scanning. The
+// text are not real links, so those regions are skipped before scanning. The
 // first href attribute on an <a> tag wins, matching browser behavior; lookalike
 // attributes such as data-href never match because "data-" sits between the
 // whitespace and "href".
 function rawHrefs(html) {
   const text = typeof html === "string" ? html : "";
-  const visible = text
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "");
+  const visible = stripNonRendered(text);
   const out = [];
   for (const tag of visible.matchAll(/<a\b[^>]*>/gi)) {
     const attr = tag[0].match(/\s+href\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
