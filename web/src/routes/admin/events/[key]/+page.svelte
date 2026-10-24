@@ -226,11 +226,19 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
     <p data-testid="roster-range">
-      Showing {roster.rangeStart}-{roster.rangeEnd} of {roster.total}
+      {roster.rangeText}
     </p>
     <form method="get" action={roster.searchAction} class="filters">
       <input type="hidden" name="roster_sort" value={roster.query.sort} />
       <input type="hidden" name="roster_order" value={roster.query.order} />
+      <div class="field">
+        <label for="roster-status">Answer status</label>
+        <select id="roster-status" name="roster_status">
+          {#each roster.statusOptions as o (o.value)}
+            <option value={o.value} selected={o.selected}>{o.label}</option>
+          {/each}
+        </select>
+      </div>
       <div class="field">
         <label for="roster-q">Search members</label>
         <input id="roster-q" name="roster_q" type="search" value={roster.query.q} />
@@ -281,6 +289,12 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </tbody>
       </table>
     </div>
+    {#if roster.firstUrl || roster.clearUrl}
+      <p class="actions">
+        {#if roster.firstUrl}<a href={roster.firstUrl}>First page of these responses</a>{/if}
+        {#if roster.clearUrl}<a href={roster.clearUrl}>Clear roster filters</a>{/if}
+      </p>
+    {/if}
     <nav aria-label="RSVP roster pages" class="actions">
       {#if roster.hasPrev}
         <a rel="prev" href={roster.prevUrl}>Previous</a>
