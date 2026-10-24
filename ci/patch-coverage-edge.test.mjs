@@ -7,16 +7,94 @@ import { test } from "node:test";
 import { lineCoverage, parseDiff, score } from "./patch-coverage.mjs";
 
 for (const [header, file] of [
-  ["b/src/space name.ts", "src/space name.ts"],
+  // Real Git appends one TAB terminator to space-containing +++ headers.
+  ["b/src/space name.ts\t", "src/space name.ts"],
   [String.raw`"b/src/\303\251.ts"`, "src/é.ts"],
   [String.raw`"b/src/a\tname.ts"`, "src/a\tname.ts"],
   [String.raw`"b/src/a\\name.ts"`, "src/a\\name.ts"],
+  [String.raw`"b/src/\303\251 space.ts"` + "\t", "src/é space.ts"],
 ]) {
   test(`quoted/space path header: ${JSON.stringify(file)}`, () => {
     const added = parseDiff(
       `diff --git a/old b/new\n--- a/old\n+++ ${header}\n@@ -1 +1 @@\n---counter;\n+++counter;\n`,
     );
     assert.deepEqual([...added], [[file, new Set([1])]]);
+  });
+}
+
+function runStrictJsonOnScratchRepo(t, filename) {
+  const root = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "patch-coverage-space-"),
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = {
+    PATH: process.env.PATH,
+    HOME: "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  const git = (...args) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Coverage Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        ...args,
+      ],
+      { cwd: root, env, stdio: "pipe", timeout: 5000 },
+    );
+  mkdirSync(join(root, "ci"));
+  copyFileSync(
+    new URL("./patch-coverage.mjs", import.meta.url),
+    join(root, "ci/patch-coverage.mjs"),
+  );
+  git("init", "--quiet");
+  git("add", ".");
+  git(
+    "commit",
+    "--quiet",
+    "-m",
+    "test: fixture base\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>",
+  );
+  git("branch", "fixture-base");
+  mkdirSync(dirname(join(root, filename)), { recursive: true });
+  writeFileSync(join(root, filename), "work();\n");
+  git("add", ".");
+  git(
+    "commit",
+    "--quiet",
+    "-m",
+    "test: fixture patch\n\nCo-Authored-By: Paperclip <noreply@paperclip.ing>",
+  );
+  mkdirSync(join(root, "coverage"));
+  writeFileSync(join(root, "coverage/coverage-final.json"), "{}");
+  const result = spawnSync(
+    process.execPath,
+    [join(root, "ci/patch-coverage.mjs"), "--strict", "--json", "--base", "fixture-base"],
+    { cwd: root, env, encoding: "utf8", timeout: 5000 },
+  );
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+for (const filename of ["src/space name.ts", "src/é space.ts"]) {
+  test(`real-Git strict CLI scores uncovered space path: ${filename}`, (t) => {
+    const result = runStrictJsonOnScratchRepo(t, filename);
+    assert.equal(result.status, 1, result.stderr);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.verdict, "FAIL");
+    assert.equal(receipt.error_code, null);
+    assert.equal(receipt.total, 1);
+    assert.equal(receipt.hit, 0);
+    assert.deepEqual(receipt.added, [`${filename}:1`]);
+    assert.deepEqual(receipt.missed, [`${filename}:1`]);
   });
 }
 

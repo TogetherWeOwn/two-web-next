@@ -139,8 +139,9 @@ No `--dry-run` is needed or accepted: all modes are already read-only.
 
 - Hunk counts distinguish metadata from source: `+++counter` is an added
   `++counter` statement inside a hunk, and `---counter` consumes only the old
-  side. File/hunk changes, context, Git-quoted paths and no-newline markers
-  preserve new-side line numbers.
+  side. File/hunk changes, context, Git-quoted paths, the single TAB
+  terminator Git appends to space-containing `+++` headers, and no-newline
+  markers preserve new-side line numbers.
 - In a present file, only statement **start** lines enter the denominator.
   Any positive statement hit on that line covers it. Other added lines
   (including type-only lines, blanks and braces) are `skipped`, not missed.

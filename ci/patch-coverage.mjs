@@ -27,7 +27,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FLOOR = 80;
 
 // Git C-quotes paths containing control/non-ASCII bytes, including octal UTF-8.
+// Space-containing +++ headers carry one trailing TAB terminator that is not
+// part of the path; strip exactly one before decoding so the real path scores.
 function diffPath(header) {
+  if (header.endsWith("\t")) header = header.slice(0, -1);
   let path = header;
   if (header.startsWith('"')) {
     const bytes = [];
