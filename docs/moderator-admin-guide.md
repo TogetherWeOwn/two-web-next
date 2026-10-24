@@ -570,14 +570,18 @@ Retyping a bound to minute precision narrows it on purpose.
 
 ### Preview and safe editing
 
-The edit page shows a **Homepage preview** panel: the last saved content,
-checked at the printed UTC time. Pressing **Create** or **Save** refreshes it.
-Typed-but-unsaved edits never appear there, and neither do rejected
-submissions: after a failed save the form keeps the submitted values for
-correction while the preview still shows the last saved row. The new-slot page
-has no preview. When the slot is not currently visible, the panel says so
-instead of rendering the slot. An inline preview is not proof of guest homepage
-delivery: verify the homepage as a guest after an authorized change.
+The edit page shows a **Homepage preview** panel with two parts. **Saved
+content preview** renders the last saved card — headline, body, admitted link
+and image — for every saved status, unpublished included, checked at the
+printed UTC time. **Homepage eligibility** separately reports the status badge,
+the reason (publication off, starts in the future, window ended, or eligible)
+and the saved UTC window bounds; an absent bound means the window is open on
+that side. Pressing **Create** or **Save** refreshes both. Typed-but-unsaved
+edits never appear in the card, and neither do rejected submissions: after a
+failed save the form keeps the submitted values for correction while the card
+and eligibility still show the last saved row. The new-slot page has no
+preview. Neither part is proof of guest homepage delivery: verify the homepage
+as a guest after an authorized change.
 
 Follow one coherent workflow per approved change:
 
