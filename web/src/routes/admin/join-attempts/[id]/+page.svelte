@@ -19,10 +19,6 @@ let { data }: PageProps = $props();
 const view = $derived(data.view);
 </script>
 
-<svelte:head>
-  <title>Join attempt {view.id} — TWO admin</title>
-</svelte:head>
-
 <AdminShell title={`Join attempt ${view.id}`} restoredWrite={data.restoredWrite}>
 <section aria-labelledby="join-attempt-heading">
   <p>

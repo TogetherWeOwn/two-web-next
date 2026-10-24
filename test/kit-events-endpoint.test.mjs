@@ -117,6 +117,8 @@ beforeEach(() => {
       emptyState: null,
       robots: undefined,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
     })),
     render: vi.fn(renderEventsHtml),
   };

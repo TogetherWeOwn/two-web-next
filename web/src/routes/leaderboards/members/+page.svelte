@@ -1,14 +1,16 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../../src/seo";
+import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
+const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
-const destination = (nextScope: string) => {
+const destination = (nextScope: string, nextSeason = season) => {
   const params = new URLSearchParams();
-  if (season !== "all") params.set("season", season);
+  if (nextSeason !== "all") params.set("season", nextSeason);
   if (nextScope !== "overall") params.set("scope", nextScope);
   if (activity !== null) params.set("activity", activity);
   const query = params.toString();
@@ -44,6 +46,11 @@ const destination = (nextScope: string) => {
       <li><a href={destination("overall")} aria-current={scope === "overall" ? "page" : undefined}>Overall</a></li>
       <li><a href={destination("relative")} aria-current={scope === "relative" ? "page" : undefined}>Around you</a></li>
     </ul>
+  </nav>
+  <nav class="schedule-views board-periods" aria-label="Board period">
+    <a href={destination(scope, periods.month)} aria-current={season === periods.month ? "page" : undefined}>This month</a>
+    <a href={destination(scope, periods.quarter)} aria-current={season === periods.quarter ? "page" : undefined}>This quarter</a>
+    <a href={destination(scope, "all")} aria-current={season === "all" ? "page" : undefined}>All time</a>
   </nav>
   <form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
     {#if scope !== "overall"}<input type="hidden" name="scope" value={scope} />{/if}

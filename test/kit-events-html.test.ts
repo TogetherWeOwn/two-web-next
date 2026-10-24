@@ -8,9 +8,10 @@ import {
 } from "../src/islands/contracts";
 
 const baseData = () => ({
-  state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", game: null, past: false, page: 1 },
   upcoming: [],
   past: [],
+  games: [],
   zone: "Europe/London",
   now: new Date("2026-10-13T12:00:00Z"),
   totalPages: 1,
@@ -56,7 +57,7 @@ describe("Kit events list HTML render", () => {
     const rendered = await renderEventsHtml(
       {
         ...baseData(),
-        state: { view: "calendar", month: "2026-10", q: "", past: false, page: 1 },
+        state: { view: "calendar", month: "2026-10", q: "", game: null, past: false, page: 1 },
         emptyState: null,
       } as never,
       headers,

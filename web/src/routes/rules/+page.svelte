@@ -2,6 +2,7 @@
 import ContentLeaf from "#lib/ContentLeaf.svelte";
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../src/seo";
+import { RULES_INTRO } from "../../../../src/rules-content";
 import type { PageProps } from "./$types";
 
 // Markup contract of Rules (src/screens/rules.tsx): the same test ids, copy,
@@ -15,7 +16,6 @@ import type { PageProps } from "./$types";
 // text while Hono JSX collapses it, so only compact markup renders the same
 // bytes (same precedent as the archive page).
 let { data }: PageProps = $props();
-const { appUrl, rules, lastUpdated, leafCss } = $derived(data);
 </script>
 
 <svelte:head>
@@ -25,16 +25,17 @@ const { appUrl, rules, lastUpdated, leafCss } = $derived(data);
 {#snippet accountJoin()}<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>{/snippet}
 <Shell
   title="House rules"
-  canonical={canonicalUrl(appUrl, "/rules")}
+  canonical={canonicalUrl(data.appUrl, "/rules")}
   theme="content"
-  {leafCss}
+  leafCss={data.leafCss}
   accountChrome={accountJoin}
   restoredWrite={data.restoredWrite}
 >
   <ContentLeaf navCurrent="rules" headingId="rules-heading" heading="House rules">
-    <p class="lead">Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.</p>
-    {#if lastUpdated}<p data-testid="rules-last-updated" class="strap">Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time></p>{/if}
-    <ol data-testid="rules-list" class="facts">{#each rules as [name, body] (name)}<li class="card"><h2>{name}</h2><p>{body}</p></li>{/each}</ol>
+    <p class="lead">{RULES_INTRO}</p>
+    {#if data.lastUpdated}<p data-testid="rules-last-updated" class="strap">Last updated <time datetime={data.lastUpdated.iso}>{data.lastUpdated.label}</time></p>{/if}
+    <nav aria-label="Jump to a rule" data-testid="rules-jump"><p class="strap">Jump to a rule</p><ul class="jump">{#each data.rules as [name, , id] (id)}<li><a href={`#${id}`}>{name}</a></li>{/each}</ul></nav>
+    <ol data-testid="rules-list" class="facts rules">{#each data.rules as [name, body, id] (id)}<li class="card"><h2 id={id}>{name}</h2><p>{body}</p><a class="rule-permalink" href={`#${id}`} aria-label={`Permalink to rule: ${name}`}>Permalink</a></li>{/each}</ol>
     <p><a class="btn" href="/join" data-testid="rules-join">Join with Discord</a>{" "}<a href="/">Back to the homepage</a></p>
   </ContentLeaf>
 </Shell>

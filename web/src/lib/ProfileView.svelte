@@ -1,7 +1,6 @@
 <script lang="ts">
 import {
   MEMBER_PROFILE_ISLAND,
-  MOUNT_ATTR,
   PROFILE_AVATAR_TESTID,
   PROFILE_CANCEL_TESTID,
   PROFILE_COPY,
@@ -50,7 +49,7 @@ import type { MemberStats } from "../../../src/profiles/stats";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
-import { canonicalUrl } from "../../../src/seo";
+import { canonicalUrl, shareImageUrl } from "../../../src/seo";
 
 // Markup contract of ProfilePage (src/profiles/pages.tsx): the header bar,
 // test ids and copy are shared, so the existing profile tests and islands
@@ -139,10 +138,15 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
   <meta property="og:url" content={canonical} />
   <meta property="og:title" content={title} />
   <meta property="og:description" content={PROFILE_SHARE_DESCRIPTION} />
+  <meta property="og:image" content={shareImageUrl(canonical)} />
+  <meta property="og:image:alt" content="Together We Own community logo" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content={title} />
   <meta name="twitter:description" content={PROFILE_SHARE_DESCRIPTION} />
   <link rel="alternate" type="application/rss+xml" title="Together We Own Events" href="/events.rss" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/theme.css" />
+  <link rel="stylesheet" href="/profile-theme.css" />
 </svelte:head>
 <!-- Open Lobby chrome: colours resolve through web/src/app.css semantic
   tokens; the profile theme class matches the Hono Layout theme. -->
@@ -333,7 +337,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
         class="profile-panel profile-editor"
         aria-labelledby="edit-heading"
         data-testid={PROFILE_EDIT_TESTID}
-        {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
+        data-island={MEMBER_PROFILE_ISLAND}
         data-member-id={member.id}
         data-saved-bio={saved.bio}
         data-saved-games-text={saved.games_text}

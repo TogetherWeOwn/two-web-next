@@ -34,6 +34,7 @@ let {
   <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>
 
+<div class="kit-admin">
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="bar">
   <a class="brand" href="/admin">TWO admin</a>
@@ -51,3 +52,4 @@ let {
 </header>
 <main id="main" tabindex="-1">{#if restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}{@render children()}</main>
 <footer>Together We Own · moderators only</footer>
+</div>

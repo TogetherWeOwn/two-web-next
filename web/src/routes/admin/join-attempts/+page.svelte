@@ -15,18 +15,19 @@ import type { PageProps } from "./$types";
 // No <script> island: the Hono viewer ships no JavaScript, so this page
 // carries none either (csr=false comes from the admin group layout).
 let { data }: PageProps = $props();
-const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $derived(data);
+const query = $derived(data.query);
+const outcomes = $derived(
+  query.outcome !== "" && !data.outcomes.includes(query.outcome)
+    ? [...data.outcomes, query.outcome]
+    : data.outcomes,
+);
 </script>
-
-<svelte:head>
-  <title>Join attempts — TWO admin</title>
-</svelte:head>
 
 <AdminShell title="Join attempts" restoredWrite={data.restoredWrite}>
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
   <p class="hint">
-    Read-only. Last {retentionDays} days, newest first. Search is an exact Discord id or request id.
+    Read-only. Last {data.retentionDays} days, newest first. Search is an exact Discord id or request id.
   </p>
   <form method="get" action="/admin/join-attempts" class="filters">
     <div class="field">
@@ -39,9 +40,6 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
         {#each ["", ...outcomes] as o (o)}
           <option value={o} selected={o === query.outcome}>{o === "" ? "All" : o}</option>
         {/each}
-        {#if query.outcome !== "" && !outcomes.includes(query.outcome)}
-          <option value={query.outcome} selected>{query.outcome}</option>
-        {/if}
       </select>
     </div>
     <div class="field">
@@ -69,36 +67,34 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
         </tr>
       </thead>
       <tbody>
-        {#if rows.length === 0}
+        {#each data.rows as r (r.id)}
+          <tr>
+            <td>
+              <a
+                href={`/admin/join-attempts/${r.id}`}
+                aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a
+              >
+            </td>
+            <td>{r.source ?? ""}</td>
+            <td>{r.discordId ?? ""}</td>
+            <td>{r.requestId ?? ""}</td>
+            <td>{r.createdAt}</td>
+          </tr>
+        {:else}
           <tr>
             <td colspan={5} data-testid="join-attempts-empty">No join attempts.</td>
           </tr>
-        {:else}
-          {#each rows as r (r.id)}
-            <tr>
-              <td>
-                <a
-                  href={`/admin/join-attempts/${r.id}`}
-                  aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a
-                >
-              </td>
-              <td>{r.source ?? ""}</td>
-              <td>{r.discordId ?? ""}</td>
-              <td>{r.requestId ?? ""}</td>
-              <td>{r.createdAt}</td>
-            </tr>
-          {/each}
-        {/if}
+        {/each}
       </tbody>
     </table>
   </div>
   <nav aria-label="Join attempt pages" class="actions">
-    {#if prevUrl}
-      <a rel="prev" href={prevUrl}>Previous</a>
+    {#if data.prevUrl}
+      <a rel="prev" href={data.prevUrl}>Previous</a>
     {/if}
     <span>Page {query.page}</span>
-    {#if hasNext && nextUrl}
-      <a rel="next" href={nextUrl}>Next</a>
+    {#if data.hasNext && data.nextUrl}
+      <a rel="next" href={data.nextUrl}>Next</a>
     {/if}
   </nav>
 </section>
