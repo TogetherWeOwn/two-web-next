@@ -36,11 +36,13 @@ function gameOptions(html: string) {
     /\bname="game"/.test(m[1]!),
   );
   expect(select, "Archive needs a native, named game select").toBeDefined();
-  return [...select![2]!.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/g)].map((m) => ({
-    value: decode(/\bvalue="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!),
-    selected: /\bselected(?:[\s=>]|$)/.test(m[1]!),
-    label: decode(m[2]!.replace(/<!--[\s\S]*?-->/g, "").trim()),
-  }));
+  return [...select![2]!.matchAll(/<option\b((?:"[^"]*"|[^>])*)>([\s\S]*?)<\/option>/g)].map(
+    (m) => ({
+      value: decode(/\bvalue="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!),
+      selected: /\bselected(?:[\s=>]|$)/.test(m[1]!),
+      label: decode(m[2]!.replace(/<!--[\s\S]*?-->/g, "").trim()),
+    }),
+  );
 }
 const totalPages = (html: string) => Number(/\bdata-total-pages="(\d+)"/.exec(html)?.[1]);
 
