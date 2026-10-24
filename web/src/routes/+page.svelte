@@ -77,6 +77,11 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     </p>
   {:else if noticeText}
     <p class="notice" role="status" data-testid="notice">{noticeText}</p>
+    {#if notice === "signin_failed" || notice === "signin_unavailable"}
+      <p>
+        <a href="/auth/discord" data-testid="notice-retry">Try signing in again</a>
+      </p>
+    {/if}
   {/if}
   <section class="hero" aria-labelledby="home-heading">
     <div class="hero-detail hero-detail-left" aria-hidden="true">
@@ -230,10 +235,13 @@ const siteGraph = $derived(siteJsonLd(appUrl));
         </h3>
         <p>
           {#if eventsUnavailable}
-            We couldn’t load the schedule. The Discord is still open — check there for the next
-            game night.
+            We couldn’t load the schedule.
+            <a href="/discord" data-testid="home-events-empty-link">The Discord</a>
+            is still open — check there for the next game night.
           {:else}
-            Game nights get posted here. Join the Discord and you’ll hear about the next one.
+            Game nights get posted here.
+            <a href="/join" data-testid="home-events-empty-link">Join the Discord</a>
+            and you’ll hear about the next one.
           {/if}
         </p>
       </div>
