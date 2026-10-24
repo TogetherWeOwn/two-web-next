@@ -1,20 +1,21 @@
 # Combined board-caption and profile-composition budget
 
-Measured 2026-10-22; refreshed 2026-10-23. This is a budget-only prerequisite for
+Measured 2026-10-22; refreshed 2026-10-24. This is a budget-history prerequisite for
 [#1493](https://github.com/TogetherWeOwn/two-web-next/pull/1493), not approval
 of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the seventh base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `e5ca18422`;
+**Current decision after the fifteenth base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `509cb40a7`;
 earlier proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
-the client fits **251904/101632 B**, but that union breaches server gzip and file
-count. The seventh reconciliation verifies the actual prerequisite tree only,
-not a new feature union. Neither this client decision nor the prerequisite-tree
-build releases the source feature's server HOLD or proves it is ready to merge.
+that client fits, but that union breaches server gzip and file count. The
+[fifteenth reconciliation](#fifteenth-base-conflict-reconciliation-retain-accessibility-history-limits-unchanged)
+verifies the actual prerequisite tree only, not a new feature union. Neither
+this client decision nor the prerequisite-tree build releases the source
+feature's server HOLD or proves it is ready to merge.
 
 ## Inputs and method
 
@@ -1035,7 +1036,7 @@ result; the ASCII JSON encoding matches main. Against pinned main the budget
 diff is one additive comment line; every non-comment value stays identical.
 All other main-side source, test, lockfile, configuration and evidence changes
 are retained verbatim. The original client increase stays withdrawn. The
-historical per-file TSV is unchanged.
+historical per-file TSV is unchanged by this reconciliation.
 
 This is history reconciliation, not refreshed feature-union admission. No
 frozen-feature overlay was built or feature ref changed. The last repeated
