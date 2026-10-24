@@ -45,8 +45,8 @@
 // - Kit view (SSR-compiled real ProfileView): the sharedGames prop marks per
 //   the HTML contract, stays plain without it, escapes HTML-shaped shared
 //   names, and keeps the empty copy; one wiring test feeds a model outcome
-//   into the view props. Source pins cover the +page.server/+page forwarding
-//   the root suite cannot execute.
+//   into the view props. Real +page.server loads and +page SSR execute the
+//   forwarding chain, with source-expression pins as secondary controls.
 //
 // Hermetic only: memory session/profile stores plus the real member-read
 // boundary (Hono) and memberReadResponse (Kit) — faithful classified reads,
@@ -348,6 +348,10 @@ describe("Hono shared-games highlight (RED)", () => {
     expect(new Set(ids), "no read beyond member + viewer").toEqual(
       new Set([MEMBER.userId, VIEWER.userId]),
     );
+    expect(ids, "exactly one member read followed by exactly one viewer read").toEqual([
+      MEMBER.userId,
+      VIEWER.userId,
+    ]);
   });
 });
 
@@ -411,7 +415,8 @@ describe("Hono shared-games highlight (GUARD: preserved behavior)", () => {
   });
 
   it("GUARD: a member with no games keeps the existing empty copy verbatim", async () => {
-    const { app, sessions } = harness(["Chess"], []);
+    const { app, sessions, store } = harness(["Chess"], []);
+    const find = vi.spyOn(store, "find");
     const res = await app.request(
       `/members/${MEMBER.userId}`,
       { headers: { cookie: await cookieFor(sessions, VIEWER) } },
@@ -422,6 +427,10 @@ describe("Hono shared-games highlight (GUARD: preserved behavior)", () => {
     expect(gamesBlock(html)).toContain(PROFILE_EMPTY_COPY.gamesOther);
     expect(gameItems(gamesBlock(html))).toHaveLength(0);
     expectNoMarkers(html, "member games empty");
+    expect(
+      find.mock.calls.map((call) => call[0]),
+      "empty games need only the member row",
+    ).toEqual([MEMBER.userId]);
   });
 
   it("GUARD: guests bounce with no game text and no markers", async () => {
@@ -526,11 +535,17 @@ describe("Kit shared-games model (RED + GUARD)", () => {
       depsFor([], ["Chess"]),
     );
     expect(sharedOf(viewerEmpty)).toEqual([]);
+    const emptyDeps = depsFor(["Chess"], []);
+    const find = vi.spyOn(emptyDeps.store, "find");
     const memberEmpty = await resolveKitProfile(
       { session: memberSession(VIEWER.userId), requestedId: MEMBER.userId, joinResult: null },
-      depsFor(["Chess"], []),
+      emptyDeps,
     );
     expect(sharedOf(memberEmpty)).toEqual([]);
+    expect(
+      find.mock.calls.map((call) => call[0]),
+      "empty games need only the member row",
+    ).toEqual([MEMBER.userId]);
   });
 
   it("RED: the model reads the viewer's own row once, nothing beyond member + viewer", async () => {
@@ -546,6 +561,10 @@ describe("Kit shared-games model (RED + GUARD)", () => {
     expect(new Set(ids), "no read beyond member + viewer").toEqual(
       new Set([MEMBER.userId, VIEWER.userId]),
     );
+    expect(ids, "exactly one member read followed by exactly one viewer read").toEqual([
+      MEMBER.userId,
+      VIEWER.userId,
+    ]);
   });
 
   it("GUARD: self reads keep a single store read", async () => {
@@ -639,7 +658,12 @@ const { compile } = webRequire("svelte/compiler") as {
 };
 
 type RenderView = (props: Record<string, unknown>) => { html: string; head: string };
+type RenderRoute = (
+  route: "profile" | "member",
+  viewerId: string,
+) => Promise<{ html: string; reads: string[]; sharedGames: string[] }>;
 let renderView: RenderView;
+let renderRoute: RenderRoute;
 
 const viewProps = (memberGames: string[], sharedGames?: string[]): Record<string, unknown> => ({
   member: memberRow(MEMBER.userId, MEMBER.username, memberGames),
@@ -655,49 +679,117 @@ describe("Kit shared-games view (RED + GUARD)", () => {
   beforeAll(async () => {
     const worktree = fileURLToPath(new URL("../", import.meta.url));
     const scratch = mkdtempSync(join(tmpdir(), "kit-shared-games-"));
-    const entry = join(scratch, "kit-shared-games-entry.mjs");
-    writeFileSync(
-      entry,
-      `
+    try {
+      const entry = join(scratch, "kit-shared-games-entry.mjs");
+      writeFileSync(
+        entry,
+        `
 import { render } from "svelte/server";
 import View from ${JSON.stringify(join(worktree, "web/src/lib/ProfileView.svelte"))};
+import ProfilePage from ${JSON.stringify(join(worktree, "web/src/routes/profile/+page.svelte"))};
+import MemberPage from ${JSON.stringify(join(worktree, "web/src/routes/members/[user]/+page.svelte"))};
+import * as profile from ${JSON.stringify(join(worktree, "web/src/routes/profile/+page.server.ts"))};
+import * as member from ${JSON.stringify(join(worktree, "web/src/routes/members/[user]/+page.server.ts"))};
+import { configure, reads } from "acceptance:shared-games-deps";
 export function renderView(props) {
   const { body, head } = render(View, { props });
   return { html: head + body, head };
 }
+export async function renderRoute(route, viewerId) {
+  configure();
+  const page = route === "profile" ? profile : member;
+  const data = await page.load({
+    locals: {
+      status: "authenticated",
+      session: { userId: viewerId, username: "viewer", avatar: null, member: true, moderator: false },
+      joinResult: null,
+    },
+    params: { user: ${JSON.stringify(MEMBER.userId)} },
+    url: new URL(route === "profile" ? "/profile" : "/members/" + ${JSON.stringify(MEMBER.userId)}, ${JSON.stringify(APP_URL)}),
+    setHeaders() {},
+  });
+  const { body, head } = render(route === "profile" ? ProfilePage : MemberPage, { props: { data } });
+  return { html: head + body, reads: [...reads], sharedGames: data.sharedGames };
+}
 `,
-    );
-    const outfile = join(scratch, "kit-shared-games.mjs");
-    await build({
-      entryPoints: [entry],
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      outfile,
-      logLevel: "warning",
-      absWorkingDir: worktree,
-      nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
-      plugins: [
-        {
-          name: "kit-shared-games-svelte-ssr",
-          setup(plugin) {
-            plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-              const source = readFileSync(args.path, "utf8");
-              const { js } = compile(source, {
-                generate: "server",
-                dev: false,
-                filename: args.path,
+      );
+      const outfile = join(scratch, "kit-shared-games.mjs");
+      await build({
+        entryPoints: [entry],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        outfile,
+        logLevel: "warning",
+        absWorkingDir: worktree,
+        tsconfig: join(worktree, "tsconfig.json"),
+        nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
+        plugins: [
+          {
+            name: "kit-shared-games-svelte-ssr",
+            setup(plugin) {
+              // Only external env/store/stats wiring is replaced. The model,
+              // both route loads, both route pages and ProfileView stay real.
+              plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+                path: "env",
+                namespace: "fixture",
+              }));
+              plugin.onResolve({ filter: /^acceptance:shared-games-deps$/ }, () => ({
+                path: "deps",
+                namespace: "fixture",
+              }));
+              plugin.onResolve({ filter: /\/src\/profiles\/kit$/ }, (args) =>
+                args.importer.endsWith("+page.server.ts")
+                  ? { path: "deps", namespace: "fixture" }
+                  : undefined,
+              );
+              plugin.onLoad({ filter: /.*/, namespace: "fixture" }, (args) => ({
+                resolveDir: worktree,
+                contents:
+                  args.path === "env"
+                    ? `export const env = { APP_URL: ${JSON.stringify(APP_URL)} };`
+                    : `
+export { resolveKitProfile } from ${JSON.stringify(join(worktree, "src/profiles/kit.ts"))};
+import { createMemoryProfileStore } from ${JSON.stringify(join(worktree, "src/profiles/store.ts"))};
+export const reads = [];
+let store;
+export function configure() {
+  reads.length = 0;
+  store = createMemoryProfileStore(${JSON.stringify([
+    memberRow(MEMBER.userId, MEMBER.username, ["Chess", "Go"]),
+    memberRow(VIEWER.userId, VIEWER.username, ["Go"]),
+  ])});
+}
+export function kitProfileDeps() {
+  return {
+    async storeFor() {
+      return { ...store, async find(id) { reads.push(id); return store.find(id); } };
+    },
+    async statsFor() { return null; },
+  };
+}
+`,
+              }));
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const source = readFileSync(args.path, "utf8");
+                const { js } = compile(source, {
+                  generate: "server",
+                  dev: false,
+                  filename: args.path,
+                });
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
               });
-              return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-            });
+            },
           },
-        },
-      ],
-    });
-    ({ renderView } = (await import(pathToFileURL(outfile).href)) as {
-      renderView: RenderView;
-    });
-    rmSync(scratch, { recursive: true, force: true });
+        ],
+      });
+      ({ renderView, renderRoute } = (await import(pathToFileURL(outfile).href)) as {
+        renderView: RenderView;
+        renderRoute: RenderRoute;
+      });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }, 120000);
 
   it("RED: the sharedGames prop marks exactly the shared entries per the HTML contract", () => {
@@ -763,6 +855,29 @@ export function renderView(props) {
     expectMarked(items[1]!, "Go");
   });
 
+  it("RED: real members loader and route page forward the shared marker into SSR", async () => {
+    const result = await renderRoute("member", VIEWER.userId);
+    const items = gameItems(gamesBlock(result.html));
+    expect(items.map((item) => itemGameName(item.inner))).toEqual(["Chess", "Go"]);
+    expectUnmarked(items[0]!, "Chess");
+    expectMarked(items[1]!, "Go");
+    expect(result.sharedGames, "the real loader forwards the model outcome").toEqual(["Go"]);
+    expect(result.reads).toEqual([MEMBER.userId, VIEWER.userId]);
+  });
+
+  it.each(["profile", "member"] as const)(
+    "GUARD: real %s loader and route page keep owner SSR marker-free",
+    async (route) => {
+      const result = await renderRoute(route, MEMBER.userId);
+      const items = gameItems(gamesBlock(result.html));
+      expect(items.map((item) => itemGameName(item.inner))).toEqual(["Chess", "Go"]);
+      for (const item of items) expectUnmarked(item, itemGameName(item.inner));
+      expectNoMarkers(result.html, `Kit ${route} owner`);
+      expect(result.sharedGames).toEqual([]);
+      expect(result.reads).toEqual([MEMBER.userId]);
+    },
+  );
+
   it("GUARD: without the sharedGames prop the list stays plain", () => {
     const { html } = renderView(viewProps(["Chess", "Go"]));
     const items = gameItems(gamesBlock(html));
@@ -803,12 +918,18 @@ describe("Kit shared-games wiring (RED source pins)", () => {
       ["profile +page.server.ts", profileServer],
     ] as const) {
       expect(source, `${label} returns outcome.sharedGames`).toContain("sharedGames");
+      expect(source, `${label} forwards the outcome value, not an empty list`).toMatch(
+        /sharedGames\s*:\s*outcome\.sharedGames\b/,
+      );
     }
     for (const [label, source] of [
       ["members +page.svelte", memberPage],
       ["profile +page.svelte", profilePage],
     ] as const) {
       expect(source, `${label} forwards data.sharedGames`).toContain("sharedGames");
+      expect(source, `${label} forwards the loaded value, not an empty list`).toMatch(
+        /sharedGames\s*=\s*\{\s*data\.sharedGames\s*\}/,
+      );
     }
     expect(view, "ProfileView consumes sharedGames").toContain("sharedGames");
     expect(view, "ProfileView renders the shared hook").toContain("data-shared-game");
