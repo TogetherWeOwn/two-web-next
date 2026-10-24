@@ -1,11 +1,14 @@
 <script lang="ts">
 import { fmt } from "../../../src/events/pages";
-import type { PublicEvent } from "../../../src/events/reads";
+import type { PastArchiveEvent } from "../../../src/kit-past-events";
 import { goingCountText } from "../../../src/islands/contracts";
 
 // Same markup contract as Card in src/events/pages.tsx, including the
-// schedule-row chrome and the month/day date badge.
-let { e }: { e: PublicEvent } = $props();
+// schedule-row chrome and the month/day date badge. The prop is the
+// anonymous-safe slice the past load projects (never the full row), so a
+// new rendered field fails typecheck here instead of silently widening the
+// __data.json payload.
+let { e }: { e: PastArchiveEvent } = $props();
 
 function dateParts(date: Date, zone: string): { month?: string; day?: string } {
   let parts: Intl.DateTimeFormatPart[];
