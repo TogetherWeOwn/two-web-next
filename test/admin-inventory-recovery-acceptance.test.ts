@@ -254,9 +254,7 @@ for (const renderer of renderers) {
           expect(result.probe.queries[0]!.sql).toContain('"events"."game" ilike');
         }
         expect(result.probe.queries[0]!.params).toEqual(
-          inventory === "events"
-            ? ["%missing%", "%missing%", 26, 2150]
-            : ["%missing%", 26, 2150],
+          inventory === "events" ? ["%missing%", "%missing%", 26, 2150] : ["%missing%", 26, 2150],
         );
         expect(result.probe.transactions).toBe(1);
         expect(result.probe.executions).toHaveLength(1);
