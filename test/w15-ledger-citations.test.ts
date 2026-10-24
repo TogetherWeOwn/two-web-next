@@ -120,8 +120,8 @@ describe("w15 acceptance-ledger lifecycle row", () => {
     expect(row!, "no lifecycle citation may dangle past the store barrel").not.toMatch(
       /src\/admin\/store\.ts:\d+/,
     );
-    expect(row!).toContain("src/admin/store-event-writes.ts:509-567");
-    expect(row!).toContain("src/admin/store-event-writes.ts:570-621");
+    expect(row!).toContain("src/admin/store-event-writes.ts:600-658");
+    expect(row!).toContain("src/admin/store-event-writes.ts:661-712");
     const writes = read("src/admin/store-event-writes.ts").split("\n");
     const transitionStart = writes.findIndex((line) =>
       line.includes("export async function transitionEvent"),

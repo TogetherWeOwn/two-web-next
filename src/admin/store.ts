@@ -18,6 +18,8 @@ export type { FeaturedEditRow, FeaturedRow } from "./store-featured";
 export { type Actor, NotFoundError, StaleBaselineError } from "./store-shared";
 export {
   createEvent,
+  duplicateEvent,
+  duplicateTitle,
   materializeMissingInstances,
   materializeRecurringSeries,
   mergePatchInput,

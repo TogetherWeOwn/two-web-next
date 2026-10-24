@@ -35,11 +35,15 @@ import { EventHostJoinFields, EventNotesField } from "./pages/event-host-join-fi
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
+  ROSTER_STATUSES,
   rosterEmptyText,
+  rosterRangeText,
+  rosterRecovery,
   rosterUrl,
   type ListParams,
   type RosterQuery,
   type RosterSort,
+  type RosterStatus,
   type SortOrder,
 } from "./table-list";
 import { utcToWall } from "./validation-wall-time";
@@ -81,16 +85,30 @@ export type KitEventEditSortHeader = {
   marker: string;
 };
 
+/** One native answer-facet option, mirroring the Hono roster select exactly. */
+export type KitEventEditStatusOption = {
+  value: RosterStatus;
+  label: string;
+  selected: boolean;
+};
+
 export type KitEventEditRosterView = {
   total: number;
   query: RosterQuery;
   entries: KitEventEditRosterEntry[];
   rangeStart: number;
   rangeEnd: number;
+  /** Shared Hono/Kit range copy: matching responses, never seats or attendance. */
+  rangeText: string;
+  /** Native answer-facet options in Hono order: All first, then each status. */
+  statusOptions: KitEventEditStatusOption[];
   hasPrev: boolean;
   hasNext: boolean;
   prevUrl: string | null;
   nextUrl: string | null;
+  /** Scoped recovery, exactly like the Hono section; null while rows render. */
+  clearUrl: string | null;
+  firstUrl: string | null;
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
@@ -236,6 +254,7 @@ export async function resolveKitEventEdit(
     join_url: row.join_url ?? "",
     join_instructions: row.join_instructions ?? "",
   };
+  const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
   return {
     kind: "ok",
     view: {
@@ -288,10 +307,18 @@ export async function resolveKitEventEdit(
         entries,
         rangeStart,
         rangeEnd,
+        rangeText: rosterRangeText(rangeStart, rangeEnd, roster.total),
+        statusOptions: ROSTER_STATUSES.map((o) => ({
+          value: o.value,
+          label: o.label,
+          selected: o.value === query.status,
+        })),
         hasPrev,
         hasNext,
         prevUrl: hasPrev ? rosterUrl(row.eventKey, query, { page: query.page - 1 }) : null,
         nextUrl: hasNext ? rosterUrl(row.eventKey, query, { page: query.page + 1 }) : null,
+        clearUrl: recovery.clearUrl,
+        firstUrl: recovery.firstUrl,
         emptyText:
           entries.length === 0
             ? roster.total > 0

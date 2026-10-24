@@ -971,7 +971,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster: [],
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(draft).not.toContain('data-testid="rsvp-pause"');
@@ -984,7 +984,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster: [],
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(open).toContain('data-testid="rsvp-pause"');
@@ -996,7 +996,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster: [],
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(closed).toContain('data-testid="rsvp-reopen"');
@@ -1011,7 +1011,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster: [],
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(ended).not.toContain('data-testid="rsvp-pause"');
@@ -1023,7 +1023,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster: [],
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(cancelled).not.toContain('data-testid="publish-event"');
@@ -1072,7 +1072,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         values: {},
         errors: {},
         roster,
-        rosterQuery: { q: "", sort: "answered", order: "desc", page: 1 },
+        rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
       }),
     );
     expect(html).toContain("Unknown member");

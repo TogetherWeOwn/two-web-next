@@ -61,10 +61,16 @@ describe("admin table query state (no DB)", () => {
   });
 
   it("defaults and allowlists roster sort/order independently of event parameters", () => {
-    expect(parseRosterQuery({})).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    expect(parseRosterQuery({})).toEqual({
+      q: "",
+      status: "",
+      sort: "answered",
+      order: "desc",
+      page: 1,
+    });
     expect(
       parseRosterQuery({ roster_q: "  Alice  ", roster_sort: "status", roster_order: "asc" }),
-    ).toEqual({ q: "Alice", sort: "status", order: "asc", page: 1 });
+    ).toEqual({ q: "Alice", status: "", sort: "status", order: "asc", page: 1 });
     expect(
       parseRosterQuery({
         q: "wrong",
@@ -72,9 +78,10 @@ describe("admin table query state (no DB)", () => {
         roster_sort: injection,
         roster_order: injection,
       }),
-    ).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    ).toEqual({ q: "", status: "", sort: "answered", order: "desc", page: 1 });
     expect(parseRosterQuery({ roster_page: "3" })).toEqual({
       q: "",
+      status: "",
       sort: "answered",
       order: "desc",
       page: 3,

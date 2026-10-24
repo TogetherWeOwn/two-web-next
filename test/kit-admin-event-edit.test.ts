@@ -213,11 +213,18 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(list).toHaveBeenCalledWith(db, "EVTPAST01", {
       q: "",
+      status: "",
       sort: "answered",
       order: "desc",
       page: 1,
     });
-    expect(outcome.view.roster.query).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    expect(outcome.view.roster.query).toEqual({
+      q: "",
+      status: "",
+      sort: "answered",
+      order: "desc",
+      page: 1,
+    });
   });
 
   it("clamps hostile paging and sort input to the bounded page-one read", async () => {
@@ -233,6 +240,7 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     );
     expect(list).toHaveBeenCalledWith(db, "EVTPAST01", {
       q: "",
+      status: "",
       sort: "answered",
       order: "desc",
       page: 1,

@@ -65,7 +65,8 @@ export function dirty<T extends Record<string, unknown>>(
   for (const [k, v] of Object.entries(after)) {
     if (AUDIT_EXCLUDE.has(k)) continue;
     const b = before[k];
-    const norm = (x: unknown) => (x instanceof Date ? x.toISOString() : (x ?? null));
+    // JSON represents an unrenderable stored date as null, including on repair.
+    const norm = (x: unknown) => (x instanceof Date ? x.toJSON() : (x ?? null));
     if (JSON.stringify(norm(b)) !== JSON.stringify(norm(v)))
       out[k] = { before: norm(b), after: norm(v) };
   }
