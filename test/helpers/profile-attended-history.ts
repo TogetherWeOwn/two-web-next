@@ -396,7 +396,24 @@ export async function runLoad(event, seam) { configure(seam); return load(event)
  */
 export function normalizeProfileHtml(html: string, renderer: Renderer): string {
   const pinned = html.replace(/(name="formOpenedAt" value=")[^"]+/, "$1<pinned>");
-  return renderer === "Kit" ? pinned.replace(/<!--[\s\S]*?-->/g, "") : pinned;
+  return renderer === "Kit" ? stripHtmlComments(pinned) : pinned;
+}
+
+/**
+ * Token walk instead of a comment regex: the close search starts after
+ * `<!--` and an unterminated `<!--` is kept verbatim.
+ */
+function stripHtmlComments(html: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const open = html.indexOf("<!--", i);
+    if (open < 0) return out + html.slice(i);
+    out += html.slice(i, open);
+    const close = html.indexOf("-->", open + 4);
+    if (close < 0) return out + html.slice(open);
+    i = close + 3;
+  }
 }
 
 export async function createAttendedHistoryHarness() {
