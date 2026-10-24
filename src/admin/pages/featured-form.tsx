@@ -1,9 +1,11 @@
 // Admin featured-form screen: new and edit (split from pages.tsx; zero behavior change).
 
+import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { safeStoredLink } from "../../featured";
 import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
+import { adminSaveStatus } from "../save-status";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
@@ -138,6 +140,7 @@ export const FeaturedFormPage: FC<{
             <a href="/admin/featured">Cancel</a>
           </div>
         </form>
+        {raw(adminSaveStatus)}
         {mode === "edit" ? (
           <form method="post" action={`/admin/featured/${row!.id}/delete`}>
             <div class="actions">
