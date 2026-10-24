@@ -147,7 +147,11 @@ describe("Kit events list response parity", () => {
   });
 
   it("skips the session store read for cookie-bearing requests", async () => {
-    const sessionFor = vi.fn(async () => ({ username: "kit-member", member: true, moderator: false }));
+    const sessionFor = vi.fn(async () => ({
+      username: "kit-member",
+      member: true,
+      moderator: false,
+    }));
     const withCookie = () =>
       request("https://example.test/events", { headers: { cookie: "session=opaque" } });
     let renders = 0;
