@@ -43,7 +43,7 @@
     "floor-guard": "node ci/floor-guard.mjs",
     "floor-guard:selftest": "node --test ci/floor-guard.test.mjs",
     "patch:coverage": "node ci/patch-coverage.mjs",
-    "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest",
+    "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest && node --test ci/patch-coverage-acceptance.test.mjs ci/patch-coverage-edge.test.mjs",
     "test:inventory": "node ci/test-inventory.mjs",
     "test:inventory:selftest": "node ci/test-inventory.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
