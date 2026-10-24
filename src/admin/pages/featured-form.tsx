@@ -7,7 +7,9 @@ import {
   FEATURED_OPEN_END_COPY,
   FEATURED_OPEN_START_COPY,
   FEATURED_WINDOW_RULES_COPY,
+  featuredBoundDisplay,
   featuredEligibilityReason,
+  type FeaturedBoundDisplay,
 } from "../../featured-eligibility";
 import { FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
@@ -16,9 +18,15 @@ import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
+function savedBoundView(display: FeaturedBoundDisplay | null, openCopy: string) {
+  if (display?.kind === "instant") return <time datetime={display.iso}>{display.iso}</time>;
+  if (display?.kind === "text") return display.text;
+  return openCopy;
+}
+
 export const FeaturedFormPage: FC<{
   mode: "new" | "edit";
-  row?: FeaturedRow;
+  row?: FeaturedRow & { startsAtText?: string | null; endsAtText?: string | null };
   values: Record<string, unknown>;
   errors: Record<string, string>;
   now?: Date;
@@ -28,6 +36,8 @@ export const FeaturedFormPage: FC<{
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
+  const startBound = row ? featuredBoundDisplay(row.startsAt, row.startsAtText) : null;
+  const endBound = row ? featuredBoundDisplay(row.endsAt, row.endsAtText) : null;
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section class="featured-form">
@@ -62,19 +72,9 @@ export const FeaturedFormPage: FC<{
             </p>
             <p>{featuredEligibilityReason(row, now)}</p>
             <p>
-              Saved window (UTC): show from{" "}
-              {row.startsAt ? (
-                <time datetime={row.startsAt.toISOString()}>{row.startsAt.toISOString()}</time>
-              ) : (
-                FEATURED_OPEN_START_COPY
-              )}
+              Saved window (UTC): show from {savedBoundView(startBound, FEATURED_OPEN_START_COPY)}
               {", "}
-              show until{" "}
-              {row.endsAt ? (
-                <time datetime={row.endsAt.toISOString()}>{row.endsAt.toISOString()}</time>
-              ) : (
-                FEATURED_OPEN_END_COPY
-              )}
+              show until {savedBoundView(endBound, FEATURED_OPEN_END_COPY)}
               {". "}
               {FEATURED_WINDOW_RULES_COPY}
             </p>

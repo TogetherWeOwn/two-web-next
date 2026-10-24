@@ -31,3 +31,32 @@ export const FEATURED_OPEN_START_COPY = "no start time — the window has no low
 export const FEATURED_OPEN_END_COPY = "no end time — the slot does not expire";
 export const FEATURED_WINDOW_RULES_COPY =
   "The saved start is inclusive and the saved end is exclusive.";
+
+export type FeaturedBoundDisplay =
+  | { kind: "open" }
+  | { kind: "instant"; iso: string }
+  | { kind: "text"; text: string };
+
+/**
+ * Saved window bound for the edit-panel display.
+ *
+ * Finite decoded Dates render as UTC ISO instants (the `<time datetime>`
+ * value the saved-preview contract parses). Driver-undecodable bounds — BC
+ * eras and infinities, which Date decoding cannot represent
+ * (src/admin/store-featured.ts keeps the exact SQL text for them) — fall back
+ * to that exact text so the panel never throws: a render throw inside the
+ * member-read boundary answers 503. Null stays open.
+ */
+export function featuredBoundDisplay(
+  bound: Date | null,
+  exactText: string | null | undefined,
+): FeaturedBoundDisplay {
+  if (bound instanceof Date && Number.isFinite(bound.getTime())) {
+    return { kind: "instant", iso: bound.toISOString() };
+  }
+  if (typeof exactText === "string" && exactText !== "") {
+    return { kind: "text", text: exactText };
+  }
+  if (bound === null) return { kind: "open" };
+  return { kind: "text", text: String(bound) };
+}

@@ -10,13 +10,16 @@
 // non-canonical spelling 404s before any record lookup), the same shared
 // getFeatured read, the same featuredValues shape for the form, and the same
 // shared featuredStatus()/currentlyVisible() preview the Hono edit page
-// renders. Dates cross into the view pre-rendered as UTC ISO strings. The
+// renders. Dates cross into the view pre-rendered as UTC ISO strings, with
+// the exact saved SQL text alongside for driver-undecodable bounds (BC,
+// infinity). The
 // POST /admin/featured/:id and POST /admin/featured/:id/delete siblings and
 // the guarded /admin/featured-contents/:id/edit legacy redirect stay
 // Hono-owned, so this model carries no write.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
+import { featuredBoundDisplay } from "../featured-eligibility";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
@@ -44,6 +47,9 @@ export type KitFeaturedEditView = {
   visible: boolean;
   startsAt: string | null;
   endsAt: string | null;
+  /** Exact saved SQL text of each bound (null when open); the panel shows it when the instant is undecodable (BC, infinity). */
+  startsAtText: string | null;
+  endsAtText: string | null;
   updatedAt: string;
   /** Evaluation instant featuredStatus() ran at (Hono prints now, not updatedAt). */
   checkedAt: string;
@@ -107,6 +113,11 @@ export async function resolveKitFeaturedEdit(
   // stored-link policy so the preview cannot link what the homepage hides.
   // The form value below stays raw so the moderator can correct the link.
   const previewUrl = safeStoredLink({ url: row.url }).url;
+  // BC and infinite bounds decode to Dates toISOString() cannot render; the
+  // shared display helper keeps the ISO for finite instants and falls back to
+  // the exact saved text so the load never throws on them.
+  const startBound = featuredBoundDisplay(row.startsAt, row.startsAtText);
+  const endBound = featuredBoundDisplay(row.endsAt, row.endsAtText);
   return {
     kind: "ok",
     view: {
@@ -125,8 +136,10 @@ export async function resolveKitFeaturedEdit(
       },
       status: featuredStatus(row, now),
       visible: currentlyVisible(row, now),
-      startsAt: row.startsAt ? row.startsAt.toISOString() : null,
-      endsAt: row.endsAt ? row.endsAt.toISOString() : null,
+      startsAt: startBound.kind === "instant" ? startBound.iso : null,
+      endsAt: endBound.kind === "instant" ? endBound.iso : null,
+      startsAtText: row.startsAtText ?? null,
+      endsAtText: row.endsAtText ?? null,
       updatedAt: row.updatedAt.toISOString(),
       checkedAt: now.toISOString(),
       imageSrc,

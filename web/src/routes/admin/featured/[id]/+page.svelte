@@ -73,9 +73,9 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     <p>{featuredEligibilityReasonFor(data.view.status)}</p>
     <p>
       Saved window (UTC): show from
-      {#if data.view.startsAt}<time datetime={data.view.startsAt}>{data.view.startsAt}</time>{:else}{FEATURED_OPEN_START_COPY}{/if},
+      {#if data.view.startsAt}<time datetime={data.view.startsAt}>{data.view.startsAt}</time>{:else if data.view.startsAtText}{data.view.startsAtText}{:else}{FEATURED_OPEN_START_COPY}{/if},
       show until
-      {#if data.view.endsAt}<time datetime={data.view.endsAt}>{data.view.endsAt}</time>{:else}{FEATURED_OPEN_END_COPY}{/if}.
+      {#if data.view.endsAt}<time datetime={data.view.endsAt}>{data.view.endsAt}</time>{:else if data.view.endsAtText}{data.view.endsAtText}{:else}{FEATURED_OPEN_END_COPY}{/if}.
       {FEATURED_WINDOW_RULES_COPY}
     </p>
   </section>
