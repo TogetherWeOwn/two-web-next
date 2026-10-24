@@ -21,6 +21,7 @@
 .events-page .schedule-date strong{font-size:2.5rem;font-variant-numeric:tabular-nums}
 .events-page .schedule-info :is(h2, h3){font-size:1.6rem;margin:0;}
 .events-page .schedule-info p{margin:.4rem 0 0;}
+.events-page .schedule-description[open] .schedule-excerpt{display:none;}
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
 .events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
 .events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
@@ -54,7 +55,7 @@
 .events-page [data-archive-state] { overflow-wrap: anywhere; }
 .events-page [data-archive-pager] { display: flex; flex-wrap: wrap; gap: 1.5rem; }
 .events-page .subscription-help{margin:1rem 0;padding:.75rem 1rem;border:1px solid var(--line);}
-.events-page .subscription-help summary{min-height:44px;}
+.events-page summary{min-height:44px;}
 .events-page .subscription-copy{display:flex;flex-wrap:wrap;gap:.5rem;}
 .events-page .subscription-copy [hidden]{display:none;}
 .events-page .subscription-copy input{flex:1 1 20rem;min-width:0;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);padding:.5rem;}
