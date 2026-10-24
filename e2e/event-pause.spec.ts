@@ -163,12 +163,13 @@ test("paused event refuses RSVPs with the paused reason, then reopens", async ({
     await expect(page.getByTestId("rsvp-paused")).toBeVisible();
 
     // The moderator reopens through the admin form; the detail page offers
-    // Pause again.
+    // the pause review again (the final Pause submit stays hidden inside the
+    // closed review until a moderator opens it).
     await admin.getByTestId("rsvp-reopen").click();
     await expect(
       admin.getByRole("heading", { name: "Status: published", exact: true }),
     ).toBeVisible();
-    await expect(admin.getByTestId("rsvp-pause")).toBeVisible();
+    await expect(admin.getByTestId("rsvp-pause-review")).toBeVisible();
 
     // The reopen persists across reload: the paused notice is gone and the
     // going control is back.
