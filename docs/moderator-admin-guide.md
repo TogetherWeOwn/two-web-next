@@ -158,8 +158,29 @@ bounds expire with the transaction without changing pooled connection defaults.
 If an inventory statement times out, the read transaction rolls back before
 the existing private, no-store 503 outage response is returned. A refused
 inventory never renders as an empty list: wait briefly, then reload the page.
+On a Kit admin read error, **Retry loading** repeats the current GET, keeping its
+filters and page. It does not resubmit a form or retry automatically. Missing-row
+404 pages keep their list/dashboard exits instead; malformed page state also
+falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
+
+## Recover an empty event or featured list
+
+On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
+search or filter is applied, even when rows are visible. It clears all filters
+and returns to page 1 while keeping the current sort and direction. It does
+not change any event or featured slot.
+
+A successful empty page 1 says **No events yet.** or **No featured content yet.**
+when unfiltered, or says no content matches the filters when filtered. Use
+**Clear filters** to broaden a no-match search.
+
+An empty page after page 1 says **No results on this page.** This does not mean
+the whole inventory is empty. Choose **First page of these results** to keep
+the current filters and sort and return directly to page 1; **Previous** still
+moves back one page. Both recovery links work by keyboard and without JavaScript.
+An unavailable read is still an outage, not an empty list; follow the guidance above.
 
 ## Correct a rejected draft
 
@@ -369,6 +390,30 @@ leave-page warning for unsaved changes (including after a rejected Save).
   recurrence fields afterward. Escalate needs outside the visible controls
   instead of invoking other APIs.
 
+### How cancelled events read on the public schedule
+
+Cancelled events stay listed so members can see what changed; the listing is
+informational, never an invitation. What both moderators and members see:
+
+- The list card keeps its title, scheduled time range, location, and a
+  **Cancelled** badge. The title is plain text: the detail page answers 410,
+  so there is intentionally no link to follow.
+- The card shows **no sign-in or RSVP invitation**. The general
+  **Join the Discord** navigation stays: joining the community is still
+  possible, answering the cancelled event is not.
+- The retained count reads **N existing responses**: answers members left
+  before cancellation. It is not attendance, not available places, and not a
+  reason to attend. Capacity is not shown on cancelled cards.
+- Month-grid entries carry the same **Cancelled** badge word in text (never
+  color alone) and name the cancellation to assistive technology. The entry
+  still jumps to the retained list card; like the card title, it never links
+  to the 410 detail page.
+
+To notify the people behind the existing responses, use the read-only RSVP
+roster for planning and the [event cancellation and reschedule communication
+checklist](events-communications.md) for the message. Do not report the
+existing-responses count as attendance.
+
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
@@ -559,7 +604,7 @@ and **Attempted** (UTC). It shows up to **100 rows per page** from the last
 **90 days**, newest first, not every server join or sign-in. Use **Next** for older
 rows and **Previous** to return, retaining filters; **Filter** returns to page 1.
 
-Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`) and
+Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`, `rate_limited`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
 a username/substring search. Empty cells mean unavailable values, not verified
 anonymity. Source is attribution, not authenticated identity. Select an outcome
@@ -567,7 +612,8 @@ link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
 Missing request IDs appear as a dash. Detail links only resolve attempts within
 the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or retry control. Cancelled consent, expired state
+page. There is no edit, delete or join-replay control; **Retry loading** on a failed
+read only reloads this viewer. Cancelled consent, expired state
 and failures before identity exchange can record a null Discord ID; those attempts
 remain visible with an empty Discord cell (a dash in detail), without inventing a
 member subject. Request/source fields are still diagnostics, not proof of anonymity.
@@ -602,8 +648,8 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content** and **Activity log** cards plus
-these diagnostic sections when their data is available:
+`/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
+cards plus these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -686,6 +732,7 @@ through the approved private support process.
 | Report | Moderator response |
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
+| RSVP seat, waitlist, pending mirror or uncertain write | Follow [RSVP states and safe recovery](rsvp-recovery.md). Pending sync is not a failed reservation; an unknown result needs a refreshed event read before another write. For this support report collect only the sanitized page path, exact visible sentence and approximate time/timezone through the approved private support process. Do not request roster/member exports, callback queries, cookies, headers or credentials, or attempt manual SQL or queue replay. |
 | **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Copy the Support reference from the page into the incident report. Do not repeatedly click or bypass the limit. |
 | **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Order is guard, then cap, then throttle: sign-in and moderator role still come first (a guest redirect or 403 takes precedence), but the cap runs before the write throttle, so an oversized body answers 413 even when the budget is spent, and 429 applies only to bodies at or under the cap. |
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording, Support reference and time. Do not guess the cause. |

@@ -14,13 +14,22 @@ import {
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import { requestBodyLimit } from "../body-limit";
+import { exceptionClass } from "../alerts";
 import type { Env, Session } from "../env";
+import { createRateLimitedWarn } from "../log-budget";
 import { safeRequestId } from "../request-log";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { eventKeyAllowed } from "./keys";
 import { getPublicEvent, withGoingCount } from "./reads";
-import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
+import {
+  body,
+  dbUnavailableJson,
+  eventJson,
+  type App,
+  type Ctx,
+  type SessionReader,
+} from "./routes-shared";
 import { SESSION_COOKIE } from "../session-cookie";
 import { isValidSessionToken } from "../sessions";
 
@@ -62,15 +71,38 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
 
-async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
+// Malformed-body warns share one bucket: a body-spraying prober emits at
+// most burst warns, then one shed per window, instead of one line per 422.
+// 415s (admission refusal before the body is read) and well-formed
+// validation 422s stay silent and spend nothing.
+const malformedLog = createRateLimitedWarn({ shedLine: "event.write.shed" });
+
+async function eventBody(c: Pick<Ctx, "req" | "get">): Promise<Record<string, unknown>> {
   // Event edits must not turn malformed/non-object JSON into an empty PATCH.
   // Keep the RSVP trap's permissive body parsing independent of this admission:
   // a form body that fails to parse is a 422 here, never an empty edit that
   // gets written, audited, and re-synced to Discord.
   const contentType = c.req.header("content-type");
+  // Malformed-body warn fields: the refused content-type plus the exception
+  // class only, never body bytes. The 422 shapes below are unchanged.
+  const warnMalformed = (exception: string): void => {
+    const requestId = safeRequestId(c.get("requestId"));
+    malformedLog.warn("event.write.malformed_body", {
+      exception,
+      content_type: mediaType(contentType),
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  };
   if (isJsonMediaType(contentType)) {
-    const input: unknown = await c.req.json().catch(() => null);
+    let parseError: unknown;
+    const input: unknown = await c.req.json().catch((err) => {
+      parseError = err;
+      return null;
+    });
     if (!input || typeof input !== "object" || Array.isArray(input)) {
+      // A parse failure carries its real class (usually SyntaxError); a
+      // well-formed non-object body carries TypeError (expected an object).
+      warnMalformed(parseError !== undefined ? exceptionClass(parseError) : "TypeError");
       throw new ValidationError({ body: "Send a JSON object." });
     }
     return input as Record<string, unknown>;
@@ -78,7 +110,8 @@ async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> 
   if (isFormMediaType(contentType)) {
     try {
       return await body(c, { onMalformedForm: "throw" });
-    } catch {
+    } catch (err) {
+      warnMalformed(exceptionClass(err));
       throw new ValidationError({ body: "Send a valid form body." });
     }
   }
@@ -116,7 +149,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
-      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      if (!db) return dbUnavailableJson(c);
       try {
         const { row } = await createEvent(
           db,
@@ -141,7 +174,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
-      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      if (!db) return dbUnavailableJson(c);
       const key = c.req.param("key");
       if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
       try {
@@ -193,7 +226,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       async (c) => {
         const who = c.get("eventModerator");
         const db = await dbFor(c);
-        if (!db) return c.json({ error: "db_unavailable" }, 503);
+        if (!db) return dbUnavailableJson(c);
         try {
           const actor = { id: who.id, username: who.username };
           const key = c.req.param("key");

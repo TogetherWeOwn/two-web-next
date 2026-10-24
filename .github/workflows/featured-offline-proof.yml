@@ -63,6 +63,9 @@ jobs:
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
             "src/admin/terminal-review.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
@@ -71,6 +74,8 @@ jobs:
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:
@@ -159,7 +164,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Credential-free guard selftests (no browser)
-        run: node --test ci/featured-proof/run-capture.test.cjs
+        run: node --test ci/featured-proof/run-capture.test.cjs ci/featured-proof/capture-current.test.cjs
       - name: Generate fictional SSR from the exact PR source
         run: |
           test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"

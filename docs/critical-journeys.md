@@ -231,7 +231,10 @@ recorded` when neither names one.
 Any other status — missing, non-string, or an unrecognized string — becomes
 `failed` with a bounded single-line `unknown test status: ...` reason, so an
 unknown report can never pass silently. Exit codes are `0` for a clean pass,
-`1` for failed or flaky journeys, and `2` for an all-skipped or empty report.
+`1` for failed/flaky journeys or runner errors, and `2` for an all-skipped,
+empty, invalid/unreadable/bounded-out report or output failure. Input faults take
+precedence over journey/runner failures. Neither the Playwright job's exit nor
+any deploy gate is relaxed by this diagnostic accounting.
 
 The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a
 report from this config cannot legitimately contain `flaky`. A flaky row fails
@@ -246,3 +249,91 @@ the derived ledger; the raw report, HTML report and traces are not published
 as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
 it reruns once, then opens a private main-red card for the Web Engineer if it
 fails again. Never rerun-until-green to clear a failure.
+
+### Diagnostic receipt contract
+
+`node ci/check-staging-journeys.mjs --help` discovers this single contract.
+Regenerate receipts from local fixtures/reports only; the CLI never starts a
+browser, socket, subprocess, retry or deploy. One hermetic check exercises the
+library and CLI, including a child-process external-effect tripwire:
+
+```sh
+node --test e2e/staging/journey-ledger.test.mjs e2e/staging/journey-receipt.test.mjs
+```
+
+The CLI accepts `--report FILE`, `--out-json FILE` and `--out-md FILE` (defaults
+above), creates both output parent directories independently, and appends the
+same Markdown to `GITHUB_STEP_SUMMARY` when set. Valid arguments with distinct,
+writable regular output paths receive both receipts **even when input cannot
+be read or parsed**. Help is effect-free and needs no report or configuration.
+Invalid arguments and colliding input/output/summary paths are refused (exit 2)
+without writing. The pre-write check compares resolved paths, canonicalized
+targets (nearest existing ancestors plus dangling final symlinks, so symlinked
+parents and not-yet-existing symlink aliases are caught) and existing-file
+device/inode identities, including symbolic and hard links. Keep local paths
+stable during execution; this is not protection against concurrent path replacement.
+A filesystem output failure, including an existing non-regular receipt or
+summary destination, also exits 2, emits only a fixed
+`output_unwritable` diagnostic, and marks any writable companion non-pass; no
+promise is made that an unwritable destination receives a file.
+
+The JSON schema is version 2 (`version` and `schemaVersion` both `2`):
+
+- `counts` retains `total/passed/failed/skipped/flaky` and counts only collected
+  journey outcomes, never runner errors or invented completed measurements.
+- `journeys` retains bounded/redacted `name/file/project/status/reason` and adds
+  `id`: `journey:` plus SHA-256 of the original file, suite-title ancestry, spec
+  title and project tuple. It is independent of ordering, status, output path
+  and run provenance. Identical tuples share an ID; it is an identity, not a
+  completed-execution count or an anonymization guarantee.
+- `provenance` contains `sha/runId/runAttempt` from `GITHUB_SHA/GITHUB_RUN_ID/`
+  `GITHUB_RUN_ATTEMPT` only. SHA must be 40 or 64 hex characters; run ID and
+  attempt are positive decimal strings of at most 20 and 10 digits. Absent or
+  invalid values are the literal `unknown`, never inferred from report metadata
+  or the checkout. Direct library callers may supply that same validated tuple.
+- `diagnostics` is a sorted, aggregated list of fixed `code/count/retryable/`
+  `next_action` objects only. No report error message, stack, snippet, location,
+  config, input/output path or arbitrary report field is copied into them.
+  Counts saturate at 10,000; at most the seven codes below can appear. A count
+  at the cap is a lower bound, not a claim that the input had exactly that many.
+- `verdict` retains `pass/fail/all-skipped/empty`. Runner errors always force
+  `fail`, even with no journeys. Shape faults plus retained rows force `fail`;
+  rejected or invalid inputs without collected rows remain non-pass `empty`.
+  Shape faults never turn a valid sibling into a fictional failed test.
+
+| Diagnostic code | Meaning | Retryable |
+| --- | --- | --- |
+| `runner_error` | One or more top-level Playwright runner/teardown error objects, irrespective of passing rows | false |
+| `report_unreadable` | Missing/unreadable input or a non-regular file | true |
+| `report_invalid_json` | Input is not complete JSON | false |
+| `report_invalid_shape` | Invalid root, nested collection or collection item | false |
+| `report_too_large` | Input bytes, nodes, string volume or collected-row cap exceeded | false |
+| `report_too_deep` | Any input nesting, including ignored metadata, exceeds the depth cap | false |
+| `output_unwritable` | A receipt or configured step summary could not be written | true |
+
+`retryable` describes regenerating a local receipt after fixing the named fault;
+**it never authorizes rerunning staging, a deployment or a failed journey**.
+`next_action` is a fixed bounded recovery instruction, not text from the report.
+
+Bounds (defined once in `REPORT_LIMITS` in `e2e/staging/journey-ledger.mjs`):
+8 MiB input, 64 value-depth levels from root depth 0, 100,000 visited values,
+100 collected journeys. The CLI checks regular-file size before reading and
+reads at most the byte cap plus one sentinel byte, including a file that grows.
+The library preflights the entire parsed value iteratively, including ignored
+metadata; cycles, excessive depth/node count or aggregate string/key bytes
+reject the input before collection. Missing optional collections (suites,
+errors, results, annotations) are empty; a missing specs or tests collection,
+an explicitly null/non-array collection and non-object items are shape faults.
+Valid siblings are still retained on shape faults. On row-cap overflow, retained rows are
+partial and the gate fails. Each display/reason field is at most 200 characters;
+source diagnostic strings over 2,048 characters are withheld whole (not
+truncated before redaction). No raw metadata or runner diagnostics expand output volume. Existing known-pattern
+redaction applies to display fields too; it is still not a general sanitizer for
+arbitrary unlabelled member content, so test labels must remain synthetic.
+
+Receipts contain no timestamps, random IDs, file locations supplied to the CLI,
+report timings or guessed success. Identical input and provenance produce
+byte-identical JSON/Markdown regardless of output directory. A diagnostic
+receipt is evidence of accounting only: it is not a Playwright-job, staging or
+deployment PASS. Existing raw-report upload exclusions and failure-scrub gates
+remain unchanged.

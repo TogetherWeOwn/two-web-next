@@ -78,7 +78,9 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("refresh this preview");
     expect(source).toContain("featured-preview-hidden");
     expect(source).toContain("<img");
-    expect(source).toContain("href={data.view.values.url}");
+    expect(source).toContain("href={data.view.previewUrl}");
+    expect(source).not.toContain("href={data.view.values.url}");
+    expect(source).toContain("value={data.view.values.url}");
   });
 
   it("renders the preview image through the shared policy with the alt fallback and evaluation time", () => {

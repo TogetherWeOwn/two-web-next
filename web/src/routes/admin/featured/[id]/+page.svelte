@@ -13,11 +13,12 @@ import type { PageProps } from "./$types";
 // featuredValues() shape the Hono edit page renders (Svelte escapes every
 // value on render, like the Hono JSX shell). The homepage preview shows the
 // last saved status through the shared featuredStatus() the load resolves —
-// never a UI-local copy — with the saved headline, body, link and image when
-// the slot is currently visible (a simplified rendering of the Hono panel's
-// full homepage item, through the shared featuredImageSrc() policy with the
-// homepage alt fallback) and the same hidden-slot note the Hono panel renders
-// when it is not. No JavaScript: plain POSTs
+// never a UI-local copy — with the saved headline, body, judged link and
+// image when the slot is currently visible (a simplified rendering of the
+// Hono panel's full homepage item, through the shared stored-link judge and
+// the shared featuredImageSrc() policy with the homepage alt fallback) and
+// the same hidden-slot note the Hono panel renders when it is not. No
+// JavaScript: plain POSTs
 // and links, like the Hono panel. The edit form mounts the deferred
 // dirty-draft/double-submit guard island as progressive markup (like
 // join/+page.svelte): with csr=false the no-JS contract still holds, and a
@@ -51,7 +52,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     {#if data.view.visible}
       <p><strong>{data.view.title}</strong></p>
       {#if data.view.values.body}<p>{data.view.values.body}</p>{/if}
-      {#if data.view.values.url}<p><a href={data.view.values.url}>Link</a></p>{/if}
+      {#if data.view.previewUrl}<p><a href={data.view.previewUrl}>Link</a></p>{/if}
       {#if data.view.imageSrc}<p><img
         src={data.view.imageSrc}
         alt={data.view.imageAlt}
@@ -77,7 +78,10 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </div>
     <div class="field">
       <label for="f-url">Link (full http(s) URL, or empty)</label>
-      <input id="f-url" name="url" type="url" value={data.view.values.url} />
+      <input id="f-url" name="url" type="url" value={data.view.values.url} aria-describedby="f-url-hint" />
+      <p id="f-url-hint" class="hint">
+        No credentials, backslashes, whitespace or control characters.
+      </p>
     </div>
     <div class="field">
       <label for="f-image-url">Image URL</label>
