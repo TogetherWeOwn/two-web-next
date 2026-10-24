@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
+import { exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import { memberReadDb } from "../db/member-reads";
-import { keyedMemberRead } from "../member-reads";
+import { keyedMemberRead, MemberReadRefused } from "../member-reads";
 import { dateOrNull } from "./stats";
 
 // Self-view attended-history window: the read fetches one row past the
@@ -34,14 +35,22 @@ const countOrZero = (value: unknown): number => {
 // classifier), so this is one raw statement with a window total, exempted by
 // exact shape in rawMemberOwner. Every returned row belongs to the bound
 // user, so the captured owners equal the viewer and the read stays unaudited.
+//
+// An ordinary database error degrades to null (the section hides, like a
+// missing stats block) instead of 503ing the already-read profile. Only
+// contract refusals propagate: a swallowed refusal would hide a programming
+// error behind a missing section. The warn is class-only, never a driver
+// message (it can carry a connection string) or member data.
 export async function readAttendedHistory(
   db: Pick<Db, "execute">,
   userId: string,
-): Promise<AttendedHistory> {
+): Promise<AttendedHistory | null> {
   const connection = memberReadDb(db as Db);
   const now = new Date().toISOString();
-  const rows = await keyedMemberRead(() =>
-    connection.execute(sql`
+  let rows;
+  try {
+    rows = await keyedMemberRead(() =>
+      connection.execute(sql`
       select rsvps.user_id, events.event_key, events.title, events.starts_at, events.ends_at,
         count(*) over () as total
       from rsvps inner join events on events.id = rsvps.event_id
@@ -50,7 +59,14 @@ export async function readAttendedHistory(
       order by events.starts_at desc, events.id desc
       limit ${sql.raw(String(ATTENDED_HISTORY_READ))}
     `),
-  );
+    );
+  } catch (err) {
+    if (err instanceof MemberReadRefused) throw err;
+    console.warn("Attended history unavailable; hiding the section.", {
+      exception: exceptionClass(err),
+    });
+    return null;
+  }
   const first = rows[0];
   return {
     total: first ? countOrZero(first.total) : 0,
