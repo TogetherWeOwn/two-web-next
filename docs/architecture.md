@@ -284,6 +284,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |
 | `src/featured-policy.ts` | content |
 | `src/featured-status.tsx` | content |
