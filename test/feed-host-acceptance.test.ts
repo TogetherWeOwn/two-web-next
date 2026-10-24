@@ -365,7 +365,7 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
       const line = unfolded.split("\r\n").find((l) => l.startsWith("ORGANIZER"))!;
       expect(line.startsWith('ORGANIZER;CN="')).toBe(true);
       expect(line.endsWith(`":${ICS_PLACEHOLDER}`)).toBe(true);
-      expect(body.split("mailto:").length - 1).toBe(1);
+      expect(unfolded.split("mailto:").length - 1).toBe(1);
     },
   );
 
@@ -391,7 +391,9 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
     expect(third, "ORGANIZER missing for third mixed host").toBeDefined();
     expect(decodeCnParam(third!.params.get("CN") ?? "")).toBe(UNICODE);
     expect(third!.value).toBe(ICS_PLACEHOLDER);
-    expect(body.split(ICS_PLACEHOLDER).length - 1).toBe(2);
+    // Unfold first: folded long hosts split the placeholder across lines.
+    const unfoldedMixed = body.replace(/\r\n[ \t]/g, "");
+    expect(unfoldedMixed.split(ICS_PLACEHOLDER).length - 1).toBe(2);
   });
 
   it("never emits a real address: only the non-routable placeholder as mailto:", () => {
@@ -406,7 +408,9 @@ describe("feed host: ICS ORGANIZER from organizer_name (parser-validated)", () =
       expect(org, "ORGANIZER missing for placeholder-only check").toBeDefined();
       expect(org!.value).toBe(ICS_PLACEHOLDER);
     }
-    expect(body.split("mailto:").length - 1).toBe(2);
+    // Unfold first: folding can split "mailto:" across lines by alignment.
+    const unfoldedOnly = body.replace(/\r\n[ \t]/g, "");
+    expect(unfoldedOnly.split("mailto:").length - 1).toBe(2);
     expect(body.includes("@togetherweown")).toBe(false);
     expect(body.includes("@example.com")).toBe(true); // display text only, inside quoted CN
   });
@@ -651,7 +655,9 @@ describe("feed host: routes carry the host (pg-proxy, parser-validated)", () => 
       const body = await res.text();
       if (path.endsWith(".ics")) {
         expect(vevents(parseIcs(body))).toHaveLength(rows.length);
-        expect(body.split(ICS_PLACEHOLDER).length - 1).toBe(rows.length);
+        // Unfold first: folded long hosts split the placeholder across lines.
+        const unfoldedFeed = body.replace(/\r\n[ \t]/g, "");
+        expect(unfoldedFeed.split(ICS_PLACEHOLDER).length - 1).toBe(rows.length);
       } else {
         expect(rssItems(parseRss(body))).toHaveLength(rows.length);
         expect(body.split(RSS_PLACEHOLDER).length - 1).toBe(rows.length);
