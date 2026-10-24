@@ -42,10 +42,15 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   the overall check. JSON, Markdown and per-run Vitest evidence are retained
   for 14 days, including on failure. The full nightly signal stays unchanged.
 - **Test inventory (HARD):** `ci/test-inventory.mjs` fails the job when a
-  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
-  runs `npm run test:inventory -- --strict` with no `continue-on-error`;
-  the `--selftest` stays hermetic (fixture trees plus wiring checks that
-  never depend on the tree having zero orphans).
+  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The same
+  step gates Playwright specs: every `e2e/**/*.spec.ts` and
+  `e2e/**/*.visual.ts` must match a CI-referenced config's
+  testDir/testMatch/testIgnore (honoring workflow file filters) or be
+  imported transitively by such a spec. `--json` prints the Playwright
+  summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
+  `next_action`). The step runs `npm run test:inventory -- --strict` with
+  no `continue-on-error`; the `--selftest` stays hermetic (fixture trees
+  plus wiring checks that never depend on the tree having zero orphans).
 - **Tier-0 check (required):** `npm run test:tier0` runs the fast-check
   validator properties, the role x route authz matrix and the
   default-planner EXPLAIN seq-scan check from `tier0/` (own vitest config:
