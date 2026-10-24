@@ -22,7 +22,7 @@
 .profile-theme .avatar { width: 96px; height: 96px; }
 .profile-theme .avatar-initial { background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: 700 2.25rem/1 Display, 'Display Fallback', 'Arial Narrow', sans-serif; overflow: hidden; }
 .profile-theme .profile-caption { margin: 0; font-size: .9rem; }
-.profile-theme .profile-meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; }
+.profile-theme .profile-meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; align-items: flex-start; }
 .profile-theme .profile-handle { margin: 0 0 .75rem; overflow-wrap: anywhere; }
 .profile-theme .profile-chip { padding: .1rem .5rem; background: var(--paper); border: 1px solid var(--line); font-size: .85rem; }
 .profile-theme .profile-meta p { margin: 0; }
