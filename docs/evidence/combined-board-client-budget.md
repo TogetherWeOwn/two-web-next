@@ -1020,3 +1020,66 @@ mandatory. Rollback reverts only this new history/evidence reconciliation
 relative to the merged base; it must not undo the independent allocations
 from #1655, #1686 and #1726, the canonical repair from #1716, or any absorbed
 main-side feature.
+
+## Fifteenth base-conflict reconciliation: retain accessibility history, limits unchanged
+
+On 2026-10-24 GitHub confirmed a live conflict on `3c3f98a34` against pinned
+main `509cb40a7` (three commits: #1746 cancelled-event RSS signalling, #1748
+independent Lighthouse navigation samples, and #1677 accessibility allocation
+history). Only `ci/kit-perf-budget.json` conflicts. All numeric values are
+identical on the merge base, branch head and incoming main. Each parsed
+comment starts with the common-base comment; both unique tails were verified
+absent from the opposite side. Resolution takes main's complete JSON and
+appends the branch-only tail exactly once. Both tails occur once in the
+result; the ASCII JSON encoding matches main. Against pinned main the budget
+diff is one additive comment line; every non-comment value stays identical.
+All other main-side source, test, lockfile, configuration and evidence changes
+are retained verbatim. The original client increase stays withdrawn. The
+historical per-file TSV is unchanged.
+
+This is history reconciliation, not refreshed feature-union admission. No
+frozen-feature overlay was built or feature ref changed. The last repeated
+union breach remains pinned to `d6a65b4fa` (127/126 server files, 370 gzip
+bytes over), not asserted for this newer base. Keep the source feature/server
+HOLD until its own then-current union and exact-head CI/review satisfy every
+gate; this prerequisite's success is not release permission.
+
+With Node `v24.22.1`, fresh external locked root/web `npm ci --include=dev`
+installs and two actual-tree `npm --prefix web run build` runs, unchanged
+`node ci/check-kit-perf.mjs` exits **0** both times:
+
+| Group | Actual prerequisite tree | Unchanged merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 250421/101390 B | 251904/101632 B |
+| Client JS files | 54 | 55 |
+| Server JS raw/gzip | 1148524/326248–326250 B | 1203200/333312 B |
+| Server JS files | 115 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2861/1019 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 twice | 0 required |
+
+Client-output path/hash maps match across both builds; server gzip differs by
+2 B. Client margins remain 1483 B raw/242 B gzip, CSS gzip 5 B. Startup
+60000 ms remains a configured bound, not measured latency.
+
+Fresh checks: checker selftests **6/6**, checker tests **13/13**, parity file
+suites **67/67**, config **34/34**, gate **6/6**, bundle selftest **34/34** and
+Hono budget pass. Incoming Lighthouse Vitest suites **209/209**, with the
+separate Node evidence/origin suites **70/70**, and RSS-neighbor Vitest suites
+**83 passed / 20 DB-gated skips / 0 failed** pass without test edits. The first
+Lighthouse invocation incorrectly sent four Vitest files to `node --test`:
+those four failed to initialize their runner, while the 70 Node tests passed.
+Running the four unchanged files with `npx vitest run` passes all 209 tests;
+no product correction or retry of red CI was involved.
+
+Lint (**1970 files**), root/CI typecheck, asset drift, inventory
+**1195/1195**, docs links (**12/12** citations, **140** Markdown files),
+ratchet unit tests **27/27**, and `npm run deps:audit` (exit **0**, zero
+blocked findings in both lockfiles) pass. No new dependency/audit change or
+red-before proof is claimed. Full `npm run check`, fresh feature acceptance,
+browser/visual/quality gates, startup latency and staging were not rerun.
+No user-facing page differs from pinned main. All exact-head CI and
+independent review gates remain required. Rollback reverts only this
+history/evidence reconciliation relative to main, not any independently
+merged allocation, dependency repair or feature.
