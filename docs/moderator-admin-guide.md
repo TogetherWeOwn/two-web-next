@@ -198,7 +198,7 @@ An unavailable read is still an outage, not an empty list; follow the guidance a
 
 ## Review a chosen UTC planning window
 
-On `/admin/events`, **Starts from (UTC date)** and **Starts before (UTC date)**
+On `/admin/events`, **Starts from (UTC date, included)** and **Starts before (UTC date, excluded)**
 limit the inventory to events whose **start time** falls in the half-open
 interval `[Starts from 00:00 UTC, Starts before 00:00 UTC)`. An event starting
 exactly at Starts from midnight is included; one starting exactly at Starts
