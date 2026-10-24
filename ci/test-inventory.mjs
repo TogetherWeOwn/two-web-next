@@ -39,6 +39,7 @@ import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { parseDocument, visit, isScalar } from "yaml";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -296,13 +297,46 @@ function listPlaywrightSpecs(root) {
   return [...new Set(out)].sort();
 }
 
+// Let YAML decode run scalars before any shell scan: folded, plain and
+// quoted multiline values can all join a script name or forwarded arguments
+// across physical lines. Re-express each decoded value as a literal block so
+// every existing scanner sees the same shell text and step/default ancestry.
+// Only this in-memory view changes; files on disk remain untouched.
+function workflowShellView(text, name) {
+  const doc = parseDocument(text);
+  assert.equal(doc.errors.length, 0, `${name} is not valid YAML: ${doc.errors[0]?.message}`);
+  const edits = [];
+  visit(doc, {
+    Pair(_, pair) {
+      if (!isScalar(pair.key) || pair.key.value !== "run" || !isScalar(pair.value)) return;
+      const node = pair.value;
+      if (typeof node.value !== "string") return;
+      const lineStart = text.lastIndexOf("\n", pair.key.range[0] - 1) + 1;
+      const indent = " ".repeat(pair.key.range[0] - lineStart + 2);
+      // Chomping does not affect command arguments; retain internal newlines,
+      // including blank lines and more-indented folded content, exactly.
+      const script = node.value.replace(/\n+$/, "");
+      const replacement = `|\n${script
+        .split("\n")
+        .map((line) => `${indent}${line}`)
+        .join("\n")}\n`;
+      edits.push({ start: node.range[0], end: node.range[2], replacement });
+    },
+  });
+  for (const { start, end, replacement } of edits.sort((a, b) => b.start - a.start))
+    text = text.slice(0, start) + replacement + text.slice(end);
+  return text;
+}
+
 function collectWorkflowFiles(root) {
   const out = [];
   const wfDir = join(root, ".github", "workflows");
   if (!existsSync(wfDir)) return out;
   for (const e of readdirSync(wfDir)) {
-    if (e.endsWith(".yml") || e.endsWith(".yaml"))
-      out.push({ name: `.github/workflows/${e}`, text: readFileSync(join(wfDir, e), "utf8") });
+    if (e.endsWith(".yml") || e.endsWith(".yaml")) {
+      const name = `.github/workflows/${e}`;
+      out.push({ name, text: workflowShellView(readFileSync(join(wfDir, e), "utf8"), name) });
+    }
   }
   return out;
 }
@@ -758,8 +792,10 @@ function stepScriptSlices(lines, start, end, content) {
 // `(cd ...)` subshell wrapping the run. `$(cd ...)` and backticks run in a
 // subshell that cannot persist, so they never match.
 const STEP_CD_RE =
-  /(?:^|[;&|])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?cd(?:\s|$|[;&)])/;
-const SUBSHELL_CD_RE = /(?<!\$)\(\s*cd(?:\s|\)|$|[;&])/;
+  /(?:^|[;&|])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
+const SUBSHELL_CD_RE = /(?<!\$)\(\s*(?:cd|pushd|popd)(?:\s|\)|$|[;&])/;
+const ROOT_CWD_REMEDIATION =
+  "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
 // Heredoc opener (`<<EOF`, `<<'EOF'`, `<<-EOF`): body lines up to the marker
 // are data, so a bare `cd` line inside one is not a directory change. The
@@ -781,6 +817,24 @@ function heredocMarker(line) {
   return null;
 }
 
+// Apply the same cwd guard to workflow shells and package scripts. Only the
+// prefix before an invocation matters. Heredoc data and command substitutions
+// do not move the caller; directory-stack builtins do, just like cd.
+function assertRootShellCwd(prefix, where) {
+  let heredoc = null;
+  for (const line of prefix.replace(/\\\r?\n/g, " ").split("\n")) {
+    if (heredoc !== null) {
+      if (line.trim() === heredoc) heredoc = null;
+      continue;
+    }
+    assert.ok(
+      !STEP_CD_RE.test(line) && !SUBSHELL_CD_RE.test(line),
+      `${where} runs after a shell directory change: ${ROOT_CWD_REMEDIATION}`,
+    );
+    heredoc = heredocMarker(line);
+  }
+}
+
 // A workflow Playwright execution runs where its step says: the step's own
 // `working-directory:`, else the job's `defaults:`, else the workflow's
 // `defaults:`, else the repo root — unless the step's shell `cd`s first. An
@@ -792,8 +846,7 @@ function heredocMarker(line) {
 function assertRootStepCwd(ctx, idx, at, what) {
   const { file, lines, content } = ctx;
   const where = `${file} runs ${what}`;
-  const tail =
-    "this gate cannot resolve playwright runs outside the repo root; run the step at the root or teach ci/test-inventory.mjs the new form";
+  const tail = ROOT_CWD_REMEDIATION;
   const step = stepBlockBounds(lines, idx, content);
   assert.ok(step, `${where} outside any run step: ${tail}`);
   let stepValue = null;
@@ -826,20 +879,11 @@ function assertRootStepCwd(ctx, idx, at, what) {
       }
     }
   }
-  let heredoc = null;
-  for (const { idx: sIdx, from } of stepScriptSlices(lines, step.start, step.end, content)) {
-    if (sIdx > idx) continue;
-    const slice = lines[sIdx].slice(from, sIdx === idx ? at : undefined);
-    if (heredoc !== null) {
-      if (slice.trim() === heredoc) heredoc = null;
-      continue;
-    }
-    assert.ok(
-      !STEP_CD_RE.test(slice) && !SUBSHELL_CD_RE.test(slice),
-      `${where} runs after the step cds: ${tail}`,
-    );
-    heredoc = heredocMarker(slice);
-  }
+  const prefix = stepScriptSlices(lines, step.start, step.end, content)
+    .filter(({ idx: sIdx }) => sIdx <= idx)
+    .map(({ idx: sIdx, from }) => lines[sIdx].slice(from, sIdx === idx ? at : undefined))
+    .join("\n");
+  assertRootShellCwd(prefix, where);
 }
 
 // Workflow `npm run` occurrences that reach a Playwright script must run at
@@ -860,6 +904,24 @@ function auditWorkflowNpmRunCwd(workflowFiles, scripts) {
         assertRootStepCwd(ctx, idx, occ.index, `npm run ${occ.name}`);
       }
     });
+  }
+}
+
+// npm starts each package script in its own shell. A cwd change inside that
+// shell can narrow a direct Playwright run or redirect a nested npm run, even
+// though the workflow step itself still runs at the root. Audit only scripts
+// CI invokes and only prefixes of commands that can reach Playwright.
+function auditScriptCwd(scripts, invoked) {
+  for (const name of invoked) {
+    const body = (scripts[name] ?? "").replace(/\\\r?\n/g, " ");
+    for (const match of body.matchAll(/\bplaywright\s+test\b/g))
+      assertRootShellCwd(body.slice(0, match.index), `script "${name}" runs playwright test`);
+    for (const occ of parseNpmRunOccurrences(body)) {
+      if (occ.name === null || !Object.hasOwn(scripts, occ.name)) continue;
+      const target = scriptRunsPlaywright(scripts, occ.name);
+      if (target.runs || target.unknown)
+        assertRootShellCwd(body.slice(0, occ.index), `script "${name}" runs npm run ${occ.name}`);
+    }
   }
 }
 
@@ -1690,6 +1752,7 @@ export function playwrightInventory(root = repoRoot) {
   const workflowText = workflowFiles.map((w) => w.text).join("\n");
   const invoked = invokedScriptNames(scripts, workflowText);
   auditWorkflowNpmRunCwd(workflowFiles, scripts);
+  auditScriptCwd(scripts, invoked);
   const refs = parsePlaywrightInvocations(root, workflowFiles, scripts, invoked);
   const parsed = new Map();
   for (const config of refs.keys()) parsed.set(config, parsePlaywrightConfig(root, config));
@@ -3555,6 +3618,186 @@ function selftest() {
         }
         if (e.throws) assert.throws(() => playwrightInventory(dir), e.throws, e.name);
         else assert.deepEqual(playwrightInventory(dir).orphans, e.orphans, e.name);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("workflow shell view preserves decoded run scalars and is idempotent", () => {
+    const runs = [
+      ">-\n          npm run\n          b",
+      "npm run\n          b",
+      "|\n          npm run b\n          echo separate-command",
+      ">+\n          npm run b\n\n          echo separate-command\n",
+      ">2-\n          npm run b\n            more-indented\n          echo next",
+      '"npm run b\\n echo next" # YAML comment',
+      "'npm run b\n          --silent'",
+      "|\n          cat <<'EOF'\n          working-directory: web\n          - run: not-a-step\n          EOF\n          npm run b",
+    ];
+    for (const run of runs) {
+      const text = `jobs:\n  t:\n    steps:\n      - run: ${run}\n        working-directory: .\n      - run: echo next-step\n`;
+      const expected = parseDocument(text).toJS().jobs.t.steps;
+      const view = workflowShellView(text, "fixture");
+      const actual = parseDocument(view).toJS().jobs.t.steps;
+      assert.equal(actual.length, 2, run);
+      for (let i = 0; i < actual.length; i++) {
+        assert.equal(actual[i].run.trimEnd(), expected[i].run.trimEnd(), run);
+        assert.equal(actual[i]["working-directory"], expected[i]["working-directory"], run);
+      }
+      assert.equal(workflowShellView(view, "fixture"), view, run);
+    }
+    assert.throws(() => workflowShellView("jobs: [unclosed", "fixture"), /not valid YAML/);
+  });
+
+  check("playwright YAML scalar folding cannot hide npm forwarding", () => {
+    const entries = [
+      ["folded separator", ">-\n          npm run b\n          -- e2e/x.spec.ts"],
+      ["folded positional", ">\n          npm run b\n          e2e/x.spec.ts"],
+      ["plain separator", "npm run b\n          -- e2e/x.spec.ts"],
+      ["plain positional", "npm run b\n          e2e/x.spec.ts"],
+      ["double-quoted separator", '"npm run b\n          -- e2e/x.spec.ts"'],
+      ["single-quoted positional", "'npm run b\n          e2e/x.spec.ts'"],
+      ["folded flags", ">-\n          npm run b --silent\n          -- e2e/x.spec.ts"],
+      ["folded script name", ">-\n          npm run\n          b -- e2e/x.spec.ts"],
+    ];
+    for (const [name, run] of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ scripts: { b: "playwright test" } }),
+        );
+        mkdirSync(join(dir, ".github/workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github/workflows/ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${run}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.config.ts"),
+          'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e"));
+        for (const spec of ["x", "y"]) writeFileSync(join(dir, `e2e/${spec}.spec.ts`), "");
+        assert.throws(
+          () => playwrightInventory(dir),
+          /cannot expand forwarded playwright filters/,
+          name,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("playwright directory stack commands and invoked script cwd fail closed", () => {
+    const entries = [
+      { name: "inline pushd", run: "pushd e2e/sub && npx playwright test" },
+      { name: "literal pushd", run: "|\n          pushd e2e/sub\n          npx playwright test" },
+      {
+        name: "folded pushd",
+        run: ">-\n          pushd e2e/sub &&\n          npx playwright test",
+      },
+      { name: "popd", run: "popd && npx playwright test" },
+      { name: "builtin pushd", run: "builtin pushd e2e/sub && npx playwright test" },
+      { name: "subshell pushd", run: "(pushd e2e/sub && npx playwright test)" },
+      { name: "script cd", run: "npm run b", scripts: { b: "cd e2e/sub && playwright test" } },
+      {
+        name: "script pushd",
+        run: "npm run b",
+        scripts: { b: "pushd e2e/sub && playwright test" },
+      },
+      { name: "script popd", run: "npm run b", scripts: { b: "popd && playwright test" } },
+      {
+        name: "nested script cd",
+        run: "npm run a",
+        scripts: { a: "cd e2e/sub && npm run b", b: "playwright test" },
+      },
+      {
+        name: "nested script pushd",
+        run: "npm run a",
+        scripts: { a: "pushd e2e/sub && npm run b", b: "playwright test" },
+      },
+      {
+        name: "nested target cd",
+        run: "npm run a",
+        scripts: { a: "npm run b", b: "cd e2e/sub && playwright test" },
+      },
+      {
+        name: "multiline script cd",
+        run: "npm run b",
+        scripts: { b: "cd e2e/sub\nplaywright test" },
+      },
+      {
+        name: "split npm name retains step cwd",
+        run: ">-\n          npm run\n          b\n        working-directory: e2e/sub",
+        scripts: { b: "playwright test" },
+      },
+      // Controls: changes in a child shell do not move its parent, changes
+      // after the run cannot affect it, and local-only scripts are not CI.
+      {
+        name: "later script cd",
+        run: "npm run b",
+        scripts: { b: "playwright test && cd e2e/sub" },
+        clean: true,
+      },
+      {
+        name: "script substitution",
+        run: "npm run b",
+        scripts: { b: "ROOT=$(cd .. && pwd) && playwright test" },
+        clean: true,
+      },
+      {
+        name: "script heredoc data",
+        run: "npm run b",
+        scripts: { b: "cat <<'EOF'\ncd e2e/sub\nEOF\nplaywright test" },
+        clean: true,
+      },
+      {
+        name: "uninvoked cwd script",
+        run: "npx playwright test",
+        scripts: { b: "cd e2e/sub && playwright test" },
+        clean: true,
+      },
+      {
+        name: "unrelated script cwd",
+        run: "npm run a && npx playwright test",
+        scripts: { a: "cd web && npm run lint", lint: "eslint ." },
+        clean: true,
+      },
+      {
+        name: "pushd substitution",
+        run: "ROOT=$(pushd .. && pwd) && npx playwright test",
+        clean: true,
+      },
+      {
+        name: "heredoc pushd data",
+        run: "|\n          cat <<'EOF'\n          pushd e2e/sub\n          EOF\n          npx playwright test",
+        clean: true,
+      },
+    ];
+    for (const e of entries) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-pw-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: e.scripts ?? {} }));
+        mkdirSync(join(dir, ".github/workflows"), { recursive: true });
+        writeFileSync(
+          join(dir, ".github/workflows/ci.yml"),
+          `name: ci\njobs:\n  t:\n    steps:\n      - run: ${e.run}\n`,
+        );
+        writeFileSync(
+          join(dir, "playwright.config.ts"),
+          'export default defineConfig({ testDir: "./e2e", testMatch: "**/*.spec.ts" });\n',
+        );
+        mkdirSync(join(dir, "e2e/sub"), { recursive: true });
+        for (const spec of ["x", "y", "sub/z"]) writeFileSync(join(dir, `e2e/${spec}.spec.ts`), "");
+        if (e.clean) assert.deepEqual(playwrightInventory(dir).orphans, [], e.name);
+        else
+          assert.throws(
+            () => playwrightInventory(dir),
+            /cannot resolve playwright runs outside the repo root/,
+            e.name,
+          );
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
