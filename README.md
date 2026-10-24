@@ -35,7 +35,12 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive and calendar feeds are not game-filtered.
+calendar feeds are not game-filtered. The separate past-event archive carries the
+same facet with archive-visible suggestions (explicit past plus ended published
+nights): filter earlier game nights by game, alone or with text, and continue a
+game-filtered schedule into history. A valid game never silently becomes
+**All games**; overlong, NUL-bearing and conflicting-duplicate filters are refused
+with a branded 400 before any read.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to

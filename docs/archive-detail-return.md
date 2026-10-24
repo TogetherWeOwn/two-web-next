@@ -35,8 +35,16 @@ normalization and outer trimming. Oversized input is refused before normalizatio
 Malformed percent/UTF-8 encoding and duplicate recognized fields are refused,
 including duplicate encoded names. Rejected or absent context keeps All events.
 
-Only `/events/past` is reconstructed, through the existing `pastEventsUrl`
-builder and its `page`/`q` grammar. An external-looking string can be a literal
+The archive game facet extends the transport with an optional `archiveGame`
+field: the archive's normalized game filter (canonical suggestion or retained
+valid input). The detail boundary admits at most one game of at most 255 raw
+Unicode code points and refuses NUL-bearing games outright; blank games mean
+unfiltered. The return link rebuilds the filtered page through the same
+`pastEventsUrl` builder, now with its `page`/`q`/`game` grammar, and keeps the
+filtered-results label whenever a query or game filter is present.
+
+Only `/events/past` is reconstructed, through the `pastEventsUrl` builder and
+its `page`/`q`/`game` grammar. An external-looking string can be a literal
 search term, never a navigation destination. There is no new redirect, session
 state, authorization grant or database read.
 
