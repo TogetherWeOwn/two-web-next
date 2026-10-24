@@ -32,8 +32,9 @@ const describe = (starts, ends, now) => {
 for (const root of document.querySelectorAll("[data-event-time-from-now]")) {
   const button = root.querySelector("button");
   const result = root.querySelector("[role='status']");
-  if (!button || !result || typeof Date !== "function") continue;
-  root.parentElement.hidden = button.hidden = false;
+  const row = root.parentElement;
+  if (!button || !result || !row || typeof Date !== "function") continue;
+  row.hidden = button.hidden = false;
   button.addEventListener("click", () => {
     const now = Date.now();
     result.textContent = describe(
@@ -44,9 +45,9 @@ for (const root of document.querySelectorAll("[data-event-time-from-now]")) {
     if (!Number.isFinite(now)) return;
     const checked = document.createElement("time");
     checked.dateTime = new Date(now).toISOString();
-    checked.textContent = new Date(now).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
+    checked.textContent = new Date(now).toLocaleString([], {
+      dateStyle: "medium",
+      timeStyle: "short",
     });
     result.append(" Checked at ", checked, ".");
   });
