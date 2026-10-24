@@ -173,6 +173,7 @@ const gameItems = (block: string): GameItem[] =>
   }));
 
 const decodeEntities = (s: string): string =>
+  // codeql[js/double-escaping]: test-only entity decoding; names flow only into expect() assertions.
   s
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -183,6 +184,7 @@ const decodeEntities = (s: string): string =>
 /** Displayed game text of one item: marker span, comments and tags removed. */
 const itemGameName = (inner: string): string =>
   decodeEntities(
+    // codeql[js/incomplete-multi-character-sanitization]: test-only tag stripping; names flow only into expect() assertions.
     inner
       .replace(/<span[^>]*profile-shared-marker[^>]*>[\s\S]*?<\/span>/g, "")
       .replace(/<!--[\s\S]*?-->/g, "")
