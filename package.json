@@ -114,14 +114,15 @@
     "yaml": "2.9.1"
   },
   "overrides": {
+    "undici": "7.30.1",
     "@lhci/cli": {
       "tmp": "0.2.7",
       "@puppeteer/browsers": "3.2.3"
     },
     "basic-ftp": "6.2.1",
     "sharp": "0.35.5",
-    "puppeteer-core": {
-      "proxy-agent": "6.5.0"
+    "lighthouse": {
+      "puppeteer-core": "25.16.0"
     }
   },
   "engines": {
