@@ -1,4 +1,5 @@
-// route-inventory: GET /privacy, GET /privacy.md
+// route-inventory: GET /privacy
+// route-inventory: GET /privacy.md
 // Independent RED acceptance: navigation only; do not edit to fit an implementation.
 // Run: npx vitest run test/privacy-published-history.acceptance.test.ts
 // Browser companion: e2e/privacy-published-history.spec.ts (existing browser-smoke glob).
