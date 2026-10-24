@@ -202,6 +202,8 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
       isOwner: false,
       isModerator: false,
       joinResult: null,
+      // Bob stores no games, so nothing of Alice's list is shared with him.
+      sharedGames: [],
     });
   });
 });
