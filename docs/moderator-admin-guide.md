@@ -179,6 +179,23 @@ retry or draft storage across navigation. Returning to the document clears stale
 save feedback without marking your draft saved. Native forms still submit
 normally without JavaScript, but do not show this client-side feedback.
 
+## Recover an empty event or featured list
+
+On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
+search or filter is applied, even when rows are visible. It clears all filters
+and returns to page 1 while keeping the current sort and direction. It does
+not change any event or featured slot.
+
+A successful empty page 1 says **No events yet.** or **No featured content yet.**
+when unfiltered, or says no content matches the filters when filtered. Use
+**Clear filters** to broaden a no-match search.
+
+An empty page after page 1 says **No results on this page.** This does not mean
+the whole inventory is empty. Choose **First page of these results** to keep
+the current filters and sort and return directly to page 1; **Previous** still
+moves back one page. Both recovery links work by keyboard and without JavaScript.
+An unavailable read is still an outage, not an empty list; follow the guidance above.
+
 ## Correct a rejected draft
 
 Event and featured-content create/edit forms show the actual validation errors

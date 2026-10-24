@@ -403,6 +403,14 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      # The toolchain suite pins the declared browser-helper peer metadata;
+      # this pins the installed half: the root proxy-agent pin must exist and
+      # be the copy that resolves from the helper's context (the LHCI-nested
+      # 6.x copy is outside that path and never satisfies it). Bare
+      # `npm ls --all` exits 0 on an unmet optional peer, so it cannot gate this.
+      - name: Proxy-peer installed resolution (browsers context)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/check-proxy-peer.mjs --selftest && node ci/check-proxy-peer.mjs
       - name: Migration runtime-rights guard
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run migration:rights && npm run migration:rights:selftest
