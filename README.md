@@ -242,6 +242,13 @@ into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
 named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
 write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
+Both verifiers admit evidence through one shared authority
+(`ci/execution-receipt-authority.mjs`): the named suite must appear with
+distinct passed cases, so counters-only summaries, unrelated-suite
+substitution, skipped/todo/cancelled cases and malformed or duplicate
+identities all fail the step. Add `--format json` for a versioned machine
+receipt (`version`, `suite_id`, `cases[].case_id`, `counts`, `verdict`,
+`error_code`, `next_action`); human output stays one line.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
