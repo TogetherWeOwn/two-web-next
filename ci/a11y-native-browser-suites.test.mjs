@@ -174,6 +174,51 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
   assert.doesNotMatch(row ?? "", /no executed-count verifier yet/);
 });
 
+const SHARE_FILE = "ci/event-native-share-browser.test.mjs";
+const SHARE_SUITE = "Native event sharing";
+const SHARE_MIN = 34;
+
+test("a11y job runs ci/event-native-share-browser.test.mjs unconditionally after Chromium and Kit installs", async () => {
+  const step = steps.find(
+    (entry) => entry.includes(SHARE_FILE) && entry.includes("node --import tsx --test"),
+  );
+  assert(step, `a11y job must run ${SHARE_FILE}`);
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share\\.tap ${escape(SHARE_FILE)}\\n`,
+    ),
+    "the native-share step must run the Chromium gate with its TAP report",
+  );
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node ci/rsvp-focus-require-executed\\.mjs artifacts/a11y/event-native-share\\.tap "${escape(SHARE_SUITE)}" ${SHARE_MIN}\\s*$`,
+    ),
+    "the native-share step must fail an all-skipped run via the executed-count verifier",
+  );
+  assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+  assert(chromiumInstall >= 0, "a11y job must install Chromium");
+  assert(
+    chromiumInstall < job.indexOf(step),
+    "Chromium install must precede the native-share step",
+  );
+  const kitInstall = job.indexOf("npm ci --prefix web --include=dev");
+  assert(
+    kitInstall >= 0 && kitInstall < job.indexOf(step),
+    "Kit install must precede the native-share step",
+  );
+
+  const source = await readFile(new URL(`../${SHARE_FILE}`, import.meta.url), "utf8");
+  assert.match(source, /No opt-in skips/, "the suite must stay unconditional");
+  assert.doesNotMatch(source, /_BROWSER_TESTS/, "the suite must not gain an opt-out gate");
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${SHARE_FILE}\` |`));
+  assert.match(row ?? "", /rsvp-focus-require-executed\.mjs/);
+  assert.match(row ?? "", /None—always runs/);
+});
+
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
 async function browserGatedSuites() {
   const found = [];
