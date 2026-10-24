@@ -62,8 +62,11 @@ jobs:
       - name: Gate (High never; Medium/Low within ci/zap-budget.json)
         run: |
           set -uo pipefail
-          if node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json 2>&1 | tee "$RUNNER_TEMP/zap/gate.md"; test "${PIPESTATUS[0]}" -eq 0; then exit 0; fi
-          if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/gate.md"; then
+          rc=0
+          node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/verdict.json" || rc=$?
+          if [ "$rc" -eq 0 ]; then exit 0; fi
+          if [ "$rc" -ne 1 ]; then exit 1; fi
+          if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/verdict.json"; then
             echo "::warning::Lone PII Disclosure (10062) High looks transient; re-scanning once."
             # Brief pause lets per-minute throttle buckets decay before the re-scan.
             sleep 30
@@ -73,7 +76,7 @@ jobs:
             rc=$?
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
             test -s "$RUNNER_TEMP/zap/zap-report.json"
-            node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json
+            node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/rescan-verdict.json"
           else
             exit 1
           fi
