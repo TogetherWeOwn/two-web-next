@@ -45,7 +45,12 @@ export default defineConfig({
                   name: "admin-errors",
                   test: /\/web\/src\/(?:lib\/(?:AdminShell\.svelte|admin-read-retry\.ts)|routes\/admin\/(?:join-attempts\/)?\+error\.svelte)$/,
                 },
-                { name: "admin", test: /\/src\/admin\// },
+                // Compress Kit's home and admin markup with the Hono renderers
+                // rather than using separate gzip streams for mirrored pages.
+                {
+                  name: "admin",
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                },
                 // Co-compress the Kit profile view with its Hono markup twin.
                 {
                   name: "profiles",
