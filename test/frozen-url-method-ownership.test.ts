@@ -220,6 +220,7 @@ describe("no API, feed, ops, alias or retired path is Kit-swallowed", () => {
     { method: "GET", path: "/join/discord" },
     { method: "GET", path: "/join/callback" },
     { method: "POST", path: "/logout" },
+    { method: "POST", path: "/logout/everywhere" },
     { method: "POST", path: "/auth/qa/fixture" },
     { method: "GET", path: "/admin/queue/failed/7/preview" },
     { method: "POST", path: "/admin/queue/failed/7/redispatch" },

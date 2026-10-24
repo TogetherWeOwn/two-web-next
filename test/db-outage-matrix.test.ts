@@ -92,6 +92,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
+  { method: "POST", route: "/logout/everywhere", status: 303, location: "/" },
   {
     method: "POST",
     route: "/auth/qa/:identity",
