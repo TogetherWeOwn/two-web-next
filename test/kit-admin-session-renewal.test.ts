@@ -1,8 +1,9 @@
 // Acceptance contract: a released successful Kit admin GET document slides the
 // moderator's session — the post-release twin of Hono's admin-guard re-stamp
-// (src/admin/guard.ts: a current bearer re-stamps the 120-minute window,
-// grace reads never refresh cookies, and bounces/refusals/redirects omit the
-// cookie), wired at the same post-response position as the event-detail
+// (src/admin/guard.ts: a current bearer re-stamps to a fresh 120-minute window,
+// grace reads never refresh cookies, and Hono delivers the replacement on any
+// outcome the browser keeps; this Kit twin renews only after a released
+// successful GET document), wired at the same post-response position as the event-detail
 // renewal in dispatchHookRequest. The Kit guard itself stays read-only
 // (src/admin/kit-guard.ts: never rotates, never sets cookies); renewal runs
 // only after the member-read boundary releases the response, never inside it.
