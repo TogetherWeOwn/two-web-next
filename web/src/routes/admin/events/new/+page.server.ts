@@ -14,7 +14,7 @@ import { buildEventCreateView } from "../../../../../../src/admin/kit-event-crea
 // SvelteKit throws `header_already_set` on a double-set.
 // POST /admin/events stays Hono-owned: the ported form keeps submitting to
 // the unchanged Hono handler during mixed mode, so draft-first creation,
-// weekly recurrence (max 52), wall-time/timezone validation, body cap,
+// weekly/monthly recurrence (max 52), wall-time/timezone validation, body cap,
 // throttle, error aggregation, retained values and the 303 stay one
 // authority until the write slice lands. The Svelte page mirrors the Hono
 // 422 error shape (values + field errors + dirty-draft marker) so the

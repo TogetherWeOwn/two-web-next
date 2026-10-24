@@ -339,7 +339,7 @@ Before publishing, use the [event page content readiness checklist](event-conten
    | Public joining link | Optional, at most 2048 characters. Must be a public http(s) URL without sign-in credentials; shown on published pages as the joining link. |
    | Joining instructions | Optional, at most 5000 characters. Verified public steps shown under How to join. |
    | Capacity | Empty = unlimited; otherwise a whole number from 1 to 2147483647. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
-   | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
+   | Repeats (new events only) | **Does not repeat**, **Weekly** or **Monthly**. A repeat requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. Monthly keeps the same wall day-of-month and meets on the last day of shorter months. |
 
 3. Press **Create draft**. Creation always starts as `draft`; you cannot publish
    by changing a form field. After creation you land on the edit screen.
@@ -456,8 +456,11 @@ Sources: [critical browser journeys](critical-journeys.md#critical-browser-journ
 
 ### Weekly series
 
-Choose **Weekly** only for an approved series and review its count/end date
-before **Create draft**. Occurrences retain local wall time across clock changes;
+Choose **Weekly** or **Monthly** only for an approved series and review its count/end date
+before **Create draft**. Weekly keeps the same weekday; monthly keeps the same
+wall day-of-month and meets on the last day of shorter months. A multi-day
+monthly event keeps its length, so a February occurrence can end in March.
+Occurrences retain local wall time across clock changes;
 subsequent occurrences in a spring-forward gap move forward by that gap, and
 repeated-hour times use the first occurrence. Fresh ambiguous first-event times
 still follow the event form's validation rules.

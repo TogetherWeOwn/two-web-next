@@ -58,6 +58,7 @@ describe("Kit event-create page contract", () => {
     }
     expect(source).toContain("Does not repeat");
     expect(source).toContain('value="weekly"');
+    expect(source).toContain('value="monthly"');
     expect(source).toContain("Occurrences (including the first, max 52)");
     expect(source).toContain("Repeat until (YYYY-MM-DD)");
   });
