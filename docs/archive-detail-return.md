@@ -95,32 +95,39 @@ refusal keeps that check observable without decoding the input passed to
 failed on malformed input, then passed with the fix. It also exercises duplicate
 and noncanonical pages, Unicode normalization and the 255-code-point boundary.
 
-After main was incorporated into PR #1699, its server gzip measured 329740B
-against the unchanged 329472B ceiling. Co-compress the four thin Kit archive/detail
-route bindings with their existing event views and resolvers, in the SSR-only
-`events` group. Their module-level work is declarations; environment, database,
-cookie and page-context reads remain inside invoked loaders/renderers. Keep
-client chunking, route ownership, legal comments and conservative minification
-unchanged; do not increase a budget.
+When main was first incorporated into PR #1699, its server gzip measured
+329740B against the then-unchanged 329472B ceiling, so the four thin Kit
+archive/detail route bindings were co-compressed with their existing event views
+and resolvers in the SSR-only `events` group. That grouping was reverted: it
+pulled `+page.server.ts` modules (which import `cloudflare:workers`) into the
+shared server chunk, and the Node-based Kit admin contrast harness cannot bundle
+that import (esbuild `Could not resolve "cloudflare:workers"`, 0/11 cases). The
+revert restores the base `events` group, which only matches universal modules.
+With main's revised 333312B ceiling the ungrouped build fits without a budget
+change: no ceiling, baseline, threshold or gate is relaxed here.
 
 Locked Node 24.22.1 / npm 11.19.1 builds measured the complete emitted server JS:
 
 | Build | Files | Raw B | Gzip B | Ceiling B | Checker exit |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Red head `0703c436` | 118 | 1129563 | 329740 | 329472 | 1 |
-| Fixed build 1 | 116 | 1128578 | 329084 | 329472 | 0 |
-| Fixed clean build 2 | 116 | 1128580 | 329085 | 329472 | 0 |
+| Grouped build 1 | 116 | 1128578 | 329084 | 329472 | 0 |
+| Grouped clean build 2 | 116 | 1128580 | 329085 | 329472 | 0 |
+| Ungrouped (current) | 115 | 1136887 | 329851 | 333312 | 0 |
 
-Both fixed builds include the retained encoding check. Every client JS/CSS path
-and SHA-256 and the Worker entry bytes match the red build. The actual emitted
-loaders, member-read boundary and Svelte renderers were compared against synthetic
-fixtures in both fixed builds: 19 archive/detail/error states retain identical
-HTML and headers (detail audit counts also match); three malformed-query states
-now correctly render All events instead of repaired search results. Only the
-Workers environment binding is substituted. This is not a Workerd, hook, browser,
+The grouped builds include the retained encoding check. Every client JS/CSS path
+and SHA-256 and the Worker entry bytes match the red build, and the ungrouped
+build keeps the same client bytes. The actual emitted loaders, member-read
+boundary and Svelte renderers were compared against synthetic fixtures in the
+grouped builds: 19 archive/detail/error states retain identical HTML and headers
+(detail audit counts also match); three malformed-query states now correctly
+render All events instead of repaired search results. Only the Workers
+environment binding is substituted. This is not a Workerd, hook, browser,
 staging or production proof. No screenshots or broad gates are claimed fresh by
-these emitted-byte checks. Undo the grouping by reverting the Vite configuration
-change; keep the parser check and its regression test.
+these emitted-byte checks. The ungrouped build additionally passes the Kit admin
+contrast suite 11/11 locally (real Chromium via the repo's chrome-deps path)
+and the `events.js` chunk carries no `cloudflare:workers` import. Keep the
+parser check and its regression test.
 
 ## Verification boundary
 

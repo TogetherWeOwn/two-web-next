@@ -53,9 +53,7 @@ export default defineConfig({
                 },
                 {
                   name: "events",
-                  // Co-compress thin archive/detail route bindings with their
-                  // existing views and resolvers instead of separate gzip streams.
-                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/(?:events\/past\/\+page(?:\.server\.ts|\.svelte)|e\/\[key\]\/\+(?:page(?:\.server\.ts|\.svelte)|error\.svelte))$)/,
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
                 },
               ],
             },
