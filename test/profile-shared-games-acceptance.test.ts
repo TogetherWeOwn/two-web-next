@@ -693,7 +693,9 @@ export function renderView(props) {
     expectMarked(items[1]!, "D&D");
     expectUnmarked(items[2]!, "Go");
     expect(html).not.toContain("<b>Chess</b>");
-    expect(html).toContain("&lt;b&gt;Chess&lt;/b&gt;");
+    // Svelte SSR escapes & and < only (kit-profile-form.test.ts:228 pins the
+    // same shape); the escaped < keeps the hostile name inert text.
+    expect(html).toContain("&lt;b>Chess&lt;/b>");
     expect(html).toContain("D&amp;D");
   });
 
