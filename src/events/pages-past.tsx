@@ -2,6 +2,7 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import {
+  EVENT_CARD_HOST_TESTID,
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
   PAST_EVENTS_BACK_TESTID,
@@ -24,30 +25,36 @@ import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 
-const Card: FC<{ e: PublicEvent }> = ({ e }) => (
-  <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
-    <ScheduleDate date={e.startsAt} zone={e.timezone} />
-    <div class="schedule-info">
-      <h2>
-        <a href={`/e/${e.eventKey}`}>{e.title}</a>
-      </h2>
-      {/* Upcoming-card shape (time · zone · location): the zone always
-          renders, the location only when the row has one. */}
-      <p>
-        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
-        <span>{e.timezone}</span>
-        {e.location ? (
-          <>
-            {" · "}
-            <span>{e.location}</span>
-          </>
-        ) : null}
-      </p>
-      {e.game ? <p>{e.game}</p> : null}
-    </div>
-    <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
-  </li>
-);
+const Card: FC<{ e: PublicEvent }> = ({ e }) => {
+  // Same compact host line as the upcoming CalCard: trimmed public organizer,
+  // already on the row (no new read); blank/missing renders no node.
+  const host = (e.organizer_name ?? "").trim();
+  return (
+    <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
+      <ScheduleDate date={e.startsAt} zone={e.timezone} />
+      <div class="schedule-info">
+        <h2>
+          <a href={`/e/${e.eventKey}`}>{e.title}</a>
+        </h2>
+        {/* Upcoming-card shape (time · zone · location): the zone always
+            renders, the location only when the row has one. */}
+        <p>
+          <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
+          <span>{e.timezone}</span>
+          {e.location ? (
+            <>
+              {" · "}
+              <span>{e.location}</span>
+            </>
+          ) : null}
+        </p>
+        {e.game ? <p>{e.game}</p> : null}
+        {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
+      </div>
+      <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
+    </li>
+  );
+};
 
 export const PastEventsPage: FC<{
   rows: PublicEvent[];

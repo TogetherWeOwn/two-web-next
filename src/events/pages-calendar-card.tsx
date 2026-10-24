@@ -3,6 +3,7 @@ import type { FC } from "hono/jsx";
 import {
   EVENTS_EMPTY_COPY,
   EVENT_CANCELLED_TESTID,
+  EVENT_CARD_HOST_TESTID,
   EVENT_CARD_TESTID,
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
@@ -44,6 +45,10 @@ export const CalCard: FC<{
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
+  // Compact host line: the trimmed public organizer, already on the row (no
+  // new read). Transients carry no organizer and blank/missing renders no
+  // node, so the badge and attendance never shift for unhosted cards.
+  const host = transient ? "" : (e.organizer_name ?? "").trim();
   return (
     <li>
       <article
@@ -66,6 +71,7 @@ export const CalCard: FC<{
             )}
           </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}
+          {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
           {!transient && e.status === "draft" ? (
             <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>
               Draft
