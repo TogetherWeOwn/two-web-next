@@ -42,8 +42,19 @@ dry-run builds in CI (`ci.yml` `check` job) with no size assertion.
 `ci/check-worker-bundle.mjs` gates the dry-run output `dist/worker.js`
 (raw and default-level gzip) against `ci/worker-bundle-budget.json`.
 It exits **0** when the bundle fits, **1** on breach, **2** when it cannot
-enforce (missing bundle or budget). Every failure prints a remediation
+enforce (invalid plan or missing evidence). Every failure prints a remediation
 pointer to the budget file's `$comment`. The checker never deploys.
+
+The canonical required measurement inventory is exactly `dist/worker.js`,
+defined once in `ci/bundle-inventory.mjs` and validated before the bundle is
+read. A plan that is empty, missing the canonical entry, misspelled,
+substituted, extended, or noncanonical is an invalid plan (exit 2); identity
+is fixed while numeric ceilings stay configurable in
+`ci/worker-bundle-budget.json`. `--root <dir>` selects the measurement root,
+`--format json` emits a versioned report (stable `worker.bundle` group and
+`worker.bundle.dist/worker.js` check IDs, measured bytes, fixed `error.code`
+with `next_action`), `--dry-run` is the same read-only measurement, and
+unknown flags exit 2 before any subprocess or write.
 
 Measured 2026-10-18 with wrangler 4.149.0
 (`npx wrangler deploy --dry-run --outdir dist`; the `--env production`

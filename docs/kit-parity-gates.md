@@ -321,6 +321,17 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
   becomes ready fails the run before any journey executes. The parity spec
   additionally records warm first-200 latency as a report annotation under a
   10s liveness bound.
+- The canonical required measurement inventory is exactly the four groups
+  above (worker `_worker.js`, server JS, client JS, client CSS), defined once
+  in `ci/bundle-inventory.mjs` and validated before any artifact is read. An
+  empty, missing, misspelled, substituted, extended, or noncanonical plan is
+  an invalid plan (exit 2); the missing canonical `_worker.js` file is
+  missing evidence (exit 2), not a breach. `--root <dir>` selects the
+  measurement root, `--format json` emits a versioned report (stable
+  `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` group IDs,
+  measured bytes, fixed `error.code` with `next_action`), `--dry-run` is the
+  same read-only measurement, and unknown flags exit 2 before any subprocess
+  or write.
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 
