@@ -20,11 +20,10 @@ export function documentedCodes(doc) {
   return [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
 }
 
-// A JSON `error:` literal that is not a lowercase snake_case code, in any
-// quote form: biome normalizes single quotes and spacing to the canonical
-// double-quoted spelling, but leaves template literals untouched, so match
-// all three delimiters (the capture group is now m[2], m[1] is the quote).
-const BAD_ERROR = /\berror:\s*(["'`])([^"'`]*[A-Z ][^"'`]*)\1\s*[,}]/g;
+// Read all three literal forms: only the matching, unescaped delimiter ends
+// the value. Other quote characters are content, not a reason to skip it.
+const ERROR_LITERAL =
+  /\berror:\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|`((?:\\[\s\S]|[^`\\])*)`)\s*[,}]/g;
 
 export function evaluate({ codes, doc, sources }) {
   const failures = [];
@@ -38,9 +37,12 @@ export function evaluate({ codes, doc, sources }) {
   }
   if (new Set(documented).size !== documented.length) failures.push("duplicate documented code");
   for (const [file, text] of Object.entries(sources)) {
-    for (const m of text.matchAll(BAD_ERROR)) {
-      const line = text.slice(0, m.index).split("\n").length;
-      failures.push(`non-vocabulary error "${m[2]}" at ${file}:${line}`);
+    for (const m of text.matchAll(ERROR_LITERAL)) {
+      const value = m[1] ?? m[2] ?? m[3];
+      if (/[A-Z ]/.test(value)) {
+        const line = text.slice(0, m.index).split("\n").length;
+        failures.push(`non-vocabulary error "${value}" at ${file}:${line}`);
+      }
     }
   }
   return { ok: failures.length === 0, codes: [...codes], failures };

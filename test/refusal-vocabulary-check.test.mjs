@@ -54,6 +54,47 @@ describe("evaluate", () => {
     ]);
   });
 
+  it.each([
+    ["double-quoted apostrophe", `"Can't authenticate"`],
+    ["double-quoted backticks", '"Invalid `status`"'],
+    ["single-quoted double quotes", `'Invalid "status"'`],
+    ["single-quoted backticks", "'Invalid `status`'"],
+    ["template apostrophe", "`Can't authenticate`"],
+    ["template double quotes", '`Invalid "status"`'],
+    ["escaped double quotes", String.raw`"Invalid \"status\""`],
+    ["escaped single quote", String.raw`'Can\'t authenticate'`],
+    ["escaped backticks", "`Invalid \\`status\\``"],
+    ["escaped backslash before closing double quote", String.raw`"Invalid \\"`],
+    ["escaped backslash before closing single quote", String.raw`'Invalid \\'`],
+    ["escaped backslash before closing backtick", "`Invalid \\\\`"],
+  ])("fails a %s error literal without losing its location", (_name, literal) => {
+    const r = evaluate({
+      codes: ["forbidden", "invalid"],
+      doc: DOC,
+      sources: { "src/quotes.ts": `// fixture\nexport const refusal = { error: ${literal} };` },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failures).toEqual([
+      `non-vocabulary error "${literal.slice(1, -1)}" at src/quotes.ts:2`,
+    ]);
+  });
+
+  it("does not read beyond a literal into a sibling property's message", () => {
+    const r = evaluate({
+      codes: ["forbidden", "invalid"],
+      doc: DOC,
+      sources: {
+        "src/siblings.ts": [
+          `export const a = { error: "forbidden", message: "Can't authenticate" };`,
+          `export const b = { error: 'invalid', message: 'Invalid "status"' };`,
+          'export const c = { error: `invalid`, message: `Invalid "status"` };',
+          'export const d = { error: "Unauthorized" };',
+        ].join("\n"),
+      },
+    });
+    expect(r.failures).toEqual(['non-vocabulary error "Unauthorized" at src/siblings.ts:4']);
+  });
+
   it("fails a non-snake_case code", () => {
     const r = evaluate({ codes: ["Forbidden"], doc: DOC, sources: {} });
     expect(r.failures).toContain("code not snake_case: Forbidden");

@@ -49,7 +49,7 @@ callers keep their HTML and text bodies: only JSON callers (an exact
 | `not_found` | 404 | none | No such event or member. |
 | `method_not_allowed` | 405 | none | Wrong verb; the `Allow` header lists the right ones. |
 | `unsupported_media_type` | 415 | none | Send JSON (or a form where the route takes one). |
-| `invalid` | 422 | `fields` | Validation failed; `fields` maps each field name to its message. |
+| `invalid` | 422 | `fields` | Validation failed; `fields` maps each field name to a string message, except on RSVP where the value is a list of strings. |
 
 Not part of this envelope: the 429 throttle shape above, `event_not_open`
 RSVP refusals (`reason`), and 503 `db_unavailable`.
