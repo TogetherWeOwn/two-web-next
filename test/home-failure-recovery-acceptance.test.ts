@@ -199,12 +199,14 @@ afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
-const RETRY_NOTICES = ["signin_failed", "signin_unavailable"] as const;
+const RETRY_NOTICES = ["signin_failed", "signin_denied", "signin_unavailable"] as const;
 
 describe("acceptance: signin failure notices offer a retry (Hono)", () => {
   it.each([
     { notice: "signin_failed" as const, viewer: "guest", session: null },
     { notice: "signin_failed" as const, viewer: "member", session: honoMember },
+    { notice: "signin_denied" as const, viewer: "guest", session: null },
+    { notice: "signin_denied" as const, viewer: "member", session: honoMember },
     { notice: "signin_unavailable" as const, viewer: "guest", session: null },
     { notice: "signin_unavailable" as const, viewer: "member", session: honoMember },
   ])(
@@ -228,6 +230,8 @@ describe("acceptance: signin failure notices offer a retry (Kit)", () => {
   it.each([
     { notice: "signin_failed" as const, viewer: "guest", session: null },
     { notice: "signin_failed" as const, viewer: "member", session: kitMember },
+    { notice: "signin_denied" as const, viewer: "guest", session: null },
+    { notice: "signin_denied" as const, viewer: "member", session: kitMember },
     { notice: "signin_unavailable" as const, viewer: "guest", session: null },
     { notice: "signin_unavailable" as const, viewer: "member", session: kitMember },
   ])(
@@ -310,7 +314,7 @@ describe("acceptance: empty schedule card links recovery (Kit)", () => {
 });
 
 describe("acceptance: other notices gain no retry link", () => {
-  it.each(["signin_denied", "joined", "already_member"] as const)(
+  it.each(["joined", "already_member"] as const)(
     "Hono ?n=%s renders its sentence with no retry",
     async (notice) => {
       const html = await renderHono(null, notice);
@@ -320,7 +324,7 @@ describe("acceptance: other notices gain no retry link", () => {
     },
   );
 
-  it.each(["signin_denied", "joined", "already_member"] as const)(
+  it.each(["joined", "already_member"] as const)(
     "Kit ?n=%s renders its sentence with no retry",
     (notice) => {
       const html = renderKit(baseData({ notice }));
@@ -369,6 +373,6 @@ describe("acceptance: notice copy is byte-identical", () => {
       signin_unavailable:
         "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.",
     });
-    expect(RETRY_NOTICES).toEqual(["signin_failed", "signin_unavailable"]);
+    expect(RETRY_NOTICES).toEqual(["signin_failed", "signin_denied", "signin_unavailable"]);
   });
 });
