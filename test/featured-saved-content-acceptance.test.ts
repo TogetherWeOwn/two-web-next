@@ -236,13 +236,15 @@ describe("Hono saved-versus-submitted redisplay and unchanged eligibility author
   }
 
   it("CONTROL-new: an unsaved create form has no saved content preview", async () => {
-    const html = await FeaturedFormPage({
-      mode: "new",
-      values: { title: "Not saved", body: "Not a saved row" },
-      errors: {},
-      now: CHECKED_AT,
-      appUrl: APP_URL,
-    }).toString();
+    const html = String(
+      await FeaturedFormPage({
+        mode: "new",
+        values: { title: "Not saved", body: "Not a saved row" },
+        errors: {},
+        now: CHECKED_AT,
+        appUrl: APP_URL,
+      }),
+    );
     expect(html).not.toContain('data-testid="featured-preview"');
     expect(html).not.toContain('data-testid="featured-item"');
     expect(html).toContain('action="/admin/featured"');

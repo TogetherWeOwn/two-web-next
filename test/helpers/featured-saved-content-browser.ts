@@ -1,6 +1,7 @@
 // Registered inside the existing featured native browser opt-in. No new skip or CI gate.
 // FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts
 import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import type { Browser } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -11,6 +12,8 @@ import {
   savedFeatured,
 } from "./featured-saved-content-cases";
 import { renderSavedHono, renderSavedKit } from "./featured-saved-content-render";
+
+declare const document: { activeElement: unknown };
 
 const css = readFileSync(new URL("../../public/styles.css", import.meta.url), "utf8");
 const editor = readFileSync(

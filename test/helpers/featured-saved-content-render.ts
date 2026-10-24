@@ -78,15 +78,17 @@ export async function renderSavedHono(
     imageHosts?: string;
   } = {},
 ): Promise<string> {
-  return await FeaturedFormPage({
-    mode: "edit",
-    row,
-    values: options.values ?? savedValues(row),
-    errors: options.errors ?? {},
-    now: CHECKED_AT,
-    appUrl: APP_URL,
-    imageHosts: options.imageHosts,
-  }).toString();
+  return String(
+    await FeaturedFormPage({
+      mode: "edit",
+      row,
+      values: options.values ?? savedValues(row),
+      errors: options.errors ?? {},
+      now: CHECKED_AT,
+      appUrl: APP_URL,
+      imageHosts: options.imageHosts,
+    }),
+  );
 }
 
 export async function renderSavedKit(row: FeaturedEditRow, imageHosts?: string): Promise<string> {
