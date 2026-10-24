@@ -266,14 +266,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
     } catch {
       if (exit !== 2) {
+        // Rebuild from named fields instead of `...result`: a self-spread
+        // rebinds the same keys here, but the static timeout-ledger check
+        // cannot resolve a variable spread into its own rebinding.
+        const prior = result;
         result = {
-          ...result,
           ...createVerdict(
-            result.alerts,
-            [...result.errors.slice(0, MAX_ERRORS - 1), { code: "summary_unavailable" }],
+            prior.alerts,
+            [...prior.errors.slice(0, MAX_ERRORS - 1), { code: "summary_unavailable" }],
             null,
           ),
-          failures: [...result.failures, "invalid scan evidence: summary output unavailable"],
+          failures: [...prior.failures, "invalid scan evidence: summary output unavailable"],
+          siteCount: prior.siteCount,
+          errors_truncated: prior.errors_truncated,
           evidence_complete: false,
         };
         md = markdown(result);
