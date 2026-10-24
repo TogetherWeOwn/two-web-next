@@ -9,6 +9,7 @@ import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
+import { PREVIOUS_PUBLISHED_POLICIES } from "../privacy-history";
 import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
 import { RULES } from "../rules-content";
@@ -163,6 +164,14 @@ export function mdPrivacy(appUrl: string): string {
     `Version ${POLICY_VERSION}`,
     "",
     POLICY_MARKDOWN.trimEnd(),
+    "",
+    "## Previous published versions",
+    "",
+    "Historical snapshots kept in the site's public history. These are not the current policy.",
+    "",
+    ...PREVIOUS_PUBLISHED_POLICIES.map(
+      (entry) => `- [Version ${entry.version} on GitHub (public repository)](${entry.href})`,
+    ),
     "",
     leafFooter(appUrl),
     "",
