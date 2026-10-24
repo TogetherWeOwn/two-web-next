@@ -1124,16 +1124,25 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. */
 export async function listFeed(
   db: Db,
   statuses: ("published" | "cancelled")[],
   now = new Date(),
+  game: string | null = null,
 ): Promise<Array<typeof events.$inferSelect>> {
+  const gameClause = gameCondition(game);
   const rows = await db
     .select()
     .from(events)
-    .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
+    .where(
+      and(
+        ...(gameClause ? [gameClause] : []),
+        inArray(events.status, statuses),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+      ),
+    )
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("feed", rows.length);
