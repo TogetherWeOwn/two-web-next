@@ -77,7 +77,11 @@ function secretFree(result) {
     for (const canary of canaries)
       assert.ok(!text.includes(canary), "a known synthetic secret escaped");
     assert.equal(scrubSecrets(text).length, 0, "existing secret-shaped guards remain mandatory");
-    assert.ok(!text.includes("https://fixture.test/private"), "token-bearing URLs must not escape");
+    assert.doesNotMatch(
+      text,
+      /https:\/\/fixture\.test\/private/,
+      "token-bearing URLs must not escape",
+    );
   }
 }
 
@@ -439,17 +443,18 @@ function runCli(t, args) {
   const cwd = mkdtempSync(join(scratch, "auth-perf-cli-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const marker = join(cwd, "fetch-called");
-  const preload = `import { appendFileSync } from 'node:fs'; globalThis.fetch = () => { appendFileSync(${JSON.stringify(marker)}, 'called\\n'); throw new Error('fixture refuses all network'); };`;
-  const result = spawnSync(
-    process.execPath,
-    ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, script, ...args],
-    {
-      cwd,
-      env: { NODE_NO_WARNINGS: "1", AUTH_PERF_URL: "https://fixture.test", E2E_QA_TOKEN: qaCanary },
-      encoding: "utf8",
-      timeout: 5_000,
+  const preload = fileURLToPath(new URL("./fixtures/auth-perf-fetch-preload.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, ["--import", preload, script, ...args], {
+    cwd,
+    env: {
+      NODE_NO_WARNINGS: "1",
+      AUTH_PERF_URL: "https://fixture.test",
+      E2E_QA_TOKEN: qaCanary,
+      AUTH_PERF_FETCH_MARKER: marker,
     },
-  );
+    encoding: "utf8",
+    timeout: 5_000,
+  });
   assert.equal(result.signal, null, "non-live modes must finish, not hang");
   assert.ok(!result.error, "CLI must start cleanly");
   assert.equal(
