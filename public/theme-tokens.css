@@ -1,35 +1,156 @@
+/* ==========================================================================
+ * TWO Brand Theme — "Lobby Ember" (derived from Logo 1, owner-approved)
+ * Drop-in theme file. Single-file swap: replacing public/theme-tokens.css
+ * with this file (plus the two-line Kit mirror in web/src/app.css, see
+ * BRAND-SYSTEM.md §6) re-themes the whole site. Components must use ONLY
+ * the semantic tokens below — never the raw --two-* ramps, never hex.
+ *
+ * Brand anchors (from Color Codes-01.jpg + vector gradient stops):
+ *   orange    #FF9C36 (Pantone 715 C)   gradient top
+ *   pink-red  #FF0E52 (Pantone 192 C)   gradient mid (52.12%)
+ *   violet    #5701AE (Pantone Violet C) gradient bottom
+ *   ink       #F7F7F7 (logo wordmark white) / #0C0C0C (logo ground black)
+ * Gradient vector: vertical, userSpace y 184.87 (violet) -> 42.95 (orange).
+ * ========================================================================== */
+
+/* ---- 1. Brand ramps (OKLCH-derived, 500 == brand anchor, monotonic) ----
+   Generation: work/fix_ramps.py. L(500) is the exact brand anchor; steps
+   below 500 interpolate 0.97 -> L0, steps above L0 -> 0.22, so luminance
+   falls monotonically 50 -> 950. 50/100 are desaturated tints, the rest
+   keep anchor chroma (gamut-shrunk only where sRGB cannot hold it). */
+:root {
+  --two-orange-50: #ffebc4;
+  --two-orange-100: #ffe4bd;
+  --two-orange-200: #ffcc84;
+  --two-orange-300: #ffb757;
+  --two-orange-400: #ffaa47;
+  --two-orange-500: #ff9c36;
+  --two-orange-600: #d47500;
+  --two-orange-700: #ab4e00;
+  --two-orange-800: #822800;
+  --two-orange-900: #5a0000;
+  --two-orange-950: #470000;
+
+  --two-pink-50: #ffd6da;
+  --two-pink-100: #ffcace;
+  --two-pink-200: #ff92a1;
+  --two-pink-300: #ff5c7e;
+  --two-pink-400: #ff3e68;
+  --two-pink-500: #ff0e52;
+  --two-pink-600: #dc0037;
+  --two-pink-700: #b9001c;
+  --two-pink-800: #970000;
+  --two-pink-900: #740000;
+  --two-pink-950: #630000;
+
+  --two-violet-50: #f9e9ff;
+  --two-violet-100: #e4d4ff;
+  --two-violet-200: #c09eff;
+  --two-violet-300: #9d6aff;
+  --two-violet-400: #793fd9;
+  --two-violet-500: #5701ae;
+  --two-violet-600: #4d00a1;
+  --two-violet-700: #430093;
+  --two-violet-800: #3a0086;
+  --two-violet-900: #320079;
+  --two-violet-950: #2e0072;
+
+  /* Dark neutrals: charcoal feel kept, violet-tinted to sit with the logo.
+     Old Open Lobby #121719 (green-charcoal) passes the same pairs; the tint
+     is an aesthetic fit choice, not a contrast fix. */
+  --two-night-900: #141117; /* page */
+  --two-night-800: #1e1a25; /* surface */
+  --two-night-700: #272133; /* raised */
+  --two-night-600: #3c344c; /* border */
+  --two-night-100: #bdb7d1; /* muted text */
+  --two-night-50: #f7f7f7; /* text (logo white) */
+}
+
+/* ---- 2. Semantic theme plugs (THE THEME CONTRACT — see BRAND-SYSTEM.md) ---- */
 .base-theme {
-  --color-text: var(--theme-text, #f5f6fb);
-  --color-page: var(--theme-page, #151720);
-  --color-accent: var(--theme-accent, #a3ff12);
-  --color-muted: var(--theme-muted, #c6cbea);
-  --color-surface: var(--theme-surface, #222430);
-  --color-border: var(--theme-border, #41465c);
+  --theme-text: #f7f7f7;
+  --theme-page: #141117;
+  --theme-accent: #ff9c36; /* solid CTA / focus default (was lime) */
+  --theme-accent-ink: #1d0b00; /* text on accent — 9.2:1, do not use white */
+  --theme-muted: #bdb7d1;
+  --theme-surface: #1e1a25;
+  --theme-raised: #272133;
+  --theme-border: #3c344c;
+  --theme-focus: #ff9c36; /* 3px outline vs page: 8.4:1 non-text */
+  --theme-link: #ffa94d; /* 9.8:1 on page — body links */
+  --theme-violet: #5701ae; /* white text on it: 10.4:1 (badges) */
+  --theme-violet-deep: #3a0086; /* violet-800; white text: 13.8:1 (pressed/hover) */
+  --theme-pink: #ff0e52; /* LARGE display text only w/ white (3.9:1);
+                                       never a text background with light text */
+  --theme-gradient-brand: linear-gradient(180deg, #ff9c36 0%, #ff0e52 52.12%, #5701ae 100%);
+  --theme-gradient-brand-h: linear-gradient(90deg, #5701ae 0%, #ff0e52 52.12%, #ff9c36 100%);
+  --theme-success: #3ddc84; /* 10.5:1 on page */
+  --theme-warn: #ffb020; /* 10.2:1 on page */
+  --theme-danger: #ff6b8a; /* 6.9:1 on page */
+
+  --color-text: var(--theme-text);
+  --color-page: var(--theme-page);
+  --color-accent: var(--theme-accent);
+  --color-muted: var(--theme-muted);
+  --color-surface: var(--theme-surface);
+  --color-border: var(--theme-border);
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);
+  --brand-ink: var(--theme-accent-ink);
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
   min-height: 100vh;
   background: var(--color-page);
   color: var(--color-text);
-  font:
-    17px / 1.65 system-ui,
-    sans-serif;
+  font: 17px / 1.65 var(--two-font-body, system-ui, sans-serif);
 }
+
 .base-theme.schedule-theme,
 .base-theme[data-theme="schedule"] {
-  --color-text: var(--theme-schedule-text, #f5f6fb);
-  --color-page: var(--theme-schedule-page, #151720);
-  --color-accent: var(--theme-schedule-accent, #a3ff12);
-  --color-muted: var(--theme-schedule-muted, #c6cbea);
-  --color-surface: var(--theme-schedule-surface, #222430);
-  --color-border: var(--theme-schedule-border, #41465c);
+  --theme-schedule-text: #f7f7f7;
+  --theme-schedule-page: #141117;
+  --theme-schedule-accent: #ff9c36;
+  --theme-schedule-accent-ink: #1d0b00;
+  --theme-schedule-muted: #bdb7d1;
+  --theme-schedule-surface: #1e1a25;
+  --theme-schedule-raised: #272133;
+  --theme-schedule-border: #3c344c;
+  --color-text: var(--theme-schedule-text);
+  --color-page: var(--theme-schedule-page);
+  --color-accent: var(--theme-schedule-accent);
+  --color-muted: var(--theme-schedule-muted);
+  --color-surface: var(--theme-schedule-surface);
+  --color-border: var(--theme-schedule-border);
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);
+  --brand-ink: var(--theme-schedule-accent-ink);
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
+}
+
+/* ---- 3. Type tokens (free OFL faces; self-host woff2, font-display: swap) ---- */
+:root {
+  --two-font-display:
+    "Chakra Petch", "Display", "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui,
+    sans-serif;
+  --two-font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Gradient display text — hero sizes ONLY (large-text AA floor, never body). */
+.brand-gradient-text {
+  background: var(--theme-gradient-brand-h, linear-gradient(90deg, #5701ae, #ff0e52 52%, #ff9c36));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Gradient hairline — section dividers, card top-rules, footer rule. */
+.brand-gradient-rule {
+  border: 0;
+  height: 3px;
+  background: var(--theme-gradient-brand-h, linear-gradient(90deg, #5701ae, #ff0e52 52%, #ff9c36));
 }

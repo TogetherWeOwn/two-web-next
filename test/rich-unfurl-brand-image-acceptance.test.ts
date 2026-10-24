@@ -179,7 +179,8 @@ function headOf(html: string): string {
 }
 
 function titleOf(html: string): string {
-  const titles = [...html.matchAll(/<title>([^<]*)<\/title>/g)].map((m) => m[1]!);
+  // SVG accessibility titles in the body are not document titles.
+  const titles = [...headOf(html).matchAll(/<title>([^<]*)<\/title>/g)].map((m) => m[1]!);
   expect(titles, "exactly one <title>").toHaveLength(1);
   return titles[0]!;
 }
@@ -257,7 +258,9 @@ function expectRichUnfurl(
   expect(metaContents(html, "property", "og:description"), `${page}: og:description`).toEqual(
     description === null ? [] : [description],
   );
-  expect(metaContents(html, "name", "twitter:card"), `${page}: twitter:card`).toHaveLength(1);
+  expect(metaContents(html, "name", "twitter:card"), `${page}: twitter:card`).toEqual([
+    "summary_large_image",
+  ]);
   expect(metaContents(html, "name", "twitter:title"), `${page}: twitter:title`).toEqual([title]);
   expect(metaContents(html, "name", "twitter:description"), `${page}: twitter:description`).toEqual(
     description === null ? [] : [description],
@@ -265,7 +268,7 @@ function expectRichUnfurl(
   const images = metaContents(html, "property", "og:image");
   expect(images, `${page}: exactly one og:image`).toHaveLength(1);
   expect(images, `${page}: exact brand asset on the canonical origin`).toEqual([
-    `${new URL(canonical).origin}/icons/icon-512.png`,
+    `${new URL(canonical).origin}/og-1200x630.png`,
   ]);
   const alts = metaContents(html, "property", "og:image:alt");
   expect(alts, `${page}: exactly one og:image:alt`).toHaveLength(1);
@@ -298,13 +301,18 @@ async function expectBrandAssetServed(imageUrl: string, canonical: string) {
   expect(image.hash, "og:image carries no fragment").toBe("");
   expect(image.pathname.startsWith("//"), "og:image has no double slash").toBe(false);
   expect(imageUrl, "served image is the exact absolute brand URL").toBe(
-    `${canon.origin}/icons/icon-512.png`,
+    `${canon.origin}/og-1200x630.png`,
   );
-  const approved = image.pathname === "/icons/icon-512.png";
+  const approved = image.pathname === "/og-1200x630.png";
   expect(approved, `og:image reuses an approved brand file, got ${image.pathname}`).toBe(true);
   const diskPath = join(root, "public", image.pathname);
   expect(existsSync(diskPath), `og:image exists under public/: ${image.pathname}`).toBe(true);
   const bytes = readFileSync(diskPath);
+  expect(isPng(bytes), "approved share asset is PNG").toBe(true);
+  expect(bytes.subarray(12, 16).toString("ascii"), "PNG starts with IHDR").toBe("IHDR");
+  expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)], "large brand dimensions").toEqual([
+    1200, 630,
+  ]);
   const mime =
     image.pathname.endsWith(".png") && isPng(bytes)
       ? "image/png"
@@ -733,7 +741,7 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
     expect(canonicals(head)).toEqual(["https://next.example.test/"]);
     expect(metaContents(head, "property", "og:url")).toEqual(["https://next.example.test/"]);
     expect(metaContents(head, "property", "og:image")).toEqual([
-      "https://next.example.test/icons/icon-512.png",
+      "https://next.example.test/og-1200x630.png",
     ]);
     expect(metaContents(head, "property", "og:image:alt")).toEqual([
       "Together We Own community logo",
@@ -754,7 +762,7 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
       expect(
         metaContents(head, "property", "og:image"),
         `${route}: exactly one brand image`,
-      ).toEqual(["https://next.example.test/icons/icon-512.png"]);
+      ).toEqual(["https://next.example.test/og-1200x630.png"]);
       expect(
         metaContents(head, "property", "og:image:alt"),
         `${route}: exactly one brand alt`,
@@ -811,6 +819,64 @@ describe("one static brand asset across every leaf and renderer", () => {
     expect([...images], "one static brand asset, not per-page art").toHaveLength(1);
     await expectBrandAssetServed([...images][0]!, canonicalUrl(APP_URL, "/about"));
   });
+});
+
+// ---------------------------------------------------------------------------
+// Oracle controls: accessible SVG titles are valid; missing/duplicated document
+// titles and wrong/deleted/duplicated share tags are not.
+// ---------------------------------------------------------------------------
+
+describe("rich-unfurl oracle negative controls", () => {
+  it.each(["Hono", "Kit"] as const)(
+    "%s rejects share and document-title mutants",
+    async (renderer) => {
+      const kit = await sharedKitBundle();
+      const html =
+        renderer === "Hono"
+          ? await (await app.request("/about", {}, leafEnv)).text()
+          : kit.renderAbout(kitLeafData().about!);
+      const expected = {
+        canonical: `${APP_URL}/about`,
+        description: null,
+        page: `${renderer} control`,
+      };
+      expectRichUnfurl(html, expected);
+      expect(html.match(/<title>/g)?.length).toBeGreaterThan(1);
+      const head = headOf(html);
+      const image = head.match(/<meta\s+[^>]*property="og:image"[^>]*>/)?.[0];
+      const alt = head.match(/<meta\s+[^>]*property="og:image:alt"[^>]*>/)?.[0];
+      const title = head.match(/<title>[^<]*<\/title>/)?.[0];
+      expect(image).toBeTruthy();
+      expect(alt).toBeTruthy();
+      expect(title).toBeTruthy();
+      const mutants: Array<[string, string, string]> = [
+        ["old icon", head.replace("/og-1200x630.png", "/icons/icon-512.png"), "exact brand asset"],
+        [
+          "arbitrary image",
+          head.replace("/og-1200x630.png", "/arbitrary.png"),
+          "exact brand asset",
+        ],
+        [
+          "wrong host",
+          head.replace(`${APP_URL}/og-1200x630.png`, "https://other.example.test/og-1200x630.png"),
+          "exact brand asset",
+        ],
+        ["deleted image", head.replace(image!, ""), "exactly one og:image"],
+        ["duplicate image", head.replace(image!, image! + image!), "exactly one og:image"],
+        ["deleted alt", head.replace(alt!, ""), "exactly one og:image:alt"],
+        ["duplicate alt", head.replace(alt!, alt! + alt!), "exactly one og:image:alt"],
+        ["missing document title", head.replace(title!, ""), "exactly one <title>"],
+        ["duplicate document title", head.replace(title!, title! + title!), "exactly one <title>"],
+        ["small Twitter card", head.replace("summary_large_image", "summary"), "twitter:card"],
+      ];
+      for (const [name, changedHead, failure] of mutants) {
+        expect(changedHead, name).not.toBe(head);
+        // Replace only head bytes; retain both official SVG titles in the body.
+        const mutant = html.replace(head, changedHead);
+        expect(() => expectRichUnfurl(mutant, expected), name).toThrow(failure);
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

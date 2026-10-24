@@ -197,7 +197,11 @@ function expectHead(
   expected: { canonical: string; title: string; description: string; robots?: string },
 ) {
   const { canonical, title, description, robots } = expected;
-  expect(html.match(/<title>/g) ?? []).toHaveLength(1);
+  const image = new URL("/og-1200x630.png", canonical).href;
+  // The inline header lockup SVGs carry their own <title> elements, so the
+  // document-title count is scoped to <head>.
+  const head = html.slice(0, html.indexOf("</head>"));
+  expect(head.match(/<title>/g) ?? []).toHaveLength(1);
   expect(html).toContain(`<title>${title}</title>`);
   expect(html.match(/<meta name="description"/g) ?? []).toHaveLength(1);
   expect(html).toContain(`<meta name="description" content="${description}"/>`);
@@ -209,9 +213,11 @@ function expectHead(
     `<meta property="og:url" content="${canonical}"`,
     `<meta property="og:title" content="${title}"`,
     `<meta property="og:description" content="${description}"`,
-    '<meta name="twitter:card" content="summary"',
+    `<meta property="og:image" content="${image}"`,
+    '<meta name="twitter:card" content="summary_large_image"',
     `<meta name="twitter:title" content="${title}"`,
     `<meta name="twitter:description" content="${description}"`,
+    `<meta name="twitter:image" content="${image}"`,
   ]) {
     expect(html, needle).toContain(needle);
   }
@@ -220,8 +226,10 @@ function expectHead(
     expect(html.match(/<meta name="robots"[^>]*>/g)).toEqual([
       `<meta name="robots" content="${robots}"/>`,
     ]);
+  // The share image is part of the head contract now: exactly one og:image.
+  expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
   expect(html, "og:image").toContain(
-    `property="og:image" content="${new URL("/icons/icon-512.png", canonical).href}"`,
+    `property="og:image" content="${new URL("/og-1200x630.png", canonical).href}"`,
   );
   expect(html, "og:image:alt").toContain(
     'property="og:image:alt" content="Together We Own community logo"',

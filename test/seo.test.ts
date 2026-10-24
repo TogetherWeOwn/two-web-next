@@ -181,10 +181,13 @@ describe("share meta parity (TOG-5624)", () => {
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/"');
     expect(html).toContain('<meta property="og:type" content="website"');
     expect(html).toContain('<meta property="og:site_name" content="Together We Own"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
     expect(html).toContain('<meta property="og:description"');
     expect(html).toContain(
-      '<meta property="og:image" content="https://next.example.test/icons/icon-512.png"',
+      '<meta property="og:image" content="https://next.example.test/og-1200x630.png"',
+    );
+    expect(html).toContain(
+      '<meta name="twitter:image" content="https://next.example.test/og-1200x630.png"',
     );
     expect(html).toContain(
       '<meta property="og:image:alt" content="Together We Own community logo"',
@@ -195,7 +198,10 @@ describe("share meta parity (TOG-5624)", () => {
     const html = await (await app.request("/about", {}, env)).text();
     expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
+    expect(html).toContain(
+      '<meta property="og:image" content="https://next.example.test/og-1200x630.png"',
+    );
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });
@@ -229,14 +235,14 @@ describe("URL freeze (W4 slice)", () => {
 describe("shareImageUrl (rich unfurls)", () => {
   it("derives the absolute brand image URL from the page canonical", () => {
     expect(shareImageUrl("https://next.example.test/about")).toBe(
-      "https://next.example.test/icons/icon-512.png",
+      "https://next.example.test/og-1200x630.png",
     );
     expect(shareImageUrl("https://next.example.test:8443/e/abc?x=1")).toBe(
-      "https://next.example.test:8443/icons/icon-512.png",
+      "https://next.example.test:8443/og-1200x630.png",
     );
   });
 
   it("falls back to the rooted path when the canonical is not parseable", () => {
-    expect(shareImageUrl("::::")).toBe("/icons/icon-512.png");
+    expect(shareImageUrl("::::")).toBe("/og-1200x630.png");
   });
 });

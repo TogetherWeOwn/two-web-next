@@ -113,6 +113,7 @@ describe("sitemap + robots (per-env host)", () => {
 
 describe("share meta (TOG-5624)", () => {
   const tags = (html: string, canonical: string, title: string, description: string) => {
+    const image = new URL("/og-1200x630.png", canonical).href;
     for (const needle of [
       `<link rel="canonical" href="${canonical}"`,
       '<meta property="og:type" content="website"',
@@ -120,9 +121,11 @@ describe("share meta (TOG-5624)", () => {
       `<meta property="og:url" content="${canonical}"`,
       `<meta property="og:title" content="${title}"`,
       `<meta property="og:description" content="${description}"`,
-      '<meta name="twitter:card" content="summary"',
+      `<meta property="og:image" content="${image}"`,
+      '<meta name="twitter:card" content="summary_large_image"',
       `<meta name="twitter:title" content="${title}"`,
       `<meta name="twitter:description" content="${description}"`,
+      `<meta name="twitter:image" content="${image}"`,
     ]) {
       expect(html, needle).toContain(needle);
     }
@@ -136,7 +139,8 @@ describe("share meta (TOG-5624)", () => {
       "Together We Own — the lobby is open",
       "We spent most of our life private. Now you can just turn up.",
     );
-    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html.match(/<meta property="og:image"/g) ?? []).toHaveLength(1);
+    expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 

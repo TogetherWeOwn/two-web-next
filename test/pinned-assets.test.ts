@@ -30,6 +30,14 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 const FONT_PINS = {
   "display-latin-500.woff2": "23afdb9b5b89b878fab04d80cc30bf41bb4f3f7e8be88e5f16a7cc7671cdb2dc",
   "display-latin-700.woff2": "5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f",
+  "chakra-petch-latin-600-normal.woff2":
+    "a5888696e9eb1b4bbbecc8eb3922b8369f49d4bddb72263e033cbd17f399be76",
+  "chakra-petch-latin-700-normal.woff2":
+    "ce5095dc1cb200aaa939e38067a0677018d10e9f26ec38cdcf1557ac524fc775",
+  "inter-latin-400-normal.woff2":
+    "8909904ab6c872eb994093482a88a28eca2cd95912d7b6fecd72103b0dc07edc",
+  "inter-latin-700-normal.woff2":
+    "6f56409fd3d64bb85f7d070bce20749db2d66b6d63cec586cc22d1c761be2491",
 } as const;
 
 const fontBytes = (name: string) => readFileSync(resolve(root, "public/fonts", name));
@@ -79,6 +87,8 @@ describe("pinned font cache", () => {
   it("stamps the immutable header on /fonts/*.woff2 only", () => {
     expect(isPinnedAssetPath("/fonts/display-latin-500.woff2")).toBe(true);
     expect(isPinnedAssetPath("/fonts/display-latin-700.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/chakra-petch-latin-700-normal.woff2")).toBe(true);
+    expect(isPinnedAssetPath("/fonts/inter-latin-400-normal.woff2")).toBe(true);
     for (const notPinned of [
       "/favicon.ico",
       "/styles.css",

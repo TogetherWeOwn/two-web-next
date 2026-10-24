@@ -835,7 +835,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const env = envFor(createMemorySessionStore());
     const page = await app.request(path, {}, env);
     expect(page.status).toBe(200);
-    const header = (await page.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
+    const header = (await page.text()).match(/<header\b[^>]*>(.*?)<\/header>/s)![1]!;
     const loginHref = header.match(/href="([^"]+)" data-testid="signin"/)![1]!;
     expect(loginHref).toBe(`/auth/discord?next=${encodeURIComponent(next)}`);
 

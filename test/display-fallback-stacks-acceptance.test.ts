@@ -2,12 +2,14 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Typography acceptance: every Display stack in the four theme sheets carries
-// the metric-matched 'Display Fallback' directly after Display (the theme.css
-// position), every --font-display token definition carries it too, and no
+// Typography acceptance: display text in the four theme sheets reads the
+// --two-font-display token (the Lobby Ember chain: Chakra Petch over Display
+// over the metric-matched 'Display Fallback'), every font-display token
+// definition carries 'Display Fallback' directly after Display, and no
 // hardcoded hex lives in theme sheets outside token files. Static pins only:
-// no app, no database, no network. The E7 build greens these without editing
-// this file.
+// no app, no database, no network. A theme swap edits the token value, never
+// the sheets; a bare Display family back in a sheet fails here instead of
+// forking the stack.
 
 const THEME_SHEETS = [
   "theme.css",
@@ -29,15 +31,18 @@ const stripFontFace = (css: string): string => css.replace(/@font-face\s*\{[^}]*
 const FONT_DECLARATION = /(?:font-family|font)\s*:[^;{}]+;/g;
 // Bare Display: neither the quoted 'Display Fallback' family nor font-display.
 const BARE_DISPLAY = /(?<!['"-\w])Display(?!['"-\w])/;
-// theme.css position: the fallback sits directly after Display.
-const UNIFIED_STACK = /Display,\s*["']Display Fallback["']/;
+// Token stacks read the shared chain instead of naming families.
+const TOKEN_STACK = /var\(--two-font-display/;
+// theme.css position: the fallback sits directly after Display (bare or quoted).
+const UNIFIED_STACK = /["']?Display["']?,\s*["']Display Fallback["']/;
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/g;
-const TOKEN_DECLARATION = /--font-display\s*:[^;{}]+;/g;
+const TOKEN_DECLARATION = /--(?:two-)?font-display\s*:[^;{}]+;/g;
 
-const displayStacks = (css: string): string[] =>
-  (stripFontFace(stripComments(css)).match(FONT_DECLARATION) ?? []).filter((declaration) =>
-    BARE_DISPLAY.test(declaration),
-  );
+const fontDeclarations = (css: string): string[] =>
+  stripFontFace(stripComments(css)).match(FONT_DECLARATION) ?? [];
+
+const tokenStacks = (css: string): string[] =>
+  fontDeclarations(css).filter((declaration) => TOKEN_STACK.test(declaration));
 
 const tokenDefinitions = (): string[] =>
   [kitAppCss(), sheet("theme-tokens.css"), ...THEME_SHEETS.map(sheet)].flatMap(
@@ -45,11 +50,11 @@ const tokenDefinitions = (): string[] =>
   );
 
 describe("unified Display fallback stacks", () => {
-  it("carries 'Display Fallback' directly after Display in every stack", () => {
+  it("reads the display token in every stack, never a bare Display family", () => {
     const violations: string[] = [];
     for (const entry of THEME_SHEETS) {
-      for (const stack of displayStacks(sheet(entry))) {
-        if (!UNIFIED_STACK.test(stack)) {
+      for (const stack of fontDeclarations(sheet(entry))) {
+        if (BARE_DISPLAY.test(stack)) {
           violations.push(`${entry}: ${stack.trim()}`);
         }
       }
@@ -62,14 +67,13 @@ describe("unified Display fallback stacks", () => {
     ["event-theme.css", 4],
     ["schedule-theme.css", 1],
     ["profile-theme.css", 4],
-  ] as const)("%s carries at least %d unified stacks", (entry, minimum) => {
-    const unified = displayStacks(sheet(entry)).filter((stack) => UNIFIED_STACK.test(stack));
-    expect(unified.length).toBeGreaterThanOrEqual(minimum);
+  ] as const)("%s carries at least %d token stacks", (entry, minimum) => {
+    expect(tokenStacks(sheet(entry)).length).toBeGreaterThanOrEqual(minimum);
   });
 
-  it("finds every Display stack (the sweep is not vacuous)", () => {
+  it("finds every token stack (the sweep is not vacuous)", () => {
     const total = THEME_SHEETS.reduce(
-      (count, entry) => count + displayStacks(sheet(entry)).length,
+      (count, entry) => count + tokenStacks(sheet(entry)).length,
       0,
     );
     expect(total).toBeGreaterThanOrEqual(16);
