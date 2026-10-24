@@ -7,6 +7,8 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_TESTID,
   RSVP_SYNCING_TESTID,
@@ -58,6 +60,7 @@ export const RsvpButton: FC<{
   const full = e.capacity !== null && occupancy >= e.capacity;
   const going = answer?.status === "going";
   const waitlisted = answer?.status === "waitlisted";
+  const soft = answer?.status === "maybe" || answer?.status === "not_going";
   const signIn = loginUrl(returnTo);
   const button = (id: string, action: string, copy: string) => (
     <button type="submit" name="status" value={action} data-testid={id} data-action={action}>
@@ -106,6 +109,29 @@ export const RsvpButton: FC<{
                 ? button(WAITLIST_CLAIM_TESTID, "going", RSVP_COPY.waitlistClaim)
                 : null}
               {button(WAITLIST_LEAVE_TESTID, "withdraw", RSVP_COPY.waitlistLeave)}
+            </>
+          ) : soft ? (
+            <>
+              <p
+                role="status"
+                tabindex={-1}
+                data-testid={answer?.status === "maybe" ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}
+              >
+                {answer?.status === "maybe" ? RSVP_COPY.maybe : RSVP_COPY.notGoing}
+              </p>
+              {!e.rsvpOpen ? (
+                button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)
+              ) : full ? (
+                <>
+                  {button(WAITLIST_JOIN_TESTID, "waitlisted", RSVP_COPY.waitlistJoin)}
+                  {button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)}
+                </>
+              ) : (
+                <>
+                  {button(RSVP_GOING_TESTID, "going", RSVP_COPY.cta)}
+                  {button(RSVP_WITHDRAW_TESTID, "withdraw", RSVP_COPY.withdraw)}
+                </>
+              )}
             </>
           ) : !e.rsvpOpen ? null : full ? (
             <>
