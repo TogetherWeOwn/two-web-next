@@ -46,7 +46,9 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/admin-terminal-review.css",
         "public/styles.css",
+        "public/admin-terminal-review.css",
         "public/theme.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",

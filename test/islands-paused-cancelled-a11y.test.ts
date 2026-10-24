@@ -191,7 +191,7 @@ describe("admin pause/cancel controls expose their names on native buttons", () 
     );
     expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-pause">');
     expect(html).toContain(">Pause RSVPs</button>");
-    expect(html).toContain('<button type="submit" class="link" data-testid="cancel-event">');
+    expect(html).toContain('<button type="submit" class="btn" data-testid="cancel-event">');
     expect(html).toContain(">Cancel event</button>");
     // Native buttons with visible-text names: no aria-label override and no
     // focus removal on the controls themselves, so assistive tech announces

@@ -6,6 +6,7 @@ import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
 import { FeaturedContentItem } from "../../pages";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
+import { TerminalReview } from "./terminal-review";
 import { ValidationSummary } from "./validation-summary";
 
 export const FeaturedFormPage: FC<{
@@ -139,13 +140,13 @@ export const FeaturedFormPage: FC<{
           </div>
         </form>
         {mode === "edit" ? (
-          <form method="post" action={`/admin/featured/${row!.id}/delete`}>
-            <div class="actions">
-              <button type="submit" class="link" data-testid="delete-featured">
-                Delete this slot
-              </button>
-            </div>
-          </form>
+          <TerminalReview
+            kind="delete"
+            title={row!.title}
+            targetId={String(row!.id)}
+            action={`/admin/featured/${row!.id}/delete`}
+            testId="delete-featured"
+          />
         ) : null}
       </section>
       <script src="/islands/admin-event-editor.js" defer />

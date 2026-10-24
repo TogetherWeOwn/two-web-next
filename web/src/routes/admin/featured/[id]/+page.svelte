@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import TerminalReview from "#lib/TerminalReview.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedFormPage mode="edit"
@@ -124,13 +125,13 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <a href="/admin/featured">Cancel</a>
     </div>
   </form>
-  <form method="post" action={`/admin/featured/${data.view.id}/delete`}>
-    <div class="actions">
-      <button type="submit" class="link" data-testid="delete-featured">
-        Delete this slot
-      </button>
-    </div>
-  </form>
+  <TerminalReview
+    kind="delete"
+    title={data.view.title}
+    targetId={String(data.view.id)}
+    action={`/admin/featured/${data.view.id}/delete`}
+    testId="delete-featured"
+  />
 </section>
 {@html island}
 </AdminShell>

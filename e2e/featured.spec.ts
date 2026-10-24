@@ -90,6 +90,11 @@ test("moderator creates, renames and deletes a featured slot shown on the homepa
     // 4. Delete through the UI; the homepage drops it and the edit page 404s.
     // The 404 is the firm proof: a homepage read that degrades to no section
     // would also pass the absence check.
+    await page
+      .locator("details")
+      .filter({ has: page.getByTestId("delete-featured") })
+      .locator("summary")
+      .click();
     await page.getByTestId("delete-featured").click();
     await expect(page).toHaveURL(/\/admin\/featured$/);
     deleted = true;

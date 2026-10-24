@@ -58,7 +58,7 @@ describe("Kit featured-edit page contract", () => {
 
   it("keeps the Hono edit controls, hints, actions and delete affordance the E2E suite drives", () => {
     expect(source).toContain('data-testid="save-featured"');
-    expect(source).toContain('data-testid="delete-featured"');
+    expect(source).toContain('testId="delete-featured"');
     expect(source).toContain('href="/admin/featured"');
     expect(source).toContain("cdn.discordapp.com");
     expect(source).toContain("screen-reader");
@@ -67,7 +67,9 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("Show from (UTC");
     expect(source).toContain("Show until (UTC");
     expect(source).toContain("Save");
-    expect(source).toContain("Delete this slot");
+    expect(source).toContain("<TerminalReview");
+    expect(source).toContain('kind="delete"');
+    expect(source).toContain("title={data.view.title}");
   });
 
   it("keeps the homepage preview with the shared status and the hidden-slot note", () => {

@@ -38,6 +38,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title} — TWO admin</title>
         <link rel="stylesheet" href="/styles.css" />
+        <link rel="stylesheet" href="/admin-terminal-review.css" />
       </head>
       <body>
         <SkipLink />
