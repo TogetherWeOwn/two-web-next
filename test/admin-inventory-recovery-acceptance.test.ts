@@ -248,7 +248,16 @@ for (const renderer of renderers) {
           `from "${inventory === "events" ? "events" : "featured_contents"}"`,
         );
         expect(result.probe.queries[0]!.sql).not.toMatch(/\bcount\s*\(/i);
-        expect(result.probe.queries[0]!.params).toEqual(["%missing%", 26, 2150]);
+        // The events inventory binds the same escaped literal for its title
+        // and game arms; featured keeps its single-pattern shape.
+        if (inventory === "events") {
+          expect(result.probe.queries[0]!.sql).toContain('"events"."game" ilike');
+        }
+        expect(result.probe.queries[0]!.params).toEqual(
+          inventory === "events"
+            ? ["%missing%", "%missing%", 26, 2150]
+            : ["%missing%", 26, 2150],
+        );
         expect(result.probe.transactions).toBe(1);
         expect(result.probe.executions).toHaveLength(1);
         expect(result.probe.audits).toEqual([]);
