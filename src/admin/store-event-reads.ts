@@ -9,14 +9,21 @@ import {
   count,
   desc,
   eq,
+  gte,
   ilike,
   inArray,
   isNotNull,
   isNull,
+  lt,
   sql,
   type SQL,
 } from "drizzle-orm";
-import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  eventStartsBounds,
+  parseEventListQuery,
+  type EventListParams,
+} from "./event-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
@@ -36,11 +43,18 @@ export type EventListRow = EventRow & { goingCount: number };
  */
 export async function listEvents(db: Db, params: EventListParams): Promise<EventListRow[]> {
   const opts = parseEventListQuery(params);
+  // A refused date window shows no rows rather than an unrestricted inventory
+  // that could pass for the requested interval; nothing to read or classify.
+  if (opts.startsWindow?.error) return [];
   return db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
     const conds: (SQL | undefined)[] = [];
     if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
     if (opts.status) conds.push(eq(events.status, opts.status));
+    // Half-open UTC start window [from, before), applied before paging.
+    const bounds = eventStartsBounds(opts.startsWindow);
+    if (bounds?.from) conds.push(gte(events.startsAt, bounds.from));
+    if (bounds?.before) conds.push(lt(events.startsAt, bounds.before));
     if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
     if (opts.series === "parent")
       conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));

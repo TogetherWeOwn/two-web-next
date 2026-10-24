@@ -8,6 +8,7 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  eventStartsWindowSummary,
   type EventListQuery,
   type EventSort,
 } from "../event-list";
@@ -124,6 +125,30 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </select>
         </div>
         <div class="field">
+          <label for="starts_from">Starts from (UTC date)</label>
+          <input
+            id="starts_from"
+            name="starts_from"
+            type="date"
+            min="0001-01-01"
+            max="9999-12-31"
+            value={query.startsWindow?.from ?? ""}
+            aria-describedby="starts-window-hint"
+          />
+        </div>
+        <div class="field">
+          <label for="starts_before">Starts before (UTC date)</label>
+          <input
+            id="starts_before"
+            name="starts_before"
+            type="date"
+            min="0001-01-01"
+            max="9999-12-31"
+            value={query.startsWindow?.before ?? ""}
+            aria-describedby="starts-window-hint"
+          />
+        </div>
+        <div class="field">
           <button type="submit" class="btn">
             Filter
           </button>
@@ -134,6 +159,18 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </div>
         ) : null}
       </form>
+      <p id="starts-window-hint" class="hint">
+        Dates are UTC midnights: events starting on Starts from are included, events starting on
+        Starts before are not. Leave either empty for no limit.
+      </p>
+      {query.startsWindow?.error ? (
+        <div class="notice" role="alert" data-testid="events-window-error">
+          <p>{query.startsWindow.error}</p>
+        </div>
+      ) : null}
+      {eventStartsWindowSummary(query.startsWindow) ? (
+        <p data-testid="events-window-summary">{eventStartsWindowSummary(query.startsWindow)}</p>
+      ) : null}
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
           New event

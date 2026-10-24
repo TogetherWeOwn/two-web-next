@@ -5,6 +5,7 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  eventStartsWindowSummary,
   type EventSort,
 } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -21,6 +22,7 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 let { data }: PageProps = $props();
 const { query, rows, hasNext, emptyText } = $derived(data);
 const now = new Date();
+const windowSummary = $derived(eventStartsWindowSummary(query.startsWindow));
 </script>
 
 {#snippet sortHeader(label: string, sort: EventSort)}
@@ -91,6 +93,30 @@ const now = new Date();
       </select>
     </div>
     <div class="field">
+      <label for="starts_from">Starts from (UTC date)</label>
+      <input
+        id="starts_from"
+        name="starts_from"
+        type="date"
+        min="0001-01-01"
+        max="9999-12-31"
+        value={query.startsWindow?.from ?? ""}
+        aria-describedby="starts-window-hint"
+      />
+    </div>
+    <div class="field">
+      <label for="starts_before">Starts before (UTC date)</label>
+      <input
+        id="starts_before"
+        name="starts_before"
+        type="date"
+        min="0001-01-01"
+        max="9999-12-31"
+        value={query.startsWindow?.before ?? ""}
+        aria-describedby="starts-window-hint"
+      />
+    </div>
+    <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
     {#if eventListHasFilters(query)}
@@ -99,6 +125,18 @@ const now = new Date();
       </div>
     {/if}
   </form>
+  <p id="starts-window-hint" class="hint">
+    Dates are UTC midnights: events starting on Starts from are included, events starting on
+    Starts before are not. Leave either empty for no limit.
+  </p>
+  {#if query.startsWindow?.error}
+    <div class="notice" role="alert" data-testid="events-window-error">
+      <p>{query.startsWindow.error}</p>
+    </div>
+  {/if}
+  {#if windowSummary}
+    <p data-testid="events-window-summary">{windowSummary}</p>
+  {/if}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>

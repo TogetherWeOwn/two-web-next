@@ -196,6 +196,33 @@ the current filters and sort and return directly to page 1; **Previous** still
 moves back one page. Both recovery links work by keyboard and without JavaScript.
 An unavailable read is still an outage, not an empty list; follow the guidance above.
 
+## Review a chosen UTC planning window
+
+On `/admin/events`, **Starts from (UTC date)** and **Starts before (UTC date)**
+limit the inventory to events whose **start time** falls in the half-open
+interval `[Starts from 00:00 UTC, Starts before 00:00 UTC)`. An event starting
+exactly at Starts from midnight is included; one starting exactly at Starts
+before midnight, or later, is not. The dates are UTC calendar days, so an event
+that begins on the previous evening in its own timezone can still fall inside
+the window. Event end times, overlap and each event's displayed timezone do not
+change which rows match, and the **Starts (UTC)** column still shows the stored
+start instant.
+
+- Either date may be left empty for an open-ended window. For the four-week
+  review in [event planning cadence](event-planning-cadence.md), enter the first
+  day of the review as Starts from and the day after the last week as Starts
+  before.
+- The page states the active interval above the table. It combines with Search,
+  Status, RSVPs, Series and Fill, and **Clear filters** removes it.
+- Sorting, paging and **Filter** keep the window. Changing a date and choosing
+  **Filter** starts again on page 1.
+- Dates must be real `YYYY-MM-DD` calendar days (years 0001 to 9999), each given
+  once, with Starts from earlier than Starts before. Otherwise the page shows a
+  warning that the date window was not applied and lists no events until you
+  correct the dates; it never shows an unrestricted list as if it matched.
+- The window is a planning view over scheduled start times only. It does not
+  show attendance, does not count events, and is not goal evidence.
+
 ## Correct a rejected draft
 
 Event and featured-content create/edit forms show the actual validation errors
