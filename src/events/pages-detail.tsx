@@ -92,6 +92,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -200,7 +201,12 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Reconciliation can lag: published rows stop inviting at
+                  // their end, using the same server instant as RSVP below.
+                  // Draft previews retain the line. The binder patches existing
+                  // spots nodes only, so refresh cannot recreate it after close.
+                  showSpotsLeft:
+                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
                   announcement: null,
                 }),
               }}
@@ -211,6 +217,7 @@ export const EventPage: FC<{
       <div class="event-rsvp">
         <RsvpButton
           e={e}
+          now={now}
           member={member}
           answer={answer}
           waitlistPosition={waitlistPosition}
@@ -298,8 +305,33 @@ export const EventPage: FC<{
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
             </a>
+            {e.status === "published" ? (
+              <>
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+                <button
+                  type="button"
+                  hidden
+                  data-native-share
+                  data-share-title={e.title}
+                  data-share-url={canonical}
+                  data-testid="event-share"
+                >
+                  Share
+                </button>
+              </>
+            ) : null}
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          {e.status === "published" ? (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-share-status"
+              data-native-share-status
+            ></p>
+          ) : null}
         </section>
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
@@ -357,6 +389,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />
       <script
