@@ -61,13 +61,12 @@ function feedHost(e: EventRow): string | undefined {
   return name ? name : undefined;
 }
 
-/** Quoted CN param-text: backslash, DQUOTE and CR/LF runs. Commas, semicolons
- * and colons stay literal inside the quotes. */
+/** Quoted CN param-text: RFC 5545 §3.1/§3.2 quoted-string is DQUOTE
+ * *QSAFE-CHAR DQUOTE with no backslash escape, so DQUOTE normalizes to an
+ * apostrophe and C0-control/DEL runs to one space. Backslash, comma,
+ * semicolon, colon, caret and `<>&` stay literal inside the quotes. */
 function cnParam(v: string): string {
-  return v
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r\n|\r|\n/g, "\\n");
+  return v.replace(/"/g, "'").replace(/[\u0000-\u001F\u007F]+/g, " ");
 }
 
 const enc = new TextEncoder();
