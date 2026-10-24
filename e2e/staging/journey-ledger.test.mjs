@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { runGate } from "../../ci/check-staging-journeys.mjs";
 import { formatLedgerMarkdown, summarizeJourneys } from "./journey-ledger.mjs";
 
@@ -1065,4 +1067,550 @@ test("gate without a step summary still writes ledger files and exits by verdict
   });
   assert.equal(code, 0);
   assert.match(readFileSync(paths.ledgerMdPath, "utf8"), /## Staging journey ledger/);
+});
+
+// Independent diagnostic acceptance contract. Deliberate breaks caught below:
+// ignored runner errors, unchecked collections, unbounded traversal/input/output,
+// early returns without receipts, raw diagnostic leakage, and unstable identities.
+// schemaVersion is a positive integer; diagnostics use fixed code/count/retryable/
+// next_action fields. Provenance uses sha/runId/runAttempt, with literal "unknown".
+// These tests impose generous safety ceilings, not the implementation's exact limits.
+const diagnosticCli = fileURLToPath(
+  new URL("../../ci/check-staging-journeys.mjs", import.meta.url),
+);
+const diagnosticCanary = "fixture-diagnostic-canary";
+const diagnosticCounts = { total: 1, passed: 1, failed: 0, skipped: 0, flaky: 0 };
+
+function diagnosticSummary(report) {
+  let summary;
+  assert.doesNotThrow(() => {
+    summary = summarizeJourneys(report);
+  }, "invalid input must produce a non-pass summary, not a traversal exception");
+  return summary;
+}
+
+function assertDiagnostic(ledger, code, count) {
+  assert.ok(Array.isArray(ledger.diagnostics), "ledger exposes structured diagnostics");
+  assert.ok(ledger.diagnostics.length <= 32, "diagnostic entries have a fixed small cap");
+  const diagnostic = ledger.diagnostics.find((entry) => entry.code === code);
+  assert.ok(diagnostic, `missing stable diagnostic code ${code}`);
+  assert.equal(typeof diagnostic.retryable, "boolean");
+  assert.equal(typeof diagnostic.next_action, "string");
+  assert.ok(diagnostic.next_action.trim().length > 0, "diagnostic gives a recovery action");
+  assert.ok(diagnostic.next_action.length <= 240, "recovery action is bounded");
+  assert.doesNotMatch(diagnostic.next_action, /[\u0000-\u001f\u007f]/);
+  assert.ok(Number.isSafeInteger(diagnostic.count) && diagnostic.count > 0);
+  assert.ok(diagnostic.count <= 10000, "diagnostic count is bounded");
+  if (count !== undefined) assert.equal(diagnostic.count, count);
+}
+
+function diagnosticRun(
+  t,
+  {
+    report,
+    raw,
+    missing = false,
+    directory = false,
+    env = {},
+    help = false,
+    splitOutputs = false,
+    reportName,
+  } = {},
+) {
+  const paths = gateScratch("journey-diagnostic-acceptance-");
+  t.after(() => rmSync(paths.dir, { recursive: true, force: true }));
+  if (reportName) paths.reportPath = join(paths.dir, reportName);
+  if (splitOutputs) {
+    paths.ledgerJsonPath = join(paths.dir, "json", "ledger.json");
+    paths.ledgerMdPath = join(paths.dir, "markdown", "ledger.md");
+  }
+  if (directory) mkdirSync(paths.reportPath);
+  else if (!missing) writeFileSync(paths.reportPath, raw ?? JSON.stringify(report));
+  const fencePath = join(paths.dir, "effect-fence.cjs");
+  const effectsPath = join(paths.dir, "unexpected-effects.txt");
+  // Child-only tripwire: a fixture receipt may read/write local files, but must
+  // never make a socket connection, fetch, or launch a deploy/other subprocess.
+  writeFileSync(
+    fencePath,
+    `const fs = require('node:fs');
+const deny = () => {
+  fs.appendFileSync(${JSON.stringify(effectsPath)}, 'unexpected external effect\\n');
+  throw new Error('fixture external-effect fence');
+};
+globalThis.fetch = deny;
+for (const [name, methods] of [
+  ['node:http', ['request', 'get']], ['node:https', ['request', 'get']],
+  ['node:net', ['connect', 'createConnection']], ['node:tls', ['connect']],
+  ['node:dgram', ['createSocket']], ['node:dns', ['lookup', 'resolve']],
+  ['node:child_process', ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']],
+]) for (const method of methods) require(name)[method] = deny;
+require('node:net').Socket.prototype.connect = deny;
+require('node:module').syncBuiltinESMExports();
+`,
+  );
+  const args = help
+    ? ["--help"]
+    : [
+        "--report",
+        paths.reportPath,
+        "--out-json",
+        paths.ledgerJsonPath,
+        "--out-md",
+        paths.ledgerMdPath,
+      ];
+  const child = spawnSync(process.execPath, ["--require", fencePath, diagnosticCli, ...args], {
+    cwd: paths.dir,
+    encoding: "utf8",
+    timeout: 10000,
+    maxBuffer: 1024 * 1024,
+    // Do not inherit real tokens, database URLs, Node preloads or target settings.
+    env: {
+      PATH: process.env.PATH,
+      HOME: paths.dir,
+      TZ: "UTC",
+      LANG: "C",
+      GITHUB_STEP_SUMMARY: paths.stepSummaryPath,
+      QA_AUTH_TOKEN: diagnosticCanary,
+      ...env,
+    },
+  });
+  assert.equal(child.error, undefined, "CLI must finish within time/output budgets");
+  assert.equal(child.signal, null, "CLI must exit normally, not from a signal");
+  assert.equal(
+    existsSync(effectsPath),
+    false,
+    "fixture mode must make no external effect attempts",
+  );
+  return { paths, ...child };
+}
+
+function diagnosticReceipt(run) {
+  assert.ok(existsSync(run.paths.ledgerJsonPath), "every input verdict writes the JSON receipt");
+  assert.ok(existsSync(run.paths.ledgerMdPath), "every input verdict writes the Markdown receipt");
+  assert.ok(existsSync(run.paths.stepSummaryPath), "every input verdict appends a step summary");
+  const json = readFileSync(run.paths.ledgerJsonPath, "utf8");
+  const markdown = readFileSync(run.paths.ledgerMdPath, "utf8");
+  const step = readFileSync(run.paths.stepSummaryPath, "utf8");
+  const ledger = JSON.parse(json);
+  assert.ok(
+    Number.isSafeInteger(ledger.schemaVersion) && ledger.schemaVersion >= 1,
+    "receipt is versioned",
+  );
+  assert.ok(Array.isArray(ledger.journeys));
+  for (const value of Object.values(ledger.counts)) {
+    assert.ok(Number.isSafeInteger(value) && value >= 0 && value <= 10000, "counts stay bounded");
+  }
+  assert.match(markdown, /## Staging journey ledger/);
+  assert.ok(step.includes(markdown.trim()), "step summary contains the same receipt");
+  assert.doesNotMatch(
+    `${run.stdout}\n${run.stderr}`,
+    /\n\s+at .+:\d+:\d+|TypeError:|RangeError:|SyntaxError:/,
+  );
+  return { ledger, json, markdown, step };
+}
+
+for (const [label, specs, verdict, exit, counts] of [
+  ["clean", [passingSpec()], "pass", 0, diagnosticCounts],
+  [
+    "mixed",
+    [passingSpec(), skippedSpec("optional journey", "no fixture")],
+    "pass",
+    0,
+    { total: 2, passed: 1, failed: 0, skipped: 1, flaky: 0 },
+  ],
+  [
+    "flaky negative control",
+    [flakySpec()],
+    "fail",
+    1,
+    { total: 1, passed: 0, failed: 1, skipped: 0, flaky: 1 },
+  ],
+  [
+    "failed",
+    [statusSpec("failed journey", "unexpected")],
+    "fail",
+    1,
+    { total: 1, passed: 0, failed: 1, skipped: 0, flaky: 0 },
+  ],
+  [
+    "unknown",
+    [statusSpec("unknown journey", "interrupted")],
+    "fail",
+    1,
+    { total: 1, passed: 0, failed: 1, skipped: 0, flaky: 0 },
+  ],
+  [
+    "all skipped",
+    [skippedSpec("optional journey", "no fixture")],
+    "all-skipped",
+    2,
+    { total: 1, passed: 0, failed: 0, skipped: 1, flaky: 0 },
+  ],
+  ["empty", [], "empty", 2, { total: 0, passed: 0, failed: 0, skipped: 0, flaky: 0 }],
+]) {
+  test(`diagnostic control: ${label} preserves actual CLI exit and journey accounting`, (t) => {
+    const run = diagnosticRun(t, { report: { ...reportWith(specs), errors: [] } });
+    assert.equal(run.status, exit);
+    assert.deepEqual(JSON.parse(readFileSync(run.paths.ledgerJsonPath, "utf8")).counts, counts);
+    assert.equal(JSON.parse(readFileSync(run.paths.ledgerJsonPath, "utf8")).verdict, verdict);
+  });
+}
+
+for (const errors of [
+  [{ message: "Global teardown did not finish" }],
+  [{ message: "Runner initialization failed" }, { message: "Global teardown failed" }],
+]) {
+  const report = { ...reportWith([passingSpec()]), errors };
+  test(`diagnostic acceptance: ${errors.length} runner errors override otherwise passing rows`, () => {
+    const summary = diagnosticSummary(report);
+    assert.equal(summary.verdict, "fail", "runner failure must never be a clean pass");
+    assert.deepEqual(
+      summary.counts,
+      diagnosticCounts,
+      "runner errors are not invented failed journeys",
+    );
+    assertDiagnostic(summary, "runner_error", errors.length);
+  });
+  test(`diagnostic acceptance: CLI exits 1 with a receipt for ${errors.length} runner errors`, (t) => {
+    const run = diagnosticRun(t, { report });
+    assert.equal(run.status, 1);
+    const { ledger, markdown } = diagnosticReceipt(run);
+    assertDiagnostic(ledger, "runner_error", errors.length);
+    assert.ok(markdown.includes("runner_error"));
+    assert.doesNotMatch(markdown, /Verdict: \*\*pass\*\*/);
+  });
+}
+
+const malformedReports = [
+  ["suites object", { suites: {} }],
+  ["suites string", { suites: "not an array" }],
+  ["suites null", { suites: null }],
+  ["null suite", { suites: [null] }],
+  ["specs object", { suites: [{ specs: {} }] }],
+  ["specs null", { suites: [{ specs: null }] }],
+  ["null spec", { suites: [{ specs: [null] }] }],
+  ["tests object", reportWith([{ ...passingSpec(), tests: {} }])],
+  ["tests null", reportWith([{ ...passingSpec(), tests: null }])],
+  ["null test", reportWith([{ ...passingSpec(), tests: [null] }])],
+  [
+    "results object",
+    reportWith([{ ...passingSpec(), tests: [{ status: "expected", results: {} }] }]),
+  ],
+  [
+    "results null",
+    reportWith([{ ...passingSpec(), tests: [{ status: "expected", results: null }] }]),
+  ],
+  [
+    "null result",
+    reportWith([{ ...passingSpec(), tests: [{ status: "expected", results: [null] }] }]),
+  ],
+  [
+    "annotations object",
+    reportWith([{ ...passingSpec(), tests: [{ status: "skipped", annotations: {} }] }]),
+  ],
+  [
+    "annotations null",
+    reportWith([{ ...passingSpec(), tests: [{ status: "skipped", annotations: null }] }]),
+  ],
+  [
+    "null annotation",
+    reportWith([{ ...passingSpec(), tests: [{ status: "skipped", annotations: [null] }] }]),
+  ],
+  ["errors object", { suites: [], errors: {} }],
+  ["errors null", { suites: [], errors: null }],
+  ["null runner error", { suites: [], errors: [null] }],
+];
+
+for (const [label, badReport] of malformedReports) {
+  const report = {
+    suites: [
+      ...reportWith([passingSpec()]).suites,
+      { title: "broken branch", suites: badReport.suites },
+      ...reportWith([{ ...passingSpec(), title: "healthy sibling after invalid branch" }]).suites,
+    ],
+    ...(Object.hasOwn(badReport, "errors") ? { errors: badReport.errors } : {}),
+  };
+  test(`diagnostic acceptance: malformed ${label} retains good sibling rows and fails closed`, () => {
+    const summary = diagnosticSummary(report);
+    assert.equal(summary.verdict, "fail", "partial input is never clean");
+    assert.ok(
+      summary.journeys.some(
+        (row) => row.name === "staging QA member session opens the member profile [chromium]",
+      ),
+    );
+    assert.ok(
+      summary.journeys.some(
+        (row) => row.name === "healthy sibling after invalid branch [chromium]",
+      ),
+    );
+    assertDiagnostic(summary, "report_invalid_shape");
+  });
+  test(`diagnostic acceptance: CLI handles malformed ${label} without raw stacks or losing good rows`, (t) => {
+    const run = diagnosticRun(t, { report });
+    assert.equal(run.status, 2, "malformed reports use the input-error exit, not a process crash");
+    const { ledger } = diagnosticReceipt(run);
+    assertDiagnostic(ledger, "report_invalid_shape");
+    assert.equal(ledger.verdict, "fail");
+    assert.ok(
+      ledger.journeys.some(
+        (row) => row.name === "staging QA member session opens the member profile [chromium]",
+      ),
+    );
+    assert.ok(
+      ledger.journeys.some((row) => row.name === "healthy sibling after invalid branch [chromium]"),
+    );
+  });
+}
+
+for (const [label, input, code] of [
+  ["missing file", { missing: true }, "report_unreadable"],
+  ["directory instead of file", { directory: true }, "report_unreadable"],
+  ["invalid JSON", { raw: `{\"${diagnosticCanary}\":` }, "report_invalid_json"],
+  ["empty file", { raw: "" }, "report_invalid_json"],
+  ["root array", { report: [] }, "report_invalid_shape"],
+  ["root scalar", { report: 3 }, "report_invalid_shape"],
+  ["root null", { report: null }, "report_invalid_shape"],
+]) {
+  test(`diagnostic acceptance: ${label} writes an honest empty diagnostic receipt`, (t) => {
+    const run = diagnosticRun(t, input);
+    assert.equal(run.status, 2);
+    const { ledger, json, markdown, step } = diagnosticReceipt(run);
+    assert.notEqual(ledger.verdict, "pass");
+    assert.deepEqual(ledger.counts, { total: 0, passed: 0, failed: 0, skipped: 0, flaky: 0 });
+    assert.deepEqual(ledger.journeys, [], "unreadable input cannot fabricate completed journeys");
+    assertDiagnostic(ledger, code);
+    assert.ok(markdown.includes(code), "Markdown gives the same actionable error code");
+    assert.doesNotMatch(
+      [json, markdown, step, run.stdout, run.stderr].join("\n"),
+      /fixture-diagnostic-canary/,
+    );
+  });
+}
+
+for (const [label, report, code] of [
+  [
+    "deep suites",
+    (() => {
+      let node = { specs: [passingSpec()] };
+      for (let depth = 0; depth < 2048; depth += 1) node = { suites: [node] };
+      return { suites: [node] };
+    })(),
+    "report_too_deep",
+  ],
+  [
+    "deep ignored metadata",
+    (() => {
+      let metadata = {};
+      for (let depth = 0; depth < 2048; depth += 1) metadata = { nested: metadata };
+      return { ...reportWith([passingSpec()]), metadata };
+    })(),
+    "report_too_deep",
+  ],
+  [
+    "oversized valid JSON",
+    { ...reportWith([passingSpec()]), metadata: { padding: "x".repeat(16 * 1024 * 1024) } },
+    "report_too_large",
+  ],
+]) {
+  test(`diagnostic acceptance: ${label} is bounded with a diagnostic, not a stack or pass`, (t) => {
+    const run = diagnosticRun(t, { report });
+    assert.equal(run.status, 2);
+    const { ledger, json, markdown, step } = diagnosticReceipt(run);
+    assert.notEqual(ledger.verdict, "pass");
+    assertDiagnostic(ledger, code);
+    for (const output of [json, markdown, step, run.stdout, run.stderr]) {
+      assert.ok(
+        Buffer.byteLength(output) <= 64 * 1024,
+        "rejected input produces only a bounded receipt",
+      );
+    }
+  });
+}
+
+test("diagnostic acceptance: many runner errors are aggregated without unbounded copies", (t) => {
+  const report = {
+    ...reportWith([passingSpec()]),
+    errors: Array.from({ length: 4096 }, () => ({ message: `teardown ${diagnosticCanary}` })),
+  };
+  const run = diagnosticRun(t, { report });
+  assert.equal(run.status, 1);
+  const { ledger, json, markdown } = diagnosticReceipt(run);
+  assertDiagnostic(ledger, "runner_error", 4096);
+  assert.deepEqual(ledger.counts, diagnosticCounts);
+  assert.ok(Buffer.byteLength(json) + Buffer.byteLength(markdown) <= 64 * 1024);
+  assert.doesNotMatch(
+    [json, markdown, run.stdout, run.stderr].join("\n"),
+    /fixture-diagnostic-canary/,
+  );
+});
+
+test("diagnostic acceptance: global errors emit only safe fields, never raw report content", (t) => {
+  const rawError = {
+    message: `teardown ${diagnosticCanary}; https://example.com/private/member?cookie=fixture-url-canary`,
+    stack: "Error: fixture-stack-canary\n    at private-member-file:1:2",
+    value: "Cookie: session=fixture-cookie-canary; memberId=123456789012345678",
+    snippet: "member@example.com fixture-member-canary",
+    location: { file: "fixture-location-canary", line: 1, column: 2 },
+  };
+  const run = diagnosticRun(t, {
+    report: {
+      ...reportWith([passingSpec()]),
+      errors: [rawError],
+      config: { private: "fixture-config-canary" },
+    },
+  });
+  assert.equal(run.status, 1);
+  const { ledger, json, markdown, step } = diagnosticReceipt(run);
+  assertDiagnostic(ledger, "runner_error", 1);
+  const emitted = [json, markdown, step, run.stdout, run.stderr].join("\n");
+  assert.doesNotMatch(
+    emitted,
+    /fixture-(?:diagnostic|url|stack|cookie|member|location|config)-canary|member@example\.com|123456789012345678|https:\/\/example\.com\/private/,
+  );
+  for (const diagnostic of ledger.diagnostics) {
+    assert.ok(
+      Object.keys(diagnostic).every((key) =>
+        ["code", "count", "retryable", "next_action"].includes(key),
+      ),
+      "runner diagnostics are allowlisted, not copied report objects",
+    );
+  }
+});
+
+test("diagnostic acceptance: new runner-error handling preserves scrubbed flaky first-attempt context", (t) => {
+  const run = diagnosticRun(t, {
+    report: {
+      ...reportWith([
+        flakySpec(
+          "flaky journey",
+          `First timeout: ${diagnosticCanary}; Cookie: fixture-cookie-canary\nprivate second line`,
+        ),
+      ]),
+      errors: [{ message: `teardown ${diagnosticCanary}` }],
+    },
+  });
+  assert.equal(run.status, 1);
+  const { ledger, json, markdown, step } = diagnosticReceipt(run);
+  assert.equal(ledger.journeys[0].status, "flaky");
+  assert.equal(ledger.counts.flaky, 1);
+  assert.equal(ledger.counts.passed, 0);
+  assert.match(ledger.journeys[0].reason, /^First timeout: \[redacted token\]/);
+  assert.doesNotMatch(
+    [json, markdown, step, run.stdout, run.stderr].join("\n"),
+    /fixture-diagnostic-canary|fixture-cookie-canary|private second line/,
+  );
+});
+
+test("diagnostic acceptance: identical inputs produce byte-identical JSON and Markdown receipts", (t) => {
+  const report = { ...reportWith([passingSpec()]), errors: [{ message: "teardown failed" }] };
+  const env = { GITHUB_SHA: "a".repeat(40), GITHUB_RUN_ID: "987654321", GITHUB_RUN_ATTEMPT: "2" };
+  const first = diagnosticRun(t, { report, env });
+  const second = diagnosticRun(t, { report, env });
+  assert.equal(first.status, 1);
+  assert.equal(second.status, 1);
+  const a = diagnosticReceipt(first);
+  const b = diagnosticReceipt(second);
+  assert.equal(a.json, b.json, "no wall-clock, output directory, or random IDs in the ledger");
+  assert.equal(a.markdown, b.markdown);
+  assert.deepEqual(a.ledger.provenance, {
+    sha: "a".repeat(40),
+    runId: "987654321",
+    runAttempt: "2",
+  });
+});
+
+test("diagnostic acceptance: absent run provenance is explicit unknown, never guessed", (t) => {
+  const run = diagnosticRun(t, { report: reportWith([passingSpec()]) });
+  assert.equal(run.status, 0);
+  assert.deepEqual(diagnosticReceipt(run).ledger.provenance, {
+    sha: "unknown",
+    runId: "unknown",
+    runAttempt: "unknown",
+  });
+});
+
+test("diagnostic acceptance: journey IDs survive reorder, status change and different run provenance", (t) => {
+  const a = passingSpec();
+  const b = { ...passingSpec(), title: "second journey" };
+  const c = { ...passingSpec(), file: "e2e/staging/profile.spec.ts" };
+  const d = { ...passingSpec(), tests: [{ ...passingSpec().tests[0], projectName: "mobile-375" }] };
+  const first = diagnosticRun(t, { report: reportWith([a, b, c, d]) });
+  const failedA = { ...a, tests: [{ ...a.tests[0], status: "unexpected" }] };
+  const second = diagnosticRun(t, {
+    report: reportWith([d, c, b, failedA]),
+    env: { GITHUB_SHA: "b".repeat(40), GITHUB_RUN_ID: "42", GITHUB_RUN_ATTEMPT: "3" },
+  });
+  assert.equal(first.status, 0);
+  assert.equal(second.status, 1);
+  const left = diagnosticReceipt(first).ledger.journeys;
+  const right = diagnosticReceipt(second).ledger.journeys;
+  assert.equal(left.length, 4);
+  assert.equal(right.length, 4);
+  for (const row of [...left, ...right]) {
+    assert.equal(typeof row.id, "string");
+    assert.match(row.id, /^[a-zA-Z0-9_.:-]{1,128}$/);
+  }
+  assert.equal(
+    new Set(left.map((row) => row.id)).size,
+    4,
+    "file/title/project distinguish identities",
+  );
+  assert.deepEqual(
+    left.map((row) => row.id),
+    right.map((row) => row.id).reverse(),
+  );
+});
+
+test("diagnostic acceptance: help is effect-free and discovers the contract and hermetic check", (t) => {
+  const run = diagnosticRun(t, { missing: true, help: true });
+  assert.equal(run.status, 0, "help succeeds without a report, credentials or a target");
+  assert.equal(run.stderr, "");
+  assert.ok(
+    run.stdout.includes("docs/critical-journeys.md"),
+    "help links the existing contract entry point",
+  );
+  const check = "node --test e2e/staging/journey-ledger.test.mjs";
+  assert.ok(run.stdout.includes(check), "help gives one fixture-only check command");
+  const guide = readFileSync(new URL("../../docs/critical-journeys.md", import.meta.url), "utf8");
+  assert.ok(guide.includes(check), "the contract entry point discovers the same runnable check");
+  assert.equal(existsSync(run.paths.ledgerJsonPath), false);
+  assert.equal(existsSync(run.paths.ledgerMdPath), false);
+  assert.equal(existsSync(run.paths.stepSummaryPath), false);
+});
+
+for (const [label, input] of [
+  ["missing", { missing: true, reportName: `${diagnosticCanary}.json` }],
+  ["invalid", { raw: `{"token":"${diagnosticCanary}"` }],
+]) {
+  test(`diagnostic acceptance: ${label} receipts are deterministic and withhold input paths/content`, (t) => {
+    const first = diagnosticRun(t, input);
+    const second = diagnosticRun(t, input);
+    assert.equal(first.status, 2);
+    assert.equal(second.status, 2);
+    const a = diagnosticReceipt(first);
+    const b = diagnosticReceipt(second);
+    assert.equal(a.json, b.json);
+    assert.equal(a.markdown, b.markdown);
+    assert.doesNotMatch(
+      [
+        a.json,
+        a.markdown,
+        a.step,
+        first.stdout,
+        first.stderr,
+        b.json,
+        b.markdown,
+        b.step,
+        second.stdout,
+        second.stderr,
+      ].join("\n"),
+      /fixture-diagnostic-canary/,
+    );
+  });
+}
+
+test("diagnostic acceptance: separate new output directories both receive the receipt", (t) => {
+  const run = diagnosticRun(t, { report: reportWith([passingSpec()]), splitOutputs: true });
+  assert.equal(run.status, 0);
+  assert.equal(diagnosticReceipt(run).ledger.verdict, "pass");
 });
