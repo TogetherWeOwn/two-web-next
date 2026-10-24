@@ -248,7 +248,7 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth and native event share suites, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -276,6 +276,7 @@ to execute the same Chromium proof.
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
