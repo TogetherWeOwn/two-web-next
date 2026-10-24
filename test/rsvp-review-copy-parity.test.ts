@@ -9,9 +9,7 @@ import { rsvpPauseReviewCopy } from "../src/admin/rsvp-review";
 
 const pages = {
   list: readFileSync(
-    fileURLToPath(
-      new URL("../web/src/routes/admin/events/+page.svelte", import.meta.url).href,
-    ),
+    fileURLToPath(new URL("../web/src/routes/admin/events/+page.svelte", import.meta.url).href),
     "utf8",
   ),
   edit: readFileSync(
