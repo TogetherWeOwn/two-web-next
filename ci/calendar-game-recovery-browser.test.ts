@@ -18,7 +18,7 @@ import {
   type GameTwin,
 } from "../test/helpers/calendar-game-recovery";
 
-const publicDir = fileURLToPath(new URL("../public/", import.meta.url));
+const publicDir = fileURLToPath(new URL("../public/", import.meta.url)).replace(/\/+$/, "");
 const source = readFileSync(
   new URL("../assets/islands/events-calendar.js", import.meta.url),
   "utf8",
@@ -58,6 +58,8 @@ async function open(
   const reads: { route: Route; path: string; method: string; answered: boolean }[] = [];
   const documents: string[] = [];
   const forbidden: string[] = [];
+  const publicFulfilled: string[] = [];
+  const publicAborted: string[] = [];
   let calendarLoads = 0;
   await context.route("**/*", async (route) => {
     const request = route.request();
@@ -88,7 +90,10 @@ async function open(
       });
     }
     const path = resolve(publicDir, `.${url.pathname}`);
-    if (!path.startsWith(publicDir + "/")) return route.abort();
+    if (!path.startsWith(publicDir + "/")) {
+      publicAborted.push(url.pathname);
+      return route.abort();
+    }
     try {
       const contentType =
         (
@@ -100,8 +105,10 @@ async function open(
             ".png": "image/png",
           } as Record<string, string>
         )[extname(path)] ?? "application/octet-stream";
+      publicFulfilled.push(url.pathname);
       return route.fulfill({ body: readFileSync(path), contentType });
     } catch {
+      publicAborted.push(url.pathname);
       return route.abort();
     }
   });
@@ -204,7 +211,15 @@ async function open(
     expect(errors).toEqual([]);
     expect(forbidden).toEqual([]);
     expect(reads.every((read) => read.method === "GET")).toBe(true);
-    if (javaScriptEnabled) expect(calendarLoads).toBe(1);
+    if (javaScriptEnabled) {
+      expect(calendarLoads).toBe(1);
+      // Styled suite: a non-calendar public asset must fulfil, never abort.
+      expect(publicFulfilled).toContain("/islands/copy-link.js");
+      expect(publicFulfilled.some((p) => p.endsWith(".css"))).toBe(true);
+      expect(publicAborted.filter((p) => p.endsWith(".css") || p.startsWith("/islands/"))).toEqual(
+        [],
+      );
+    }
     expect(documents).toHaveLength(1);
   }
   return {
@@ -326,7 +341,7 @@ for (const twin of GAME_TWINS)
         // may commit its admitted snapshot, but never overwrite those drafts.
         const committed = new URL(h.page.url()).searchParams.get("game");
         expect(["Chess", "Go"]).toContain(committed);
-        expect(await h.content.innerText()).toContain(`${committed} fixture night`);
+        expect(await h.content.innerText()).toMatch(new RegExp(`${committed} fixture night`, "i"));
         expect(h.reads).toHaveLength(2);
         h.clean();
       });
@@ -339,7 +354,7 @@ for (const twin of GAME_TWINS)
         await h.count(2);
         await h.reply(1, 200);
         await expect.poll(() => new URL(h.page.url()).searchParams.get("game")).toBe(null);
-        expect(await h.content.innerText()).toContain("Go fixture night");
+        expect(await h.content.innerText()).toMatch(/Go fixture night/i);
         await h.reply(0);
         await h.page.clock.runFor(1);
         expect(await h.retry.isVisible()).toBe(false);
@@ -368,8 +383,8 @@ for (const twin of GAME_TWINS)
         expect(target.searchParams.get("q")).toBe("fixture");
         await h.reply(1, 200);
         await expect.poll(() => new URL(h.page.url()).searchParams.get("game")).toBe("Go");
-        expect(await h.content.innerText()).toContain("Go fixture night");
-        expect(await h.content.innerText()).not.toContain("Chess fixture night");
+        expect(await h.content.innerText()).toMatch(/Go fixture night/i);
+        expect(await h.content.innerText()).not.toMatch(/Chess fixture night/i);
         expect(await h.game.inputValue()).toBe("Go");
         expect(await h.retry.isVisible()).toBe(false);
         await h.page.clock.runFor(60_000);
@@ -412,25 +427,53 @@ for (const twin of GAME_TWINS)
         await h.count(2);
         await h.reply(1, 200);
         await expect.poll(() => h.game.inputValue()).toBe("Chess");
-        expect(await h.content.innerText()).toContain("Chess fixture night");
+        expect(await h.content.innerText()).toMatch(/Chess fixture night/i);
         await h.page.evaluate(() => history.forward());
         await h.count(3);
         await h.reply(2, 200);
         await expect.poll(() => h.game.inputValue()).toBe("Go");
-        expect(await h.content.innerText()).toContain("Go fixture night");
+        expect(await h.content.innerText()).toMatch(/Go fixture night/i);
         h.clean();
       });
 
       it("A1.1 unknown game recovery names effective All games, never an invented scope", async () => {
         const h = await open(twin, bundle, "/events?game=Unrecognized");
         expect(await h.game.inputValue()).toBe("");
-        expect(await h.content.innerText()).toContain("Chess fixture night");
-        expect(await h.content.innerText()).toContain("Go fixture night");
+        expect(await h.content.innerText()).toMatch(/Chess fixture night/i);
+        expect(await h.content.innerText()).toMatch(/Go fixture night/i);
         await h.submit("Go");
         await h.reply(0);
         await h.failed();
         expect(await h.status.innerText()).toMatch(/all games/i);
         expect(await h.status.innerText()).not.toMatch(/for [“"']?Unrecognized/);
+        h.clean();
+      });
+
+      it("A1.3 pending navigation with newer game-only draft suppresses recovery and keeps the draft", async () => {
+        const h = await open(twin, bundle);
+        await h.page.getByTestId("events-view-calendar").click();
+        await h.count(1);
+        await h.game.selectOption("Go");
+        await h.reply(0);
+        await expect.poll(() => h.page.getByTestId("events-loading").isVisible()).toBe(false);
+        expect(await h.retry.isVisible()).toBe(false);
+        expect(await h.dismiss.isVisible()).toBe(false);
+        expect(await h.game.inputValue()).toBe("Go");
+        expect(h.reads).toHaveLength(1);
+        await h.retained();
+        h.clean();
+      });
+
+      it("A1.1 navigation from unknown game names effective All games, never the raw URL scope", async () => {
+        const h = await open(twin, bundle, "/events?game=Unrecognized");
+        expect(await h.game.inputValue()).toBe("");
+        await h.page.getByTestId("events-view-calendar").click();
+        await h.reply(0);
+        await h.failed();
+        await h.retained();
+        const text = await h.status.innerText();
+        expect(text).toMatch(/all games/i);
+        expect(text).not.toMatch(/Unrecognized/);
         h.clean();
       });
 
@@ -443,7 +486,7 @@ for (const twin of GAME_TWINS)
         await h.page.keyboard.press("Enter");
         await h.page.waitForURL(/game=Go/);
         expect(await h.game.inputValue()).toBe("Go");
-        expect(await h.content.innerText()).toContain("Go fixture night");
+        expect(await h.content.innerText()).toMatch(/Go fixture night/i);
         expect(h.reads).toHaveLength(0);
         expect(h.documents).toHaveLength(2);
       });

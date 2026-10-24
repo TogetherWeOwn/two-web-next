@@ -15,23 +15,33 @@ export type GameTwin = "Hono" | "Kit";
 export const GAME_TWINS: GameTwin[] = ["Hono", "Kit"];
 export const GAME_BUNDLES = ["source", "shipped"] as const;
 
-export function gameRow(id: number, game: string, past = false) {
+export function gameRow(id: number, game: string, past = false, month?: string) {
+  const baseMonth = month ?? (past ? "2020-05" : "2099-05");
+  const day = `${baseMonth}-12`;
   return {
     ...partialEvent(id),
     eventKey: id === 1 ? "01ARZ3NDEKTSV4RRFFQ69G5FAA" : "01ARZ3NDEKTSV4RRFFQ69G5FAB",
     title: `${game} fixture night`,
     game,
-    startsAt: new Date(past ? "2020-05-12T20:00:00Z" : "2099-05-12T20:00:00Z"),
-    endsAt: new Date(past ? "2020-05-12T22:00:00Z" : "2099-05-12T22:00:00Z"),
+    startsAt: new Date(`${day}T20:00:00Z`),
+    endsAt: new Date(`${day}T22:00:00Z`),
   };
 }
 
 // SQL is the only data boundary replaced. Resolver, predicates, paging, model,
 // both route adapters and the shared renderer are real. No external connection.
-export function gameRecoveryFixture(options: { empty?: boolean; failed?: boolean } = {}) {
+export function gameRecoveryFixture(
+  options: {
+    empty?: boolean;
+    failed?: boolean;
+    upcomingRows?: ReturnType<typeof gameRow>[];
+    pastRows?: ReturnType<typeof gameRow>[];
+  } = {},
+) {
   let failed = options.failed ?? false;
-  let upcoming = options.empty ? [] : [gameRow(1, "Chess"), gameRow(2, "Go")];
-  const past = [gameRow(1, "Chess", true), gameRow(2, "Go", true)];
+  let upcoming =
+    options.upcomingRows ?? (options.empty ? [] : [gameRow(1, "Chess"), gameRow(2, "Go")]);
+  const past = options.pastRows ?? [gameRow(1, "Chess", true), gameRow(2, "Go", true)];
   const queries: { sql: string; params: unknown[] }[] = [];
   const discordCalls: number[] = [];
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
@@ -73,6 +83,18 @@ export function gameRecoveryFixture(options: { empty?: boolean; failed?: boolean
     if (query) {
       const text = query.slice(1, -1).replace(/\\(.)/g, "$1").toLowerCase();
       rows = rows.filter((r) => `${r.title} ${r.description}`.toLowerCase().includes(text));
+    }
+    // Month-grid reads (limit 200) carry [now, to, from, 200]: only rows
+    // overlapping the grid survive, like the real `startsAt < to AND
+    // endsAt > from` predicate. Global list/count reads keep all upcoming.
+    if (!/^select count/i.test(sql) && Number(params.at(-1)) === 200) {
+      const toRaw = params.at(-3);
+      const fromRaw = params.at(-2);
+      const to = toRaw instanceof Date ? toRaw : new Date(String(toRaw));
+      const from = fromRaw instanceof Date ? fromRaw : new Date(String(fromRaw));
+      if (!Number.isNaN(to.getTime()) && !Number.isNaN(from.getTime())) {
+        rows = rows.filter((r) => r.startsAt < to && r.endsAt > from);
+      }
     }
     if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     if (sql.includes("limit")) {
