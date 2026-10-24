@@ -158,6 +158,10 @@ bounds expire with the transaction without changing pooled connection defaults.
 If an inventory statement times out, the read transaction rolls back before
 the existing private, no-store 503 outage response is returned. A refused
 inventory never renders as an empty list: wait briefly, then reload the page.
+On a Kit admin read error, **Retry loading** repeats the current GET, keeping its
+filters and page. It does not resubmit a form or retry automatically. Missing-row
+404 pages keep their list/dashboard exits instead; malformed page state also
+falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
 
@@ -586,7 +590,8 @@ fields are carried, never a return URL: outcome is limited to 256 UTF-8 bytes,
 search to 128 code units / 512 UTF-8 bytes and the encoded context to 4096 bytes.
 Oversized context is omitted, not truncated; list/storage filter policy is unchanged.
 Duplicate, malformed or partial context is refused. URL-shaped values remain filter data.
-There is no edit, delete or retry control. Cancelled consent, expired state
+There is no edit, delete or join-replay control; **Retry loading** on a failed
+read only reloads this viewer. Cancelled consent, expired state
 and failures before identity exchange can record a null Discord ID; those attempts
 remain visible as **Not recorded**, without inventing a member subject.
 Request/source fields are still diagnostics, not proof of anonymity.
