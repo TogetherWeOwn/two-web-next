@@ -52,8 +52,7 @@ const INVALID_PLAN_NEXT_ACTION =
   "Fix ci/kit-perf-budget.json to match the canonical inventory " +
   "(worker _worker.js, server js, client js and css) defined in ci/bundle-inventory.mjs, " +
   "then rerun node ci/check-kit-perf.mjs";
-const REBUILD_NEXT_ACTION =
-  "Run npm run build --prefix web, then rerun node ci/check-kit-perf.mjs";
+const REBUILD_NEXT_ACTION = "Run npm run build --prefix web, then rerun node ci/check-kit-perf.mjs";
 const ENUMERATION_NEXT_ACTION =
   "Rerun npm run build --prefix web and node ci/check-kit-perf.mjs; " +
   "if the named path still fails, inspect permissions on the Kit output dir";
@@ -600,7 +599,11 @@ function selftest() {
   save(root, { ...fitBudget, worker: {} });
   const jsonInvalid = runJson(root);
   assert.equal(jsonInvalid.code, 2, `json invalid plan must exit 2, got ${jsonInvalid.code}`);
-  assert.equal(jsonInvalid.report.error?.code, "INVALID_PLAN", "invalid plan must use INVALID_PLAN");
+  assert.equal(
+    jsonInvalid.report.error?.code,
+    "INVALID_PLAN",
+    "invalid plan must use INVALID_PLAN",
+  );
   cases += 1;
   console.log("PASS versioned json report carries INVALID_PLAN for an invalid plan");
   console.log(`kit perf budget selftest: ${cases} cases passed.`);

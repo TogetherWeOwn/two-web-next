@@ -94,7 +94,8 @@ export function validateKitPlan(budget) {
   }
   if (!isObject(budget.worker)) return "budget must have a worker object";
   const workerEntries = Object.keys(budget.worker);
-  if (workerEntries.length === 0) return "worker inventory is empty: budget must measure _worker.js";
+  if (workerEntries.length === 0)
+    return "worker inventory is empty: budget must measure _worker.js";
   for (const entry of workerEntries) {
     if (entry !== KIT_WORKER_ENTRY) {
       return `noncanonical worker entry: ${shortKey(entry)} (canonical inventory is exactly _worker.js)`;
@@ -158,19 +159,23 @@ export function parseGateArgs(args) {
   const options = { root: null, format: "human", selftest: false, dryRun: false };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    const inlineRoot = arg.startsWith("--root=") ? arg.slice("--root=".length) : null;
     if (arg === "--selftest") {
       options.selftest = true;
     } else if (arg === "--dry-run") {
       options.dryRun = true;
-    } else if (arg === "--root") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) return { error: "--root needs a directory" };
+    } else if (arg === "--root" || inlineRoot !== null) {
+      const value = inlineRoot ?? args[i + 1];
+      if (value === undefined || value === "" || (inlineRoot === null && value.startsWith("--"))) {
+        return { error: "--root needs a directory" };
+      }
       options.root = value;
-      i += 1;
+      if (inlineRoot === null) i += 1;
     } else if (arg === "--format") {
       const value = args[i + 1];
       if (value === undefined) return { error: "--format needs a value (supported: json)" };
-      if (value !== "json") return { error: `unsupported --format value: ${shortKey(value)} (supported: json)` };
+      if (value !== "json")
+        return { error: `unsupported --format value: ${shortKey(value)} (supported: json)` };
       options.format = "json";
       i += 1;
     } else if (arg === "--") {
@@ -186,9 +191,7 @@ export function parseGateArgs(args) {
 }
 
 export function gateUsage(scriptName) {
-  return (
-    `Usage: node ${scriptName} [--root <dir>] [--format json] [--dry-run] [--selftest]`
-  );
+  return `Usage: node ${scriptName} [--root <dir>|--root=<dir>] [--format json] [--dry-run] [--selftest]`;
 }
 
 // Build the versioned JSON report. Groups always carry the canonical IDs;

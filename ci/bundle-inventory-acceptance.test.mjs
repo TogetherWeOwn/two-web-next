@@ -138,7 +138,10 @@ function assertJsonReport({ parsed, stdout, stderr, status, check, groupIds, che
       ["pass", "fail", "cannot-enforce"].includes(group.status),
       `${label}: group ${group.id} needs a stable status`,
     );
-    assert.ok(Array.isArray(group.checks) && group.checks.length > 0, `${label}: group ${group.id} needs checks`);
+    assert.ok(
+      Array.isArray(group.checks) && group.checks.length > 0,
+      `${label}: group ${group.id} needs checks`,
+    );
     for (const c of group.checks) {
       seenChecks.push(c.id);
       assert.ok(
@@ -159,7 +162,11 @@ function assertJsonReport({ parsed, stdout, stderr, status, check, groupIds, che
       }
     }
   }
-  assert.deepEqual(seenChecks.sort(), [...checkIds].sort(), `${label}: checks must be the canonical set`);
+  assert.deepEqual(
+    seenChecks.sort(),
+    [...checkIds].sort(),
+    `${label}: checks must be the canonical set`,
+  );
   const stderrLines = stderr.split("\n").filter((l) => l.trim().length > 0);
   assert.ok(stderrLines.length <= 20, `${label}: human output must stay bounded`);
   for (const line of stderrLines) {
@@ -214,7 +221,11 @@ function parseCliJson(result, label) {
 // --- Kit inventory REDs (via run API) ---------------------------------------
 
 test("RED kit: empty worker map cannot enforce (exit 2), never fits", (t) => {
-  const fx = makeKitFixture({ budgetMutate: (b) => { b.worker = {}; } });
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      b.worker = {};
+    },
+  });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
   assertCannotEnforce(result, /worker/i, "empty worker map");
@@ -222,7 +233,11 @@ test("RED kit: empty worker map cannot enforce (exit 2), never fits", (t) => {
 });
 
 test("RED kit: omitted server section cannot enforce (exit 2), never fits", (t) => {
-  const fx = makeKitFixture({ budgetMutate: (b) => { delete b.server; } });
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      delete b.server;
+    },
+  });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
   assertCannotEnforce(result, /server/i, "omitted server");
@@ -234,7 +249,7 @@ test("RED kit: typo worker entry is invalid plan (2), not breach (1)", (t) => {
     omitWorkerFile: true,
     extraFiles: [{ path: "_worker_js", body: SMALL_BODY }],
     budgetMutate: (b) => {
-      b.worker = { "_worker_js": { maxRawBytes: 4096, maxGzipBytes: 4096 } };
+      b.worker = { _worker_js: { maxRawBytes: 4096, maxGzipBytes: 4096 } };
     },
   });
   t.after(() => cleanup(fx.root));
@@ -304,7 +319,11 @@ test("RED kit: arbitrary repo file cannot substitute for the Worker (2)", (t) =>
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
-  assertCannotEnforce(result, /worker|plan|inventory|canonical|substitut/i, "repo-file substitution");
+  assertCannotEnforce(
+    result,
+    /worker|plan|inventory|canonical|substitut/i,
+    "repo-file substitution",
+  );
   assertNoOkLines(result, "repo-file substitution");
 });
 
@@ -318,7 +337,9 @@ test("RED kit: missing canonical Worker file is missing evidence (2), not breach
 test("RED kit: invalid plan is checked before file reads (no ok lines)", (t) => {
   const fx = makeKitFixture({
     omitClientDir: true,
-    budgetMutate: (b) => { b.worker = {}; },
+    budgetMutate: (b) => {
+      b.worker = {};
+    },
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
@@ -338,7 +359,11 @@ test("RED worker: budgets without dist/worker.js cannot enforce (2)", (t) => {
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runWorker, fx.root);
-  assertCannotEnforce(result, /dist\/worker\.js|worker|plan|inventory|canonical/i, "missing canonical");
+  assertCannotEnforce(
+    result,
+    /dist\/worker\.js|worker|plan|inventory|canonical/i,
+    "missing canonical",
+  );
   assertNoOkLines(result, "missing canonical");
 });
 
@@ -352,7 +377,11 @@ test("RED worker: substituted small file cannot stand in for dist/worker.js (2)"
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runWorker, fx.root);
-  assertCannotEnforce(result, /dist\/worker\.js|plan|inventory|canonical|substitut/i, "substituted bundle");
+  assertCannotEnforce(
+    result,
+    /dist\/worker\.js|plan|inventory|canonical|substitut/i,
+    "substituted bundle",
+  );
   assertNoOkLines(result, "substituted bundle");
 });
 
@@ -439,7 +468,11 @@ test("RED worker: arbitrary repo file cannot substitute for dist/worker.js (2)",
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runWorker, fx.root);
-  assertCannotEnforce(result, /dist\/worker\.js|plan|inventory|canonical|substitut/i, "repo-file substitution");
+  assertCannotEnforce(
+    result,
+    /dist\/worker\.js|plan|inventory|canonical|substitut/i,
+    "repo-file substitution",
+  );
   assertNoOkLines(result, "repo-file substitution");
 });
 
@@ -452,7 +485,11 @@ test("RED worker: invalid plan is checked before file reads (no ok lines)", (t) 
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runWorker, fx.root);
-  assertCannotEnforce(result, /dist\/worker\.js|plan|inventory|canonical/i, "invalid plan before reads");
+  assertCannotEnforce(
+    result,
+    /dist\/worker\.js|plan|inventory|canonical/i,
+    "invalid plan before reads",
+  );
   assertNoOkLines(result, "invalid plan before reads");
 });
 
@@ -477,7 +514,11 @@ test("RED kit: --format json emits versioned report with stable IDs (exit 0)", (
 });
 
 test("RED kit: --format json on invalid plan carries INVALID_PLAN + next_action (2)", (t) => {
-  const fx = makeKitFixture({ budgetMutate: (b) => { b.worker = {}; } });
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      b.worker = {};
+    },
+  });
   t.after(() => cleanup(fx.root));
   const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
   assert.equal(result.status, 2, `expected exit 2, got ${result.status}\nstderr: ${result.stderr}`);
@@ -497,7 +538,9 @@ test("RED kit: --format json on invalid plan carries INVALID_PLAN + next_action 
 
 test("RED kit: --format json on breach reports failing check with bytes (1)", (t) => {
   const fx = makeKitFixture({
-    budgetMutate: (b) => { b.client.js.maxRawBytes = JS_BODY.length - 1; },
+    budgetMutate: (b) => {
+      b.client.js.maxRawBytes = JS_BODY.length - 1;
+    },
   });
   t.after(() => cleanup(fx.root));
   const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
@@ -562,7 +605,9 @@ test("RED worker: --format json on invalid plan carries INVALID_PLAN + next_acti
 
 test("RED worker: --format json on breach reports failing check with bytes (1)", (t) => {
   const fx = makeWorkerFixture({
-    budgetMutate: (b) => { b.budgets[HONO_WORKER_PATH].maxRawBytes = HONO_BODY.length - 1; },
+    budgetMutate: (b) => {
+      b.budgets[HONO_WORKER_PATH].maxRawBytes = HONO_BODY.length - 1;
+    },
   });
   t.after(() => cleanup(fx.root));
   const result = runCli(workerScript, ["--root", fx.root, "--format", "json"]);
@@ -630,7 +675,10 @@ test("CONTROL both gates reject a wrong --format value (2) without writes", (t) 
   const workerBefore = snapshotFs(workerFx.root);
   const kitResult = runCli(kitScript, ["--root", kitFx.root, "--format", "xml"]);
   const workerResult = runCli(workerScript, ["--root", workerFx.root, "--format", "xml"]);
-  for (const [name, result] of [["kit", kitResult], ["worker", workerResult]]) {
+  for (const [name, result] of [
+    ["kit", kitResult],
+    ["worker", workerResult],
+  ]) {
     assert.equal(result.status, 2, `${name}: wrong format must exit 2, got ${result.status}`);
     assert.ok(
       /usage|unknown|invalid|format/i.test(result.stderr),
@@ -638,7 +686,10 @@ test("CONTROL both gates reject a wrong --format value (2) without writes", (t) 
     );
   }
   assert.ok(sameSnapshot(kitBefore, snapshotFs(kitFx.root)), "kit wrong format must not write");
-  assert.ok(sameSnapshot(workerBefore, snapshotFs(workerFx.root)), "worker wrong format must not write");
+  assert.ok(
+    sameSnapshot(workerBefore, snapshotFs(workerFx.root)),
+    "worker wrong format must not write",
+  );
 });
 
 test("CONTROL --dry-run is either rejected or the same read-only measurement", (t) => {
@@ -708,7 +759,11 @@ test("CONTROL kit: nested assets counted, sourcemaps excluded (exit 0)", (t) => 
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
-  assert.equal(result.code, 0, `expected fits (0), got ${result.code}\n${result.errors.join("\n")}`);
+  assert.equal(
+    result.code,
+    0,
+    `expected fits (0), got ${result.code}\n${result.errors.join("\n")}`,
+  );
   assert.ok(result.logs.some((l) => l.includes("ok server js: 2/2 files")));
   assert.ok(result.logs.some((l) => l.includes("ok client js: 2/2 files")));
   assert.ok(result.logs.some((l) => l.includes("ok client css: 2/2 files")));
@@ -731,10 +786,18 @@ test("CONTROL kit: exact fit passes (0), one-byte breach fails (1)", (t) => {
 
 test("CONTROL kit: malformed ceilings stay invalid plan (2)", (t) => {
   for (const mutate of [
-    (b) => { b.worker["_worker.js"].maxRawBytes = -1; },
-    (b) => { delete b.worker["_worker.js"].maxGzipBytes; },
-    (b) => { b.client.js.maxFiles = 0; },
-    (b) => { b.startup.maxMs = 0; },
+    (b) => {
+      b.worker["_worker.js"].maxRawBytes = -1;
+    },
+    (b) => {
+      delete b.worker["_worker.js"].maxGzipBytes;
+    },
+    (b) => {
+      b.client.js.maxFiles = 0;
+    },
+    (b) => {
+      b.startup.maxMs = 0;
+    },
   ]) {
     const fx = makeKitFixture({ budgetMutate: mutate });
     t.after(() => cleanup(fx.root));
@@ -752,7 +815,11 @@ test("CONTROL kit: supported metadata stays valid (exit 0)", (t) => {
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runKit, fx.root);
-  assert.equal(result.code, 0, `metadata must stay valid, got ${result.code}\n${result.errors.join("\n")}`);
+  assert.equal(
+    result.code,
+    0,
+    `metadata must stay valid, got ${result.code}\n${result.errors.join("\n")}`,
+  );
 });
 
 test("CONTROL kit: missing/empty output still cannot enforce (2)", (t) => {
@@ -782,7 +849,11 @@ test("CONTROL worker: malformed budgets stay invalid plan (2)", (t) => {
     { "dist/worker.js": { maxRawBytes: -1, maxGzipBytes: 10 } },
     { "../escape.js": { maxRawBytes: 10, maxGzipBytes: 10 } },
   ]) {
-    const fx = makeWorkerFixture({ budgetMutate: (b) => { b.budgets = budgets; } });
+    const fx = makeWorkerFixture({
+      budgetMutate: (b) => {
+        b.budgets = budgets;
+      },
+    });
     t.after(() => cleanup(fx.root));
     const result = runCaptured(runWorker, fx.root);
     assert.equal(result.code, 2, `malformed budget must exit 2, got ${result.code}`);
@@ -799,7 +870,10 @@ test("CONTROL worker: missing bundle cannot enforce (2) without auto-rebuild", (
     result.errors.some((l) => /cannot enforce|missing/i.test(l)),
     `missing bundle must say cannot enforce, got: ${result.errors.join(" | ")}`,
   );
-  assert.ok(sameSnapshot(before, snapshotFs(fx.root)), "missing evidence must not auto-create files");
+  assert.ok(
+    sameSnapshot(before, snapshotFs(fx.root)),
+    "missing evidence must not auto-create files",
+  );
   assert.ok(
     result.errors.some((l) => /wrangler deploy --dry-run/i.test(l)),
     "missing bundle must point at the manual dry-run command",
@@ -815,7 +889,11 @@ test("CONTROL worker: supported metadata stays valid (exit 0)", (t) => {
   });
   t.after(() => cleanup(fx.root));
   const result = runCaptured(runWorker, fx.root);
-  assert.equal(result.code, 0, `metadata must stay valid, got ${result.code}\n${result.errors.join("\n")}`);
+  assert.equal(
+    result.code,
+    0,
+    `metadata must stay valid, got ${result.code}\n${result.errors.join("\n")}`,
+  );
 });
 
 test("CONTROL worker body fixture is stable for exact-fit ceilings", () => {

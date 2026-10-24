@@ -4,7 +4,14 @@
 // product behavior, no builds, no network. Every fixture starts from an
 // otherwise-valid budget/artifact tree so a negative reaches the intended
 // missing-inventory/substitution branch, not an unrelated parse failure.
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";

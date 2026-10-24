@@ -64,7 +64,9 @@ export function measure(root = repoRoot) {
   try {
     doc = JSON.parse(readFileSync(join(root, "ci/worker-bundle-budget.json"), "utf8"));
   } catch (error) {
-    errors.push(boundLine(`worker bundle budget: cannot enforce: ${error.message}. ${REMEDIATION}`));
+    errors.push(
+      boundLine(`worker bundle budget: cannot enforce: ${error.message}. ${REMEDIATION}`),
+    );
     return fail(2, {
       code: "INVALID_PLAN",
       message: boundLine(`cannot enforce: ${error.message}`),
@@ -95,9 +97,7 @@ export function measure(root = repoRoot) {
     );
     return fail(2, {
       code: "MISSING_EVIDENCE",
-      message: boundLine(
-        `${WORKER_BUNDLE_ENTRY}: missing/unreadable bundle: ${error.message}`,
-      ),
+      message: boundLine(`${WORKER_BUNDLE_ENTRY}: missing/unreadable bundle: ${error.message}`),
       nextAction: REBUILD_NEXT_ACTION,
     });
   }
