@@ -136,13 +136,64 @@ export function gameRecoveryFixture(options: { empty?: boolean; failed?: boolean
 }
 
 export function decodedText(html: string) {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&#(?:39|x27);/g, "'")
-    .replace(/&quot;/g, '"')
+  // Text comparison for synthetic rendered fixtures, never an HTML sanitizer.
+  // Walk markup tokens and raw-text elements before decoding text exactly once.
+  let cursor = 0;
+  let rawTag: string | undefined;
+  let text = "";
+  while (cursor < html.length) {
+    if (rawTag) {
+      const close = html.indexOf("</", cursor);
+      if (close === -1) break;
+      cursor = close + 2;
+      const nameEnd = cursor + rawTag.length;
+      if (
+        html.slice(cursor, nameEnd).toLowerCase() !== rawTag ||
+        !/[\t\n\f\r />]/.test(html[nameEnd] ?? "")
+      )
+        continue;
+      cursor = close;
+      rawTag = undefined;
+    }
+    const open = html.indexOf("<", cursor);
+    if (open === -1) {
+      text += html.slice(cursor);
+      break;
+    }
+    text += `${html.slice(cursor, open)} `;
+    if (html.startsWith("<!--", open)) {
+      const close = html.indexOf("-->", open + 4);
+      if (close === -1) break;
+      cursor = close + 3;
+      continue;
+    }
+    let quote = "";
+    let end = open + 1;
+    for (; end < html.length; end++) {
+      const char = html[end];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === ">") {
+        break;
+      }
+    }
+    if (end === html.length) break;
+    const tag = /^([a-z][a-z0-9:-]*)(?=[\t\n\f\r />]|$)/i
+      .exec(html.slice(open + 1, end))?.[1]
+      ?.toLowerCase();
+    if (tag === "script" || tag === "style") rawTag = tag;
+    cursor = end + 1;
+  }
+  const entities: Record<string, string> = {
+    "&amp;": "&",
+    "&#39;": "'",
+    "&#x27;": "'",
+    "&quot;": '"',
+  };
+  return text
+    .replace(/&(?:amp|#39|#x27|quot);/g, (entity) => entities[entity]!)
     .replace(/\s+/g, " ")
     .trim();
 }
