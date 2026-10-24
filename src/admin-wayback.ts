@@ -30,9 +30,10 @@ export function adminWayBack(path: string): AdminWayBack | null {
     return { href: "/admin/events/new", label: "Back to the new event form" };
   }
   // An update and a lifecycle action refuse onto the same editor.
-  const event = /^\/admin\/events\/([^/]+)(\/publish|\/cancel|\/rsvp-pause|\/rsvp-reopen)?$/.exec(
-    clean,
-  );
+  const event =
+    /^\/admin\/events\/([^/]+)(\/publish|\/cancel|\/duplicate|\/rsvp-pause|\/rsvp-reopen)?$/.exec(
+      clean,
+    );
   if (event) {
     return { href: `/admin/events/${event[1]}`, label: "Back to the event editor" };
   }
