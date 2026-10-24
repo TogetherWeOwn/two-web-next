@@ -31,6 +31,12 @@ const SUITES = [
     min: 21,
   },
   {
+    file: "test/calendar-game-subscription-acceptance.test.ts",
+    env: "CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS",
+    title: "game subscription follows the committed schedule",
+    min: 16,
+  },
+  {
     file: "ci/audit-lifecycle.test.mjs",
     env: "A11Y_BROWSER_TESTS",
     title: "audit lifecycle real Chromium signal cleanup",

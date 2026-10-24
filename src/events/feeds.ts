@@ -1,12 +1,33 @@
 // W9 calendar feeds: pure builders ported byte-for-byte from two-web's
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
+import { containsControlCharacters } from "../admin/validation-shared";
 import { stripTrailingSlash } from "../seo";
 import { rssXml as xml } from "./rss-xml";
 
 type EventRow = typeof events.$inferSelect;
 
 export const SITE_NAME = "Together We Own";
+
+/** Feed `?game=` scope bound: 100 Unicode code points, like stored-game validation. */
+export const FEED_GAME_SCOPE_MAX_LENGTH = 100;
+
+/**
+ * Parse the optional `/events.ics?game=` scope. Blank (missing/empty/whitespace)
+ * means the unfiltered collection; a trimmed valid game filters to exactly that
+ * game. Overlong values, CR/LF property-injection input and control/invisible
+ * characters refuse with undefined so the route answers 400 without a read.
+ * Unknown games stay valid here — they filter to an empty scoped calendar, never all games.
+ */
+export function parseFeedGameScope(raw: string | null | undefined): string | null | undefined {
+  if (raw === null || raw === undefined) return null;
+  const game = raw.trim();
+  if (game === "") return null;
+  if ([...game].length > FEED_GAME_SCOPE_MAX_LENGTH) return undefined;
+  if (game.includes("\r") || game.includes("\n")) return undefined;
+  if (containsControlCharacters(game)) return undefined;
+  return game;
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -148,13 +169,14 @@ function vevent(e: EventRow, appUrl: string): string[] {
   return lines;
 }
 
-function calendar(inner: string[]): string {
+function calendar(inner: string[], game: string | null = null): string {
+  const name = game === null ? `${SITE_NAME} Events` : `${SITE_NAME} Events — ${game}`;
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//TogetherWeOwn//Events//EN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${text(`${SITE_NAME} Events`)}`,
+    `X-WR-CALNAME:${text(name)}`,
     `X-WR-CALDESC:${text(`Upcoming events from ${SITE_NAME}`)}`,
     ...inner,
     "END:VCALENDAR",
@@ -164,7 +186,11 @@ function calendar(inner: string[]): string {
 
 export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent(e, appUrl));
 
-export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string => {
+export const eventsIcsCollection = (
+  rows: EventRow[],
+  appUrl: string,
+  game: string | null = null,
+): string => {
   // One out-of-range stored revision must not fail the whole export: skip
   // that row and log the count plus the skipped event keys, so the stranded
   // subscriber-visible event can be found and the identity migration started.
@@ -200,7 +226,7 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
       skipped: skippedTimestamps,
     });
   }
-  return calendar(inner);
+  return calendar(inner, game);
 };
 
 export function latestWireUpdatedAt(rows: EventRow[]): Date {
@@ -243,9 +269,20 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
   );
 }
 
-export const feedUrl = (appUrl: string) => `${feedBase(appUrl)}/events.ics`;
+/**
+ * Collection feed URL, optionally scoped to one game. Blank game keeps the
+ * exact unfiltered URL; a game appends the single `game` query value so the
+ * subscription carries the committed schedule scope and nothing else.
+ */
+export const feedUrl = (appUrl: string, game?: string | null) => {
+  const base = `${feedBase(appUrl)}/events.ics`;
+  const scope = (game ?? "").trim();
+  if (scope === "") return base;
+  return `${base}?${new URLSearchParams({ game: scope })}`;
+};
 export const rssUrl = (appUrl: string) => `${feedBase(appUrl)}/events.rss`;
-export const webcalUrl = (appUrl: string) => feedUrl(appUrl).replace(/^https?:\/\//, "webcal://");
+export const webcalUrl = (appUrl: string, game?: string | null) =>
+  feedUrl(appUrl, game).replace(/^https?:\/\//, "webcal://");
 
 /** RFC3986 query encoding, like PHP_QUERY_RFC3986. */
 const q = (v: string) =>
