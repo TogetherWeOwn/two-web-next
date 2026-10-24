@@ -9,6 +9,7 @@ import { recordAccess } from "../admin/store";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
 import type { Ctx, ProfileDeps } from "./routes-shared";
+import { readAttendedHistory, type AttendedHistory } from "./history";
 import {
   MEMBER_STATS_BUDGET_MS,
   memberStatsWithBudget,
@@ -51,7 +52,15 @@ export function profileStores(deps: ProfileDeps) {
     const db = await dbFor(c);
     return db ? (entry) => recordAccess(db, entry) : null;
   };
-  return { storeFor, statsFor, sinkFor };
+  // Own attended history for the self-view only; the read route decides
+  // selfness, so other-member renders never reach this read. No database
+  // reads as absent (no section), like a missing stats block.
+  const historyFor = async (c: Ctx, id: string): Promise<AttendedHistory | null> => {
+    if (deps.history) return deps.history(id);
+    const db = await dbFor(c);
+    return db ? readAttendedHistory(db, id) : null;
+  };
+  return { storeFor, statsFor, sinkFor, historyFor };
 }
 
 export type ProfileStores = ReturnType<typeof profileStores>;

@@ -5,6 +5,10 @@ import { canonicalUrl } from "../seo";
 import {
   MEMBER_PROFILE_ISLAND,
   MOUNT_ATTR,
+  PROFILE_ATTENDED_COUNT_TESTID,
+  PROFILE_ATTENDED_EMPTY_TESTID,
+  PROFILE_ATTENDED_MORE_TESTID,
+  PROFILE_ATTENDED_TESTID,
   PROFILE_AVATAR_TESTID,
   PROFILE_CANCEL_TESTID,
   PROFILE_COPY,
@@ -27,6 +31,7 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
+import type { AttendedHistory } from "./history";
 import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
 import {
   PROFILE_BIO_COUNT_ID,
@@ -201,6 +206,45 @@ const MemberStatsBlock: FC<{
   );
 };
 
+// Own attended history: count plus the most recent attended nights, newest
+// first. Rendered only on the owner's self-view with a resolved history; any
+// other render passes null and stays byte-identical. Member titles render
+// through JSX interpolation only, never raw HTML.
+const AttendedHistoryBlock: FC<{ history: AttendedHistory }> = ({ history }) => (
+  <section
+    class="profile-panel"
+    aria-labelledby="attended-heading"
+    data-testid={PROFILE_ATTENDED_TESTID}
+  >
+    <h2 id="attended-heading">Nights you attended</h2>
+    {history.total > 0 ? (
+      <>
+        <p data-testid={PROFILE_ATTENDED_COUNT_TESTID} role="status">
+          Attended {history.total} {history.total === 1 ? "night" : "nights"}
+        </p>
+        <ul>
+          {history.nights.map((night) => (
+            <li>
+              <a href={`/e/${night.eventKey}`}>{night.title}</a>{" "}
+              <time datetime={night.startsAt.toISOString()}>{statsDate(night.startsAt)}</time>
+            </li>
+          ))}
+        </ul>
+        {history.total > history.nights.length ? (
+          <p class="profile-hint" data-testid={PROFILE_ATTENDED_MORE_TESTID}>
+            Showing the {history.nights.length} most recent of {history.total} attended nights.
+          </p>
+        ) : null}
+      </>
+    ) : (
+      <p data-testid={PROFILE_ATTENDED_EMPTY_TESTID}>
+        You have not attended any nights yet. <a href="/events">Browse the schedule</a> to find your
+        first.
+      </p>
+    )}
+  </section>
+);
+
 // Share tags (TOG-6793): the canonical is always the shareable member URL,
 // so /profile and /members/{user} never present as duplicates. The
 // description stays generic on purpose — the only member data in the tags is
@@ -225,6 +269,8 @@ export const ProfilePage: FC<{
   appUrl: string;
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
+  /** Resolved only for the owner's self-view; null everywhere else renders nothing. */
+  history?: AttendedHistory | null;
   errors?: Record<string, string>;
   values?: ProfileFormValues;
   /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
@@ -236,6 +282,7 @@ export const ProfilePage: FC<{
   appUrl,
   joinResult,
   stats,
+  history,
   errors,
   values,
   statsDraftWarning,
@@ -405,6 +452,7 @@ export const ProfilePage: FC<{
             draftWarning={statsDraftWarning}
           />
         ) : null}
+        {isOwner && history ? <AttendedHistoryBlock history={history} /> : null}
         {isOwner ? (
           <section
             class="profile-panel profile-editor"

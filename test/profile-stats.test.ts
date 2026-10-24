@@ -49,7 +49,13 @@ function fixture(
   memberRows: Record<string, unknown>[] = [fullMember],
   milestoneRows: Record<string, unknown>[] = milestones,
 ) {
-  const execute = vi.fn().mockResolvedValueOnce(memberRows).mockResolvedValueOnce(milestoneRows);
+  // Faithful-driver default: real execute always resolves an array, so later
+  // reads (e.g. the self-view history read) resolve empty, never undefined.
+  const execute = vi
+    .fn()
+    .mockResolvedValue([])
+    .mockResolvedValueOnce(memberRows)
+    .mockResolvedValueOnce(milestoneRows);
   // Local results still pass through Drizzle compilation/prepareQuery, so the
   // production observer verifies the exact SQL projection in route tests.
   const session = {

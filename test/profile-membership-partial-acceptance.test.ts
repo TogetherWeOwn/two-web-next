@@ -78,7 +78,13 @@ function fixture(
   memberRows: Record<string, unknown>[] = [fullMember],
   rows: Record<string, unknown>[] = milestoneRows,
 ) {
-  const execute = vi.fn().mockResolvedValueOnce(memberRows).mockResolvedValueOnce(rows);
+  // Faithful-driver default: real execute always resolves an array, so later
+  // reads (e.g. the self-view history read) resolve empty, never undefined.
+  const execute = vi
+    .fn()
+    .mockResolvedValue([])
+    .mockResolvedValueOnce(memberRows)
+    .mockResolvedValueOnce(rows);
   const session = {
     prepareQuery: (query: unknown) => ({ execute: () => execute(query) }),
   } as unknown as PgSession;
@@ -682,12 +688,21 @@ describe("Hono editor, privacy, and audit pins", () => {
   it("GREEN: the owner editor and joined fallback survive every stats state", async () => {
     for (const setup of ["partial", "empty"] as const) {
       const { db, execute } = fixture();
+      // mockReset wipes the fixture's faithful empty-array default, so each
+      // arm re-pins it: later reads (the self-view history read) resolve
+      // empty like a real driver, never undefined.
       if (setup === "partial")
         execute
           .mockReset()
+          .mockResolvedValue([])
           .mockResolvedValueOnce([fullMember])
           .mockRejectedValueOnce(new Error("missing milestones view"));
-      else execute.mockReset().mockResolvedValueOnce([fullMember]).mockResolvedValueOnce([]);
+      else
+        execute
+          .mockReset()
+          .mockResolvedValue([])
+          .mockResolvedValueOnce([fullMember])
+          .mockResolvedValueOnce([]);
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const { app, log, cookieFor, bindings } = await harness(db);
       const res = await app.request(

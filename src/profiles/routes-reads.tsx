@@ -9,7 +9,10 @@ import { ProfilePage } from "./pages";
 import { type Ctx, type ProfileApp, SNOWFLAKE } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 
-export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: ProfileStores) {
+export function registerReadRoutes(
+  app: ProfileApp,
+  { storeFor, statsFor, historyFor }: ProfileStores,
+) {
   const render = async (c: Ctx, id: string) => {
     // Same per-isolate, DB-source-scoped cached guest snapshot as ordinary
     // 404s and event-detail 404s: one fill per TTL, never one Postgres
@@ -30,11 +33,15 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
     const viewer = c.get("viewer");
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
+    // Strictly self-only: only the owner's own render issues the history
+    // read, so other-member bytes never change and no extra statement runs.
+    const history = viewer.id === member.id ? await historyFor(c, member.id) : null;
     return bufferedMemberHtml(
       c,
       <ProfilePage
         member={member}
         stats={stats}
+        history={history}
         isOwner={viewer.id === member.id}
         isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}

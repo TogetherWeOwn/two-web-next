@@ -22,6 +22,7 @@ import { safeNext } from "../join/service";
 import type { KitRequestSession } from "../kit-session";
 import { declareMemberResult } from "../member-reads";
 import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE, type JoinResult } from "../return-journey";
+import { readAttendedHistory, type AttendedHistory } from "./history";
 import { SNOWFLAKE } from "./routes-shared";
 import {
   MEMBER_STATS_BUDGET_MS,
@@ -49,6 +50,9 @@ export type KitProfileDeps = {
   /** Absent (or resolving null) hides the stats block; a read failure resolves
    * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
+  /** Own attended history. Read only for the owner's self-view; absent (or
+   * resolving null) hides the history section. */
+  history?: (memberId: string) => Promise<AttendedHistory | null>;
 };
 
 export type KitProfileOutcome =
@@ -60,6 +64,7 @@ export type KitProfileOutcome =
       kind: "ok";
       member: MemberView;
       stats: MemberStats | null;
+      history: AttendedHistory | null;
       isOwner: boolean;
       isModerator: boolean;
       joinResult: JoinResult | null;
@@ -89,7 +94,13 @@ export function kitProfileDeps(env: Env) {
       });
       return readOwnedMemberStats(drizzle(client), id, signal);
     }, memberId);
-  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET };
+  // Own attended history lives in the web DB with the store reads (unlike the
+  // bot-owned stats views), so this shares the request DB, never BOT_DATABASE_URL.
+  const historyFor = async (memberId: string): Promise<AttendedHistory | null> => {
+    const db = await dbFor({ env });
+    return db ? readAttendedHistory(db, memberId) : null;
+  };
+  return { storeFor, statsFor, historyFor, sessionSecret: env.SESSION_SECRET };
 }
 
 export async function resolveKitProfile(
@@ -134,11 +145,15 @@ export async function resolveKitProfile(
     return { kind: "notFound" };
   }
   const stats = deps.stats ? await deps.stats(member.id) : null;
+  const isOwner = viewer.userId === member.id;
+  // Strictly self-only: other-member outcomes never issue the history read.
+  const history = isOwner && deps.history ? await deps.history(member.id) : null;
   return {
     kind: "ok",
     member,
     stats,
-    isOwner: viewer.userId === member.id,
+    history,
+    isOwner,
     isModerator: viewer.moderator,
     joinResult: req.joinResult,
   };
