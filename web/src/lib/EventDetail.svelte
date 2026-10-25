@@ -2,6 +2,7 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { formatElapsedDuration } from "../../../src/events/date-format";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
   EVENT_FULL_TESTID,
@@ -67,6 +68,9 @@ const detailIslands = [
 // Server-decided RSVP closure: the resolver settles the verdict from the
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
+const duration = $derived(
+  formatElapsedDuration(new Date(model.endsAt).getTime() - new Date(model.timeDatetime).getTime()),
+);
 const closed = $derived(model.rsvpClosed);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
@@ -199,6 +203,12 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
+    {#if duration}
+      <div>
+        <dt>Duration</dt>
+        <dd>{duration}</dd>
+      </div>
+    {/if}
     {#if model.location}
       <div>
         <dt>Where</dt>
