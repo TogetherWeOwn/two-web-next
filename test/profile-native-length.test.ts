@@ -194,7 +194,8 @@ for (const path of paths) {
           expectCodePointForm(invalidHtml);
         } else {
           expect(await response.json()).toEqual({
-            errors: { [error.startsWith("Keep your bio") ? "bio" : "games"]: error },
+            error: "invalid",
+            fields: { [error.startsWith("Keep your bio") ? "bio" : "games"]: error },
           });
         }
         expect(save).not.toHaveBeenCalled();
