@@ -1,6 +1,7 @@
 <script lang="ts">
 import { page } from "$app/state";
 import AdminShell from "#lib/AdminShell.svelte";
+import { adminReadRetryHref } from "#lib/admin-read-retry.ts";
 
 // Route-level error page for GET /admin/join-attempts and
 // GET /admin/join-attempts/:id: the list and detail loads throw the branded
@@ -19,6 +20,9 @@ import AdminShell from "#lib/AdminShell.svelte";
 const missing = $derived(page.status === 404);
 const outage = $derived(page.status === 503);
 const reference = $derived(page.data?.requestId);
+const retryHref = $derived(
+  outage || page.status === 500 ? adminReadRetryHref(page.url, "join-attempts") : null,
+);
 const title = $derived(
   missing
     ? "Join attempt not found"
@@ -52,6 +56,9 @@ const title = $derived(
     <p class="support-reference">
       Support reference: <code data-testid="error-support-reference">{reference}</code>
     </p>
+  {/if}
+  {#if retryHref}
+    <p><a href={retryHref} style="outline-color: var(--color-lobby-focus)">Retry loading</a></p>
   {/if}
 </section>
 </AdminShell>

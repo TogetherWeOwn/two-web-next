@@ -16,7 +16,11 @@ import { discordEventsSource } from "../../src/events/discord-transients";
 import { listPast, type PublicEvent } from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
-import { dispatchPastArchiveRequest, loadPastArchivePage } from "../../src/kit-past-events";
+import {
+  dispatchPastArchiveRequest,
+  loadPastArchivePage,
+  toPublicPastArchiveRow,
+} from "../../src/kit-past-events";
 import { kitEventsJourneyFor, kitEventsSessionFor } from "../../src/kit-session";
 import app from "../app";
 
@@ -204,6 +208,7 @@ const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
   listPast,
   loadPastArchivePage,
+  toPublicPastArchiveRow,
   loadEventsPage,
   renderEventsHtml,
   kitEventsSessionFor,
@@ -229,7 +234,7 @@ export async function compileArchiveKit() {
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
     [join(root, "src/events/reads.ts"), ["listPast"]],
-    [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage"]],
+    [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
     [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],

@@ -22,6 +22,7 @@ import {
   bufferedMemberText,
   memberReadActive,
 } from "./member-reads";
+import { jsonRefusal } from "./json-refusal";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
 import { acceptsJson } from "./media-type";
 import { requestRoute, safeRequestId } from "./request-log";
@@ -138,7 +139,8 @@ function jsonOnlyEventRequest(c: Context): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);
@@ -269,9 +271,25 @@ export function badRequest(c: Context): Response | Promise<Response> {
   return memberReadActive() ? bufferedMemberHtml(c, page, 400) : c.html(page);
 }
 
+// The single default every Hono outage 503 emits as its Retry-After header,
+// so machine clients back off uniformly. Matches the 429 default.
+export const OUTAGE_RETRY_AFTER_SECONDS = 60;
+
+// 429-identical clamp (see rateLimitExceeded): floor, non-finite falls back
+// to the constant, minimum 1.
+export function clampOutageRetryAfter(retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS): number {
+  const parsed = Math.floor(retryAfter);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : OUTAGE_RETRY_AFTER_SECONDS;
+}
+
 // Shared outage envelope: no session/data reads, no driver details. Explicit
 // JSON endpoints may opt in even without an Accept header.
-export function databaseUnavailable(c: Context, jsonOnly = false): Response | Promise<Response> {
+export function databaseUnavailable(
+  c: Context,
+  jsonOnly = false,
+  retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS,
+): Response | Promise<Response> {
+  c.header("Retry-After", String(clampOutageRetryAfter(retryAfter)));
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(503);
@@ -300,7 +318,11 @@ function outageJsonBody(c: Context) {
 // outage envelope, released through the capture instead of beside it. A
 // direct databaseUnavailable call here would fail the capture.response
 // identity check and refuse the page it just built.
-export function databaseUnavailableBuffered(c: Context): Response | Promise<Response> {
+export function databaseUnavailableBuffered(
+  c: Context,
+  retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS,
+): Response | Promise<Response> {
+  c.header("Retry-After", String(clampOutageRetryAfter(retryAfter)));
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(503);
@@ -423,7 +445,7 @@ export function nonOwnerProfileWrite(c: Context): Response | Promise<Response> {
   varyAccept(c);
   c.status(403);
   if (acceptsJson(c.req.header("accept"))) {
-    return c.json({ error: "forbidden", message: "You can only edit your own profile." });
+    return jsonRefusal(c, "forbidden", 403, { message: "You can only edit your own profile." });
   }
   return c.html(<OwnProfileOnlyPage />);
 }
@@ -459,8 +481,10 @@ export function gone(c: Context): Response | Promise<Response> {
 
 export function maintenanceHandler(
   inviteUrl: string,
+  retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS,
 ): (c: Context) => Response | Promise<Response> {
   return (c) => {
+    c.header("Retry-After", String(clampOutageRetryAfter(retryAfter)));
     c.header("cache-control", "no-store, private");
     c.status(503);
     return c.html(<MaintenancePage inviteUrl={inviteUrl} supportReference={supportReference(c)} />);

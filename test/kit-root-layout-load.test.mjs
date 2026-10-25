@@ -42,6 +42,18 @@ describe("Kit root layout load: requestId forwarding", () => {
     expect(load({ locals: { requestId: ULID } })).toEqual({ requestId: ULID });
   });
 
+  it("serializes only the safe reference, never member or session locals", () => {
+    const payload = load({
+      locals: {
+        requestId: RAY,
+        session: { username: "private-member", token: "private-token" },
+        userId: "123456789012345678",
+        email: "private@example.test",
+      },
+    });
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({ requestId: RAY });
+  });
+
   it("drops a hostile locals id to undefined", () => {
     expect(load({ locals: { requestId: "<script>alert(1)</script>" } })).toEqual({
       requestId: undefined,

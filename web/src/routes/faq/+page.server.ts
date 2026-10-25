@@ -9,9 +9,9 @@ import { LEAF_CRITICAL_CSS } from "../../../../src/leaf-critical-css";
 export const csr = false;
 
 // Same reads and cache policy as the Hono handler (src/static-leaves.tsx):
-// APP_URL only. No session, no cookie, no database — the page stays 200
-// during an app-DB outage, exactly like the Hono leaf.
+// APP_URL plus the config stamp only. No session, no cookie, no database —
+// the page stays 200 during an app-DB outage, exactly like the Hono leaf.
 export const load: PageServerLoad = async ({ setHeaders }) => {
   setHeaders({ "cache-control": "public, max-age=3600" });
-  return { ...faqPageData(env.APP_URL), leafCss: LEAF_CRITICAL_CSS };
+  return { ...faqPageData(env.APP_URL, env.FAQ_LAST_REVIEWED), leafCss: LEAF_CRITICAL_CSS };
 };

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { navigationMetadata } from "./lighthouse-navigation-fixtures.mjs";
 import { main as desktopMain } from "../ci/lighthouse-quality-run.mjs";
 import { main as mobileMain } from "../ci/lighthouse-origin-run.mjs";
 
@@ -48,9 +49,9 @@ function profile(kind, deployed = false, event = true) {
   return { kind, env, event, urls, quota: collect.numberOfRuns };
 }
 
-function report(url, changes = {}) {
+function report(url, changes = {}, p = { kind: "mobile" }) {
   return {
-    lighthouseVersion: "12.8.2",
+    ...navigationMetadata(p.kind, { deployed: Boolean(p.env?.QUALITY_ORIGIN) }),
     requestedUrl: url,
     finalUrl: url,
     finalDisplayedUrl: url,
@@ -71,41 +72,43 @@ function report(url, changes = {}) {
   };
 }
 
-const complete = (p) => p.urls.flatMap((url) => Array.from({ length: p.quota }, () => report(url)));
+const complete = (p) =>
+  p.urls.flatMap((url) => Array.from({ length: p.quota }, () => report(url, {}, p)));
 const thinUrl = (p) => p.urls.at(-1);
 const without = (reports, url) => reports.filter((r) => r.requestedUrl !== url);
 function thin(p, count = p.quota - 1) {
   return [
     ...without(complete(p), thinUrl(p)),
-    ...Array.from({ length: count }, () => report(thinUrl(p))),
+    ...Array.from({ length: count }, () => report(thinUrl(p), {}, p)),
   ];
 }
 function uneven(p) {
   // The total is exactly full; a surplus for the first URL cannot buy a sample
   // for the last URL. This catches aggregate-only admission, even on exit 0.
-  return [...thin(p), report(p.urls[0])];
+  return [...thin(p), report(p.urls[0], {}, p)];
 }
 
 function impostors(p) {
   return [
     [
       "foreign origin",
-      (url) => report(new URL(new URL(url).pathname, "https://unrelated.example").href),
+      (url) => report(new URL(new URL(url).pathname, "https://unrelated.example").href, {}, p),
     ],
     [
       "foreign redirect",
       (url) => {
         const final = new URL(new URL(url).pathname, "https://unrelated.example").href;
-        return report(url, { finalUrl: final, finalDisplayedUrl: final });
+        return report(url, { finalUrl: final, finalDisplayedUrl: final }, p);
       },
     ],
-    ["unplanned path", () => report(`${new URL(p.urls[0]).origin}/not-planned`)],
-    ["unplanned query", (url) => report(`${url}?unplanned=1`)],
+    ["unplanned path", () => report(`${new URL(p.urls[0]).origin}/not-planned`, {}, p)],
+    ["unplanned query", (url) => report(`${url}?unplanned=1`, {}, p)],
     ["malformed report shape", (url) => ({ requestedUrl: url, finalUrl: url, categories: {} })],
     ["malformed JSON", () => '{"categories":'],
     [
       "runtime error",
-      (url) => report(url, { runtimeError: { code: "NO_NAVSTART", message: "navigation failed" } }),
+      (url) =>
+        report(url, { runtimeError: { code: "NO_NAVSTART", message: "navigation failed" } }, p),
     ],
   ];
 }
@@ -230,7 +233,7 @@ for (const p of mainProfiles) {
     });
 
     it("accepts a surplus once every planned URL has met its quota", async () => {
-      const result = await collect(p, [{ reports: [...complete(p), report(p.urls[0])] }]);
+      const result = await collect(p, [{ reports: [...complete(p), report(p.urls[0], {}, p)] }]);
       expect(result.code).toBe(0);
       expect(result.calls).toBe(1);
     });
@@ -370,7 +373,7 @@ for (const p of mainProfiles) {
           reports.findIndex((r) => r.requestedUrl === canonical),
           1,
         );
-        reports.push(report(configured.urls.at(-1)));
+        reports.push(report(configured.urls.at(-1), {}, configured));
         const result = await collect(configured, [{ reports }]);
         expect(result.code).not.toBe(0);
         expect(result.calls).toBe(2);

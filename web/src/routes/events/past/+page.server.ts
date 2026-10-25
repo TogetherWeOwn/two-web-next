@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
 import { listPast } from "../../../../../src/events/reads";
-import { loadPastArchivePage } from "../../../../../src/kit-past-events";
+import { loadPastArchivePage, toPublicPastArchiveRow } from "../../../../../src/kit-past-events";
 import { MAX_QUERY_LENGTH } from "../../../../../src/events/search-log";
 import { EVENTS_SEARCH_TOO_LONG_COPY } from "../../../../../src/islands/contracts";
 
@@ -26,7 +26,7 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
     error(422, EVENTS_SEARCH_TOO_LONG_COPY);
   }
   try {
-    return await loadPastArchivePage({
+    const data = await loadPastArchivePage({
       env,
       pageParam: url.searchParams.get("page"),
       queryParam: url.searchParams.get("q"),
@@ -38,6 +38,12 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
       // (safeRequestId inside the alert drops anything unvalidated).
       requestId: locals.requestId,
     });
+    // Projected before returning: Kit serializes load data into __data.json
+    // for anonymous clients even with csr=false, so the authorship
+    // snowflake and other unrendered row fields never ride the rows (the
+    // join precedent: toPublicWidgetSnapshot). The card only reads the
+    // projected fields, so the view is unchanged.
+    return { ...data, rows: data.rows.map(toPublicPastArchiveRow) };
   } catch {
     error(503, "Events temporarily unavailable");
   }

@@ -1,12 +1,9 @@
-// Builder-owned supplement: admin group error boundary reference threading.
+// Builder-owned supplement: newly integrated boundaries retain correlation.
 //
-// Main's admin boundary (web/src/routes/admin/+error.svelte) arrived after
-// this slice's every-boundary pin, which requires each own-chrome boundary to
-// carry the support-reference block the moderator guide promises. The merge
-// threads page.data.requestId through the new boundary, mirroring the
-// join-attempts precedent. The correlation suite pins the block's existence;
-// this file renders with the id set and unset, so a neutered derivation
-// fails here.
+// Main added admin, hotzones and member-board boundaries after this slice's
+// every-boundary pin. Render each with the id set and unset so dropping the
+// page-data binding cannot silently lose the served reference. The admin
+// case also retains the moderator recovery link.
 //
 // Hermetic: an SSR render of the real admin boundary with a stubbed
 // $app/state (the acceptance harness shape, plus page.data). No live
@@ -28,78 +25,88 @@ const { compile } = webRequire("svelte/compiler") as {
   ) => { js: { code: string } };
 };
 
-const BOUNDARY = "web/src/routes/admin/+error.svelte";
+const BOUNDARIES = [
+  { path: "/admin", title: "Admin temporarily unavailable", recovery: "Back to the dashboard" },
+  { path: "/hotzones", title: "We will be right back", recovery: "Back to the homepage" },
+  {
+    path: "/leaderboards/members",
+    title: "We will be right back",
+    recovery: "Back to the homepage",
+  },
+];
 
-describe("builder: the admin boundary renders the served support reference", () => {
-  const CANARY = "canary-<b>7f3a9e</b>-trace";
-  const SERVED_ID = "01J9X7Q2M4W0B3D6F8H1K3N5P7";
+describe.each(BOUNDARIES)(
+  "builder: $path boundary renders the served support reference",
+  ({ path, title, recovery }) => {
+    const CANARY = "canary-<b>7f3a9e</b>-trace";
+    const SERVED_ID = "01J9X7Q2M4W0B3D6F8H1K3N5P7";
 
-  type RenderBoundary = (
-    status: number,
-    message: string,
-    data?: { requestId?: string },
-  ) => { head: string; body: string };
-  let renderBoundary: RenderBoundary | null = null;
-  let boundaryError: unknown = null;
+    type RenderBoundary = (
+      status: number,
+      message: string,
+      data?: { requestId?: string },
+    ) => { head: string; body: string };
+    let renderBoundary: RenderBoundary | null = null;
+    let boundaryError: unknown = null;
 
-  beforeAll(async () => {
-    try {
-      await initBoundaryRender();
-    } catch (error) {
-      boundaryError = error;
+    beforeAll(async () => {
+      try {
+        await initBoundaryRender();
+      } catch (error) {
+        boundaryError = error;
+      }
+    });
+
+    function requireRender(): RenderBoundary {
+      if (boundaryError) throw boundaryError;
+      if (!renderBoundary) throw new Error("boundary render harness did not initialize");
+      return renderBoundary;
     }
-  });
 
-  function requireRender(): RenderBoundary {
-    if (boundaryError) throw boundaryError;
-    if (!renderBoundary) throw new Error("boundary render harness did not initialize");
-    return renderBoundary;
-  }
-
-  async function initBoundaryRender(): Promise<void> {
-    const worktree = `${root}/`;
-    const scratch = mkdtempSync(join(tmpdir(), "kit-admin-error-reference-"));
-    const entry = join(scratch, "kit-admin-error-reference-entry.mjs");
-    writeFileSync(
-      entry,
-      `
+    async function initBoundaryRender(): Promise<void> {
+      const worktree = `${root}/`;
+      const scratch = mkdtempSync(join(tmpdir(), "kit-admin-error-reference-"));
+      const entry = join(scratch, "kit-admin-error-reference-entry.mjs");
+      writeFileSync(
+        entry,
+        `
 import { render } from "svelte/server";
-import Boundary from ${JSON.stringify(join(worktree, BOUNDARY))};
+import Boundary from ${JSON.stringify(join(worktree, `web/src/routes${path}/+error.svelte`))};
 export function renderBoundary(status, message, data) {
   globalThis.__kitAdminErrorPage = {
     status,
     error: { message },
     data,
-    url: new URL("https://next.example.test/admin"),
+    url: new URL(${JSON.stringify(`https://next.example.test${path}`)}),
     params: {},
-    route: { id: "/admin" },
+    route: { id: ${JSON.stringify(path)} },
   };
   const { head, body } = render(Boundary);
   return { head, body };
 }
 `,
-    );
-    const outfile = join(scratch, "kit-admin-error-reference.mjs");
-    await build({
-      entryPoints: [entry],
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      outfile,
-      logLevel: "warning",
-      absWorkingDir: worktree,
-      nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
-      alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
-      plugins: [
-        {
-          name: "kit-admin-error-reference-svelte-ssr",
-          setup(plugin) {
-            plugin.onResolve({ filter: /^\$app\/state$/ }, () => ({
-              path: "app-state",
-              namespace: "kit-admin-error-builder",
-            }));
-            plugin.onLoad({ filter: /.*/, namespace: "kit-admin-error-builder" }, () => ({
-              contents: `export const page = {
+      );
+      const outfile = join(scratch, "kit-admin-error-reference.mjs");
+      await build({
+        entryPoints: [entry],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        outfile,
+        logLevel: "warning",
+        absWorkingDir: worktree,
+        nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
+        alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
+        plugins: [
+          {
+            name: "kit-admin-error-reference-svelte-ssr",
+            setup(plugin) {
+              plugin.onResolve({ filter: /^\$app\/state$/ }, () => ({
+                path: "app-state",
+                namespace: "kit-admin-error-builder",
+              }));
+              plugin.onLoad({ filter: /.*/, namespace: "kit-admin-error-builder" }, () => ({
+                contents: `export const page = {
                 get status() { return globalThis.__kitAdminErrorPage.status; },
                 get error() { return globalThis.__kitAdminErrorPage.error; },
                 get data() { return globalThis.__kitAdminErrorPage.data; },
@@ -107,46 +114,45 @@ export function renderBoundary(status, message, data) {
                 get params() { return globalThis.__kitAdminErrorPage.params; },
                 get route() { return globalThis.__kitAdminErrorPage.route; },
               };`,
-              loader: "js",
-            }));
-            plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-              const source = readFileSync(args.path, "utf8");
-              const { js } = compile(source, {
-                generate: "server",
-                dev: false,
-                filename: args.path,
+                loader: "js",
+              }));
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const source = readFileSync(args.path, "utf8");
+                const { js } = compile(source, {
+                  generate: "server",
+                  dev: false,
+                  filename: args.path,
+                });
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
               });
-              return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-            });
+            },
           },
-        },
-      ],
-    });
-    ({ renderBoundary } = (await import(pathToFileURL(outfile).href)) as {
-      renderBoundary: RenderBoundary;
-    });
-    rmSync(scratch, { recursive: true, force: true });
-  }
+        ],
+      });
+      ({ renderBoundary } = (await import(pathToFileURL(outfile).href)) as {
+        renderBoundary: RenderBoundary;
+      });
+      rmSync(scratch, { recursive: true, force: true });
+    }
 
-  it("renders the served support reference from page data", () => {
-    const rendered = requireRender()(503, CANARY, { requestId: SERVED_ID });
-    expect(rendered.body, "503 names the outage like Hono").toContain(
-      "Admin temporarily unavailable",
-    );
-    expect(rendered.body, "503 names the served id").toContain(SERVED_ID);
-    expect(rendered.body, "503 keeps the reference testid").toContain(
-      'data-testid="error-support-reference"',
-    );
-    expect(rendered.body, "503 keeps the dashboard way back").toContain("Back to the dashboard");
-    expect(rendered.body, "503 echoes no failure").not.toContain("canary-");
-    expect(rendered.head, "503 stays out of search indexes").toContain("noindex");
-  });
+    it("renders the served support reference from page data", () => {
+      const rendered = requireRender()(503, CANARY, { requestId: SERVED_ID });
+      expect(rendered.body, "503 names the outage like Hono").toContain(title);
+      expect(rendered.body, "503 names the served id").toContain(SERVED_ID);
+      expect(rendered.body, "503 keeps the reference testid").toContain(
+        'data-testid="error-support-reference"',
+      );
+      expect(rendered.body, "503 keeps its recovery link").toContain(recovery);
+      expect(rendered.body, "503 echoes no failure").not.toContain("canary-");
+      expect(rendered.head, "503 stays out of search indexes").toContain("noindex");
+    });
 
-  it("renders no reference block without a request id", () => {
-    const rendered = requireRender()(503, CANARY);
-    expect(rendered.body, "503 without an id renders no block").not.toContain(
-      "error-support-reference",
-    );
-    expect(rendered.body, "503 without an id stays defined").not.toContain("undefined");
-  });
-});
+    it("renders no reference block without a request id", () => {
+      const rendered = requireRender()(503, CANARY);
+      expect(rendered.body, "503 without an id renders no block").not.toContain(
+        "error-support-reference",
+      );
+      expect(rendered.body, "503 without an id stays defined").not.toContain("undefined");
+    });
+  },
+);

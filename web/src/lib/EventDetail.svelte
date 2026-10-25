@@ -8,12 +8,26 @@ import {
   RSVP_BUTTON_ISLAND,
   RSVP_CHECK_TESTID,
   RSVP_CLOSED_TESTID,
+  RSVP_CONFIRMED_COPY,
   RSVP_CONFIRMED_TESTID,
-  RSVP_COPY,
+  RSVP_CTA_COPY,
+  RSVP_FULL_COPY,
   RSVP_GOING_TESTID,
+  RSVP_GUEST_CTA_COPY,
+  RSVP_MAYBE_COPY,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_COPY,
+  RSVP_NOT_GOING_TESTID,
+  RSVP_PAUSED_COPY,
   RSVP_PAUSED_TESTID,
+  RSVP_SYNCED_COPY,
   RSVP_SYNCED_TESTID,
+  RSVP_SYNCING_COPY,
   RSVP_SYNCING_TESTID,
+  RSVP_WAITLIST_CLAIM_COPY,
+  RSVP_WAITLIST_JOIN_COPY,
+  RSVP_WAITLIST_LEAVE_COPY,
+  RSVP_WITHDRAW_COPY,
   RSVP_WITHDRAW_TESTID,
   WAITLIST_CLAIM_TESTID,
   WAITLIST_JOIN_TESTID,
@@ -43,6 +57,7 @@ const detailIslands = [
   "event-device-timezone",
   "rsvp-button",
   "copy-link",
+  "event-share",
   "going-count",
   "attendees-live",
 ]
@@ -56,6 +71,8 @@ const closed = $derived(model.rsvpClosed);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
+const isMaybe = $derived(model.answer?.status === "maybe");
+const soft = $derived(isMaybe || model.answer?.status === "not_going");
 const signIn = $derived(loginUrl(model.joinReturnTo));
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
@@ -67,7 +84,10 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Use the server's RSVP verdict for elapsed published rows too: status
+    // reconciliation can lag behind the event's end. Draft previews keep
+    // their spots line; the browser clock never decides closure.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled" && closed !== "past",
     announcement: null,
   }),
 );
@@ -83,6 +103,38 @@ const lineup = $derived(
     />
   {/if}
 </svelte:head>
+
+{#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
+  {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
+    {#if event}
+      <a
+        href="/e/{event.key}"
+        rel={previous ? "prev" : "next"}
+        data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
+      >
+        <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
+        <time datetime={event.datetime}>{event.whenText}</time>
+        {#if event.location}
+          <span class="event-related-location">{event.location}</span>
+        {/if}
+      </a>
+    {/if}
+  {/snippet}
+  {#if neighbors && (neighbors.previous || neighbors.next)}
+    <nav
+      class="event-pagination"
+      aria-label={series ? "Series events" : "More events"}
+      data-testid={series ? "event-series-nav" : "event-pagination"}
+    >
+      {@render eventLink(neighbors.previous, true)}{" "}
+      {@render eventLink(neighbors.next, false)}
+    </nav>
+  {/if}
+{/snippet}
+
+{#snippet rsvpButton(status: "going" | "waitlisted" | "withdraw", testid: string, label: string)}
+  <button type="submit" name="status" value={status} data-testid={testid} data-action={status}>{label}</button>
+{/snippet}
 
 {#snippet memberChrome()}
   <form method="post" action="/logout">
@@ -104,7 +156,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
+    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
@@ -152,6 +204,20 @@ const lineup = $derived(
         <dt>Where</dt>
         <dd>
           <p data-testid="event-venue">{model.location}</p>
+          {#if model.directionsUrl}
+            <p>
+              <a href={model.directionsUrl} data-testid="event-directions" rel="noopener">
+                Get directions
+              </a>
+            </p>
+          {/if}
+        </dd>
+      </div>
+    {/if}{#if model.series && model.series.hosts.length > 0}
+      <div>
+        <dt>Series hosts</dt>
+        <dd>
+          <p data-testid="event-series-hosts">{model.series.hosts.join(", ")}</p>
         </dd>
       </div>
     {/if}
@@ -173,42 +239,56 @@ const lineup = $derived(
       {#if closed}
         <p role="status" data-testid={RSVP_CLOSED_TESTID}>{rsvpClosedCopy(closed)}</p>
       {:else if !model.viewerMember}
-        <a href={signIn}>{RSVP_COPY.guestCta}</a>
+        <a href={signIn}>{RSVP_GUEST_CTA_COPY}</a>
       {:else}
         <form method="post" action={rsvpAction} data-rsvp-form>
           {#if !model.rsvpOpen}
-            <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_COPY.paused}</p>
+            <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_PAUSED_COPY}</p>
           {/if}
           {#if going}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the confirmed notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
             <p role="status" tabindex={-1} data-testid={RSVP_CONFIRMED_TESTID}>
-              <span aria-hidden="true" data-testid={RSVP_CHECK_TESTID}>✓{" "}</span>{RSVP_COPY.confirmed}
+              <span aria-hidden="true" data-testid={RSVP_CHECK_TESTID}>✓{" "}</span>{RSVP_CONFIRMED_COPY}
             </p>
-            <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
+            {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
           {:else if waitlisted}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the waitlist notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
             <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>
               {waitlistPositionCopy(model.waitlistPosition)}
             </p>
             {#if model.rsvpOpen && !full}
-              <button type="submit" name="status" value="going" data-testid={WAITLIST_CLAIM_TESTID} data-action="going">{RSVP_COPY.waitlistClaim}</button>
+              {@render rsvpButton("going", WAITLIST_CLAIM_TESTID, RSVP_WAITLIST_CLAIM_COPY)}
             {/if}
-            <button type="submit" name="status" value="withdraw" data-testid={WAITLIST_LEAVE_TESTID} data-action="withdraw">{RSVP_COPY.waitlistLeave}</button>
+            {@render rsvpButton("withdraw", WAITLIST_LEAVE_TESTID, RSVP_WAITLIST_LEAVE_COPY)}
+          {:else if soft}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the soft-answer notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
+            <p role="status" tabindex={-1} data-testid={isMaybe ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}>
+              {isMaybe ? RSVP_MAYBE_COPY : RSVP_NOT_GOING_COPY}
+            </p>
+            {#if !model.rsvpOpen}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else if full}
+              {@render rsvpButton("waitlisted", WAITLIST_JOIN_TESTID, RSVP_WAITLIST_JOIN_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else}
+              {@render rsvpButton("going", RSVP_GOING_TESTID, RSVP_CTA_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {/if}
           {:else if !model.rsvpOpen}
             <!-- paused with no answer: the notice above is the whole state -->
           {:else if full}
             <p role="status" data-testid={EVENT_FULL_TESTID}>
-              {RSVP_COPY.full} {rsvpFullCapCopy(model.capacity!)}
+              {RSVP_FULL_COPY} {rsvpFullCapCopy(model.capacity!)}
             </p>
-            <button type="submit" name="status" value="waitlisted" data-testid={WAITLIST_JOIN_TESTID} data-action="waitlisted">{RSVP_COPY.waitlistJoin}</button>
+            {@render rsvpButton("waitlisted", WAITLIST_JOIN_TESTID, RSVP_WAITLIST_JOIN_COPY)}
           {:else}
-            <button type="submit" name="status" value="going" data-testid={RSVP_GOING_TESTID} data-action="going">{RSVP_COPY.cta}</button>
+            {@render rsvpButton("going", RSVP_GOING_TESTID, RSVP_CTA_COPY)}
           {/if}
           {#if going || waitlisted}
             {#if model.answer?.syncedToDiscordAt}
-              <p data-testid={RSVP_SYNCED_TESTID}>{RSVP_COPY.synced}</p>
+              <p data-testid={RSVP_SYNCED_TESTID}>{RSVP_SYNCED_COPY}</p>
             {:else}
-              <p role="status" data-testid={RSVP_SYNCING_TESTID}>{RSVP_COPY.syncing}</p>
+              <p role="status" data-testid={RSVP_SYNCING_TESTID}>{RSVP_SYNCING_COPY}</p>
             {/if}
           {/if}
         </form>
@@ -255,8 +335,27 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
+        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
+            type="button"
+            hidden
+            data-native-share
+            data-share-title={model.title}
+            data-share-url={model.canonical}
+            data-testid="event-share"
+          >
+            Share
+          </button>
+        {/if}
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {#if model.status === "published"}
+        <p
+          role="status"
+          aria-live="polite"
+          data-testid="event-share-status"
+          data-native-share-status
+        ></p>
+      {/if}
     </section>
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
@@ -310,25 +409,7 @@ const lineup = $derived(
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">
-    {#if model.neighbors.previous || model.neighbors.next}
-      <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
-        {#if model.neighbors.previous}
-          <a
-            href="/e/{model.neighbors.previous.key}"
-            rel="prev"
-            data-testid="event-previous"
-          >
-            ← Previous event: {model.neighbors.previous.title}
-          </a>
-        {/if}{" "}
-        {#if model.neighbors.next}
-          <a href="/e/{model.neighbors.next.key}" rel="next" data-testid="event-next">
-            Next event: {model.neighbors.next.title} →
-          </a>
-        {/if}
-      </nav>
-    {/if}
+  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
         <h2>More events you might like</h2>

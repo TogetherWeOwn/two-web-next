@@ -296,7 +296,9 @@ exactly once.
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
+| `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
+| `src/json-refusal.ts` | http-guard |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
@@ -313,6 +315,7 @@ exactly once.
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
 | `src/member-erasure.ts` | profiles |
@@ -324,6 +327,7 @@ exactly once.
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
+| `src/privacy-history.ts` | content |
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
@@ -337,6 +341,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
 | `src/faq-content.ts` | content |
+| `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |

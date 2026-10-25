@@ -153,7 +153,7 @@ describe("profile NUL rejection on the form transports", () => {
         games_text: "Chess",
       });
       expect(res.status).toBe(422);
-      expect(await res.json()).toEqual({ errors: { bio: controlError } });
+      expect(await res.json()).toEqual({ error: "invalid", fields: { bio: controlError } });
       expectRefused(harness);
     }
   });
@@ -169,7 +169,7 @@ describe("profile NUL rejection on the form transports", () => {
           games_text: wrap("Chess"),
         });
         expect(res.status).toBe(422);
-        expect(await res.json()).toEqual({ errors: { games: controlError } });
+        expect(await res.json()).toEqual({ error: "invalid", fields: { games: controlError } });
         expectRefused(harness);
       }
     },
@@ -183,7 +183,7 @@ describe("profile NUL rejection on the form transports", () => {
       games_text: `Chess\nG${NUL}o`,
     });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ errors: { games: controlError } });
+    expect(await res.json()).toEqual({ error: "invalid", fields: { games: controlError } });
     expectRefused(harness);
   });
 
@@ -198,7 +198,8 @@ describe("profile NUL rejection on the form transports", () => {
       });
       expect(res.status).toBe(422);
       expect(await res.json()).toEqual({
-        errors: { bio: controlError, games: controlError },
+        error: "invalid",
+        fields: { bio: controlError, games: controlError },
       });
       expectRefused(harness);
     },
@@ -208,7 +209,7 @@ describe("profile NUL rejection on the form transports", () => {
     const bioHarness = await setup();
     const bioRes = await bioHarness.rawForm("bio=a%00b&timezone=UTC&games_text=Chess");
     expect(bioRes.status).toBe(422);
-    expect(await bioRes.json()).toEqual({ errors: { bio: controlError } });
+    expect(await bioRes.json()).toEqual({ error: "invalid", fields: { bio: controlError } });
     expectRefused(bioHarness);
 
     const gamesHarness = await setup();
@@ -217,7 +218,7 @@ describe("profile NUL rejection on the form transports", () => {
       { method: "POST" },
     );
     expect(gamesRes.status).toBe(422);
-    expect(await gamesRes.json()).toEqual({ errors: { games: controlError } });
+    expect(await gamesRes.json()).toEqual({ error: "invalid", fields: { games: controlError } });
     expectRefused(gamesHarness);
   });
 
@@ -242,7 +243,8 @@ describe("profile NUL rejection on the form transports", () => {
     });
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({
-      errors: { bio: controlError, games: controlError },
+      error: "invalid",
+      fields: { bio: controlError, games: controlError },
     });
     expectRefused(harness);
   });
