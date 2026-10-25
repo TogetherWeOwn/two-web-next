@@ -18,7 +18,7 @@ describe("shipped RSVP island expired-session destinations (local fixtures)", ()
       expect(browser.requests[0]!.url).toBe(`/events/${KEY}/rsvp`);
       expect(browser.requests[0]!.init.method).toBe(method);
       browser.requests[0]!.resolve(
-        Response.json({ error: "Unauthorized", recovery: RECOVERY }, { status: 401 }),
+        Response.json({ error: "unauthenticated", recovery: RECOVERY }, { status: 401 }),
       );
       await browser.settle();
 

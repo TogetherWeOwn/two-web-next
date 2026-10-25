@@ -396,6 +396,33 @@ describe("delayed profile refusals preserve deliberate newer focus", () => {
     expect(control.value).toBe("Newer draft typed after save");
   });
 
+  it("unified 422 fields envelope keeps field association (errors stays the legacy fallback)", async () => {
+    // The server now answers { error: "invalid", fields }; the island reads
+    // `fields` first and `errors` only so a cached island survives the
+    // rollout. This pins the new shape; the keyed-422 case above pins the
+    // legacy key. Reverting the island to `j.errors` must fail here.
+    const f = fixture();
+    f.submit();
+    const control = f.deliberate();
+    f.requests[0]!.resolve({
+      ok: false,
+      status: 422,
+      json: async () => ({ error: "invalid", fields: { bio: BIO_ERROR } }),
+    });
+    await flush();
+
+    expect(f.document.activeElement).toBe(control);
+    const bio = f.form.elements.bio!;
+    expect(bio.getAttribute("aria-invalid")).toBe("true");
+    expect(bio.getAttribute("aria-describedby")).toContain("profile-bio-error");
+    expect(f.byId("profile-bio-error")?.textContent).toBe(BIO_ERROR);
+    const summary = f.notice("profile-error")!;
+    expect(summary.getAttribute("role")).toBe("alert");
+    expect(summary.querySelectorAll("a").map((a) => a.getAttribute("href"))).toEqual([
+      "#profile-bio",
+    ]);
+  });
+
   it("after a refusal that respected newer work, a deliberate retry can still save", async () => {
     const f = fixture();
     f.submit();
