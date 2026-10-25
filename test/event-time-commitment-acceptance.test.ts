@@ -150,7 +150,9 @@ for (const twin of ["Hono", "Kit"] as const) {
         // order in the name, and the full title remains available to AT.
         expect(link!.name).toContain(link!.text.replace(/…$/, ""));
         expect(link!.name).toContain(fixture.title);
-        expect(link!.name).toContain("1 June 2030");
+        // Timed entries retain their short host-day wording; continuations below
+        // retain the long displayed day instead.
+        expect(link!.name).toContain("Sat 1 Jun");
         expect(link!.name).not.toContain("Invalid/Timezone");
         if (fixture.status === "cancelled") {
           expect(link!.text).toContain("Cancelled");
@@ -168,7 +170,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(link!.day).toBe("2030-06-02");
       expect(link!.text).toContain("03:00 Asia/Tokyo");
       expect(link!.name).toContain("03:00 Asia/Tokyo");
-      expect(link!.name).toContain("2 June 2030");
+      expect(link!.name).toContain("Sun 2 Jun");
     });
     it("positive control: retains host-day bucketing, continuation wording and destinations", async () => {
       const html = await renderCalendar(twin, clockRows(), {

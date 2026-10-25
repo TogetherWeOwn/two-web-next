@@ -164,8 +164,8 @@ describe("month grid accessible names", () => {
       // Useful day context follows the title.
       expect(name).toContain(wallTimeHm(e.startsAt, ZONE));
       expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
-      // Compact visible label is unchanged.
-      expect(link.visible).toBe(`${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)}`);
+      // The host zone identifies the compact clock without changing truncation.
+      expect(link.visible).toBe(`${wallTimeHm(e.startsAt, ZONE)} ${ZONE} ${gridTitle(e.title)}`);
       // Link target / jump behavior unchanged.
       expect(link.href).toBe(calendarJumpUrl(false, rowKey(e)));
       expect(link.attrs).toContain("data-cal-jump");
@@ -214,7 +214,7 @@ describe("month grid accessible names", () => {
     expectNameLeadsWithVisible(dName, dLink);
     expect(dName).toContain(wallTimeHm(d.startsAt, ZONE));
     expect(dName).toContain(cardDayLabel(d.startsAt, ZONE));
-    expect(dLink.visible).toBe(`${wallTimeHm(d.startsAt, ZONE)} ${gridTitle(d.title)}`);
+    expect(dLink.visible).toBe(`${wallTimeHm(d.startsAt, ZONE)} ${ZONE} ${gridTitle(d.title)}`);
   });
 
   it("keeps the names and link targets on consecutive month pages", async () => {
@@ -292,11 +292,11 @@ describe("month grid accessible names", () => {
     const links = gridLinks(html);
     expect(links).toHaveLength(1);
     const link = links[0]!;
-    expect(link.visible).toBe("20:00 NY raid night");
-    expect(ariaOf(link.attrs)).toBe("20:00 NY raid night, Mon 14 Jan");
+    expect(link.visible).toBe("20:00 America/New_York NY raid night");
+    expect(ariaOf(link.attrs)).toBe("20:00 America/New_York NY raid night, Mon 14 Jan");
     const cell = new RegExp(`<td[^>]*data-date="2030-01-14"[^>]*>([\\s\\S]*?)</td>`).exec(
       html,
     )![1]!;
-    expect(cell).toContain(">20:00 NY raid night</a>");
+    expect(cell).toContain(">20:00 America/New_York NY raid night</a>");
   });
 });
