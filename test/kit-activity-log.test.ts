@@ -76,6 +76,40 @@ describe("loadActivityLogPage: shared filters, paging, instants, headers", () =>
     expect(out.hasNext).toBe(false);
   });
 
+  it("prepares serializable recovery links on the server from the normalized query", async () => {
+    const listFn = vi.fn(async () => []);
+    const out = await loadActivityLogPage({
+      env,
+      subjectParam: "  Event Alpha  ",
+      causerParam: "  42  ",
+      pageParam: "2",
+      setHeaders: headersSpy(),
+      dbForFn: async () => db,
+      listFn,
+    });
+    expect(out).toMatchObject({
+      recovery: {
+        clearUrl: "/admin/activity-log?page=1",
+        firstUrl: "/admin/activity-log?page=1&subject=Event+Alpha&causer=42",
+      },
+    });
+    expect(listFn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(JSON.stringify(out))).toEqual(out);
+  });
+
+  it("omits server recovery actions while populated rows render", async () => {
+    const out = await loadActivityLogPage({
+      env,
+      subjectParam: "Event",
+      causerParam: null,
+      pageParam: "2",
+      setHeaders: headersSpy(),
+      dbForFn: async () => db,
+      listFn: async () => [row()],
+    });
+    expect(out).toMatchObject({ recovery: null });
+  });
+
   it("falls back to page 1 for unsafe page values", async () => {
     for (const pageParam of ["0", "-1", "1.5", "abc", "9007199254740993"]) {
       const listFn = vi.fn(async (_db: Db, _opts: unknown) => []);
