@@ -337,7 +337,10 @@ describe.each(backends)("owner-only leaderboard opt-out ($name)", (backend) => {
       jsonPatch(cookie, { ...FULL_JSON, leaderboard_opt_out: "maybe" }),
     );
     expect(res.status).toBe(422);
-    expect(await res.json()).toMatchObject({ errors: { leaderboard_opt_out: expect.any(String) } });
+    expect(await res.json()).toMatchObject({
+      error: "invalid",
+      fields: { leaderboard_opt_out: expect.any(String) },
+    });
     expect(await seeded.snapshot()).toEqual(before);
   });
 

@@ -17,6 +17,7 @@ import {
   calendarUrl,
   cardTimeLabel,
   eventsSearchMissCopy,
+  eventsSearchGameMissCopy,
   type CalendarState,
 } from "../islands/contracts";
 import type { PublicEvent } from "./reads";
@@ -90,16 +91,43 @@ export const PartialSourceNotice: FC<{ url: string; inviteUrl: string }> = ({ ur
   </div>
 );
 
-/** Search miss block: named query, what is searched, and the way back out. */
-export const SearchMiss: FC<{ state: CalendarState }> = ({ state }) => (
+/** Complete filtered miss: name the effective scope and broaden only what the link promises. */
+export const SearchMiss: FC<{ state: CalendarState; gameFilter?: string | null }> = ({
+  state,
+  gameFilter = null,
+}) => (
   <div data-testid={EVENTS_EMPTY_SEARCH_TESTID}>
-    <h2>{EVENTS_EMPTY_COPY.searchMissTitle}</h2>
-    <p>{eventsSearchMissCopy(state.q)}</p>
-    <p>{EVENTS_EMPTY_COPY.searchMissBody}</p>
+    <h2>
+      {state.q.trim() !== ""
+        ? EVENTS_EMPTY_COPY.searchMissTitle
+        : "No upcoming events for this game."}
+    </h2>
     <p>
-      <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_EMPTY_TESTID}>
-        {EVENTS_EMPTY_COPY.searchMissClear}
-      </a>
+      {gameFilter !== null
+        ? state.q.trim() !== ""
+          ? eventsSearchGameMissCopy(state.q, gameFilter)
+          : `No upcoming events for “${gameFilter}”.`
+        : eventsSearchMissCopy(state.q)}
     </p>
+    {state.q.trim() !== "" ? (
+      <>
+        <p>{EVENTS_EMPTY_COPY.searchMissBody}</p>
+        <p>
+          <a
+            href={calendarUrl({ ...state, q: "", page: 1 })}
+            data-testid={EVENTS_SEARCH_CLEAR_EMPTY_TESTID}
+          >
+            {EVENTS_EMPTY_COPY.searchMissClear}
+          </a>
+        </p>
+      </>
+    ) : null}
+    {gameFilter !== null ? (
+      <p>
+        <a href={calendarUrl({ ...state, game: "", page: 1 })}>
+          {state.q.trim() !== "" ? "Search all games" : "Show all games"}
+        </a>
+      </p>
+    ) : null}
   </div>
 );

@@ -239,7 +239,11 @@ try {
   });
   assert.equal(form.status, 403, "cross-origin form POST is refused");
   assert.match(form.headers.get("content-type") ?? "", /application\/json/);
-  assert.deepEqual(await form.json(), { error: "cross_origin" });
+  const formBody = await form.json();
+  assert.equal(formBody.error, "cross_origin");
+  assert.equal(typeof formBody.request_id, "string");
+  assert.ok(formBody.request_id.length > 0, "cross-origin refusal carries request_id");
+  assert.deepEqual(Object.keys(formBody).sort(), ["error", "request_id"]);
   assert.equal(form.headers.get("cache-control"), "no-store, private");
   assert.match(
     form.headers.get("content-security-policy") ?? "",
