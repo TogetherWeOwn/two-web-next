@@ -1,10 +1,12 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { run } from "../ci/check-kit-perf.mjs";
 
-const committedBudget = readFileSync(new URL("../ci/kit-perf-budget.json", import.meta.url));
+const scriptPath = fileURLToPath(new NodeURL("../ci/check-kit-perf.mjs", import.meta.url));
+const committedBudget = readFileSync(new NodeURL("../ci/kit-perf-budget.json", import.meta.url));
 const budget = JSON.parse(committedBudget.toString("utf8"));
 
 function allocationResult(clientRawBytes: number) {
@@ -26,13 +28,17 @@ function allocationResult(clientRawBytes: number) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, bytes);
     }
-    const logs: string[] = [];
-    const errors: string[] = [];
-    const code = run(root, {
-      log: (line: string) => logs.push(line),
-      error: (line: string) => errors.push(line),
+    const result = spawnSync(process.execPath, [scriptPath, "--root", root], {
+      encoding: "utf8",
+      timeout: 30_000,
     });
-    return { code, logs, errors };
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    return {
+      code: result.status,
+      logs: result.stdout.split(/\r?\n/).filter(Boolean),
+      errors: result.stderr.split(/\r?\n/).filter(Boolean),
+    };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
