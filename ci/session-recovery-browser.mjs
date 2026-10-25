@@ -2,6 +2,7 @@
 // Routing/cookie APIs: https://playwright.dev/docs/network
 // https://playwright.dev/docs/api/class-browsercontext#browser-context-add-cookies
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:https";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -162,6 +163,15 @@ try {
       },
     ]);
     return result;
+  }
+  // Profile/admin page views rotate the bearer: after a navigation the jar
+  // holds the successor, not the login-time token. Expire/revoke the current
+  // bearer so the test targets the live session.
+  async function currentTokenHash() {
+    const jar = (await context.cookies()).find((c) => c.name === "__Host-two_session");
+    assert.ok(jar, "expected a session cookie in the jar");
+    const raw = decodeURIComponent(jar.value).split(".")[0];
+    return createHash("sha256").update(raw).digest("hex");
   }
   const a = await context.newPage();
   const b = await context.newPage();
@@ -546,7 +556,7 @@ try {
   console.log("PASS two-tab logout synchronization to guest render");
 
   // A failed expired save preserves all three draft fields; no automatic/double retry.
-  const expired = await login();
+  await login();
   const profileResponse = await a.goto(url("/profile?edit=1"));
   assert.equal(profileResponse.status(), 200);
   assert.equal(a.url(), url("/profile?edit=1"), await a.locator("body").innerText());
@@ -554,8 +564,9 @@ try {
   await a.getByRole("textbox", { name: /^Bio\b/ }).fill("Unsaved draft");
   await a.getByRole("textbox", { name: /^Games\b/ }).fill("Go\nChess");
   await a.getByLabel("Timezone", { exact: true }).fill("UTC");
-  const row = await f.sessions.get(expired.tokenHash);
-  await f.sessions.create({ ...row, tokenHash: expired.tokenHash, expiresAt: new Date(0) });
+  const liveHash = await currentTokenHash();
+  const row = await f.sessions.get(liveHash);
+  await f.sessions.create({ ...row, tokenHash: liveHash, expiresAt: new Date(0) });
   const beforePatch = patchCalls;
   await a.getByRole("button", { name: "Save", exact: true }).click();
   const notice = a.getByTestId("profile-session-expired");
@@ -607,10 +618,10 @@ try {
   );
 
   // Revoked profile tab vetoes a background navigation and keeps its draft reachable.
-  const revoked = await login();
+  await login();
   await b.goto(url("/profile"));
   await b.getByRole("textbox", { name: /^Bio\b/ }).fill("Revoked-tab draft");
-  await f.sessions.revoke(revoked.tokenHash);
+  await f.sessions.revoke(await currentTokenHash());
   await b.bringToFront();
   await b.evaluate(() => {
     window.dispatchEvent(new Event("focus"));
