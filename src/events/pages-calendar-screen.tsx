@@ -1,5 +1,6 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
+import type { HeaderSession, Session } from "../env";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
@@ -73,6 +74,8 @@ export const EventsCalendarPage: FC<{
   /** Effective facet: the canonical stored game, or null when unfiltered. */
   gameFilter: string | null;
   member: boolean;
+  /** Signed-in viewer for the header account area; the shell gates members. */
+  session?: Session | HeaderSession | null;
   inviteUrl: string;
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
@@ -98,6 +101,7 @@ export const EventsCalendarPage: FC<{
   games,
   gameFilter,
   member,
+  session,
   inviteUrl,
   appUrl,
   loginReturnTo = null,
@@ -114,7 +118,12 @@ export const EventsCalendarPage: FC<{
   const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
   // An error state suppresses the miss block: a failed read must never read
   // as "no matches" (contract: error beats everything, including a search).
-  const searchMiss = searching && !hasVisibleResults && emptyState === null && !outOfRange;
+  const searchMiss =
+    emptyState === null &&
+    !discordFailed &&
+    !outOfRange &&
+    ((searching && !hasVisibleResults) ||
+      (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
   const pushDay = (day: string, e: CalRow) => {
@@ -154,7 +163,11 @@ export const EventsCalendarPage: FC<{
   // incomplete — older in-month past rows may exist unread — so the claim is
   // suppressed there; future months cannot hold past rows. A failed source
   // suppresses the claim — October may only look empty — while the
-  // error/never/gap states keep their own precedence.
+  // error/never/gap states keep their own precedence. A game-scoped miss
+  // already names the effective scope with its own broadening link, so it
+  // suppresses the unscoped month sentence: with game-filtered grid rows the
+  // sentence is false when another game occupies the month, and its
+  // Upcoming-events link would land back on the same filtered zero.
   const monthHasInMonthRows =
     weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
     past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
@@ -165,7 +178,8 @@ export const EventsCalendarPage: FC<{
     state.view === "calendar" &&
     !discordFailed &&
     !monthHasInMonthRows &&
-    !(pastMayBeTruncated && monthCouldHoldPast);
+    !(pastMayBeTruncated && monthCouldHoldPast) &&
+    !searchMiss;
   return (
     <ScheduleShell
       title="Events"
@@ -173,6 +187,7 @@ export const EventsCalendarPage: FC<{
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}
       member={member}
+      session={session}
       loginReturnTo={loginReturnTo}
       markdownAlternate={markdownAlternate ?? undefined}
     >
@@ -243,7 +258,9 @@ export const EventsCalendarPage: FC<{
           </button>
         </div>
 
-        <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
+        <div data-cal-zone="miss">
+          {searchMiss ? <SearchMiss state={state} gameFilter={gameFilter} /> : null}
+        </div>
 
         {/* Skeleton: member-started re-renders only — typing is untargeted. */}
         <div data-testid={EVENTS_LOADING_TESTID} hidden>
