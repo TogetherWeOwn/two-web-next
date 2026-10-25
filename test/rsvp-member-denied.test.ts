@@ -90,7 +90,7 @@ describe("RSVP member-denied matrix (TOG-20410)", () => {
 
     expect(res.status).toBe(403);
     const body = await res.json();
-    expect(body).toEqual({ error: "forbidden" });
+    expect(body).toEqual({ error: "forbidden", request_id: expect.any(String) });
   });
 
   it("non-member session receives 403 on DELETE /events/:key/rsvp", async () => {
@@ -114,6 +114,6 @@ describe("RSVP member-denied matrix (TOG-20410)", () => {
 
     expect(res.status).toBe(403);
     const body = await res.json();
-    expect(body).toEqual({ error: "forbidden" });
+    expect(body).toEqual({ error: "forbidden", request_id: expect.any(String) });
   });
 });
