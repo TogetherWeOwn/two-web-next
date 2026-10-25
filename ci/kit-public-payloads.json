@@ -108,7 +108,7 @@
     {
       "route": "GET /members/:user",
       "binding": "web/src/routes/members/[user]/+page.server.ts",
-      "reads": "member profile (audited)"
+      "reads": "member profile plus the viewer's own games row for the shared-games match (audited)"
     },
     {
       "route": "GET /leaderboards/members",
