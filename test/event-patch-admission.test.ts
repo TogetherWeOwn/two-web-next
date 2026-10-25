@@ -395,7 +395,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       env,
     );
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "forbidden" });
+    expect(await res.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
     await expectUnchanged(before);
   });
 });
