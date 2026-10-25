@@ -803,7 +803,7 @@
                     }, 0);
                     return;
                   }
-                  syncNote("2000-01-01T00:00:00.000Z", !!d.sync_failed);
+                  syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
                 },
                 function () {
                   if (inflight === controller) unknownOutcome(button);
