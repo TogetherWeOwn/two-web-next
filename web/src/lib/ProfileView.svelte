@@ -125,6 +125,7 @@ const bioCount = $derived(bioCountText(codePoints(form.bio)));
 const gamesCount = $derived(gamesCountText(parseGamesText(form.games_text)));
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
+const compareIsland = '<script src="/islands/local-time-compare.js" defer></' + "script>";
 const editorIsland = '<script src="/islands/member-profile.js" defer></' + "script>";
 </script>
 
@@ -208,6 +209,11 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               Timezone: {member.timezone ||
                 (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)}
             </p>
+            <div data-local-time-compare={member.timezone ?? ""}>
+              <button type="button" class="btn profile-secondary" hidden>
+                Compare local times
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -238,6 +244,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       </div>
     </section>
     {@html avatarIsland}
+    {@html compareIsland}
     {#if isOwner}
       <section
         class="profile-panel profile-new-member"
