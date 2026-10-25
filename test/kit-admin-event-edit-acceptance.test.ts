@@ -494,7 +494,11 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // Six forms: edit update, publish, cancel, duplicate, RSVP toggle, roster search.
+    // Six source forms: edit update, publish, cancel, duplicate, reopen,
+    // roster search. Pause arrives as pre-rendered server HTML via {@html}
+    // (client gzip ceiling), never as a source form; the rendered pause and
+    // reopen counts are pinned by the pause-review suites instead of this
+    // source text.
     expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
     expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
     expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);

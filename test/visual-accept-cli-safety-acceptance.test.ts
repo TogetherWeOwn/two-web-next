@@ -277,8 +277,10 @@ function writeCollidingArtifact(
     writeBytes(join(artifact, suite.actualsRel, "a", "home-actual.png"), bytesA);
     writeBytes(join(artifact, suite.actualsRel, "b", "home-actual.png"), bytesB);
   } else {
-    writeBytes(join(artifact, "a", "home-actual.png"), bytesA);
-    writeBytes(join(artifact, "b", "home-actual.png"), bytesB);
+    // Hono admits actuals only from the exact test-results-visual suite
+    // segment; generic folders carry no replacement authority.
+    writeBytes(join(artifact, suite.actualsRel, "a", "home-actual.png"), bytesA);
+    writeBytes(join(artifact, suite.actualsRel, "b", "home-actual.png"), bytesB);
   }
   return { bytesA, bytesB };
 }
@@ -521,8 +523,10 @@ for (const suite of SUITES) {
         writeBytes(join(artifact, suite.actualsRel, "a", "home-actual.png"), sameBytes);
         writeBytes(join(artifact, suite.actualsRel, "b", "home-actual.png"), sameBytes);
       } else {
-        writeBytes(join(artifact, "a", "home-actual.png"), sameBytes);
-        writeBytes(join(artifact, "b", "home-actual.png"), sameBytes);
+        // Hono admits actuals only from the exact test-results-visual suite
+        // segment; generic folders carry no replacement authority.
+        writeBytes(join(artifact, suite.actualsRel, "a", "home-actual.png"), sameBytes);
+        writeBytes(join(artifact, suite.actualsRel, "b", "home-actual.png"), sameBytes);
       }
 
       const result = runCli(suite.script, [artifact], workspace);
