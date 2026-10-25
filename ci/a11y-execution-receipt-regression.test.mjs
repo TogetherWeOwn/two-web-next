@@ -165,6 +165,20 @@ for (const [label, body] of [
   test(`TAP refuses diagnostic ${label}`, () => refused(cli(adapters[0], body)));
 }
 
+for (const json of [false, true]) {
+  test(`TAP ${json ? "JSON" : "human"} refuses tab-indented diagnostic content`, () => {
+    const body = tapFixture.replace(
+      "          duration_ms: 1.877336",
+      `          duration_ms: 1.877336\n          \tBail out! ${canary}`,
+    );
+    assert.notEqual(body, tapFixture);
+    const result = cli(adapters[0], body, { json });
+    refused(result, json);
+    assert.match(result.stderr, /malformed-diagnostics/);
+    assert.throws(() => checkTap(body, suite, 3), /malformed-diagnostics/);
+  });
+}
+
 test("TAP permits diagnostic literals attached to an assertion without parsing their contents as results", () => {
   const body = tapFixture.replace(
     "          type: 'test'",
