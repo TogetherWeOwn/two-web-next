@@ -24,6 +24,7 @@ import type { Env } from "./env";
 import { warnInvalidConfigOnce } from "./config-warn";
 import { readCappedBody } from "./csp-report-body";
 import { redactCspReportUri } from "./csp-report-uri";
+import { createLogBudget } from "./log-budget";
 
 export { MAX_CSP_REPORT_BYTES, readCappedBody } from "./csp-report-body";
 export type { CappedBody } from "./csp-report-body";
@@ -131,37 +132,9 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
   return random() <= rate;
 }
 
-const CSP_LOG_BURST = 20;
-const CSP_LOG_REFILL_MS = 3_000;
-let logTokens = CSP_LOG_BURST;
-let lastLogRefill = 0;
-
-// Fixed-size isolate state, no client keys or timers. Consume synchronously
-// just before logging so concurrent body reads cannot overspend the budget.
-function takeCspLogToken(): boolean {
-  const now = Date.now();
-  const elapsed = Math.max(0, now - lastLogRefill);
-  logTokens = Math.min(CSP_LOG_BURST, logTokens + elapsed / CSP_LOG_REFILL_MS);
-  lastLogRefill = Math.max(lastLogRefill, now);
-  if (logTokens < 1) return false;
-  logTokens -= 1;
-  return true;
-}
-
-// Bounded shed signal: at most one warn per refill window, fixed keys only,
-// no request content. Counts log-budget drops since the previous shed emit so
-// operators can tell a shedding sink from a quiet one without flooding.
-let shedDropped = 0;
-let lastShedEmit = 0;
-function warnCspShed(): void {
-  shedDropped += 1;
-  const now = Date.now();
-  if (now - lastShedEmit < CSP_LOG_REFILL_MS) return;
-  lastShedEmit = now;
-  const dropped = shedDropped;
-  console.warn("csp.report.shed", { dropped });
-  shedDropped -= dropped;
-}
+// Same policy as refusal telemetry, but its own tokens and shed count: a
+// refusal flood must never spend the CSP sink's budget (or vice versa).
+const takeCspLogToken = createLogBudget("csp.report.shed");
 
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
 // everything behind it is down. Every path — valid, malformed, oversized,
@@ -172,7 +145,6 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
     const body = await readCappedBody(c.req.raw);
     if (body.truncated) {
       if (takeCspLogToken()) console.warn("csp.report.dropped_oversize", { bytes: body.bytes });
-      else warnCspShed();
       return c.body(null, 204);
     }
     const report = extractCspReport(body.text);
@@ -185,14 +157,12 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
       if (body.text !== "") {
         if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
           if (takeCspLogToken()) console.warn("csp.report.malformed", { bytes: body.bytes });
-          else warnCspShed();
         }
       }
       return c.body(null, 204);
     }
     if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
       if (takeCspLogToken()) console.warn("csp.report.violation", cspReportLogFields(report));
-      else warnCspShed();
     }
     return c.body(null, 204);
   } catch (err) {
@@ -204,7 +174,6 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
         console.warn("csp.report.sink_failed", {
           exception: err instanceof Error ? err.name : typeof err,
         });
-      else warnCspShed();
     } catch {
       // Logger down: the 204 below still stands; nothing else can record this.
     }

@@ -70,7 +70,7 @@ async function cookie(moderator: boolean): Promise<string> {
   ).split(";")[0]!;
 }
 
-type Action = "publish" | "cancel" | "rsvp-pause" | "rsvp-reopen";
+type Action = "publish" | "cancel" | "duplicate" | "rsvp-pause" | "rsvp-reopen";
 
 describe.skipIf(!process.env.DATABASE_URL)(
   "event write member-denied matrix (agent-testdb)",
@@ -154,7 +154,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         env,
       );
 
-    it.each(["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const)(
+    it.each(["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"] as const)(
       "member POST %s returns JSON 403 with zero mutations and no write-back",
       async (action) => {
         const row = await seedFor(action);
@@ -172,7 +172,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           env,
         );
         expect(res.status).toBe(403);
-        expect(await res.json()).toEqual({ error: "forbidden" });
+        expect(await res.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
         expect(await getEvent(fixture.db, row.eventKey)).toEqual(before);
         expect(await fixture.db.select().from(activityLog)).toEqual([]);
         expect(sent).toEqual([]);
@@ -193,7 +193,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         env,
       );
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "forbidden" });
+      expect(await res.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
       expect(sent).toEqual([]);
     });
 

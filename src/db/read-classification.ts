@@ -27,17 +27,28 @@ const goingCountsLegacy =
 const goingCountsNamed =
   /^select "rsvps"\."event_id", count\(\*\) from "rsvps" inner join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+ and "users"\."username" <> \$\d+\) group by "rsvps"\."event_id"$/;
 // Roster totals return a single cardinality, never member identifiers. The
-// username filter is a bound parameter; only these two join/where shapes may
-// run under the roster-count classification.
+// username filter and the allowlisted answer facet are bound parameters;
+// only these four join/where shapes may run under the roster-count
+// classification. The facet keeps the pinned condition order event, status,
+// member search; anything else (extra projections, dropped event predicate,
+// OR/UNION/GROUP BY, id equality, stacked statements) still refuses.
 const rosterCountUnfiltered =
   /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where "events"\."event_key" = \$\d+$/;
 const rosterCountFiltered =
   /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
+const rosterCountStatus =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where \("events"\."event_key" = \$\d+ and "rsvps"\."status" = \$\d+\)$/;
+const rosterCountStatusFiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "rsvps"\."status" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
 const fillCount =
   /select count\(\*\) from "rsvps" where \("rsvps"\."event_id" = "events"\."id" and "rsvps"\."status" = \$\d+\)/g;
 // The edit form needs PostgreSQL timestamp text, not lossy JS Dates. Only this
 // complete bound-ID query permits its computed projections, never arbitrary SQL.
 const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at", CASE WHEN isfinite("starts_at") THEN to_char("starts_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "starts_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "starts_at"::text END, CASE WHEN isfinite("ends_at") THEN to_char("ends_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "ends_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "ends_at"::text END from "featured_contents" where "featured_contents"."id" = $1`;
+
+// The series reader bounds public text before transport. Admit only this complete
+// projection and bound-root query, never arbitrary computed event expressions.
+const seriesContextRead = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $6 from "events" where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10)) order by "events"."recurrence_index" asc, "events"."id" asc limit $11`;
 
 export function validateNonSensitiveRead(
   classification: NonSensitiveRead,
@@ -50,7 +61,13 @@ export function validateNonSensitiveRead(
     return;
   }
   if (classification === "roster-count") {
-    if (!rosterCountUnfiltered.test(query) && !rosterCountFiltered.test(query)) refuseMemberRead();
+    if (
+      !rosterCountUnfiltered.test(query) &&
+      !rosterCountFiltered.test(query) &&
+      !rosterCountStatus.test(query) &&
+      !rosterCountStatusFiltered.test(query)
+    )
+      refuseMemberRead();
     return;
   }
   if (
@@ -62,6 +79,7 @@ export function validateNonSensitiveRead(
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
+  if (classification === "events" && fields?.length && query === seriesContextRead) return;
   const table =
     classification === "events"
       ? "events"

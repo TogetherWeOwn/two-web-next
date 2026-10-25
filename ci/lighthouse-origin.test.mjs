@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { main } from "./lighthouse-origin-run.mjs";
+import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 
 // Offline selftest for the watch Lighthouse runner. No network and no browser:
 // discovery runs against stub fetches and lhci against a stub launcher.
@@ -437,6 +438,7 @@ test("an origin that errors, redirects or is not allowlisted fails discovery ins
 });
 
 const lhr = (path, values, finalPath = path) => ({
+  ...navigationMetadata("mobile"),
   requestedUrl: `${APEX}${path}`,
   finalUrl: `${APEX}${finalPath}`,
   categories: { performance: { score: 1 } },
