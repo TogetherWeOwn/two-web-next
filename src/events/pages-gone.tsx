@@ -3,6 +3,7 @@
 // Kit gone block (web/src/lib/EventGone.svelte): same testids, same order,
 // same formatter, no RSVP/join surface anywhere.
 import type { FC } from "hono/jsx";
+import { EXISTING_RESPONSES_TESTID, existingResponsesText } from "../islands/contracts";
 import type { EventLink, PublicEvent } from "./reads";
 import { EventDetailShell, fmt } from "./pages-shared";
 
@@ -27,6 +28,11 @@ export const EventGonePage: FC<{
         Cancelled
       </p>
       <h1>{e.title}</h1>
+      {/* Retained answers as history, never attendance: the cancelled
+          schedule card's line (existingResponsesText), with no capacity and
+          no island mount — a closed event takes no RSVPs, so there is
+          nothing to refresh. */}
+      <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(e.goingCount)}</p>
       {related.length > 0 ? (
         <ul class="facts" data-testid="event-cancelled-alternatives">
           {related.map((alternative) => (

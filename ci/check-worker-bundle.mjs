@@ -9,80 +9,176 @@
 // ci/worker-bundle-budget.json. Served-asset and Kit budgets are untouched;
 // no deploy behavior changes. A breach fails with a remediation pointer, not
 // a silent size line.
+//
+// The canonical required measurement inventory (exactly dist/worker.js) lives
+// in ci/bundle-inventory.mjs and is validated before the bundle is read: a
+// substituted, misspelled or extended plan is an invalid plan (exit 2),
+// never a silent drop and never a fits verdict.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
+import {
+  WORKER_BUNDLE_ENTRY,
+  WORKER_CHECK_IDS,
+  WORKER_GROUP_IDS,
+  buildJsonReport,
+  cannotEnforceGroups,
+  gateUsage,
+  parseGateArgs,
+  validateWorkerPlan,
+} from "./bundle-inventory.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SCRIPT_NAME = "ci/check-worker-bundle.mjs";
+const CHECK_NAME = "worker-bundle";
 
 const REMEDIATION =
   "see ci/worker-bundle-budget.json ($comment) for the measured baseline and the x1.25 rule; " +
   "raising a ceiling needs an explicit decision explaining the growth, never a relaxation to make CI green. " +
   "Re-measure with: npx wrangler deploy --dry-run --outdir dist && node ci/check-worker-bundle.mjs";
 
-export function run(root = repoRoot, output = console) {
-  let budgets;
+const INVALID_PLAN_NEXT_ACTION =
+  "Fix ci/worker-bundle-budget.json so budgets contains exactly dist/worker.js " +
+  "with raw/gzip ceilings (canonical inventory in ci/bundle-inventory.mjs), " +
+  "then rerun node ci/check-worker-bundle.mjs";
+const REBUILD_NEXT_ACTION =
+  "Run npx wrangler deploy --dry-run --outdir dist, then rerun node ci/check-worker-bundle.mjs";
+
+function boundLine(line) {
+  return line.length > 500 ? `${line.slice(0, 497)}…` : line;
+}
+
+// Measure the canonical bundle at root without printing. Returns the exit
+// code, the bounded human lines, the canonical group, and the fixed error
+// object for exit 2. The plan is validated before the bundle is read.
+export function measure(root = repoRoot) {
+  const logs = [];
+  const errors = [];
+  const groups = [];
+  const fail = (code, error) => ({ code, logs, errors, groups, error });
+
+  let doc;
   try {
-    budgets = JSON.parse(readFileSync(join(root, "ci/worker-bundle-budget.json"), "utf8")).budgets;
-    if (
-      !budgets ||
-      typeof budgets !== "object" ||
-      Array.isArray(budgets) ||
-      !Object.keys(budgets).length
-    ) {
-      throw new Error("budgets must be a nonempty object");
-    }
-    for (const [entry, ceiling] of Object.entries(budgets)) {
-      if (
-        entry.includes("..") ||
-        !ceiling ||
-        !Number.isSafeInteger(ceiling.maxRawBytes) ||
-        ceiling.maxRawBytes <= 0 ||
-        !Number.isSafeInteger(ceiling.maxGzipBytes) ||
-        ceiling.maxGzipBytes <= 0
-      ) {
-        throw new Error(`invalid entry or raw/gzip ceilings: ${entry}`);
-      }
-    }
+    doc = JSON.parse(readFileSync(join(root, "ci/worker-bundle-budget.json"), "utf8"));
   } catch (error) {
-    output.error(`worker bundle budget: cannot enforce: ${error.message}. ${REMEDIATION}`);
-    return 2;
+    errors.push(
+      boundLine(`worker bundle budget: cannot enforce: ${error.message}. ${REMEDIATION}`),
+    );
+    return fail(2, {
+      code: "INVALID_PLAN",
+      message: boundLine(`cannot enforce: ${error.message}`),
+      nextAction: INVALID_PLAN_NEXT_ACTION,
+    });
+  }
+  const planProblem = validateWorkerPlan(doc);
+  if (planProblem) {
+    errors.push(boundLine(`worker bundle budget: cannot enforce: ${planProblem}. ${REMEDIATION}`));
+    return fail(2, {
+      code: "INVALID_PLAN",
+      message: boundLine(`invalid plan: ${planProblem}`),
+      nextAction: INVALID_PLAN_NEXT_ACTION,
+    });
   }
 
-  let breaches = 0;
-  for (const [entry, ceiling] of Object.entries(budgets)) {
-    let bytes;
-    try {
-      bytes = readFileSync(join(root, entry));
-    } catch (error) {
-      // The dry-run step must run first; a missing bundle proves nothing.
-      output.error(
-        `worker bundle budget: cannot enforce: ${entry}: missing/unreadable bundle: ${error.message} ` +
+  const ceiling = doc.budgets[WORKER_BUNDLE_ENTRY];
+  let bytes;
+  try {
+    bytes = readFileSync(join(root, WORKER_BUNDLE_ENTRY));
+  } catch (error) {
+    // The dry-run step must run first; a missing bundle proves nothing.
+    errors.push(
+      boundLine(
+        `worker bundle budget: cannot enforce: ${WORKER_BUNDLE_ENTRY}: missing/unreadable bundle: ${error.message} ` +
           `(run npx wrangler deploy --dry-run --outdir dist first). ${REMEDIATION}`,
-      );
-      return 2;
-    }
-    const raw = bytes.length;
-    // Default zlib level, identical to the served-asset checker, not best-case gzip.
-    const gzip = gzipSync(bytes).length;
-    const exceeded = [];
-    if (raw > ceiling.maxRawBytes) exceeded.push(`raw ${raw}B over ${ceiling.maxRawBytes}B`);
-    if (gzip > ceiling.maxGzipBytes) exceeded.push(`gzip ${gzip}B over ${ceiling.maxGzipBytes}B`);
-    if (exceeded.length) {
-      output.error(`worker bundle budget: ${entry}: ${exceeded.join(", ")}. ${REMEDIATION}`);
-      breaches += 1;
-    } else {
-      output.log(
-        `ok ${entry}: raw ${raw}/${ceiling.maxRawBytes}B, gzip ${gzip}/${ceiling.maxGzipBytes}B`,
-      );
-    }
+      ),
+    );
+    return fail(2, {
+      code: "MISSING_EVIDENCE",
+      message: boundLine(`${WORKER_BUNDLE_ENTRY}: missing/unreadable bundle: ${error.message}`),
+      nextAction: REBUILD_NEXT_ACTION,
+    });
   }
-  if (breaches) return 1;
-  output.log("worker bundle budget: main Worker bundle fits.");
-  return 0;
+  const raw = bytes.length;
+  // Default zlib level, identical to the served-asset checker, not best-case gzip.
+  const gzip = gzipSync(bytes).length;
+  const exceeded = [];
+  if (raw > ceiling.maxRawBytes) exceeded.push(`raw ${raw}B over ${ceiling.maxRawBytes}B`);
+  if (gzip > ceiling.maxGzipBytes) exceeded.push(`gzip ${gzip}B over ${ceiling.maxGzipBytes}B`);
+  if (exceeded.length) {
+    errors.push(
+      boundLine(
+        `worker bundle budget: ${WORKER_BUNDLE_ENTRY}: ${exceeded.join(", ")}. ${REMEDIATION}`,
+      ),
+    );
+    groups.push({
+      id: "worker.bundle",
+      status: "fail",
+      checks: [
+        {
+          id: "worker.bundle.dist/worker.js",
+          status: "fail",
+          rawBytes: raw,
+          gzipBytes: gzip,
+          maxRawBytes: ceiling.maxRawBytes,
+          maxGzipBytes: ceiling.maxGzipBytes,
+        },
+      ],
+    });
+    return fail(1, null);
+  }
+  logs.push(
+    boundLine(
+      `ok ${WORKER_BUNDLE_ENTRY}: raw ${raw}/${ceiling.maxRawBytes}B, gzip ${gzip}/${ceiling.maxGzipBytes}B`,
+    ),
+  );
+  groups.push({
+    id: "worker.bundle",
+    status: "pass",
+    checks: [
+      {
+        id: "worker.bundle.dist/worker.js",
+        status: "pass",
+        rawBytes: raw,
+        gzipBytes: gzip,
+        maxRawBytes: ceiling.maxRawBytes,
+        maxGzipBytes: ceiling.maxGzipBytes,
+      },
+    ],
+  });
+  logs.push("worker bundle budget: main Worker bundle fits.");
+  return fail(0, null);
+}
+
+export function run(root = repoRoot, output = console) {
+  const result = measure(root);
+  for (const line of result.logs) output.log(line);
+  for (const line of result.errors) output.error(line);
+  return result.code;
+}
+
+// Versioned JSON measurement for agents: the canonical group with its stable
+// ID, measured bytes when measured, and a fixed error code plus a concrete
+// next_action on exit 2. Human lines stay available for stderr.
+export function runJson(root = repoRoot) {
+  const result = measure(root);
+  const groups =
+    result.groups.length > 0
+      ? result.groups
+      : cannotEnforceGroups(WORKER_GROUP_IDS, WORKER_CHECK_IDS);
+  return {
+    code: result.code,
+    report: buildJsonReport({
+      check: CHECK_NAME,
+      groups,
+      exitCode: result.code,
+      error: result.error,
+    }),
+    logs: result.logs,
+    errors: result.errors,
+  };
 }
 
 function selftest() {
@@ -176,6 +272,55 @@ function selftest() {
     ]) {
       check("invalid budget fails closed", () => save(invalid), 2, "cannot enforce");
     }
+    check(
+      "substituted bundle entry cannot enforce",
+      (budget) => {
+        budget.budgets = { "dist/small.js": { maxRawBytes: 4096, maxGzipBytes: 4096 } };
+        save(budget);
+      },
+      2,
+      "noncanonical bundle entry",
+    );
+    check(
+      "typo bundle entry cannot enforce",
+      (budget) => {
+        budget.budgets = { "dist/worker.jsx": { maxRawBytes: 4096, maxGzipBytes: 4096 } };
+        save(budget);
+      },
+      2,
+      "noncanonical bundle entry",
+    );
+    check(
+      "extra bundle entry cannot enforce",
+      (budget) => {
+        budget.budgets["dist/extra.js"] = { maxRawBytes: 4096, maxGzipBytes: 4096 };
+        save(budget);
+      },
+      2,
+      "noncanonical bundle entry",
+    );
+    save({ budgets: { "dist/worker.js": { ...exact } } });
+    writeFileSync(join(root, "dist/worker.js"), payload);
+    const jsonFit = runJson(root);
+    assert.equal(jsonFit.code, 0, `json fit must exit 0, got ${jsonFit.code}`);
+    assert.equal(jsonFit.report.version, 1, "json report must carry version 1");
+    assert.deepEqual(
+      jsonFit.report.groups.map((group) => group.id),
+      WORKER_GROUP_IDS,
+      "json report must carry the canonical group",
+    );
+    cases += 1;
+    console.log("PASS versioned json report carries the canonical inventory");
+    save({ budgets: { "dist/other.js": { maxRawBytes: 4096, maxGzipBytes: 4096 } } });
+    const jsonInvalid = runJson(root);
+    assert.equal(jsonInvalid.code, 2, `json invalid plan must exit 2, got ${jsonInvalid.code}`);
+    assert.equal(
+      jsonInvalid.report.error?.code,
+      "INVALID_PLAN",
+      "invalid plan must use INVALID_PLAN",
+    );
+    cases += 1;
+    console.log("PASS versioned json report carries INVALID_PLAN for an invalid plan");
     console.log(`worker bundle budget selftest: ${cases} cases passed.`);
     return 0;
   } finally {
@@ -184,10 +329,20 @@ function selftest() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== "--selftest")) {
-    console.error("Usage: node ci/check-worker-bundle.mjs [--selftest]");
+  const [, , ...args] = process.argv;
+  const parsed = parseGateArgs(args);
+  if (parsed.error) {
+    console.error(`${gateUsage(SCRIPT_NAME)}: ${parsed.error}`);
     process.exitCode = 2;
+  } else if (parsed.options.selftest) {
+    process.exitCode = selftest();
+  } else if (parsed.options.format === "json") {
+    const measured = runJson(parsed.options.root ?? repoRoot);
+    for (const line of measured.logs) console.error(line);
+    for (const line of measured.errors) console.error(line);
+    process.stdout.write(`${JSON.stringify(measured.report)}\n`);
+    process.exitCode = measured.code;
   } else {
-    process.exitCode = process.argv[2] === "--selftest" ? selftest() : run(repoRoot);
+    process.exitCode = run(parsed.options.root ?? repoRoot);
   }
 }

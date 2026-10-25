@@ -67,7 +67,7 @@ describe("staging alert probe gates", () => {
       { origin: "https://evil.test" },
     );
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "cross_origin" });
+    expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     expect(send).not.toHaveBeenCalled();
   });
 

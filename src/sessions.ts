@@ -19,7 +19,7 @@ import {
 } from "./oauth-journeys";
 
 /** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
- * Login, authenticated-page rotation and member/admin GET renewal re-stamp the
+ * Login, authenticated-page rotation and member/admin GET rotation re-stamp the
  * DB expiry and cookie Max-Age; the status probe cookie follows the same value. */
 export const SESSION_TTL_SECONDS = 60 * 120;
 

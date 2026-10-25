@@ -60,8 +60,13 @@ jobs:
             "src/admin/pages/**" \
             "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
+            "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
+            "src/featured-eligibility.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
@@ -70,6 +75,8 @@ jobs:
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:

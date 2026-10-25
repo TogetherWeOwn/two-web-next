@@ -28,7 +28,7 @@ import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ASSERT_FAILURE_MARKER,
   hasAssertFailure,
@@ -39,7 +39,13 @@ import { STAGING_ORIGIN } from "./operator-constants.mjs";
 
 const require = createRequire(import.meta.url);
 const lib = require("./lighthouse-origin-lib.cjs");
-const { sampleMatrix, evidenceLines } = require("./lighthouse-samples.cjs");
+const {
+  sampleMatrix,
+  evidenceLines,
+  checkFixtureDirectory,
+  parseCheckFixtureArgs,
+  invalidArgumentsResult,
+} = require("./lighthouse-samples.cjs");
 
 const OUTPUT_DIR = ".lighthouseci";
 const CONFIG = "ci/lighthouse-origin.cjs";
@@ -62,7 +68,12 @@ function runLhci(env) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [require.resolve("@lhci/cli/src/cli.js"), "autorun", `--config=${CONFIG}`],
+      [
+        require.resolve("@lhci/cli/src/cli.js"),
+        "autorun",
+        `--config=${CONFIG}`,
+        `--collect.settings.configPath=${fileURLToPath(new URL("./lighthouse-diagnostics.config.mjs", import.meta.url))}`,
+      ],
       { env, stdio: ["ignore", "pipe", "pipe"] },
     );
     let text = "";
@@ -160,7 +171,7 @@ function marginalRetryNotice(marginal) {
 
 async function writeSummary(
   dir,
-  { origin, eventPath, found, exitCode, rows, marginalRetry = null },
+  { origin, eventPath, found, exitCode, rows, rejectionCounts = {}, marginalRetry = null },
 ) {
   const summary = lib.renderSummary({
     origin,
@@ -172,7 +183,7 @@ async function writeSummary(
   await writeFile(join(dir, "watch-summary.md"), summary);
   await writeFile(
     join(dir, "watch-summary.json"),
-    `${JSON.stringify({ origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, ...(marginalRetry ? { marginalRetry } : {}) }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, ...(marginalRetry ? { marginalRetry } : {}) }, null, 2)}\n`,
   );
   return summary;
 }
@@ -183,7 +194,10 @@ async function writeSummary(
 // clearOriginAttemptEvidence here (top-level per-run files only) and the
 // desktop quality step's later clear (same top-level scope), so both attempts
 // stay in the uploaded `.lighthouseci/` artifact for the next investigation.
-async function archiveMarginalAttempt(dir, { origin, eventPath, found, exitCode, rows, marginal }) {
+async function archiveMarginalAttempt(
+  dir,
+  { origin, eventPath, found, exitCode, rows, rejectionCounts = {}, marginal },
+) {
   const attemptDir = join(dir, ATTEMPT1_LHR_DIR);
   await mkdir(attemptDir, { recursive: true });
   const summary = lib.renderSummary({
@@ -198,7 +212,7 @@ async function archiveMarginalAttempt(dir, { origin, eventPath, found, exitCode,
   );
   await writeFile(
     join(dir, ATTEMPT1_TABLE_JSON),
-    `${JSON.stringify({ origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, marginal }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, marginal }, null, 2)}\n`,
   );
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
@@ -210,6 +224,35 @@ async function archiveMarginalAttempt(dir, { origin, eventPath, found, exitCode,
       // the required evidence; per-run files are best-effort detail.
     }
   }
+}
+
+// Every finished attempt, including short/failed collects, is immutable before
+// either retry cleanup or the later desktop collect can delete top-level LHRs.
+// Archives are never read by sample accounting, assertions or retry selection.
+async function archiveMobileAttempt(dir, { n, exitCode }) {
+  const parent = join(dir, "mobile-attempts");
+  await mkdir(parent, { recursive: true });
+  const attemptDir = join(parent, `attempt-${n}`);
+  await mkdir(attemptDir);
+  const names = (await readdir(dir))
+    .filter((name) => /^lhr-\d+\.json$/.test(name) || name === "assertion-results.json")
+    .sort();
+  for (const name of names) await copyFile(join(dir, name), join(attemptDir, name));
+  await writeFile(
+    join(attemptDir, "manifest.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        profile: "mobile",
+        attempt: n,
+        exitCode,
+        files: names,
+        assertions: names.includes("assertion-results.json") ? "assertion-results.json" : "unknown",
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 export async function main(
@@ -224,7 +267,7 @@ export async function main(
     diagnosisFile,
   } = {},
 ) {
-  if (argv.length !== 1) {
+  if (argv.length === 0) {
     log("usage: npm run lighthouse:origin -- <origin>");
     log(`origin is one of: ${lib.ALLOWED_ORIGINS.join(", ")}`);
     return 2;
@@ -235,6 +278,19 @@ export async function main(
   } catch (error) {
     log(error.message);
     return 2;
+  }
+  // Read-only fixture verification: no discovery, collection, writes or
+  // archives. Unknown or malformed check flags fail here, before any of that.
+  if (argv.length > 1) {
+    const parsed = parseCheckFixtureArgs(argv.slice(1));
+    if (!parsed.ok) {
+      log(JSON.stringify(invalidArgumentsResult("mobile")));
+      return 2;
+    }
+    const { collect } = lib.buildConfig({ origin, eventPath: undefined }).ci;
+    const result = checkFixtureDirectory(parsed.dir, collect, "mobile");
+    log(JSON.stringify(result));
+    return result.code === "collection_complete" ? 0 : 1;
   }
   const collectLog = logFile ?? join(dir, "origin-collect.log");
   const diagnosisPath = diagnosisFile ?? join(dir, "origin-collect-diagnosis.md");
@@ -324,6 +380,7 @@ export async function main(
         flag: "a",
       },
     );
+    await archiveMobileAttempt(dir, { n, exitCode });
     const lhrObjects = loadCollectedLhrs(dir);
     const matrix = sampleMatrix(lhrObjects, collect);
     const assertions = loadAssertions(dir);
@@ -364,6 +421,7 @@ export async function main(
         found,
         exitCode,
         rows,
+        rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
       });
       log(summary);
@@ -384,6 +442,7 @@ export async function main(
           found,
           exitCode,
           rows,
+          rejectionCounts: matrix.rejectionCounts ?? {},
           marginal,
         });
         firstAttemptMarginal = marginal;
@@ -404,6 +463,7 @@ export async function main(
         found,
         exitCode,
         rows,
+        rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
       });
       const { text, verdict } = buildOriginDiagnosis({
@@ -426,6 +486,7 @@ export async function main(
         found,
         exitCode,
         rows,
+        rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
       });
       const { text, verdict } = buildOriginDiagnosis({
@@ -447,7 +508,8 @@ export async function main(
   return 1;
 }
 
-function selftest() {
+async function selftest() {
+  const { navigationMetadata } = await import("../test/lighthouse-navigation-fixtures.mjs");
   const ORIGIN = STAGING_ORIGIN;
   const EVENT = "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV";
   const ROUTES = ["/", "/events", EVENT, "/join", "/about", "/faq", "/rules", "/privacy"];
@@ -474,8 +536,10 @@ function selftest() {
   };
 
   const stubLhr = (url, lcp = 1000) => ({
+    ...navigationMetadata("mobile"),
     requestedUrl: url,
     finalUrl: url,
+    finalDisplayedUrl: url,
     categories: { performance: { score: 1 } },
     audits: {
       "largest-contentful-paint": { numericValue: lcp },
@@ -525,399 +589,398 @@ function selftest() {
   const summaryRows = (lhciDir) =>
     JSON.parse(readFileSync(join(lhciDir, "watch-summary.json"), "utf8")).rows;
 
-  (async () => {
-    // Usage and origin validation never launch lhci.
-    assert.equal(await main([], { lhci: () => assert.fail("must not run") }), 2);
-    assert.equal(
-      await main(["https://evil.example/"], { lhci: () => assert.fail("must not run") }),
-      2,
+  // Usage and origin validation never launch lhci.
+  assert.equal(await main([], { lhci: () => assert.fail("must not run") }), 2);
+  assert.equal(
+    await main(["https://evil.example/"], { lhci: () => assert.fail("must not run") }),
+    2,
+  );
+  // Discovery failure is a finding, not a collect: exit 1, no lhci call.
+  {
+    let calls = 0;
+    const code = await main([ORIGIN], {
+      fetchImpl: async () => {
+        throw new Error("boom");
+      },
+      lhci: async () => {
+        calls += 1;
+        return { exitCode: 0, output: "" };
+      },
+      dir: join(mkdtempSync(join(tmpdir(), "lh-origin-")), ".lighthouseci"),
+      log: () => {},
+    });
+    assert.equal(code, 1);
+    assert.equal(calls, 0);
+  }
+  // Green first attempt: 8 routes x 3 runs, no retry, no diagnosis, exit 0.
+  {
+    const { code, calls, lhciDir } = await runCase([{ exitCode: 0, urls: urlsFor(ROUTES) }]);
+    assert.equal(code, 0);
+    assert.equal(calls, 1);
+    assert.equal(loadCollectedLhrs(lhciDir).length, 24);
+    assert.deepEqual(
+      summaryRows(lhciDir).map((row) => row.verdict),
+      Array(8).fill("pass"),
     );
-    // Discovery failure is a finding, not a collect: exit 1, no lhci call.
-    {
-      let calls = 0;
-      const code = await main([ORIGIN], {
-        fetchImpl: async () => {
-          throw new Error("boom");
-        },
-        lhci: async () => {
-          calls += 1;
-          return { exitCode: 0, output: "" };
-        },
-        dir: join(mkdtempSync(join(tmpdir(), "lh-origin-")), ".lighthouseci"),
-        log: () => {},
-      });
-      assert.equal(code, 1);
-      assert.equal(calls, 0);
-    }
-    // Green first attempt: 8 routes x 3 runs, no retry, no diagnosis, exit 0.
-    {
-      const { code, calls, lhciDir } = await runCase([{ exitCode: 0, urls: urlsFor(ROUTES) }]);
-      assert.equal(code, 0);
-      assert.equal(calls, 1);
-      assert.equal(loadCollectedLhrs(lhciDir).length, 24);
-      assert.deepEqual(
-        summaryRows(lhciDir).map((row) => row.verdict),
-        Array(8).fill("pass"),
-      );
-      assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
-      assert.match(readFileSync(join(lhciDir, "origin-collect.log"), "utf8"), /stub attempt 1/);
-    }
-    // The truncation signature: exit 0 but tail routes unmeasured. The old
-    // runner failed closed here with no diagnosis; the retry must fire.
-    {
-      const { code, calls, lhciDir, logs } = await runCase([
-        { exitCode: 0, urls: urlsFor(ROUTES).slice(0, 15), note: "cut off mid-collect" },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.match(logs.join("\n"), /retrying \(attempt 2\/2\)/);
-      assert.equal(loadCollectedLhrs(lhciDir).length, 24);
-    }
-    // Exit 0 over thin evidence still retries: one /privacy run missing
-    // leaves every route measured, but medians over partial runs are not a
-    // pass. A full second attempt goes green with no diagnosis.
-    {
-      const { code, calls, lhciDir, logs } = await runCase([
-        { exitCode: 0, urls: urlsFor(ROUTES).slice(0, 23), note: "one run short" },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.match(logs.join("\n"), /retrying \(attempt 2\/2\)/);
-      assert.equal(loadCollectedLhrs(lhciDir).length, 24);
-      assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
-    }
-    // Short failure then green: exactly one retry, exit 0. Attempt 1's
-    // assertion verdicts are cleared with its LHRs, never leaking into the
-    // retry's summary.
-    {
-      const staleFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 9999,
-          expected: 2000,
-        },
-      ]);
-      const { code, calls, lhciDir } = await runCase([
-        {
-          exitCode: 1,
-          urls: urlsFor(ROUTES).slice(0, 4),
-          raw: { "assertion-results.json": staleFailure },
-        },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.equal(existsSync(join(lhciDir, "assertion-results.json")), false);
-    }
-    // A spawn failure becomes a failed attempt (not a crash): short evidence
-    // retries once, then COLLECT FAILURE keeps the last exit code.
-    {
-      const { code, calls, lhciDir } = await runCase([
-        { reject: "spawn /nope ENOENT" },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.match(readFileSync(join(lhciDir, "origin-collect.log"), "utf8"), /failed to start/);
-    }
-    // Short twice: COLLECT FAILURE naming the short tail routes, last exit
-    // code preserved, tail recorded.
-    {
-      const { code, calls, lhciDir } = await runCase([
-        { exitCode: 2, urls: [], note: "NO_NAVSTART boom" },
-        { exitCode: 3, urls: urlsFor(ROUTES).slice(0, 6), note: "chrome crash boom" },
-      ]);
-      assert.equal(code, 3);
-      assert.equal(calls, 2);
-      const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
-      assert.match(diagnosis, /COLLECT FAILURE/);
-      assert.match(diagnosis, /chrome crash boom/);
-      assert.match(diagnosis, /attempt 1: exit 2, 0 LHRs/);
-      assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
-      assert.match(diagnosis, /\/rules: 0\/3 runs \(no run completed\)/);
-      assert.match(diagnosis, /\/privacy: 0\/3 runs \(no run completed\)/);
-      const rows = summaryRows(lhciDir);
-      assert.equal(rows.find((row) => row.path === "/rules").verdict, "fail");
-      assert.equal(rows.find((row) => row.path === "/rules").runs, 0);
-      assert.match(rows.find((row) => row.path === "/rules").note, /no Lighthouse run completed/);
-    }
-    // Full evidence plus the evaluated-assertion marker: real breach, NO
-    // retry, BUDGET BREACH. The decline decision is logged with its reason.
-    {
-      const { code, calls, lhciDir, logs } = await runCase([
-        { exitCode: 1, urls: urlsFor(ROUTES), assertFailed: true },
-      ]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      assert.match(
-        readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8"),
-        /BUDGET BREACH/,
-      );
-      assert.match(
-        logs.join("\n"),
-        /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
-      );
-    }
-    // Marginal `/` LCP breach retries once and gates on the retry: attempt 1
-    // (2060, band (2000, 2200), everything else pass plus one FCP warn)
-    // archives both tables and the first per-run LHRs; attempt 2 goes green.
-    {
-      const urls = urlsFor(ROUTES);
-      const lcps = urls.map((url, i) => (i < 3 ? [1940, 2060, 2065][i] : 1000));
-      const marginalFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 2060,
-          expected: 2000,
-        },
-        {
-          url: `${ORIGIN}/events`,
-          auditId: "first-contentful-paint",
-          level: "warn",
-          actual: 1850,
-          expected: 1800,
-        },
-      ]);
-      const { code, calls, lhciDir, logs } = await runCase([
-        {
-          exitCode: 1,
-          urls,
-          lcps,
-          raw: { "assertion-results.json": marginalFailure },
-          assertFailed: true,
-        },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.match(
-        logs.join("\n"),
-        /Marginal breach \(only error is \/ LCP 2060 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
-      );
-      assert.doesNotMatch(
-        logs.join("\n"),
-        /Marginal retry declined/,
-        "a retried run keeps its retry line, with no decline line",
-      );
-      // Dual evidence: the archived first table, the gating table pointing at
-      // it, and the first attempt's per-run LHRs.
-      assert.match(
-        readFileSync(join(lhciDir, "watch-summary.attempt1.md"), "utf8"),
-        /Attempt 1 \(marginal breach, retried\)/,
-      );
-      assert.match(
-        readFileSync(join(lhciDir, "watch-summary.attempt1.md"), "utf8"),
-        /\| \/ \| fail \| 3 \|/,
-      );
-      assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
-      assert.equal(
-        JSON.parse(readFileSync(join(lhciDir, "watch-summary.json"), "utf8")).marginalRetry.actual,
-        2060,
-      );
-      assert.equal(
-        JSON.parse(readFileSync(join(lhciDir, "watch-summary.attempt1.json"), "utf8")).marginal
-          .actual,
-        2060,
-      );
-      assert.equal(loadCollectedLhrs(join(lhciDir, "marginal-attempt1")).length, 24);
-      assert.equal(
-        loadCollectedLhrs(lhciDir).length,
-        24,
-        "top-level LHRs are the retry's, not the archived attempt's",
-      );
-      assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
-    }
-    // Marginal twice: the retry also breaches, so the gate stays red with
-    // BUDGET BREACH naming the retry as systematic, not variance.
-    {
-      const urls = urlsFor(ROUTES);
-      const lcps = urls.map((url, i) => (i < 3 ? 2100 : 1000));
-      const marginalFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 2100,
-          expected: 2000,
-        },
-      ]);
-      const step = {
+    assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
+    assert.match(readFileSync(join(lhciDir, "origin-collect.log"), "utf8"), /stub attempt 1/);
+  }
+  // The truncation signature: exit 0 but tail routes unmeasured. The old
+  // runner failed closed here with no diagnosis; the retry must fire.
+  {
+    const { code, calls, lhciDir, logs } = await runCase([
+      { exitCode: 0, urls: urlsFor(ROUTES).slice(0, 15), note: "cut off mid-collect" },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.match(logs.join("\n"), /retrying \(attempt 2\/2\)/);
+    assert.equal(loadCollectedLhrs(lhciDir).length, 24);
+  }
+  // Exit 0 over thin evidence still retries: one /privacy run missing
+  // leaves every route measured, but medians over partial runs are not a
+  // pass. A full second attempt goes green with no diagnosis.
+  {
+    const { code, calls, lhciDir, logs } = await runCase([
+      { exitCode: 0, urls: urlsFor(ROUTES).slice(0, 23), note: "one run short" },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.match(logs.join("\n"), /retrying \(attempt 2\/2\)/);
+    assert.equal(loadCollectedLhrs(lhciDir).length, 24);
+    assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
+  }
+  // Short failure then green: exactly one retry, exit 0. Attempt 1's
+  // assertion verdicts are cleared with its LHRs, never leaking into the
+  // retry's summary.
+  {
+    const staleFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 9999,
+        expected: 2000,
+      },
+    ]);
+    const { code, calls, lhciDir } = await runCase([
+      {
+        exitCode: 1,
+        urls: urlsFor(ROUTES).slice(0, 4),
+        raw: { "assertion-results.json": staleFailure },
+      },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.equal(existsSync(join(lhciDir, "assertion-results.json")), false);
+  }
+  // A spawn failure becomes a failed attempt (not a crash): short evidence
+  // retries once, then COLLECT FAILURE keeps the last exit code.
+  {
+    const { code, calls, lhciDir } = await runCase([
+      { reject: "spawn /nope ENOENT" },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.match(readFileSync(join(lhciDir, "origin-collect.log"), "utf8"), /failed to start/);
+  }
+  // Short twice: COLLECT FAILURE naming the short tail routes, last exit
+  // code preserved, tail recorded.
+  {
+    const { code, calls, lhciDir } = await runCase([
+      { exitCode: 2, urls: [], note: "NO_NAVSTART boom" },
+      { exitCode: 3, urls: urlsFor(ROUTES).slice(0, 6), note: "chrome crash boom" },
+    ]);
+    assert.equal(code, 3);
+    assert.equal(calls, 2);
+    const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
+    assert.match(diagnosis, /COLLECT FAILURE/);
+    assert.match(diagnosis, /chrome crash boom/);
+    assert.match(diagnosis, /attempt 1: exit 2, 0 LHRs/);
+    assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
+    assert.match(diagnosis, /\/rules: 0\/3 runs \(no run completed\)/);
+    assert.match(diagnosis, /\/privacy: 0\/3 runs \(no run completed\)/);
+    const rows = summaryRows(lhciDir);
+    assert.equal(rows.find((row) => row.path === "/rules").verdict, "fail");
+    assert.equal(rows.find((row) => row.path === "/rules").runs, 0);
+    assert.match(rows.find((row) => row.path === "/rules").note, /no Lighthouse run completed/);
+  }
+  // Full evidence plus the evaluated-assertion marker: real breach, NO
+  // retry, BUDGET BREACH. The decline decision is logged with its reason.
+  {
+    const { code, calls, lhciDir, logs } = await runCase([
+      { exitCode: 1, urls: urlsFor(ROUTES), assertFailed: true },
+    ]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.match(
+      readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8"),
+      /BUDGET BREACH/,
+    );
+    assert.match(
+      logs.join("\n"),
+      /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
+    );
+  }
+  // Marginal `/` LCP breach retries once and gates on the retry: attempt 1
+  // (2060, band (2000, 2200), everything else pass plus one FCP warn)
+  // archives both tables and the first per-run LHRs; attempt 2 goes green.
+  {
+    const urls = urlsFor(ROUTES);
+    const lcps = urls.map((url, i) => (i < 3 ? [1940, 2060, 2065][i] : 1000));
+    const marginalFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 2060,
+        expected: 2000,
+      },
+      {
+        url: `${ORIGIN}/events`,
+        auditId: "first-contentful-paint",
+        level: "warn",
+        actual: 1850,
+        expected: 1800,
+      },
+    ]);
+    const { code, calls, lhciDir, logs } = await runCase([
+      {
         exitCode: 1,
         urls,
         lcps,
         raw: { "assertion-results.json": marginalFailure },
         assertFailed: true,
-      };
-      const { code, calls, lhciDir, logs } = await runCase([step, { ...step }]);
-      assert.equal(code, 1);
-      assert.equal(calls, 2);
-      const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
-      assert.match(diagnosis, /BUDGET BREACH/);
-      assert.match(diagnosis, /systematic, not variance/);
-      assert.match(diagnosis, /marginal \/ LCP breach at 2100 ms, retried/);
-      assert.doesNotMatch(
-        diagnosis,
-        /attempt 2: exit 1, 24 LHRs \(marginal \/ LCP breach at 2100 ms, retried\)/,
-      );
-      assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
-      assert.match(
-        logs.join("\n"),
-        /Marginal breach \(only error is \/ LCP 2100 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
-      );
-      assert.doesNotMatch(
-        logs.join("\n"),
-        /Marginal retry declined/,
-        "a terminal marginal breach is not a decline",
-      );
-    }
-    // Far over budget: `/` LCP at 2500 is outside the band, NO retry.
-    {
-      const farFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 2500,
-          expected: 2000,
-        },
-      ]);
-      const { code, calls, lhciDir, logs } = await runCase([
-        {
-          exitCode: 1,
-          urls: urlsFor(ROUTES),
-          raw: { "assertion-results.json": farFailure },
-          assertFailed: true,
-        },
-      ]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
-      const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
-      assert.match(diagnosis, /BUDGET BREACH/);
-      assert.doesNotMatch(diagnosis, /systematic, not variance/);
-      assert.match(
-        logs.join("\n"),
-        /Marginal retry declined \(\/ LCP 2500 outside the marginal band \(2000, 2200\)\): no retry\./,
-      );
-    }
-    // The band edge is exclusive: exactly 2200 (10% over) is not marginal.
-    {
-      const edgeFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 2200,
-          expected: 2000,
-        },
-      ]);
-      const { code, calls, lhciDir, logs } = await runCase([
-        {
-          exitCode: 1,
-          urls: urlsFor(ROUTES),
-          raw: { "assertion-results.json": edgeFailure },
-          assertFailed: true,
-        },
-      ]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
-      assert.match(
-        logs.join("\n"),
-        /Marginal retry declined \(\/ LCP 2200 outside the marginal band \(2000, 2200\)\): no retry\./,
-      );
-    }
-    // A second error anywhere else vetoes the retry, even with `/` LCP in the
-    // band: the gate is no longer pass/warn-only outside `/`.
-    {
-      const mixedFailure = JSON.stringify([
-        {
-          url: `${ORIGIN}/`,
-          auditId: "largest-contentful-paint",
-          level: "error",
-          actual: 2060,
-          expected: 2000,
-        },
-        {
-          url: `${ORIGIN}/events`,
-          auditId: "server-response-time",
-          level: "error",
-          actual: 900,
-          expected: 600,
-        },
-      ]);
-      const { code, calls, lhciDir, logs } = await runCase([
-        {
-          exitCode: 1,
-          urls: urlsFor(ROUTES),
-          raw: { "assertion-results.json": mixedFailure },
-          assertFailed: true,
-        },
-      ]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
-      assert.match(
-        logs.join("\n"),
-        /Marginal retry declined \(\/events is fail, not pass\/warn-only\): no retry\./,
-      );
-    }
-    // Full evidence but no assertion verdict (upload/config blew up): NO
-    // retry, and the verdict must NOT claim a budget breached.
-    {
-      const { code, calls, lhciDir, logs } = await runCase([
-        { exitCode: 1, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 1);
-      assert.equal(calls, 1);
-      const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
-      assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
-      assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
-      assert.match(
-        logs.join("\n"),
-        /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
-      );
-    }
-    // A half-written report from a crashed run is missing evidence, never a
-    // crash: truncated JSON is skipped and the short attempt retries.
-    {
-      const { code, calls, lhciDir } = await runCase([
-        { exitCode: 1, urls: urlsFor(ROUTES).slice(0, 4), raw: { "lhr-7.json": "{truncated" } },
-        { exitCode: 0, urls: urlsFor(ROUTES) },
-      ]);
-      assert.equal(code, 0);
-      assert.equal(calls, 2);
-      assert.equal(loadCollectedLhrs(lhciDir).length, 24);
-    }
-    // Fixture-only discovery skips the event route: 7 x 3 expected, the
-    // event row is reported skipped, and a full 21-LHR run passes.
-    {
-      const { code, calls, lhciDir } = await runCase(
-        [{ exitCode: 0, urls: urlsFor(NO_EVENT_ROUTES) }],
-        { fetchImpl: fetchFixtureOnly },
-      );
-      assert.equal(code, 0);
-      assert.equal(calls, 1);
-      const rows = summaryRows(lhciDir);
-      assert.equal(rows.length, 8);
-      assert.equal(rows.find((row) => row.path === "/e/<key>").verdict, "skipped");
-    }
-    console.log("lighthouse-origin-run selftest: ok");
-  })().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+      },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.match(
+      logs.join("\n"),
+      /Marginal breach \(only error is \/ LCP 2060 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
+    );
+    assert.doesNotMatch(
+      logs.join("\n"),
+      /Marginal retry declined/,
+      "a retried run keeps its retry line, with no decline line",
+    );
+    // Dual evidence: the archived first table, the gating table pointing at
+    // it, and the first attempt's per-run LHRs.
+    assert.match(
+      readFileSync(join(lhciDir, "watch-summary.attempt1.md"), "utf8"),
+      /Attempt 1 \(marginal breach, retried\)/,
+    );
+    assert.match(
+      readFileSync(join(lhciDir, "watch-summary.attempt1.md"), "utf8"),
+      /\| \/ \| fail \| 3 \|/,
+    );
+    assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
+    assert.equal(
+      JSON.parse(readFileSync(join(lhciDir, "watch-summary.json"), "utf8")).marginalRetry.actual,
+      2060,
+    );
+    assert.equal(
+      JSON.parse(readFileSync(join(lhciDir, "watch-summary.attempt1.json"), "utf8")).marginal
+        .actual,
+      2060,
+    );
+    assert.equal(loadCollectedLhrs(join(lhciDir, "marginal-attempt1")).length, 24);
+    assert.equal(
+      loadCollectedLhrs(lhciDir).length,
+      24,
+      "top-level LHRs are the retry's, not the archived attempt's",
+    );
+    assert.equal(existsSync(join(lhciDir, "origin-collect-diagnosis.md")), false);
+  }
+  // Marginal twice: the retry also breaches, so the gate stays red with
+  // BUDGET BREACH naming the retry as systematic, not variance.
+  {
+    const urls = urlsFor(ROUTES);
+    const lcps = urls.map((url, i) => (i < 3 ? 2100 : 1000));
+    const marginalFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 2100,
+        expected: 2000,
+      },
+    ]);
+    const step = {
+      exitCode: 1,
+      urls,
+      lcps,
+      raw: { "assertion-results.json": marginalFailure },
+      assertFailed: true,
+    };
+    const { code, calls, lhciDir, logs } = await runCase([step, { ...step }]);
+    assert.equal(code, 1);
+    assert.equal(calls, 2);
+    const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
+    assert.match(diagnosis, /BUDGET BREACH/);
+    assert.match(diagnosis, /systematic, not variance/);
+    assert.match(diagnosis, /marginal \/ LCP breach at 2100 ms, retried/);
+    assert.doesNotMatch(
+      diagnosis,
+      /attempt 2: exit 1, 24 LHRs \(marginal \/ LCP breach at 2100 ms, retried\)/,
+    );
+    assert.match(readFileSync(join(lhciDir, "watch-summary.md"), "utf8"), /gates on attempt 2/);
+    assert.match(
+      logs.join("\n"),
+      /Marginal breach \(only error is \/ LCP 2100 within \(2000, 2200\)\): retrying \(attempt 2\/2\)/,
+    );
+    assert.doesNotMatch(
+      logs.join("\n"),
+      /Marginal retry declined/,
+      "a terminal marginal breach is not a decline",
+    );
+  }
+  // Far over budget: `/` LCP at 2500 is outside the band, NO retry.
+  {
+    const farFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 2500,
+        expected: 2000,
+      },
+    ]);
+    const { code, calls, lhciDir, logs } = await runCase([
+      {
+        exitCode: 1,
+        urls: urlsFor(ROUTES),
+        raw: { "assertion-results.json": farFailure },
+        assertFailed: true,
+      },
+    ]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
+    const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
+    assert.match(diagnosis, /BUDGET BREACH/);
+    assert.doesNotMatch(diagnosis, /systematic, not variance/);
+    assert.match(
+      logs.join("\n"),
+      /Marginal retry declined \(\/ LCP 2500 outside the marginal band \(2000, 2200\)\): no retry\./,
+    );
+  }
+  // The band edge is exclusive: exactly 2200 (10% over) is not marginal.
+  {
+    const edgeFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 2200,
+        expected: 2000,
+      },
+    ]);
+    const { code, calls, lhciDir, logs } = await runCase([
+      {
+        exitCode: 1,
+        urls: urlsFor(ROUTES),
+        raw: { "assertion-results.json": edgeFailure },
+        assertFailed: true,
+      },
+    ]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
+    assert.match(
+      logs.join("\n"),
+      /Marginal retry declined \(\/ LCP 2200 outside the marginal band \(2000, 2200\)\): no retry\./,
+    );
+  }
+  // A second error anywhere else vetoes the retry, even with `/` LCP in the
+  // band: the gate is no longer pass/warn-only outside `/`.
+  {
+    const mixedFailure = JSON.stringify([
+      {
+        url: `${ORIGIN}/`,
+        auditId: "largest-contentful-paint",
+        level: "error",
+        actual: 2060,
+        expected: 2000,
+      },
+      {
+        url: `${ORIGIN}/events`,
+        auditId: "server-response-time",
+        level: "error",
+        actual: 900,
+        expected: 600,
+      },
+    ]);
+    const { code, calls, lhciDir, logs } = await runCase([
+      {
+        exitCode: 1,
+        urls: urlsFor(ROUTES),
+        raw: { "assertion-results.json": mixedFailure },
+        assertFailed: true,
+      },
+    ]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.equal(existsSync(join(lhciDir, "watch-summary.attempt1.md")), false);
+    assert.match(
+      logs.join("\n"),
+      /Marginal retry declined \(\/events is fail, not pass\/warn-only\): no retry\./,
+    );
+  }
+  // Full evidence but no assertion verdict (upload/config blew up): NO
+  // retry, and the verdict must NOT claim a budget breached.
+  {
+    const { code, calls, lhciDir, logs } = await runCase([{ exitCode: 1, urls: urlsFor(ROUTES) }]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    const diagnosis = readFileSync(join(lhciDir, "origin-collect-diagnosis.md"), "utf8");
+    assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
+    assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
+    assert.match(
+      logs.join("\n"),
+      /Marginal retry declined \(no error-level assertion to retry\): no retry\./,
+    );
+  }
+  // A half-written report from a crashed run is missing evidence, never a
+  // crash: truncated JSON is skipped and the short attempt retries.
+  {
+    const { code, calls, lhciDir } = await runCase([
+      { exitCode: 1, urls: urlsFor(ROUTES).slice(0, 4), raw: { "lhr-7.json": "{truncated" } },
+      { exitCode: 0, urls: urlsFor(ROUTES) },
+    ]);
+    assert.equal(code, 0);
+    assert.equal(calls, 2);
+    assert.equal(loadCollectedLhrs(lhciDir).length, 24);
+  }
+  // Fixture-only discovery skips the event route: 7 x 3 expected, the
+  // event row is reported skipped, and a full 21-LHR run passes.
+  {
+    const { code, calls, lhciDir } = await runCase(
+      [{ exitCode: 0, urls: urlsFor(NO_EVENT_ROUTES) }],
+      { fetchImpl: fetchFixtureOnly },
+    );
+    assert.equal(code, 0);
+    assert.equal(calls, 1);
+    const rows = summaryRows(lhciDir);
+    assert.equal(rows.length, 8);
+    assert.equal(rows.find((row) => row.path === "/e/<key>").verdict, "skipped");
+  }
+  console.log("lighthouse-origin-run selftest: ok");
 }
 
 // Gated on being the entry point, so importing main() or the diagnosis
 // builder from another script never runs the selftest as a side effect.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (process.argv.includes("--selftest")) selftest();
-  else process.exitCode = await main(process.argv.slice(2));
+  if (process.argv.includes("--selftest")) {
+    try {
+      await selftest();
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+  } else process.exitCode = await main(process.argv.slice(2));
 }
