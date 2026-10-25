@@ -1,5 +1,6 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
+import type { HeaderSession, Session } from "../env";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
@@ -73,6 +74,8 @@ export const EventsCalendarPage: FC<{
   /** Effective facet: the canonical stored game, or null when unfiltered. */
   gameFilter: string | null;
   member: boolean;
+  /** Signed-in viewer for the header account area; the shell gates members. */
+  session?: Session | HeaderSession | null;
   inviteUrl: string;
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
@@ -98,6 +101,7 @@ export const EventsCalendarPage: FC<{
   games,
   gameFilter,
   member,
+  session,
   inviteUrl,
   appUrl,
   loginReturnTo = null,
@@ -183,6 +187,7 @@ export const EventsCalendarPage: FC<{
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}
       member={member}
+      session={session}
       loginReturnTo={loginReturnTo}
       markdownAlternate={markdownAlternate ?? undefined}
     >

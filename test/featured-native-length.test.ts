@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FeaturedFormPage } from "../src/admin/pages";
 import type { FeaturedRow } from "../src/admin/store";
 import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
+import { registerSavedContentBrowser } from "./helpers/featured-saved-content-browser";
 
 const base = {
   title: "Game night",
@@ -201,6 +202,7 @@ describe.skipIf(process.env.FEATURED_NATIVE_BROWSER_TESTS !== "true")(
     afterAll(async () => {
       await browser?.close();
     });
+    registerSavedContentBrowser(() => browser);
 
     async function load(currentMode: "new" | "edit") {
       mode = currentMode;

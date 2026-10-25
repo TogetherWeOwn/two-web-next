@@ -252,7 +252,7 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
       const json = await send(`/members/${ALICE.userId}`, jsonPatch(cookie, VALID));
       expect(json.status, `${cookie ?? "no cookie"} JSON`).toBe(401);
       expect(await json.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: "/auth/recover?next=%2Fprofile",
       });
       for (const init of [formPatch(cookie, VALID_FORM), formPatch(cookie, VALID_FORM, "POST")]) {
@@ -293,7 +293,8 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
       );
       expect(res.status).toBe(422);
       expect(await res.json()).toEqual({
-        errors: {
+        error: "invalid",
+        fields: {
           fields: "Only your bio, games, timezone and leaderboard setting can be changed.",
         },
       });

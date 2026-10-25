@@ -96,6 +96,32 @@ describe("calendar card fullness pins", () => {
     expect(html).not.toContain(">Full<");
   });
 
+  it("keeps past draft cards unmarked even with retained responses at capacity", () => {
+    const html = String(
+      CalCard({
+        e: cardRow({
+          status: "draft",
+          goingCount: 3,
+          goingOccupancy: 10,
+          capacity: 10,
+          startsAt: new Date("2029-12-30T19:00:00Z"),
+          endsAt: new Date("2029-12-30T21:00:00Z"),
+        }),
+        zone: "UTC",
+        now: new Date("2030-01-01T12:00:00Z"),
+        isPast: true,
+        member: true,
+        inviteUrl: "https://discord.gg/invite",
+        loginReturnTo: null,
+      }),
+    );
+    expect(html).toContain(">Draft<");
+    expect(html).toContain("3 of 10 going");
+    expect(html).not.toContain('data-testid="event-spots-left"');
+    expect(html).not.toContain(">Full<");
+    expect(html).not.toContain('data-testid="event-schedule-availability"');
+  });
+
   it("marks a full card from occupancy even when the named count has room", () => {
     // Control for the negative above: the same renderer and row shape carry
     // the marker when occupancy reaches capacity, so the open-card absence

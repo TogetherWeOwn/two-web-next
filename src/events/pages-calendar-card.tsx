@@ -161,6 +161,7 @@ export const CalCard: FC<{
                   beside the paused line: paused wins the verdict, the marker
                   stays as capacity fact. */}
                 {!cancelled &&
+                !isPast &&
                 availability?.state !== "past" &&
                 e.capacity !== null &&
                 e.goingOccupancy >= e.capacity ? (

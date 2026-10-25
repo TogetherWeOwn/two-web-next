@@ -29,7 +29,38 @@ continuation, and island replacement). The attendance count's existing test hook
 retains only its count and legacy Full marker; availability remains an inline
 sibling within the same styled attendance run.
 
-## Baseline conflict disposition
+## Draft review repair and renewed base conflict
+
+Design-contract extension: moderators scanning an ended draft must retain its
+Draft badge and response count, without a misleading Full marker. Future drafts
+remain badge-only rather than advertising seats or paused RSVPs. This restores
+the pre-existing rule; there is no new action, layout, token or typography change.
+
+The following no-JavaScript captures use the real merged Hono renderer and public
+assets. The before bundle substitutes the reviewed card source in memory; the
+after bundle uses the restored independent past-context guard. Both use the same
+local fixtures and merged assets. All four final images were opened. Body fonts
+are this container's browser fallback, not the pinned CI runner's system fonts.
+
+| Width | Before | After |
+| --- | --- | --- |
+| 1280×800 | [Past draft before](draft-before-1280.png) | [Past draft after](draft-after-1280.png) |
+| 390×844 | [Past draft before](draft-before-390.png) | [Past draft after](draft-after-390.png) |
+
+A new owned suite checks finite, uncapped and paused future drafts through both
+Hono/Kit list and calendar renderers, with published positive controls. Deleting
+the draft guard fails all 12 cases. The separate past-draft-at-capacity pin was
+observed failing before the one-line guard repair.
+
+The renewed binary conflict with base `a4cd5d2e3` retains the four newer base
+images (including the reordered subscription links), not the older accepted
+availability images. No local screenshot is substituted as a baseline. The
+combined layout still needs a current pinned-runner failure artifact and review;
+the historical acceptance below is not proof for this merged tree. CSS was
+compacted without changing its minified declarations to fit the unchanged
+6144-byte raw budget after integrating the base's search-highlight rule.
+
+## Historical baseline conflict disposition
 
 The initial binary conflict resolution retained the base images until combined
 head `86a4007fc` produced a pinned-runner artifact in
