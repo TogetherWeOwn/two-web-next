@@ -82,7 +82,6 @@ function installFakePlaywright() {
     version: () => 'FAKE SELFTEST ONLY; no browser execution',
     close: async () => {},
     newContext: async ({ viewport }) => {
-      let fixture;
       const calls = new Map();
       const locator = selector => ({
         locator,
@@ -92,9 +91,7 @@ function installFakePlaywright() {
         count: async () => {
           if (selector === '[data-status]') return 4;
           if (selector === 'thead th') return 5;
-          assert.equal(selector, '[data-testid="featured-item"]');
-          assert.equal(fixture, 'scheduled.html');
-          return 0;
+          assert.fail(`unexpected count selector: ${selector}`);
         },
         innerText: async () => selector === '[data-testid="featured-preview"]'
           ? 'Save changes to refresh this preview' : selector.match(/^\[data-status="(\w+)"\]$/)[1],
@@ -112,7 +109,7 @@ function installFakePlaywright() {
         newPage: async () => ({
           locator,
           keyboard: { press: async () => {} },
-          setContent: async html => { fixture = html.match(/<title>([^<]+)<\/title>/)[1]; },
+          setContent: async html => { assert.match(html, /<title>[^<]+<\/title>/); },
           evaluate: async () => ({ viewportWidth: viewport.width, documentWidth: viewport.width, elements: [] }),
           screenshot: async options => {
             assert.equal(options.fullPage, true);
