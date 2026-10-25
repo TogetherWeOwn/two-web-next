@@ -92,6 +92,12 @@ const SUITES = [
     title: "profile local time after save in Chromium",
     min: 40,
   },
+  {
+    file: "test/event-chosen-timezone.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "event chosen timezone browser acceptance",
+    min: 30,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
