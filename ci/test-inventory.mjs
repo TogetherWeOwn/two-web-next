@@ -316,7 +316,9 @@ function workflowShellView(text, name) {
       // Chomping does not affect command arguments; retain internal newlines,
       // including blank lines and more-indented folded content, exactly.
       const script = node.value.replace(/\n+$/, "");
-      const replacement = `|\n${script
+      // Explicit indentation prevents a more-indented first shell command
+      // from setting the YAML block threshold above subsequent commands.
+      const replacement = `|2\n${script
         .split("\n")
         .map((line) => `${indent}${line}`)
         .join("\n")}\n`;
@@ -610,12 +612,13 @@ function stripYamlComment(line) {
 function literalScriptLines(lines) {
   const content = new Set();
   for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)(?:-\s+)?run\s*:\s*[|>].*$/.exec(lines[i]);
+    const m = /^(\s*)(-\s+)?run\s*:\s*[|>]([1-9])?.*$/.exec(lines[i]);
     if (!m) continue;
-    const indent = m[1].length;
-    // Block-scalar content indent is auto-detected from the first line (a
-    // step key after the block, however deep, still ends it).
-    let threshold = null;
+    const indent = m[1].length + (m[2]?.length ?? 0);
+    // Honor explicit indentation relative to the mapping key, including a
+    // same-line sequence marker. Otherwise YAML detects it from the first
+    // content line. A more-indented first command must not hide later lines.
+    let threshold = m[3] ? indent + Number(m[3]) : null;
     for (let j = i + 1; j < lines.length; j++) {
       if (lines[j].trim() === "") continue;
       if (threshold === null) {
@@ -781,19 +784,18 @@ function stepScriptSlices(lines, start, end, content) {
     }
     const m = /^\s*(?:-\s+)?run\s*:\s*(.*)$/.exec(lines[i]);
     if (!m) continue;
-    if (/^[|>]\s*(#.*)?$/.test(m[1])) continue; // block header: no script here
+    if (/^[|>][1-9]?[+-]?\s*(#.*)?$/.test(m[1])) continue; // block header: no script here
     slices.push({ idx: i, from: lines[i].length - m[1].length });
   }
   return slices;
 }
 
-// A `cd` that moves the step's shell: command position (line start or after
-// a chain separator, past env assignments and `command`/`builtin`), or a
-// `(cd ...)` subshell wrapping the run. `$(cd ...)` and backticks run in a
-// subshell that cannot persist, so they never match.
+// Directory commands in simple or compound command position: separators,
+// groups, case arms and control keywords can all precede a cwd change. Reject
+// them conservatively even if a branch might not execute. `$(cd ...)` and
+// backticks run in a child shell and do not move the caller.
 const STEP_CD_RE =
-  /(?:^|[;&|])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
-const SUBSHELL_CD_RE = /(?<!\$)\(\s*(?:cd|pushd|popd)(?:\s|\)|$|[;&])/;
+  /(?:^|[;&|{})]|(?<!\$)\()\s*(?:(?:if|then|elif|else|do|while|until|!)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
 const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
@@ -828,7 +830,7 @@ function assertRootShellCwd(prefix, where) {
       continue;
     }
     assert.ok(
-      !STEP_CD_RE.test(line) && !SUBSHELL_CD_RE.test(line),
+      !STEP_CD_RE.test(line),
       `${where} runs after a shell directory change: ${ROOT_CWD_REMEDIATION}`,
     );
     heredoc = heredocMarker(line);
@@ -3632,6 +3634,10 @@ function selftest() {
       ">+\n          npm run b\n\n          echo separate-command\n",
       ">2-\n          npm run b\n            more-indented\n          echo next",
       '"npm run b\\n echo next" # YAML comment',
+      '"  echo setup\\ncd e2e/sub\\nnpx playwright test"',
+      '"\\n  echo setup\\ncd e2e/sub\\nnpm run b"',
+      "|2-\n            echo setup\n          cd e2e/sub\n          npm run b",
+      ">2-\n            echo setup\n          cd e2e/sub\n\n          npm run b",
       "'npm run b\n          --silent'",
       "|\n          cat <<'EOF'\n          working-directory: web\n          - run: not-a-step\n          EOF\n          npm run b",
     ];
@@ -3639,7 +3645,9 @@ function selftest() {
       const text = `jobs:\n  t:\n    steps:\n      - run: ${run}\n        working-directory: .\n      - run: echo next-step\n`;
       const expected = parseDocument(text).toJS().jobs.t.steps;
       const view = workflowShellView(text, "fixture");
-      const actual = parseDocument(view).toJS().jobs.t.steps;
+      const decoded = parseDocument(view);
+      assert.equal(decoded.errors.length, 0, run);
+      const actual = decoded.toJS().jobs.t.steps;
       assert.equal(actual.length, 2, run);
       for (let i = 0; i < actual.length; i++) {
         assert.equal(actual[i].run.trimEnd(), expected[i].run.trimEnd(), run);
@@ -3692,6 +3700,54 @@ function selftest() {
 
   check("playwright directory stack commands and invoked script cwd fail closed", () => {
     const entries = [
+      ...["npx playwright test", "npm run b"].flatMap((invocation) =>
+        [
+          '"  echo setup\\ncd e2e/sub\\nINVOCATION"',
+          '"\\n  echo setup\\ncd e2e/sub\\nINVOCATION"',
+          "|2-\n            echo setup\n          cd e2e/sub\n          INVOCATION",
+          ">2-\n            echo setup\n          cd e2e/sub\n\n          INVOCATION",
+        ].map((run) => ({
+          name: `indented first command before ${invocation}: ${run}`,
+          run: run.replace("INVOCATION", invocation),
+          scripts: { b: "playwright test" },
+        })),
+      ),
+      ...[
+        "if true; then cd e2e/sub; fi;",
+        "{ cd e2e/sub; };",
+        "if cd e2e/sub; then :; fi;",
+        "if false; then :; elif cd e2e/sub; then :; fi;",
+        "if false; then :; else cd e2e/sub; fi;",
+        "for dir in e2e/sub; do cd $dir; done;",
+        "while cd e2e/sub; do break; done;",
+        "until cd e2e/sub; do break; done;",
+        "! cd e2e/sub;",
+        "case sub in sub) cd e2e/sub;; esac;",
+        "if true; then builtin pushd e2e/sub; fi;",
+        "{ command cd e2e/sub; };",
+        "if true; then { X=y builtin cd e2e/sub; }; fi;",
+        "if true; then popd; fi;",
+      ].flatMap((prefix) => [
+        {
+          name: `workflow compound: ${prefix}`,
+          run: JSON.stringify(`${prefix} npx playwright test`),
+        },
+        {
+          name: `workflow compound npm: ${prefix}`,
+          run: JSON.stringify(`${prefix} npm run b`),
+          scripts: { b: "playwright test" },
+        },
+        {
+          name: `script compound: ${prefix}`,
+          run: "npm run b",
+          scripts: { b: `${prefix} playwright test` },
+        },
+        {
+          name: `nested script compound: ${prefix}`,
+          run: "npm run a",
+          scripts: { a: `${prefix} npm run b`, b: "playwright test" },
+        },
+      ]),
       { name: "inline pushd", run: "pushd e2e/sub && npx playwright test" },
       { name: "literal pushd", run: "|\n          pushd e2e/sub\n          npx playwright test" },
       {
@@ -3733,8 +3789,26 @@ function selftest() {
         run: ">-\n          npm run\n          b\n        working-directory: e2e/sub",
         scripts: { b: "playwright test" },
       },
-      // Controls: changes in a child shell do not move its parent, changes
-      // after the run cannot affect it, and local-only scripts are not CI.
+      // Controls: compound syntax alone does not move cwd, changes in a child
+      // shell do not move its parent, later changes cannot affect an earlier
+      // run, and local-only scripts are not CI.
+      {
+        name: "workflow compound without cwd change",
+        run: JSON.stringify("{ echo cd e2e/sub; }; npx playwright test"),
+        clean: true,
+      },
+      {
+        name: "script compound without cwd change",
+        run: "npm run b",
+        scripts: { b: "if true; then echo cd e2e/sub; fi; playwright test" },
+        clean: true,
+      },
+      {
+        name: "later compound cwd change",
+        run: "npm run b",
+        scripts: { b: "playwright test; if true; then cd e2e/sub; fi" },
+        clean: true,
+      },
       {
         name: "later script cd",
         run: "npm run b",
