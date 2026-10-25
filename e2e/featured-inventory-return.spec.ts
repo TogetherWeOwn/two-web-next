@@ -141,32 +141,10 @@ for (const renderer of ["Hono", "Kit"] as Renderer[]) {
     }
   });
 
-  test(`${renderer} no-JS: deletion review is a native saved-slot review, not a navigation or mutation`, async ({
-    browser,
-  }) => {
-    const context = await browser.newContext({
-      javaScriptEnabled: false,
-      viewport: { width: 390, height: 844 },
-    });
-    try {
-      const journal = await mount(context, renderer);
-      const page = await context.newPage();
-      await enter(page);
-      const review = page.locator("details").filter({ has: page.getByTestId("delete-featured") });
-      await expect(
-        review,
-        "deletion retains the separately owned explicit review boundary",
-      ).toHaveCount(1);
-      await expect(review).not.toHaveAttribute("open");
-      await review.locator("summary").click();
-      await expect(page.getByTestId("delete-featured")).toBeVisible();
-      await expect(review).toContainText(slot.title);
-      await review.locator("summary").click();
-      await expect(page.getByTestId("delete-featured")).not.toBeVisible();
-      expect(journal.documents).toHaveLength(2);
-      expect(journal.unexpected).toEqual([]);
-    } finally {
-      await context.close();
-    }
-  });
+  // The no-JS deletion-review round trip lives in
+  // e2e/featured-inventory-return-review.spec.ts on the companion
+  // acceptance history. It requires the separately owned native
+  // deletion-review disclosure, which is not part of this
+  // inventory-return change; the two histories combine once that
+  // contract lands.
 }
