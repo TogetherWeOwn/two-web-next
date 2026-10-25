@@ -194,10 +194,18 @@ The table is not a complete sign-in history: `/auth/discord/callback` does not
 write join-attempt rows, website-throttled (429 admission) requests do not reach
 the recorder, and a missing join store can leave no row. A Discord
 automatic-add backoff (`rate_limited`) is recorded; a local admission refusal
-is not. The current live add-member call also
-leaves Request ID empty; do not promise a trace ID or infer success from an
-absent row. List and detail reads attribute the returned rows' recorded Discord
-IDs directly, excluding the viewer, without requiring a current users row or
+is not. Which rows carry a Request ID depends on the outcome. The early
+`denied` and `error` rows record the website's correlation ID for that
+callback request: the ID the middleware stores in the request context, echoes
+as the `x-request-id` response header, and logs as `http.request.request_id`,
+so those rows join to request logs. The later add-member rows (`added`,
+`already_member`, `degraded`, `rate_limited`) instead carry the live adapter's
+`done.requestId`, which the production live adapter returns as null, so
+Request ID stays empty there. Not every error path records a row, and a
+callback without middleware context can still record null; do not promise a
+trace ID or infer success from an absent row. List and detail reads attribute
+the returned rows' recorded Discord IDs directly, excluding the viewer,
+without requiring a current users row or
 membership flag. Missing, invalid or partial member keys refuse the contents;
 they are not silently omitted from attribution. Empty lists and self-only reads
 create no access row. Audit-write failures always refuse protected contents;

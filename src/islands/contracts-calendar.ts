@@ -281,6 +281,10 @@ export const CALENDAR_MONTH_EMPTY_TESTID = "calendar-month-empty";
 export const CALENDAR_MONTH_EMPTY_RECOVERY_COPY = "Upcoming events";
 
 export const EVENT_CARD_TESTID = "event-card";
+/** Compact host line inside a card's `.schedule-info`: `Hosted by {name}` for
+ * a non-blank organizer, no node at all when blank/missing. Plain text, never
+ * a link — the same public name the detail page shows as `event-organizer`. */
+export const EVENT_CARD_HOST_TESTID = "event-card-host";
 export const EVENT_DRAFT_TESTID = "event-draft";
 export const EVENT_CANCELLED_TESTID = "event-cancelled";
 export const EVENT_DISCORD_RSVP_TESTID = "event-discord-rsvp";
