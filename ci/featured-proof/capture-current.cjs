@@ -26,15 +26,33 @@ async function captureScreenshot(page, options, attempts) {
 // or write a PNG; it only records where the failure sits (browser, page, layout, raw CDP capture).
 async function captureDiagnostics(browser, context, page) {
   const diagnostics = { browserConnected: browser.isConnected?.(), pageClosed: page?.isClosed?.() };
-  let session;
-  try {
-    session = await context.newCDPSession(page);
-    diagnostics.layoutMetrics = await session.send('Page.getLayoutMetrics');
-    const viewportOnly = await session.send('Page.captureScreenshot', { format: 'png' });
-    diagnostics.viewportOnlyCaptureBytes = Buffer.from(viewportOnly.data, 'base64').length;
-  } catch (error) { diagnostics.probeError = error.message.split('\n')[0]; }
-  finally { await session?.detach().catch(() => {}); }
-  return diagnostics;
+  let expired = false;
+  let timer;
+  // One shared budget includes session creation, both probes and detach. Closing the view's
+  // context releases an unfinished session; diagnostic cleanup must never hold recovery hostage.
+  const deadline = new Promise(resolve => { timer = setTimeout(() => {
+    expired = true;
+    diagnostics.probeError = 'Diagnostic CDP probe timed out after 1000ms';
+    resolve();
+  }, 1000); });
+  const probe = (async () => {
+    let session;
+    try {
+      session = await context.newCDPSession(page);
+      if (expired) return;
+      const layoutMetrics = await session.send('Page.getLayoutMetrics');
+      if (expired) return;
+      diagnostics.layoutMetrics = layoutMetrics;
+      const viewportOnly = await session.send('Page.captureScreenshot', { format: 'png' });
+      if (expired) return;
+      diagnostics.viewportOnlyCaptureBytes = Buffer.from(viewportOnly.data, 'base64').length;
+    } catch (error) { if (!expired) diagnostics.probeError = error.message.split('\n')[0]; }
+    finally { if (!expired) await session?.detach().catch(() => {}); }
+  })();
+  try { await Promise.race([probe, deadline]); }
+  finally { clearTimeout(timer); }
+  // Late protocol replies cannot change the serialized evidence or start another probe.
+  return { ...diagnostics };
 }
 
 // Run one view; when only the capture transport failed (twice, on the same page), discard the
@@ -249,5 +267,5 @@ async function main() {
   }));
   if (!passed) process.exitCode = 1;
 }
-module.exports = { captureScreenshot, captureViewWithRecovery, isCaptureUnavailable, MAX_VIEW_RECOVERIES };
+module.exports = { captureScreenshot, captureViewWithRecovery, captureDiagnostics, isCaptureUnavailable, MAX_VIEW_RECOVERIES };
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });

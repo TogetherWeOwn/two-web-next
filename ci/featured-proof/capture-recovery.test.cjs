@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const test = require('node:test');
-const { captureViewWithRecovery, MAX_VIEW_RECOVERIES } = require('./capture-current.cjs');
+const { captureViewWithRecovery, captureDiagnostics } = require('./capture-current.cjs');
 
 const protocolMessage = 'page.screenshot: Protocol error (Page.captureScreenshot): Unable to capture screenshot';
 const view = { fixture: 'long-content.html', viewport: { width: 1280, height: 900 } };
@@ -70,7 +70,7 @@ for (const [name, error] of [
   });
 }
 
-test(`recovery is capped at ${MAX_VIEW_RECOVERIES} views per run`, async () => {
+test('recovery is capped at exactly two views per run', async () => {
   const recoveries = [];
   let attempts = 0;
   const relaunches = [];
@@ -78,11 +78,75 @@ test(`recovery is capped at ${MAX_VIEW_RECOVERIES} views per run`, async () => {
     view, recoveries, relaunch: async () => { relaunches.push(attempts); },
     attemptView: async () => { if (++attempts % 2) throw captureFailure(); return { ok: true }; },
   });
-  for (let i = 0; i < MAX_VIEW_RECOVERIES; i++) assert.deepEqual(await run(), { result: { ok: true } });
+  for (let i = 0; i < 2; i++) assert.deepEqual(await run(), { result: { ok: true } });
   const capped = await run();
   assert.ok(capped.error);
-  assert.equal(relaunches.length, MAX_VIEW_RECOVERIES);
-  assert.equal(recoveries.length, MAX_VIEW_RECOVERIES);
+  assert.equal(attempts, 5);
+  assert.equal(relaunches.length, 2);
+  assert.equal(recoveries.length, 2);
+});
+
+test('current-source CI collects the recovery suite in its credential-free selftest step', async () => {
+  const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
+  const currentSource = workflow.split('\n  current-source:\n')[1].split('\n  featured-proof:\n')[0];
+  assert.match(currentSource, /- name: Credential-free guard selftests \(no browser\)\s+run: node --test ci\/featured-proof\/run-capture\.test\.cjs ci\/featured-proof\/capture-current\.test\.cjs ci\/featured-proof\/capture-recovery\.test\.cjs\s*\n/);
+});
+
+for (const stalledAt of ['session', 'layout', 'capture', 'detach']) {
+  test(`diagnostics share a one-second deadline including ${stalledAt}; late completion cannot change the snapshot`, { timeout: 2000 }, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    const calls = [];
+    const step = async (name, result) => { calls.push(name); if (name === stalledAt) await pending; return result; };
+    const session = {
+      send: method => method === 'Page.getLayoutMetrics' ? step('layout', { width: 1280 }) : step('capture', { data: 'cG5n' }),
+      detach: () => step('detach'),
+    };
+    const result = captureDiagnostics({ isConnected: () => true }, { newCDPSession: () => step('session', session) }, { isClosed: () => false });
+    // Let each already-resolved probe advance to the deliberately pending call.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.equal(calls.at(-1), stalledAt);
+    let settled = false;
+    result.then(() => { settled = true; });
+    t.mock.timers.tick(999);
+    await Promise.resolve();
+    assert.equal(settled, false);
+    t.mock.timers.tick(1);
+    const diagnostics = await result;
+    assert.match(diagnostics.probeError, /timed out after 1000ms/);
+    const snapshot = JSON.stringify(diagnostics);
+    const callsAtDeadline = [...calls];
+    release();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.equal(JSON.stringify(diagnostics), snapshot);
+    assert.deepEqual(calls, callsAtDeadline, 'no later probe starts after the deadline');
+  });
+}
+
+test('the diagnostic deadline is total, not a fresh second per CDP call', { timeout: 2000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const step = async value => { await new Promise(resolve => setTimeout(resolve, 300)); return value; };
+  const result = captureDiagnostics({ isConnected: () => true }, { newCDPSession: () => step({
+    send: method => step(method === 'Page.getLayoutMetrics' ? { width: 1280 } : { data: 'cG5n' }),
+    detach: () => step(),
+  }) }, { isClosed: () => false });
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(300);
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+  }
+  let settled = false;
+  result.then(() => { settled = true; });
+  t.mock.timers.tick(99);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  const diagnostics = await result;
+  assert.deepEqual(diagnostics, {
+    browserConnected: true, pageClosed: false, layoutMetrics: { width: 1280 },
+    viewportOnlyCaptureBytes: 3, probeError: 'Diagnostic CDP probe timed out after 1000ms',
+  });
+  t.mock.timers.tick(200);
 });
 
 // Preloaded in the child only. Fake browser reads are not layout or PNG evidence; the production CLI,
@@ -101,12 +165,20 @@ function installFakePlaywright() {
     const id = ++instance;
     fs.appendFileSync(process.env.FAKE_LOG, `launch ${id}\n`);
     return {
-      version: () => 'FAKE SELFTEST ONLY; no browser execution',
+      version: () => mode === 'version' && id > 1 ? 'FAKE DIFFERENT BUILD' : 'FAKE SELFTEST ONLY; no browser execution',
       isConnected: () => true,
       close: async () => { fs.appendFileSync(process.env.FAKE_LOG, `close ${id}\n`); },
       newContext: async ({ viewport }) => {
         let fixture;
         let handler;
+        let keepAlive;
+        const diagnosticStep = async (name, value) => {
+          if (mode === `hang-${name}`) {
+            keepAlive = setInterval(() => {}, 1000);
+            await new Promise(() => {});
+          }
+          return value;
+        };
         const faulty = () => id === 1 && fixture === 'long-content.html' && viewport.width === 1280;
         const locator = selector => ({
           locator, nth: () => locator(selector), focus: async () => {},
@@ -120,10 +192,12 @@ function installFakePlaywright() {
         });
         return {
           route: async (pattern, fn) => { handler = fn; },
-          close: async () => {},
-          newCDPSession: async () => ({
-            send: async method => method === 'Page.getLayoutMetrics' ? { cssContentSize: { width: viewport.width, height: 2303 } } : { data: Buffer.from('viewport png').toString('base64') },
-            detach: async () => {},
+          close: async () => { clearInterval(keepAlive); },
+          newCDPSession: () => diagnosticStep('session', {
+            send: method => method === 'Page.getLayoutMetrics'
+              ? diagnosticStep('layout', { cssContentSize: { width: viewport.width, height: 2303 } })
+              : diagnosticStep('capture', { data: Buffer.from('viewport png').toString('base64') }),
+            detach: () => diagnosticStep('detach'),
           }),
           newPage: async () => ({
             locator, keyboard: { press: async () => {} }, isClosed: () => false,
@@ -202,6 +276,34 @@ test('CLI: one transient persistent-on-page failure is recovered with all twelve
   // Rerun view's checks are the ones reported, not the discarded run's.
   assert.equal(report.results[1].fixture, 'long-content.html');
   assert.ok(report.results[1].checks.length >= recovery.checks.length);
+});
+
+for (const phase of ['session', 'layout', 'capture', 'detach']) {
+  test(`CLI: a never-answering diagnostic ${phase} still reaches recovery and writes the complete report`, async t => {
+    const { child, report, launches, pngs } = await runCli(t, `hang-${phase}`);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    assert.equal(JSON.parse(child.stdout).automatedChecksPassed, true);
+    assert.equal(launches, 2);
+    assert.equal(pngs.length, 12);
+    assert.equal(report.results.length, 8);
+    assert.deepEqual(report.errors, []);
+    assert.equal(report.recoveries[0].outcome, 'recovered');
+    assert.match(report.recoveries[0].diagnostics.probeError, /timed out after 1000ms/);
+  });
+}
+
+test('CLI: a different relaunched browser build fails closed and is not attributed to the original version', async t => {
+  const { child, report, launches, pngs } = await runCli(t, 'version');
+  assert.equal(child.status, 1);
+  assert.equal(JSON.parse(child.stdout).automatedChecksPassed, false);
+  assert.equal(report.browserVersion, 'FAKE SELFTEST ONLY; no browser execution');
+  assert.equal(launches, 2);
+  assert.equal(pngs.length, 11);
+  assert.equal(report.results.length, 7);
+  assert.equal(report.errors.length, 1);
+  assert.equal(report.errors[0].error, 'Relaunched browser version changed');
+  assert.equal(report.recoveries[0].outcome, 'failed');
+  assert.equal(report.recoveries[0].secondError, 'Relaunched browser version changed');
 });
 
 test('CLI: a failure that survives the fresh browser stays red with the missing capture named', async t => {
