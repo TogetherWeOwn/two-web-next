@@ -32,6 +32,12 @@
 .profile-theme .profile-bio { white-space: pre-wrap; }
 .profile-theme [data-testid='profile-games'] ul { list-style: none; display: flex; flex-wrap: wrap; gap: .5rem; padding: 0; margin: 0; }
 .profile-theme [data-testid='profile-games'] li { max-width: 100%; padding: .35rem .75rem; background: var(--paper); border: 1px solid var(--line); }
+.profile-theme [data-testid='profile-games'] li[data-shared-game='true'] { outline: 2px solid var(--brand); outline-offset: -2px; }
+.profile-theme [data-testid='profile-shared-marker'] { margin-left: .5rem; padding: 0 .4rem; border: 1px solid var(--brand); font-size: .8rem; font-weight: 700; text-transform: uppercase; }
+@media (forced-colors: active) {
+  .profile-theme [data-testid='profile-games'] li[data-shared-game='true'] { outline-color: Highlight; }
+  .profile-theme [data-testid='profile-shared-marker'] { border-color: Highlight; }
+}
 .profile-theme .profile-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 0; }
 .profile-theme .profile-stats-grid > div { background: var(--paper); border: 1px solid var(--line); padding: 1rem; min-width: 0; }
 .profile-theme .profile-stats-grid dt { color: var(--muted); font-size: .9rem; margin-bottom: .5rem; }

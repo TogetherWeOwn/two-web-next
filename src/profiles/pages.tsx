@@ -229,6 +229,10 @@ export const ProfilePage: FC<{
   values?: ProfileFormValues;
   /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
   statsDraftWarning?: boolean;
+  /** Member's displayed game strings the viewer also plays; entries exactly
+   * equal to a value render the shared marker. Absent (or empty) renders the
+   * plain list: own profile and zero-shared never mark. */
+  sharedGames?: string[];
 }> = ({
   member,
   isOwner,
@@ -239,6 +243,7 @@ export const ProfilePage: FC<{
   errors,
   values,
   statsDraftWarning,
+  sharedGames,
 }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -264,6 +269,10 @@ export const ProfilePage: FC<{
   // refreshes these same nodes; no-JS readers get the seeded state.
   const bioCount = bioCountText(codePoints(form.bio));
   const gamesCount = gamesCountText(parseGamesText(form.games_text));
+  // Exact-match set over the route's computed shared names: the match itself
+  // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
+  // twin, so the view never re-derives it.
+  const shared = new Set(sharedGames ?? []);
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -294,6 +303,11 @@ export const ProfilePage: FC<{
           <form method="post" action="/logout" data-testid="profile-signout">
             <button type="submit" class="link">
               Sign out
+            </button>
+          </form>
+          <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+            <button type="submit" class="link">
+              Sign out everywhere
             </button>
           </form>
         </div>
@@ -372,9 +386,16 @@ export const ProfilePage: FC<{
               <div data-testid="profile-games">
                 {member.games.length > 0 ? (
                   <ul>
-                    {member.games.map((g) => (
-                      <li>{g}</li>
-                    ))}
+                    {member.games.map((g) =>
+                      shared.has(g) ? (
+                        <li data-shared-game="true">
+                          {g}
+                          <span data-testid="profile-shared-marker">Shared</span>
+                        </li>
+                      ) : (
+                        <li>{g}</li>
+                      ),
+                    )}
                   </ul>
                 ) : (
                   <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
