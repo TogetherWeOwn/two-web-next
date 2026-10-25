@@ -68,7 +68,9 @@ export type SessionStore = {
   revokeLineage: (statusHash: string) => Promise<void>;
   /** Fresh login (TOG-12284): revoke every live session for this user except
    * the freshly issued token, so a pre-login/pre-join token — and any older
-   * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
+   * concurrent login — cannot survive sign-in. Hash-only, like revoke.
+   * Sign-out-everywhere passes REVOKE_ALL_EXCEPT: a hash that matches no
+   * row, so the sweep takes the presented session too. */
   revokeUserSessions: (userId: string, exceptTokenHash: string) => Promise<void>;
   /** Expiry GC: delete rows reads can no longer see. Returns rows removed.
    * The general store drains all eligible rows in one call. The scheduled
@@ -563,6 +565,12 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
   };
 }
+
+/** Except-hash meaning "no exception" for revokeUserSessions: the empty
+ * string never equals a SHA-256 hex token_hash, so the sweep revokes every
+ * live row for the user, including the presented session. Pass a real hash
+ * only to spare exactly one live token (fresh login). */
+export const REVOKE_ALL_EXCEPT = "";
 
 /** SHA-256 hex of a session token. Tokens are compared by hash only. */
 export async function hashToken(token: string): Promise<string> {
