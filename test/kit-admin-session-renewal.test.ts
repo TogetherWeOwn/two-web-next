@@ -1,19 +1,19 @@
 // Acceptance contract: a released successful Kit admin GET document slides the
-// moderator's session — the post-release twin of Hono's admin-guard slide
-// (src/admin/guard.ts: a current bearer renews the 120-minute window, grace
-// reads never refresh cookies, and bounces/refusals/redirects omit the
-// cookie), wired at the same post-response position as the event-detail
+// moderator's session — the post-release twin of Hono's admin-guard re-stamp
+// (src/admin/guard.ts: a current bearer re-stamps to a fresh 120-minute window,
+// grace reads never refresh cookies, and Hono delivers the replacement on any
+// outcome the browser keeps; this Kit twin renews only after a released
+// successful GET document), wired at the same post-response position as the event-detail
 // renewal in dispatchHookRequest. The Kit guard itself stays read-only
 // (src/admin/kit-guard.ts: never rotates, never sets cookies); renewal runs
 // only after the member-read boundary releases the response, never inside it.
 //
-// Slide, not rotate. Hono admin reads deliberately never rotate — rotation is
-// the site's concern, and an admin read must not invalidate the cookie the
-// moderator's other tab holds (c22993f44 "without rotating the bearer"). The
-// event-detail helper is the precedent for position and failure posture only
-// (post-release, class-only warn, lost race resolves to no cookie), not for
-// minting a replacement bearer: the renewal cookie re-signs the PRESENTED
-// bearer with a fresh Max-Age, and the store call is renew(), never rotate().
+// Slide, not rotate. Hono admin reads rotate since the profile/admin re-stamp;
+// this Kit twin still slides until its own rotation lands. The event-detail
+// helper is the precedent for position and failure posture only (post-release,
+// class-only warn, lost race resolves to no cookie), not for minting a
+// replacement bearer: the renewal cookie re-signs the PRESENTED bearer with a
+// fresh Max-Age, and the store call is renew(), never rotate().
 //
 // Seam the Builder adds (names are the contract; this file compiles before
 // they land and fails granularly until they do):

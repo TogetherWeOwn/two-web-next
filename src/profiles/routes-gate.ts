@@ -15,6 +15,7 @@ import { SESSION_COOKIE } from "../session-cookie";
 import {
   hashToken,
   isValidSessionToken,
+  newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
 } from "../sessions";
@@ -61,7 +62,7 @@ export function memberGate(deps: ProfileDeps) {
     // before any hash/store call).
     if (!isValidSessionToken(token)) return bounceToLogin(c);
     let viewer: Viewer | null = null;
-    let renewedSession: {
+    let rotatedSession: {
       sessions: SessionStore;
       tokenHash: string;
       sessionCookie: string;
@@ -75,23 +76,38 @@ export function memberGate(deps: ProfileDeps) {
       if (row) {
         if (row.member && c.req.method === "GET") {
           // get() also admits short predecessor grace; only a current bearer
-          // has a status key and can renew. Grace reads never refresh cookies.
+          // has a status key and can rotate. Grace reads never mint or refresh.
           const statusKey = await sessions.statusHash(tokenHash);
           if (statusKey) {
-            if (!(await sessions.renew(tokenHash, expiresAt))) {
-              // Rotation may have won between statusHash and renew: re-read
-              // once, mirroring readSession's lost-race fallback. A
-              // grace-valid bearer serves without renewal or cookies (a thrown
-              // re-read fails closed below); revoked/expired still bounces.
+            // Every authenticated page view mints a fresh bearer, mirroring
+            // readSession: the old row is deleted and the predecessor stays
+            // grace-valid for 10s so the member's other tab keeps working.
+            const replacement = newSessionToken();
+            const replacementHash = await hashToken(replacement);
+            const rotated = await sessions.rotate(tokenHash, {
+              tokenHash: replacementHash,
+              userId: row.userId,
+              username: row.username,
+              avatar: row.avatar,
+              member: row.member,
+              moderator: row.moderator,
+              expiresAt,
+            });
+            if (!rotated) {
+              // Rotation lost a race (revoked/rotated/expired between the
+              // reads): re-read once, mirroring readSession's lost-race
+              // fallback. A grace-valid bearer serves without rotation or
+              // cookies (a thrown re-read fails closed below); revoked/expired
+              // still bounces.
               const graceRow = await sessions.get(tokenHash);
               if (!graceRow) return bounceToLogin(c);
               row = graceRow;
             } else {
-              const attachStatus = await prepareAuthStatus(c, sessions, tokenHash, statusKey);
+              const attachStatus = await prepareAuthStatus(c, sessions, replacementHash, statusKey);
               // Sign before the route's read deadline; attach only after revalidating below.
               const sessionCookie = await generateSignedCookie(
                 SESSION_COOKIE,
-                token,
+                replacement,
                 c.env.SESSION_SECRET,
                 {
                   path: "/",
@@ -101,7 +117,12 @@ export function memberGate(deps: ProfileDeps) {
                   maxAge: SESSION_TTL_SECONDS,
                 },
               );
-              renewedSession = { sessions, tokenHash, sessionCookie, attachStatus };
+              rotatedSession = {
+                sessions,
+                tokenHash: replacementHash,
+                sessionCookie,
+                attachStatus,
+              };
             }
           }
         }
@@ -130,16 +151,16 @@ export function memberGate(deps: ProfileDeps) {
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
     await next();
-    // Another tab may rotate this bearer while the route is rendering. Never
-    // let a slower response restore a token that is no longer live.
-    if (renewedSession) {
+    // Another tab may rotate the fresh bearer while the route is rendering.
+    // Never let a slower response restore a token that is no longer live.
+    if (rotatedSession) {
       try {
         if (
-          (await renewedSession.sessions.get(renewedSession.tokenHash)) &&
-          (await renewedSession.sessions.statusHash(renewedSession.tokenHash))
+          (await rotatedSession.sessions.get(rotatedSession.tokenHash)) &&
+          (await rotatedSession.sessions.statusHash(rotatedSession.tokenHash))
         ) {
-          c.header("set-cookie", renewedSession.sessionCookie, { append: true });
-          renewedSession.attachStatus?.();
+          c.header("set-cookie", rotatedSession.sessionCookie, { append: true });
+          rotatedSession.attachStatus?.();
         }
       } catch (err) {
         console.error("profiles could not revalidate the session; refusing.", {
