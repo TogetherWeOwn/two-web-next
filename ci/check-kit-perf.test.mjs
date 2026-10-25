@@ -322,6 +322,14 @@ test("shipping budget: measured 255253-byte client raw fits", (t) => {
   assert.deepEqual(result.errors, []);
 });
 
+test("shipping budget: refreshed 255872-byte client raw fits", (t) => {
+  const fx = makeShippingFixture(Buffer.alloc(255872, "a"));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
 test("shipping budget: exact client raw boundary fits and one byte above fails", (t) => {
   const fx = makeShippingFixture(Buffer.alloc(shippingClientBudget.maxRawBytes, "a"));
   t.after(fx.cleanup);
