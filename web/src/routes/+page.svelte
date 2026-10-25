@@ -1,6 +1,8 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import type { HomeUpcomingRow } from "../../../src/events/reads";
+import { groupTeaserEvents } from "../../../src/events/teaser-groups";
 import { featuredImageSrc } from "../../../src/featured-image";
 import type { HomeNotice } from "../../../src/home-copy";
 import {
@@ -39,6 +41,10 @@ const canonical = $derived(canonicalUrl(appUrl, "/"));
 const noticeText = $derived(notice ? HOME_NOTICES[notice as HomeNotice] : null);
 const ranks = $derived(counts.ranks.length ? counts.ranks : FALLBACK_RANKS);
 const siteGraph = $derived(siteJsonLd(appUrl));
+// Same shared buckets as the Hono screen: group the capped rows at render.
+// The explicit row type recovers what $derived destructuring widens (see
+// noticeText above): without it the groups widen to the helper's input.
+const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
 </script>
 
 {#snippet guestChrome()}
@@ -77,7 +83,7 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     </p>
   {:else if noticeText}
     <p class="notice" role="status" data-testid="notice">{noticeText}</p>
-    {#if notice === "signin_failed" || notice === "signin_unavailable"}
+    {#if notice === "signin_failed" || notice === "signin_denied" || notice === "signin_unavailable"}
       <p>
         <a href="/auth/discord" data-testid="notice-retry">Try signing in again</a>
       </p>
@@ -186,36 +192,43 @@ const siteGraph = $derived(siteJsonLd(appUrl));
     <h2 id="home-events-heading">Game nights, when they land.</h2>
     {#if upcomingEvents.length > 0}
       <ul class="facts home-events" data-testid="home-events-list">
-        {#each upcomingEvents as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
-          <li class="card" data-source={event.source}>
-            <a
-              class="home-event-link"
-              href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
-              data-testid={event.source === "discord" ? "home-event-discord" : undefined}
-            >
-              <p>
-                <time datetime={event.startsAt.toISOString()}>
-                  {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
-                    ? event.timezone
-                    : "UTC"})
-                </time>
-              </p>
-              <h3>{event.title}</h3>
-              {#if event.location}<p>{event.location}</p>{/if}
-              {#if event.source === "discord"}
-                <p>RSVP in Discord</p>
-              {:else}
-                <p>
-                  {goingCountText(event.goingCount, event.capacity)}
-                  {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
-                    {" · "}
-                    <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
-                  {/if}
-                </p>
-              {/if}
-            </a>
+        <!-- csr=false: omit this server-rendered list from the unused client asset.
+             Direct server compilation without Vite's env also renders it. -->
+        {#if import.meta.env?.SSR !== false}{#each groupedEvents as group (group.key)}
+          <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
+            <h3 class="strap">{group.label}</h3>
           </li>
-        {/each}
+          {#each group.events as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+            <li class="card" data-source={event.source}>
+              <a
+                class="home-event-link"
+                href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
+                data-testid={event.source === "discord" ? "home-event-discord" : undefined}
+              >
+                <p>
+                  <time datetime={event.startsAt.toISOString()}>
+                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
+                      ? event.timezone
+                      : "UTC"})
+                  </time>
+                </p>
+                <h3>{event.title}</h3>
+                {#if event.location}<p>{event.location}</p>{/if}
+                {#if event.source === "discord"}
+                  <p>RSVP in Discord</p>
+                {:else}
+                  <p>
+                    {goingCountText(event.goingCount, event.capacity)}
+                    {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
+                      {" · "}
+                      <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
+                    {/if}
+                  </p>
+                {/if}
+              </a>
+            </li>
+          {/each}
+        {/each}{/if}
       </ul>
       <p>
         <a href="/events">See all events <span aria-hidden="true">→</span></a>

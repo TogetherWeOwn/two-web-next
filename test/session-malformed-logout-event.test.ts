@@ -115,7 +115,7 @@ describe("moderator event writes with a malformed bearer", () => {
     const get = vi.spyOn(store, "get");
     const res = await patch(store, await signed(MALFORMED));
     expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: "unauthenticated" });
+    expect(await res.json()).toEqual({ error: "unauthenticated", request_id: expect.any(String) });
     expect(get).not.toHaveBeenCalled();
   });
 
@@ -125,7 +125,8 @@ describe("moderator event writes with a malformed bearer", () => {
     const res = await patch(store, await signed(WELLFORMED_UNKNOWN));
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
+      request_id: expect.any(String),
       recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
     });
     expect(get).toHaveBeenCalled();

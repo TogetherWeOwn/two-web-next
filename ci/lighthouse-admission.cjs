@@ -110,12 +110,19 @@ function assertFixtureContent(path, response, html, before, after) {
     );
     const times = [...populated.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)];
     assert.ok(times.length > 0, `${path}: rendered fixture time required`);
-    const detail = path === `/e/${key}`;
-    if (detail) assert.equal(times.length, 2, `${path}: fixture start and end required`);
+    const range = path === `/e/${key}` || path === "/events";
+    if (range) {
+      assert.equal(times.length, 2, `${path}: fixture start and end required`);
+      assert.equal(
+        Date.parse(times[1][1]) - Date.parse(times[0][1]),
+        7200_000,
+        `${path}: fixture two-hour duration required`,
+      );
+    }
     for (const [index, [, instant]] of times.entries()) {
-      // The detail now exposes the fixture's two-hour end as well as its start.
-      // Normalize only that endpoint; retain the request-time/epoch guard for both.
-      const startsAt = Date.parse(instant) - (detail && index === 1 ? 7200_000 : 0);
+      // Both detail and calendar expose the two-hour end. Normalize only that
+      // endpoint; retain the request-time/epoch guard for every rendered instant.
+      const startsAt = Date.parse(instant) - (range && index === 1 ? 7200_000 : 0);
       assert.ok(
         startsAt >= before + 7 * 86400_000 && startsAt <= after + 7 * 86400_000,
         `${path}: fixture must start seven days after this local request, not at workerd's module epoch`,

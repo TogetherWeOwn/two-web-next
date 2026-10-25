@@ -6,7 +6,8 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
-import { attendeePageHref } from "./attendee-paths";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import type {
   EventAttendee,
   EventLink,
@@ -19,6 +20,20 @@ import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
 import { formatEventWhen as fmtWithOffset } from "./date-format";
+
+const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
+  <>
+    {Number.isFinite(event.startsAt.getTime()) ? (
+      <>
+        {" "}
+        <time datetime={event.startsAt.toISOString()}>
+          {fmtWithOffset(event.startsAt, event.timezone)}
+        </time>
+      </>
+    ) : null}
+    {event.location ? <span class="event-related-location">{event.location}</span> : null}
+  </>
+);
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -40,6 +55,7 @@ export const EventPage: FC<{
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
+  archive?: ArchiveContext | null;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -60,6 +76,7 @@ export const EventPage: FC<{
   series = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
+  archive,
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -75,6 +92,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -89,6 +107,7 @@ export const EventPage: FC<{
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
+      backLink={archiveReturnLink(archive)}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -182,7 +201,12 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Reconciliation can lag: published rows stop inviting at
+                  // their end, using the same server instant as RSVP below.
+                  // Draft previews retain the line. The binder patches existing
+                  // spots nodes only, so refresh cannot recreate it after close.
+                  showSpotsLeft:
+                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
                   announcement: null,
                 }),
               }}
@@ -193,6 +217,7 @@ export const EventPage: FC<{
       <div class="event-rsvp">
         <RsvpButton
           e={e}
+          now={now}
           member={member}
           answer={answer}
           waitlistPosition={waitlistPosition}
@@ -280,8 +305,33 @@ export const EventPage: FC<{
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
             </a>
+            {e.status === "published" ? (
+              <>
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+                <button
+                  type="button"
+                  hidden
+                  data-native-share
+                  data-share-title={e.title}
+                  data-share-url={canonical}
+                  data-testid="event-share"
+                >
+                  Share
+                </button>
+              </>
+            ) : null}
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          {e.status === "published" ? (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-share-status"
+              data-native-share-status
+            ></p>
+          ) : null}
         </section>
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
@@ -329,7 +379,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
+              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees
@@ -339,6 +389,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />
       <script
@@ -348,19 +399,21 @@ export const EventPage: FC<{
       />
       <div class="event-discovery">
         {series && (series.previous || series.next) ? (
-          <nav aria-label="Series events" data-testid="event-series-nav">
+          <nav class="event-pagination" aria-label="Series events" data-testid="event-series-nav">
             {series.previous ? (
               <a
                 href={`/e/${series.previous.eventKey}`}
                 rel="prev"
                 data-testid="event-series-previous"
               >
-                ← Previous in series: {series.previous.title}
+                <span>← Previous in series: {series.previous.title}</span>
+                <DestinationPreview event={series.previous} />
               </a>
             ) : null}{" "}
             {series.next ? (
               <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
-                Next in series: {series.next.title} →
+                <span>Next in series: {series.next.title} →</span>
+                <DestinationPreview event={series.next} />
               </a>
             ) : null}
           </nav>
@@ -369,12 +422,14 @@ export const EventPage: FC<{
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
-                ← Previous event: {neighbors.previous.title}
+                <span>← Previous event: {neighbors.previous.title}</span>
+                <DestinationPreview event={neighbors.previous} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
-                Next event: {neighbors.next.title} →
+                <span>Next event: {neighbors.next.title} →</span>
+                <DestinationPreview event={neighbors.next} />
               </a>
             ) : null}
           </nav>
