@@ -6,8 +6,9 @@ Allocate only the measured combined cost of [admin clarity](https://github.com/T
 in this separate budget decision. Move client JavaScript raw bytes from **254464 to
 254976** (one 512-byte step) and server JavaScript gzip bytes from **333568 to
 333824** (one 256-byte step). Every other numeric ceiling, file cap, startup bound,
-checker, dependency, application file and test stays unchanged. Preserve the budget's
-complete `$comment` history byte-for-byte.
+checker, dependency and application file stays unchanged. Preserve the budget's
+complete `$comment` history byte-for-byte. Independently authored regression cases
+protect the shipping allocations without changing existing assertions.
 
 The [earlier no-allowance result](kit-admin-clarity-client-budget.md) describes its
 pinned historical base, not this newer composition. This allocation is neither
@@ -86,7 +87,8 @@ implementations and separate compression overhead. Removing required labels,
 notice copy or UTC context would change the feature contract. Changing compiler
 settings or unrelated markup to save these bytes would broaden this slice. Accept
 the attributed feature cost rather than introduce that behavior risk or speculative
-optimization. No application or acceptance-test edit ships with this decision.
+optimization. No application edit ships with this decision; feature acceptance
+tests remain unchanged.
 
 ## Minimality and unchanged enforcement
 
@@ -114,7 +116,50 @@ budget overlay both pass the canonical checker: client 254769/102569 both times,
 server 1178100/333639 then 1178102/333636 raw/gzip. A production build of the
 standalone decision tree (main plus this budget and note, without the feature)
 also passes: client 253949/102273, server 1176054/333152. No feature source or
-acceptance tests ship on the decision branch.
+feature acceptance-test changes ship on the decision branch.
+
+## Executable shipping-allocation regressions
+
+`ci/check-kit-perf.test.mjs` adds 17 independently authored cases, incorporated
+unchanged from [the test-only handoff](https://github.com/TogetherWeOwn/two-web-next/commit/883b5f7bbe76cbb00c31c26bcf36a0928a8dd620).
+The existing CI checker step already runs this file; no workflow or production
+checker change is needed. Each case copies the committed budget byte-for-byte
+into complete hermetic artifact fixtures and invokes the real `runJson()` checker.
+The fixtures use actual raw bytes and default Node `gzipSync` per-file totals,
+not mocked measurements or a fixture-generated budget.
+
+Fixed client raw evidence at 254769 and 254976 bytes must pass; 254977 must fail.
+Fixed server gzip evidence at 333639 and 333824 bytes must pass; 333825 must fail.
+These literals do not follow a changed cap, so accidental over-allocation cannot
+move the refusal boundary. Client gzip 102912/102913 and server raw
+1203200/1203201 exercise the unchanged other-axis boundaries. Additional cases
+retain Worker, CSS and file-count refusals. Every case verifies measured totals,
+the complete four-group inventory and the single targeted refusal, with every
+unrelated group and axis still in bounds. Synthetic fixtures establish checker
+behavior, not a new measurement of feature artifacts.
+
+Reproduce the shipping regression suite:
+
+```sh
+node --test ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs
+```
+
+The suite passes 81/81 with no skips on Node 24.22.1. Independent scratch controls
+change only one shipping budget field at a time and leave the checker unchanged:
+
+| Control | Original tests | With shipping regressions |
+| --- | --- | --- |
+| Server gzip reverted to 333568 | 64/64 pass | 78 pass, 3 fail; fixed interval admission rejects |
+| Client raw reverted to 254464 | 64/64 pass | 78 pass, 3 fail; fixed interval admission rejects |
+| Server gzip over-allocated to 333825 | Not rerun | 80 pass, 1 fail; fixed upper-bound refusal admits |
+| Client raw over-allocated to 254977 | Not rerun | 80 pass, 1 fail; fixed upper-bound refusal admits |
+| Restored shipping budget | 64/64 previously passed | 81/81 pass, no skips |
+
+The Builder independently repeated all four controls on the decision tree plus
+the unchanged authored test bytes and restored the original budget afterward.
+Neither shipping ceiling, existing assertion nor enforcement code was edited in
+this review-fix round. A later intentional budget decision must deliberately
+update the corresponding fixed regression boundary with its own evidence.
 
 ACT: make a separate, independently reviewed two-ceiling allocation. WHY: repeated
 same-dependency measurements attribute a real combined cost that pristine main does
