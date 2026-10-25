@@ -72,6 +72,12 @@ function appWithStore(store: ReturnType<typeof createMemorySessionStore>) {
 const probeCookie = (setCookies: string[]) =>
   setCookies.find((c) => c.startsWith(`${AUTH_STATUS_COOKIE}=`));
 
+/** The bearer inside a `name=signed` cookie pair (unsigned half). */
+const bearerOf = (pair: string): string => {
+  const signedValue = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(";")[0]!);
+  return signedValue.slice(0, signedValue.lastIndexOf("."));
+};
+
 describe("Hono reference: moderator tab-sync probe (the contract the Kit port preserves)", () => {
   it("moderator GET /admin sets the signed probe cookie and exactly one tab-sync controller", async () => {
     const store = createMemorySessionStore();
@@ -183,7 +189,12 @@ describe("Hono reference: moderator tab-sync probe (the contract the Kit port pr
     expect(outage.status).toBe(503);
     expect(await outage.json()).toEqual({ authenticated: false });
 
-    await store.revoke(live.tokenHash);
+    // Revoke the jar's live bearer (the panel view already rotated the login
+    // bearer): the lineage dies and the probe answers false.
+    const liveHash = await hashToken(
+      bearerOf(jar.split("; ").find((c) => c.startsWith(`${SESSION_COOKIE}=`))!),
+    );
+    await store.revoke(liveHash);
     expect(await (await request("/auth/status", { headers: { cookie: jar } })).json()).toEqual({
       authenticated: false,
     });
