@@ -26,10 +26,11 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 // Transient-429 hardening: discovery shares the staging origin with the
 // staging-journey browsers, so a feed or candidate-verification GET can be
 // rate-limited while the origin is healthy. A 429 retries a bounded number
-// of times with backoff honoring Retry-After; a candidate still throttled
-// afterwards is skipped like a gone listing, and a feed still throttled
-// afterwards falls through to the next source. Any other non-200 status
-// still throws: an origin that does not answer stays a finding, never a skip.
+// of times with backoff honoring Retry-After. Alternate candidates/sources
+// may recover coverage, but incomplete discovery never becomes a no-event
+// skip. One elapsed/request budget covers the whole discovery operation.
+const DISCOVERY_BUDGET_MS = 60_000;
+const DISCOVERY_MAX_REQUESTS = 24;
 const DISCOVERY_THROTTLE_RETRIES = 3;
 const DISCOVERY_THROTTLE_BASE_DELAY_MS = 1000;
 const DISCOVERY_THROTTLE_MAX_DELAY_MS = 10_000;
@@ -211,25 +212,73 @@ function throttledError(origin, path) {
   return error;
 }
 
-async function getText(origin, path, fetchImpl, sleepImpl = defaultSleep) {
-  // GET only, no body, no credentials; a redirect is a finding, not followed.
-  // A 429 retries with backoff honoring Retry-After; exhaustion throws a
-  // coded error so the caller falls through to the next source.
+function discoveryBudget(origin, fetchImpl, options) {
+  const now = options.nowImpl ?? (() => performance.now());
+  const deadline = now() + DISCOVERY_BUDGET_MS;
+  const sleepImpl = options.sleepImpl ?? defaultSleep;
+  let requests = 0;
+  const exhausted = () =>
+    Object.assign(
+      new Error(
+        `Event discovery incomplete: budget exhausted (${DISCOVERY_BUDGET_MS}ms or ${DISCOVERY_MAX_REQUESTS} GETs); retry when the origin is healthy.`,
+      ),
+      { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+    );
+  const check = () => {
+    if (now() >= deadline) throw exhausted();
+  };
+  return {
+    check,
+    async get(path) {
+      check();
+      if (requests >= DISCOVERY_MAX_REQUESTS) throw exhausted();
+      requests += 1;
+      // GET only, no credentials; redirects are findings, not followed. The
+      // remaining overall deadline also aborts response-body consumption.
+      const signal = AbortSignal.timeout(
+        Math.max(1, Math.ceil(Math.min(DISCOVERY_TIMEOUT_MS, deadline - now()))),
+      );
+      try {
+        const response = await fetchImpl(`${origin}${path}`, {
+          method: "GET",
+          redirect: "manual",
+          headers: { "user-agent": "two-web-next-watch-lighthouse" },
+          signal,
+        });
+        check();
+        return response;
+      } catch (error) {
+        check();
+        throw error;
+      }
+    },
+    async text(response) {
+      const text = await response.text();
+      check();
+      return text;
+    },
+    async sleep(ms) {
+      check();
+      if (ms >= deadline - now()) throw exhausted();
+      await sleepImpl(ms);
+      check();
+    },
+  };
+}
+
+async function getText(origin, path, budget) {
+  // Exhausted throttling falls through to another source, not to a pass.
   for (let attempt = 0; ; attempt += 1) {
-    const response = await fetchImpl(`${origin}${path}`, {
-      method: "GET",
-      redirect: "manual",
-      headers: { "user-agent": "two-web-next-watch-lighthouse" },
-      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-    });
+    const response = await budget.get(path);
     if (response.status !== 429) {
       if (response.status !== 200) {
         throw new Error(`GET ${origin}${path} returned ${response.status}, expected 200.`);
       }
-      return response.text();
+      return budget.text(response);
     }
+    await response.body?.cancel();
     if (attempt >= DISCOVERY_THROTTLE_RETRIES) throw throttledError(origin, path);
-    await sleepImpl(throttleDelayMs(response, attempt));
+    await budget.sleep(throttleDelayMs(response, attempt));
   }
 }
 
@@ -237,23 +286,14 @@ function isStagingFixturePage(html) {
   return /<h1[^>]*>\s*Staging E2E /.test(html);
 }
 
-async function getCandidate(origin, path, fetchImpl) {
-  // GET only, no credentials; a redirect is a finding, not followed.
-  return fetchImpl(`${origin}${path}`, {
-    method: "GET",
-    redirect: "manual",
-    headers: { "user-agent": "two-web-next-watch-lighthouse" },
-    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-  });
-}
-
-async function getCandidateAfterThrottle(origin, path, fetchImpl, sleepImpl) {
-  // The first non-429 verification response, or the last 429 once the
-  // bounded retries are exhausted (the caller skips that candidate).
+async function getCandidateAfterThrottle(path, budget) {
+  // Try an alternate candidate after the fourth 429, within the shared budget.
   for (let attempt = 0; ; attempt += 1) {
-    const response = await getCandidate(origin, path, fetchImpl);
-    if (response.status !== 429 || attempt >= DISCOVERY_THROTTLE_RETRIES) return response;
-    await sleepImpl(throttleDelayMs(response, attempt));
+    const response = await budget.get(path);
+    if (response.status !== 429) return response;
+    await response.body?.cancel();
+    if (attempt >= DISCOVERY_THROTTLE_RETRIES) return response;
+    await budget.sleep(throttleDelayMs(response, attempt));
   }
 }
 
@@ -261,23 +301,16 @@ async function getCandidateAfterThrottle(origin, path, fetchImpl, sleepImpl) {
  * First listed candidate whose page answers 200 with non-fixture content. A
  * 404/410 means the listing outlived the event (cancelled after the cached
  * feed was built): try the next listing. A 429 retries with backoff honoring
- * Retry-After, then the candidate is skipped like a gone listing: one
- * throttled candidate never fails the whole step. Any other status throws:
- * an origin that does not answer stays a watch finding, never a skip.
+ * Retry-After, then another candidate may supply real coverage. Any other
+ * status throws; exhausted throttling stays incomplete unless a pick succeeds.
  */
-async function pickStableCandidate(
-  origin,
-  paths,
-  fetchImpl,
-  tally,
-  seen,
-  sleepImpl = defaultSleep,
-) {
+async function pickStableCandidate(origin, paths, budget, tally, seen) {
   for (const path of paths) {
+    budget.check();
     // Already rejected in an earlier pass (title filter, gone, fixture page):
     // skip without another request or a second tally count.
     if (seen?.has(path)) continue;
-    const response = await getCandidateAfterThrottle(origin, path, fetchImpl, sleepImpl);
+    const response = await getCandidateAfterThrottle(path, budget);
     if (response.status === 429) {
       tally.throttled += 1;
       seen?.add(path);
@@ -291,7 +324,7 @@ async function pickStableCandidate(
     if (response.status !== 200) {
       throw new Error(`GET ${origin}${path} returned ${response.status}, expected 200.`);
     }
-    if (isStagingFixturePage(await response.text())) {
+    if (isStagingFixturePage(await budget.text(response))) {
       tally.fixtures += 1;
       seen?.add(path);
       continue;
@@ -307,53 +340,61 @@ async function pickStableCandidate(
  * title before any request; each remaining candidate is verified live so a
  * feed entry cached before a cancel is never measured. Returns `{ path,
  * source }`, or `{ path: null, reason }` when the origin answers 200 but
- * lists no stable event. A 429 retries with backoff honoring Retry-After and
- * then degrades to a skip (throttled candidates, then throttled feeds) so
- * the other routes are still measured. Any other failing request throws: an
- * origin that does not answer is a watch finding, never a skip.
+ * lists no stable event. A 429 retries with backoff honoring Retry-After.
+ * If no alternate event verifies, exhausted throttling or the shared budget
+ * throws: incomplete discovery must not shrink the quality gate's route plan.
  */
 async function discoverEventPath(origin, fetchImpl = fetch, options = {}) {
   const root = requireAllowedOrigin(origin);
-  const sleepImpl = options.sleepImpl ?? defaultSleep;
+  const budget = discoveryBudget(root, fetchImpl, options);
   const tally = { fixtures: 0, gone: 0, throttled: 0 };
   // Paths rejected in the RSS pass are never re-requested in the /events
   // pass: the listing carries no titles, so without this the fallback would
   // fetch the same fixture or stale pages again and count them twice.
   const rejected = new Set();
-  // A feed still throttled after retries falls through to the next source
-  // instead of failing the step; when both are throttled the event route is
-  // reported skipped with the throttle noted.
+  // A throttled source can fall through to a healthy alternate. Remember
+  // incomplete reads so they cannot masquerade as a legitimate empty feed.
   const throttledSources = [];
   let items = [];
   try {
-    items = eventItemsFromRss(await getText(root, "/events.rss", fetchImpl, sleepImpl));
+    items = eventItemsFromRss(await getText(root, "/events.rss", budget));
   } catch (error) {
     if (error?.code !== DISCOVERY_THROTTLED) throw error;
     throttledSources.push("/events.rss");
   }
   const rssPaths = [];
   for (const item of items) {
+    budget.check();
     if (isStagingFixtureTitle(item.title)) {
       tally.fixtures += 1;
       rejected.add(item.path);
     } else rssPaths.push(item.path);
   }
-  const rssPick = await pickStableCandidate(root, rssPaths, fetchImpl, tally, rejected, sleepImpl);
+  const rssPick = await pickStableCandidate(root, rssPaths, budget, tally, rejected);
   if (rssPick) return { path: rssPick, source: "/events.rss" };
   let listed = [];
   try {
-    listed = eventPathsFromListing(await getText(root, "/events", fetchImpl, sleepImpl));
+    listed = eventPathsFromListing(await getText(root, "/events", budget));
   } catch (error) {
     if (error?.code !== DISCOVERY_THROTTLED) throw error;
     throttledSources.push("/events");
   }
-  const listedPick = await pickStableCandidate(root, listed, fetchImpl, tally, rejected, sleepImpl);
+  const listedPick = await pickStableCandidate(root, listed, budget, tally, rejected);
   if (listedPick) return { path: listedPick, source: "/events" };
   const skipped = [];
   if (tally.fixtures > 0) skipped.push(`${tally.fixtures} staging fixture(s)`);
   if (tally.gone > 0) skipped.push(`${tally.gone} cancelled/stale listing(s)`);
   if (tally.throttled > 0) skipped.push(`${tally.throttled} throttled (429) candidate(s)`);
   for (const source of throttledSources) skipped.push(`${source} throttled (429 after retries)`);
+  budget.check();
+  if (tally.throttled > 0 || throttledSources.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Event discovery incomplete: ${skipped.join(", ")}; no stable event verified. Retry when throttling clears.`,
+      ),
+      { code: DISCOVERY_THROTTLED },
+    );
+  }
   return {
     path: null,
     reason:

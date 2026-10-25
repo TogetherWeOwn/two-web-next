@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -308,7 +308,7 @@ test("discovery skips 404 candidates and keeps real coverage", async () => {
 });
 
 test("discovery fails closed on unhealthy candidate statuses", async () => {
-  // 429 is not here: throttling retries, then degrades to a skip (below).
+  // 429 retries first; exhaustion must still fail if no alternate event verifies.
   for (const status of [500, 301]) {
     const { fetchImpl } = stubFetch({
       "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
@@ -380,7 +380,7 @@ test("an unparseable Retry-After falls back to exponential backoff", async () =>
   assert.deepEqual(sleeps, [1000, 2000, 4000]);
 });
 
-test("discovery skips the event route, instead of failing, when every candidate is throttled", async () => {
+test("discovery fails, rather than skipping coverage, when every candidate is throttled", async () => {
   const sleeps = [];
   const { calls, fetchImpl } = stubFetch({
     "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
@@ -389,10 +389,15 @@ test("discovery skips the event route, instead of failing, when every candidate 
     // re-requested or counted twice.
     "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
   });
-  const skipped = await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps));
-  assert.equal(skipped.path, null);
-  assert.match(skipped.reason, /no published event is listed/);
-  assert.match(skipped.reason, /1 throttled \(429\) candidate\(s\)/);
+  await assert.rejects(
+    () => lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)),
+    (error) => {
+      assert.equal(error.code, "DISCOVERY_THROTTLED");
+      assert.match(error.message, /incomplete/);
+      assert.match(error.message, /1 throttled \(429\) candidate\(s\)/);
+      return true;
+    },
+  );
   assert.equal(
     calls.filter((call) => call.url.endsWith(EVENT_PATH)).length,
     lib.DISCOVERY_THROTTLE_RETRIES + 1,
@@ -416,7 +421,7 @@ test("discovery retries a transient 429 on the feed and recovers", async () => {
   assert.deepEqual(sleeps, [1000]);
 });
 
-test("a throttled feed falls through to the next source, then skips with the throttle noted", async () => {
+test("a throttled feed falls through, but incomplete discovery never becomes a skip", async () => {
   const listed = stubFetch({
     "/events.rss": { status: 429 },
     "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
@@ -427,12 +432,225 @@ test("a throttled feed falls through to the next source, then skips with the thr
     { path: EVENT_PATH, source: "/events" },
     "a throttled RSS feed must not hide a healthy /events listing",
   );
+  assert.equal(listed.calls.filter((call) => call.url.endsWith("/events.rss")).length, 4);
   const both = stubFetch({ "/events.rss": { status: 429 }, "/events": { status: 429 } });
-  const skipped = await lib.discoverEventPath(APEX, both.fetchImpl, recordSleeps([]));
-  assert.equal(skipped.path, null);
-  assert.match(skipped.reason, /no published event is listed/);
-  assert.match(skipped.reason, /\/events\.rss throttled \(429 after retries\)/);
-  assert.match(skipped.reason, /\/events throttled \(429 after retries\)/);
+  const sleeps = [];
+  await assert.rejects(
+    () => lib.discoverEventPath(APEX, both.fetchImpl, recordSleeps(sleeps)),
+    (error) => {
+      assert.equal(error.code, "DISCOVERY_THROTTLED");
+      assert.match(error.message, /incomplete/);
+      assert.match(error.message, /\/events\.rss throttled \(429 after retries\)/);
+      assert.match(error.message, /\/events throttled \(429 after retries\)/);
+      return true;
+    },
+  );
+  for (const path of ["/events.rss", "/events"]) {
+    assert.equal(both.calls.filter((call) => new URL(call.url).pathname === path).length, 4);
+  }
+  assert.deepEqual(sleeps, [1000, 2000, 4000, 1000, 2000, 4000]);
+});
+
+test("Retry-After date and numeric boundaries use the fixed clock and ten-second cap", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-25T09:00:00Z"));
+  for (const [header, expected] of [
+    ["Sun, 25 Oct 2026 09:00:07 GMT", 7000],
+    ["Sun, 25 Oct 2026 08:59:59 GMT", 0],
+    ["Sun, 25 Oct 2026 09:01:00 GMT", 10000],
+    ["0", 0],
+    ["10", 10000],
+    ["11", 10000],
+    ["60", 10000],
+    ["9999999999999999999999999999999999999999", 10000],
+    [" 2 ", 2000],
+  ]) {
+    const sleeps = [];
+    const { fetchImpl } = stubFetch({
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: [
+        { status: 429, headers: new Headers({ "retry-after": header }) },
+        { body: "<h1>Community game night</h1>" },
+      ],
+    });
+    assert.equal(
+      (await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps))).path,
+      EVENT_PATH,
+    );
+    assert.deepEqual(sleeps, [expected], header);
+  }
+  for (const header of ["soon", "not-a-date", "?"]) {
+    const sleeps = [];
+    const { fetchImpl } = stubFetch({
+      "/events.rss": [
+        { status: 429, headers: { "retry-after": header } },
+        { status: 429, headers: { "retry-after": header } },
+        { status: 429, headers: { "retry-after": header } },
+        { body: rss(`${APEX}${EVENT_PATH}`) },
+      ],
+      [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+    });
+    assert.equal(
+      (await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps))).path,
+      EVENT_PATH,
+    );
+    assert.deepEqual(sleeps, [1000, 2000, 4000], header);
+  }
+});
+
+test("discovery shares one elapsed-time budget across all candidates", async () => {
+  const paths = Array.from({ length: 100 }, (_, i) => `/e/community-${i}`);
+  const sleeps = [];
+  let now = 0;
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(...paths.map((path) => `${APEX}${path}`)) },
+    "/events": { body: "" },
+    ...Object.fromEntries(
+      paths.map((path) => [path, { status: 429, headers: { "retry-after": "10" } }]),
+    ),
+  });
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(APEX, fetchImpl, {
+        nowImpl: () => now,
+        sleepImpl: async (ms) => {
+          sleeps.push(ms);
+          now += ms;
+        },
+      }),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.ok(now <= 60000, `elapsed ${now} exceeds one minute`);
+  assert.ok(calls.length <= 24, `requests ${calls.length} exceed total cap`);
+  assert.ok(sleeps.length > 0, "the deadline did not bypass retry recovery");
+});
+
+test("discovery shares one request budget across both sources even with no sleeps", async () => {
+  const paths = Array.from({ length: 100 }, (_, i) => `/e/stale-${i}`);
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(...paths.slice(0, 10).map((path) => `${APEX}${path}`)) },
+    "/events": {
+      body: paths
+        .slice(10)
+        .map((path) => `<a href="${path}">Old meetup</a>`)
+        .join(""),
+    },
+    ...Object.fromEntries(paths.map((path) => [path, { status: 410 }])),
+  });
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(APEX, fetchImpl, {
+        nowImpl: () => 0,
+        ...recordSleeps([]),
+      }),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.equal(calls.length, 24);
+  assert.ok(calls.some((call) => new URL(call.url).pathname === "/events"));
+});
+
+test("a slow response cannot overrun the shared deadline and select an event", async () => {
+  let now = 0;
+  const calls = [];
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(
+        APEX,
+        async (url, init) => {
+          calls.push({ url, init });
+          now += 35000;
+          return { status: 200, text: async () => rss(`${APEX}${EVENT_PATH}`) };
+        },
+        { nowImpl: () => now },
+      ),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(({ init }) => init.signal instanceof AbortSignal));
+});
+
+test("the runner rejects persistent candidate or feed throttling before launching Lighthouse", async () => {
+  for (const routes of [
+    {
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: { status: 429 },
+      "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+    },
+    { "/events.rss": { status: 429 }, "/events": { status: 429 } },
+    { "/events.rss": { status: 429 }, "/events": { body: "" } },
+  ]) {
+    await withDir(async (dir) => {
+      const { fetchImpl } = stubFetch(routes);
+      let launched = 0;
+      const code = await main([APEX], {
+        fetchImpl,
+        dir,
+        log: () => {},
+        discoveryOptions: recordSleeps([]),
+        lhci: async (env) => {
+          launched += 1;
+          let n = 0;
+          for (const path of lib.plannedPaths(env.LIGHTHOUSE_EVENT_PATH || undefined)) {
+            for (let run = 0; run < base.ci.collect.numberOfRuns; run += 1) {
+              await writeFile(
+                join(dir, `lhr-${n++}.json`),
+                JSON.stringify(lhr(path, [1000, 0, 100, 10, 800])),
+              );
+            }
+          }
+          await writeFile(join(dir, "assertion-results.json"), "[]");
+          return { exitCode: 0, output: "" };
+        },
+      });
+      assert.equal(code, 1);
+      assert.equal(
+        launched,
+        0,
+        "throttled evidence must not be replaced with a reduced route plan",
+      );
+      const summary = await readFile(join(dir, "watch-summary.md"), "utf8");
+      assert.match(summary, /Event discovery failed.*incomplete.*throttled/);
+      assert.doesNotMatch(summary, /Event route skipped/);
+    });
+  }
+});
+
+test("each exhausted 429 body is released before retrying or selecting an alternate", async () => {
+  let cancelled = 0;
+  let requests = 0;
+  let sleeps = 0;
+  const found = await lib.discoverEventPath(
+    APEX,
+    async (url) => {
+      const path = new URL(url).pathname;
+      requests += 1;
+      if (path === "/events.rss" || path === "/e/throttled") {
+        return {
+          status: 429,
+          body: {
+            cancel: async () => {
+              cancelled += 1;
+            },
+          },
+        };
+      }
+      if (path === "/events")
+        return {
+          status: 200,
+          text: async () => '<a href="/e/throttled">Throttled</a><a href="/e/healthy">Healthy</a>',
+        };
+      assert.equal(cancelled, 8);
+      return { status: 200, text: async () => "<h1>Healthy</h1>" };
+    },
+    {
+      sleepImpl: async () => {
+        sleeps += 1;
+        assert.equal(cancelled, requests - 1 + (sleeps <= 3 ? 1 : 0));
+      },
+    },
+  );
+  assert.equal(found.path, "/e/healthy");
+  assert.equal(cancelled, 8);
+  assert.equal(sleeps, 6);
 });
 
 test("discovery reports cancelled listings when only stale candidates remain", async () => {
