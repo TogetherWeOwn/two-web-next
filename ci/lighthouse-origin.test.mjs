@@ -223,6 +223,61 @@ test("discovery skips live staging fixtures by RSS title without requesting them
   );
 });
 
+// Regression: cancelled events keep their feed row with a `Cancelled: `
+// title prefix (src/events/feeds.ts RSS_CANCELLED_TITLE_PREFIX), so a
+// cancelled staging fixture reads `Cancelled: Staging E2E ...`. The bare
+// fixture prefix missed those rows and every stale one became a
+// verification GET until the origin throttled discovery with a 429.
+// Cancelled fixtures are filtered by title before any request, like live
+// fixtures; the 429 retry stays for genuinely transient throttles.
+test("discovery skips cancelled staging fixtures by RSS title without requesting them", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Cancelled: Staging E2E RSVP 1760317553000"),
+        rssItem(`${APEX}${EVENT_PATH}`, "Community game night"),
+      ),
+    },
+    // The cancelled fixture page is gone (410): the title filter must skip
+    // it before any liveness check, or every stale row costs a request.
+    [FIXTURE_EVENT_PATH]: { status: 410, body: "<h1>Old fixture</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.ok(
+    calls.every((call) => !call.url.endsWith(FIXTURE_EVENT_PATH)),
+    "a cancelled staging fixture must never be requested",
+  );
+});
+
+test("discovery still verifies a genuinely cancelled event instead of title-filtering it", async () => {
+  const CANCELLED_PATH = "/e/01JGGGGGGGGGGGGGGGGGGGGGGG";
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${CANCELLED_PATH}`, "Cancelled: Community game night"),
+        rssItem(`${APEX}${EVENT_PATH}`, "Spring tournament"),
+      ),
+    },
+    // A real cancelled listing is not a fixture: it is verified live once,
+    // tolerated as gone, and never counted as a fixture.
+    [CANCELLED_PATH]: { status: 410, body: "<h1>Old meetup</h1>" },
+    [EVENT_PATH]: { body: "<h1>Spring tournament</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(CANCELLED_PATH)).length,
+    1,
+    "a genuine cancelled listing is verified once, then skipped as gone",
+  );
+});
+
 test("discovery skips stale-cache 410 candidates and keeps real coverage", async () => {
   const GONE_PATH = "/e/01JBBBBBBBBBBBBBBBBBBBBBBB";
   const { fetchImpl } = stubFetch({
