@@ -283,6 +283,12 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Event chosen timezone range (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-chosen-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-chosen-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-chosen-timezone.json "event chosen timezone browser acceptance" 30
       - name: Kit member auth (real Chromium, local HTTPS fixtures)
         run: |
           mkdir -p artifacts/a11y
