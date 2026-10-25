@@ -68,7 +68,31 @@ one real fragment request versus one native document.
 This fixture runs the actual Hono renderer and Kit resolver/component SSR; it does
 not prove the full built Kit Worker/HTTP pipeline or a deployed revision. Hono
 accessibility, Lighthouse and visual-baseline gates do not exercise Kit detail.
-No staging/production test or deployment is claimed. No visual baseline, mask,
-threshold or asset budget is changed here. The pinned visual runner must report
-its own differences; intentional changes can be accepted only from its reviewed
-failure artifact through the existing visual-accept tool.
+No staging/production test or deployment is claimed. No mask, threshold or asset
+budget is changed here.
+
+## Pinned CI visual-baseline review
+
+[Run 40233604945](https://github.com/TogetherWeOwn/two-web-next/actions/runs/40233604945)
+on implementation head `318472baa` passed 14 visual cases and failed three cases
+covering four images. Each mismatch is the intended Duration entry: desktop adds
+a fifth metadata column and wraps existing text; mobile adds a stacked row.
+The content below moves down with the taller metadata block. All four expected,
+actual and diff images were opened; the sign-in action, paused notice, calendar
+links, neighboring events and footer remain present and readable.
+
+Accepted the four CI actuals with `node ci/visual-accept.mjs --format json` from
+the extracted `e2e-failure-40233604945-1` artifact, then verified all four checkout
+images match those CI actuals byte-for-byte. Only these baselines change; the
+other 14 baseline images remain identical:
+
+| Baseline | Before size | Accepted size |
+| --- | --- | --- |
+| [Guest desktop](../../../e2e/visual/__screenshots__/event-desktop.png) | 1280×1852 | 1280×1924 |
+| [Guest mobile](../../../e2e/visual/__screenshots__/event-mobile.png) | 390×2686 | 390×2784 |
+| [Paused member desktop](../../../e2e/visual/__screenshots__/event-paused-desktop.png) | 1280×1693 | 1280×1765 |
+| [Paused member mobile](../../../e2e/visual/__screenshots__/event-paused-mobile.png) | 390×2459 | 390×2556 |
+
+No test source, independently authored acceptance oracle, screenshot mask or pixel
+budget changes. The next exact-head CI run must verify these baselines; accepting
+the reviewed artifact is not itself a passing browser-smoke verdict.
