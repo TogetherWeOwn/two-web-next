@@ -568,6 +568,216 @@ test("a slow response cannot overrun the shared deadline and select an event", a
   assert.ok(calls.every(({ init }) => init.signal instanceof AbortSignal));
 });
 
+// Native AbortSignal.timeout does not use node:test's mocked timers. Keep real
+// AbortSignals, but schedule their aborts on the controlled timer queue.
+async function withDiscoveryClock(t, elapsedBeforeRequest, run) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let now = elapsedBeforeRequest;
+  let initialSample = true;
+  const timeouts = [];
+  const pending = [];
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException("Discovery request timed out", "TimeoutError"));
+    }, ms);
+    timeouts.push({ ms, controller, timer });
+    return controller.signal;
+  });
+  const clock = {
+    timeouts,
+    advance(ms) {
+      now += ms;
+      t.mock.timers.tick(ms);
+    },
+    start(fetchImpl) {
+      const result = { settled: false };
+      const done = lib
+        .discoverEventPath(APEX, fetchImpl, {
+          // The first sample starts the budget; later samples include a scheduler
+          // delay before the first GET, without stalling an already-timed request.
+          nowImpl: () => {
+            if (initialSample) {
+              initialSample = false;
+              return 0;
+            }
+            return now;
+          },
+        })
+        .then(
+          (value) => Object.assign(result, { settled: true, value }),
+          (error) => Object.assign(result, { settled: true, error }),
+        );
+      pending.push(done);
+      return { result, done };
+    },
+  };
+  try {
+    await run(clock);
+  } finally {
+    now = 60000;
+    for (const { controller, timer } of timeouts) {
+      clearTimeout(timer);
+      controller.abort(new DOMException("Test cleanup", "AbortError"));
+    }
+    await Promise.all(pending);
+    t.mock.restoreAll();
+    t.mock.timers.reset();
+  }
+}
+
+for (const phase of ["fetch", "body"]) {
+  test(`discovery aborts pending ${phase} with only 1000ms remaining`, async (t) => {
+    await withDiscoveryClock(t, 58000, async (clock) => {
+      const entered = Promise.withResolvers();
+      const calls = [];
+      let suppliedSignal;
+      let aborted = false;
+      const { result, done } = clock.start(async (url, { signal }) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        if (path === "/events.rss") {
+          return {
+            status: 200,
+            text: async () => {
+              clock.advance(1000);
+              return rss(`${APEX}${EVENT_PATH}`);
+            },
+          };
+        }
+        assert.equal(path, EVENT_PATH);
+        suppliedSignal = signal;
+        if (phase === "fetch") {
+          return new Promise((_resolve, reject) => {
+            const abort = () => {
+              aborted = true;
+              reject(signal.reason);
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            entered.resolve();
+            if (signal.aborted) abort();
+          });
+        }
+        return new Response(
+          new ReadableStream(
+            {
+              start(controller) {
+                const abort = () => {
+                  aborted = true;
+                  controller.error(signal.reason);
+                };
+                signal.addEventListener("abort", abort, { once: true });
+                if (signal.aborted) abort();
+              },
+              pull() {
+                // With no prefetch, pull proves text() is awaiting body bytes.
+                entered.resolve();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status: 200 },
+        );
+      });
+      await entered.promise;
+      assert.equal(suppliedSignal.aborted, false);
+      assert.equal(result.settled, false);
+      clock.advance(999);
+      assert.equal(suppliedSignal.aborted, false);
+      assert.equal(result.settled, false);
+      clock.advance(1);
+      assert.equal(aborted, true, `the supplied signal must interrupt pending ${phase}`);
+      assert.equal(suppliedSignal.reason.name, "TimeoutError");
+      await done;
+      if (phase === "body") assert.equal(result.error, suppliedSignal.reason);
+      else assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.deepEqual(
+        clock.timeouts.map(({ ms }) => ms),
+        [2000, 1000],
+      );
+      assert.equal(result.value, undefined, "an aborted request cannot select an event");
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH], "no fallback GET after expiry");
+    });
+  });
+}
+
+for (const [remaining, timeout] of [
+  [60000, 15000],
+  [15000, 15000],
+  [14999.25, 15000],
+  [1000, 1000],
+  [1.25, 2],
+  [0.25, 1],
+]) {
+  test(`discovery caps and rounds the request timeout with ${remaining}ms remaining`, async (t) => {
+    await withDiscoveryClock(t, 60000 - remaining, async (clock) => {
+      const calls = [];
+      const { result, done } = clock.start(async (url, { signal }) => {
+        calls.push(new URL(url).pathname);
+        assert.equal(signal.aborted, false);
+        return {
+          status: 200,
+          text: async () => rss(`${APEX}${EVENT_PATH}`),
+        };
+      });
+      await done;
+      assert.equal(result.error, undefined);
+      assert.deepEqual(result.value, { path: EVENT_PATH, source: "/events.rss" });
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH]);
+      assert.deepEqual(
+        clock.timeouts.map(({ ms }) => ms),
+        [timeout, timeout],
+      );
+    });
+  });
+}
+
+for (const elapsed of [60000, 60000.25]) {
+  test(`discovery makes no GET when the first request starts at ${elapsed}ms`, async (t) => {
+    await withDiscoveryClock(t, elapsed, async (clock) => {
+      let requests = 0;
+      const { result, done } = clock.start(async () => {
+        requests += 1;
+        return { status: 200, text: async () => rss(`${APEX}${EVENT_PATH}`) };
+      });
+      await done;
+      assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.equal(requests, 0);
+      assert.equal(clock.timeouts.length, 0);
+    });
+  });
+}
+
+for (const elapsed of [60000, 60000.25]) {
+  test(`discovery rejects an event whose body finishes at ${elapsed}ms`, async (t) => {
+    await withDiscoveryClock(t, 59000, async (clock) => {
+      const calls = [];
+      let bodyCompleted = false;
+      const { result, done } = clock.start(async (url) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        return {
+          status: 200,
+          text: async () => {
+            if (path === EVENT_PATH) {
+              // EOF wins the promise race, but its continuation resumes too late.
+              clock.advance(elapsed - 59000);
+              bodyCompleted = true;
+              return "<h1>Community game night</h1>";
+            }
+            return rss(`${APEX}${EVENT_PATH}`);
+          },
+        };
+      });
+      await done;
+      assert.equal(bodyCompleted, true);
+      assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.equal(result.value, undefined, "a completed body does not override the deadline");
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH]);
+    });
+  });
+}
+
 test("the runner rejects persistent candidate or feed throttling before launching Lighthouse", async () => {
   for (const routes of [
     {
