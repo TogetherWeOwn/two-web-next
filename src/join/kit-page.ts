@@ -12,12 +12,25 @@
 // a pure function, so only it lives here.
 import type { DiscordWidgetSnapshot } from "../discord-widget";
 import { readReturnJourney } from "../kit-session";
+import type { JOIN_START_FAILED_NOTICE } from "./route-shared";
 import { JOIN_RESULT_COOKIE, type JoinResult } from "../return-journey";
 
 export type JoinPageCacheControl =
   | "private, no-store"
   | "public, max-age=60"
   | "public, max-age=3600";
+
+/**
+ * The `?notice=` value Kit accepts: exactly the store-down bounce value, else
+ * no notice. Same exact-match rule as the Hono GET /join handler
+ * (`./route-page.ts` against `JOIN_START_FAILED_NOTICE`): a hostile, mistyped
+ * or empty value renders the plain page and leaves no trace in the HTML or
+ * the load data. Type-only import keeps this module free of the journey
+ * store's runtime graph for the Kit worker.
+ */
+export function parseJoinNotice(value: string | null): typeof JOIN_START_FAILED_NOTICE | null {
+  return value === "start-failed" ? value : null;
+}
 
 export function joinPageCacheControl(
   joinResult: JoinResult | null,

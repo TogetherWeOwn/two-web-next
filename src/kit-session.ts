@@ -32,6 +32,7 @@ import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
+import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
   JOIN_RESULT_COOKIE,
@@ -213,10 +214,9 @@ export async function readReturnJourney(
  * the list load needs: an outage resolves to null (guest render with no
  * drafts), never to a false logout, and nothing here rotates or revokes.
  */
-export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
-  member: boolean;
-  moderator: boolean;
-} | null> {
+export function kitEventsSessionFor(
+  env: Env,
+): (request: Request) => Promise<KitEventsSession | null> {
   return async (request) => {
     try {
       const decision = await resolveRequestSession(request, {
@@ -224,7 +224,11 @@ export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
         store: await storeForEnv(env),
       });
       return decision.status === "authenticated" && decision.session
-        ? { member: decision.session.member, moderator: decision.session.moderator }
+        ? {
+            username: decision.session.username,
+            member: decision.session.member,
+            moderator: decision.session.moderator,
+          }
         : null;
     } catch (err) {
       // The store never materialized, so no read ran: one class-only warn.
