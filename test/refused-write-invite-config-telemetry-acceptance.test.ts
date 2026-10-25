@@ -361,7 +361,8 @@ describe("profile refused-write telemetry", () => {
     );
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({
-      errors: { bio: "Keep your bio to 1000 characters or fewer." },
+      error: "invalid",
+      fields: { bio: "Keep your bio to 1000 characters or fewer." },
     });
     expect(store.save).not.toHaveBeenCalled();
     expect(captured(warnSpy(), errorSpy()).all).toHaveLength(0);
