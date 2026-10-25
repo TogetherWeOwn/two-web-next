@@ -44,7 +44,10 @@ export function recoveryDb(rows: unknown[] = [], outage = false) {
           }
           reads.push(query);
           if (outage)
-            throw Object.assign(new Error("PRIVATE_DATABASE_EXCEPTION"), { code: "08006" });
+            throw Object.assign(new Error("PRIVATE_DATABASE_EXCEPTION"), {
+              name: "PostgresError",
+              code: "08006",
+            });
           if (/count\s*\(/i.test(query.sql)) throw new Error("Recovery must not add a count read");
           return rows;
         },

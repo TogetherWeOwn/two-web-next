@@ -59,12 +59,19 @@ function namedLink(html: string, name: RegExp) {
   expect(link.href).toMatch(/^\/admin(?:\/|\?|$)/);
   return new URL(link.href!, recoveryOrigin);
 }
-function privateRead(result: Awaited<ReturnType<typeof activityRecovery>>) {
+function privateRead(result: Awaited<ReturnType<typeof activityRecovery>>, offset = 0) {
   expect(result.status).toBe(200);
   expect(result.headers.get("cache-control")).toMatch(/private/);
   expect(result.headers.get("cache-control")).toMatch(/no-store/);
   expect(result.probe.reads).toHaveLength(1);
   expect(result.probe.reads[0]!.sql).toMatch(/from "activity_log"/);
+  const query = result.probe.reads[0]!;
+  const bound = (clause: string, absent: number) => {
+    const match = query.sql.match(new RegExp(`\\b${clause}\\s+(?:\\$(\\d+)|(\\d+))`, "i"));
+    return match ? (match[1] ? query.params[Number(match[1]) - 1] : Number(match[2])) : absent;
+  };
+  expect(bound("limit", 0)).toBe(51);
+  expect(bound("offset", 0)).toBe(offset);
   expect(result.probe.reads[0]!.sql).not.toMatch(/count\s*\(|"properties"/i);
   expect(result.probe.writes).toEqual([]);
 }
@@ -233,12 +240,15 @@ for (const renderer of ["Hono", "Kit"] as const) {
       expect(
         links(result.html).some((a) => /Clear filters|First page of these results/i.test(a.name)),
       ).toBe(false);
-      expect(result.probe.reads[0]!.params).not.toContain("x".repeat(129));
+      expect(JSON.stringify(result.probe.reads[0]!.params)).not.toContain("x".repeat(129));
     });
 
     it("a first-page filter miss offers native Clear filters, not a global-empty claim", async () => {
       const result = await activityRecovery(renderer, "?subject=Event%20%26%20Alpha&causer=42");
       privateRead(result);
+      expect(result.probe.reads[0]!.params).toEqual(
+        expect.arrayContaining(["%Event & Alpha%", "%42%"]),
+      );
       expect(emptyText(result.html)).toMatch(/No activity matches these filters/i);
       const clear = namedLink(result.html, /^Clear filters$/i);
       expect(clear.pathname).toBe("/admin/activity-log");
@@ -254,10 +264,14 @@ for (const renderer of ["Hono", "Kit"] as const) {
       it(`${filtered ? "filtered" : "unfiltered"} empty later page names the page and returns directly to its first results`, async () => {
         const search = `?page=9${filtered ? "&subject=%20Event%20%26%20Alpha%00%20&causer=%2042%2Flegacy%20" : ""}&next=https://evil.example/`;
         const result = await activityRecovery(renderer, search);
-        privateRead(result);
+        privateRead(result, 400);
+        if (filtered)
+          expect(result.probe.reads[0]!.params).toEqual(
+            expect.arrayContaining(["%Event & Alpha%", "%42/legacy%"]),
+          );
         expect(emptyText(result.html)).toMatch(/page/i);
         expect(emptyText(result.html)).not.toMatch(
-          /No activity yet|No activity matches these filters/i,
+          /^\s*(?:No activity yet|No activity matches these filters)\.?\s*$/i,
         );
         const first = namedLink(result.html, /^First page of these results$/i);
         expect(first.pathname).toBe("/admin/activity-log");
@@ -280,7 +294,10 @@ for (const renderer of ["Hono", "Kit"] as const) {
         "?page=2&subject=Event&causer=100000000000000111",
         rows,
       );
-      privateRead(result);
+      privateRead(result, 50);
+      expect(result.probe.reads[0]!.params).toEqual(
+        expect.arrayContaining(["%Event%", "%100000000000000111%"]),
+      );
       expect(result.html).not.toContain("PRIVATE_BEFORE_AFTER");
       expect(text(content(result.html))).toContain("Recorded fixture change <not markup>");
       expect(elements(content(result.html), (n) => n.tagName === "time")).toHaveLength(50);
