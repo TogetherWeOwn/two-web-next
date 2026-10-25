@@ -627,6 +627,246 @@ describe("Kit GET /events/past anonymous payload", () => {
 
     assertNoMemberBytes(serializePayload(data), "GET /events/past", ['"createdBy"']);
   });
+
+  // Search-only exceptions to the archive projection, pinned at the serialized
+  // real-load boundary (parsed `__data.json` bytes, not the projection helper or
+  // the rendered DOM): `titleSpans` and `passage` ride a row only for a nonblank
+  // query, and `passage` only when the row has a description. The description
+  // itself, member bytes and internal columns never appear in either mode.
+  describe("search-only payload fields", () => {
+    const BASE_ROW_KEYS = [
+      "eventKey",
+      "title",
+      "startsAt",
+      "timezone",
+      "location",
+      "game",
+      "goingCount",
+      "goingOccupancy",
+      "capacity",
+      "discordEventId",
+    ].sort();
+    const TEASER_TITLE = "Hostile Teaser Title zz9 漢字";
+    const TEASER_DESCRIPTION =
+      "The teaser reel returns. Hostile description … 💀 with maximal fields";
+    const EMOJI = "😀";
+    // 200 + 1 + 6 + 1 + 300 supplementary-aware code points: far past the
+    // 318-point passage window, with the match 201 points in.
+    const LONG_DESCRIPTION = `${EMOJI.repeat(200)} needle ${EMOJI.repeat(300)}`;
+
+    type ArchiveRow = Record<string, unknown>;
+
+    function archiveRow(id: number, overrides: Record<string, unknown>): Record<string, unknown> {
+      return hostileEventRow({
+        id,
+        status: "past",
+        startsAt: PAST_STARTS_AT,
+        endsAt: PAST_ENDS_AT,
+        ...overrides,
+      });
+    }
+
+    const descriptionRow = (): Record<string, unknown> =>
+      archiveRow(7, { description: TEASER_DESCRIPTION });
+    const noDescriptionRow = (): Record<string, unknown> =>
+      archiveRow(8, {
+        eventKey: "no-description-b",
+        title: "Teaser Night Two",
+        description: null,
+        createdBy: PROBE_SNOWFLAKE_2,
+      });
+    const emptyDescriptionRow = (): Record<string, unknown> =>
+      archiveRow(9, {
+        eventKey: "empty-description-c",
+        title: "Teaser Night Three",
+        description: "",
+        createdBy: PROBE_SNOWFLAKE_3,
+      });
+    const longDescriptionRow = (): Record<string, unknown> =>
+      archiveRow(10, {
+        eventKey: "long-description-d",
+        title: "Archive Needle Night",
+        description: LONG_DESCRIPTION,
+      });
+
+    async function servedArchive(
+      eventRows: Record<string, unknown>[],
+      search: string,
+    ): Promise<{
+      payload: { rows: ArchiveRow[]; q: string };
+      bytes: string;
+      headers: Record<string, string>;
+    }> {
+      useEnv(
+        baseEnv({
+          ADMIN_DB: fakeDb(
+            storedFixture({
+              eventRows,
+              users: hostileUsers(),
+              rsvps: hostileRsvps(7),
+              eventsCount: eventRows.length,
+            }),
+          ),
+        }),
+      );
+      const headers: Record<string, string> = {};
+      const args = guestArgs(`https://example.test/events/past${search}`);
+      args.setHeaders = (set) => Object.assign(headers, set);
+      const data = await loads.pastLoad(args);
+      const bytes = serializePayload(data);
+      // What Kit ships to the anonymous client: the parsed serialized bytes.
+      return { payload: JSON.parse(bytes) as { rows: ArchiveRow[]; q: string }, bytes, headers };
+    }
+
+    function rowByKey(rows: ArchiveRow[], eventKey: string): ArchiveRow {
+      const row = rows.find((candidate) => candidate["eventKey"] === eventKey);
+      expect(row, `serialized rows lack ${eventKey}`).toBeDefined();
+      return row as ArchiveRow;
+    }
+
+    const sortedKeys = (row: ArchiveRow): string[] => Object.keys(row).sort();
+    const joined = (segments: unknown): string =>
+      (segments as { text: string }[]).map((segment) => segment.text).join("");
+
+    const BLANK_QUERIES: [string, string][] = [
+      ["a missing q", ""],
+      ["an empty q", "?q="],
+      ["a spaces-only q", "?q=%20%20%20"],
+      ["a tab/space/NUL-only q", "?q=%09%20%00%20"],
+    ];
+
+    for (const [label, search] of BLANK_QUERIES) {
+      it(`ships only the ten base keys per row for ${label}, descriptions and all`, async () => {
+        const { payload, bytes, headers } = await servedArchive(
+          [descriptionRow(), noDescriptionRow(), emptyDescriptionRow(), longDescriptionRow()],
+          search,
+        );
+
+        // Non-vacuous: four hostile rows flowed through with honest aggregates.
+        expect(payload.q).toBe("");
+        expect(payload.rows).toHaveLength(4);
+        const first = rowByKey(payload.rows, "hostile-event-key-zz9");
+        expect(first["title"]).toBe(TEASER_TITLE);
+        expect(first["goingCount"]).toBe(2);
+        expect(first["goingOccupancy"]).toBe(3);
+        expect(first["capacity"]).toBe(25);
+        for (const row of payload.rows) {
+          expect(sortedKeys(row), `row ${String(row["eventKey"])} keys`).toEqual(BASE_ROW_KEYS);
+        }
+        for (const key of ['"passage"', '"titleSpans"', '"description"']) {
+          expect(bytes, `blank-query payload carried ${key}`).not.toContain(key);
+        }
+        expect(bytes).not.toContain("with maximal fields");
+        expect(bytes).not.toContain(LONG_DESCRIPTION.slice(0, 40));
+        assertNoMemberBytes(bytes, "GET /events/past (blank q)", ['"createdBy"']);
+        // Browsing keeps its shared-cache policy (cacheable, Cookie-varied).
+        expect(headers["cache-control"]).toBe("public, max-age=300");
+        expect(headers["x-two-past-cacheable"]).toBe("true");
+        expect(headers["vary"]).toBe("Cookie");
+      });
+    }
+
+    it("adds titleSpans to every row and passage only to rows with a description for a normalized q", async () => {
+      // Padding, a tab and a NUL around the query are normalized away.
+      const { payload, bytes, headers } = await servedArchive(
+        [descriptionRow(), noDescriptionRow(), emptyDescriptionRow()],
+        "?q=%20%20teaser%09%00",
+      );
+
+      expect(payload.q).toBe("teaser");
+      expect(payload.rows).toHaveLength(3);
+
+      const withDescription = rowByKey(payload.rows, "hostile-event-key-zz9");
+      expect(sortedKeys(withDescription)).toEqual(
+        [...BASE_ROW_KEYS, "passage", "titleSpans"].sort(),
+      );
+      expect(withDescription["titleSpans"]).toEqual([
+        { text: "Hostile ", match: false },
+        { text: "Teaser", match: true },
+        { text: " Title zz9 漢字", match: false },
+      ]);
+      expect(withDescription["passage"]).toEqual([
+        { text: "The ", match: false },
+        { text: "teaser", match: true },
+        { text: " reel returns. Hostile description … 💀 with maximal fields", match: false },
+      ]);
+      // Full title and bounded excerpt keep their literal text; marks are the only addition.
+      expect(withDescription["title"]).toBe(TEASER_TITLE);
+      expect(joined(withDescription["titleSpans"])).toBe(TEASER_TITLE);
+      expect(joined(withDescription["passage"])).toBe(TEASER_DESCRIPTION);
+      expect(withDescription["goingCount"]).toBe(2);
+      expect(withDescription["goingOccupancy"]).toBe(3);
+
+      for (const [eventKey, title, spans] of [
+        [
+          "no-description-b",
+          "Teaser Night Two",
+          [
+            { text: "Teaser", match: true },
+            { text: " Night Two", match: false },
+          ],
+        ],
+        [
+          "empty-description-c",
+          "Teaser Night Three",
+          [
+            { text: "Teaser", match: true },
+            { text: " Night Three", match: false },
+          ],
+        ],
+      ] as const) {
+        const row = rowByKey(payload.rows, eventKey);
+        // A missing or empty description yields no passage key at all.
+        expect(sortedKeys(row), `${eventKey} keys`).toEqual(
+          [...BASE_ROW_KEYS, "titleSpans"].sort(),
+        );
+        expect(row["title"]).toBe(title);
+        expect(row["titleSpans"]).toEqual(spans);
+      }
+
+      // The description itself and every member/internal column stay off the wire.
+      expect(bytes).not.toContain('"description"');
+      expect(bytes).not.toContain('"createdBy"');
+      assertNoMemberBytes(bytes, "GET /events/past (q=teaser)", ['"createdBy"']);
+      // Searching renders stay private no-store with no Vary.
+      expect(headers["cache-control"]).toBe("private, no-store");
+      expect(headers["x-two-past-cacheable"]).toBe("false");
+      expect(headers["vary"]).toBeUndefined();
+    });
+
+    it("bounds a long supplementary-code-point passage to 320 code points with ellipses", async () => {
+      const { payload, bytes } = await servedArchive([longDescriptionRow()], "?q=needle");
+
+      expect(payload.q).toBe("needle");
+      expect(payload.rows).toHaveLength(1);
+      const row = rowByKey(payload.rows, "long-description-d");
+      expect(sortedKeys(row)).toEqual([...BASE_ROW_KEYS, "passage", "titleSpans"].sort());
+      expect(row["titleSpans"]).toEqual([
+        { text: "Archive ", match: false },
+        { text: "Needle", match: true },
+        { text: " Night", match: false },
+      ]);
+
+      const passage = row["passage"] as { text: string; match: boolean }[];
+      // Non-vacuous: the window is a strict excerpt of a description far over the cap.
+      const fullPoints = Array.from(LONG_DESCRIPTION).length;
+      const excerpt = joined(passage);
+      expect(fullPoints).toBeGreaterThan(500);
+      expect(Array.from(excerpt).length).toBeLessThanOrEqual(320);
+      expect(Array.from(excerpt).length).toBeGreaterThan(300);
+      expect(excerpt, "passage split a surrogate pair").not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+      // Trimmed on both sides: leading and trailing ellipsis segments, unmarked.
+      expect(passage[0]).toEqual({ text: "…", match: false });
+      expect(passage[passage.length - 1]).toEqual({ text: "…", match: false });
+      expect(passage.filter((segment) => segment.match)).toEqual([{ text: "needle", match: true }]);
+      // The full description never rides the payload.
+      expect(bytes).not.toContain(LONG_DESCRIPTION);
+      expect(bytes).not.toContain('"description"');
+      assertNoMemberBytes(bytes, "GET /events/past (q=needle)", ['"createdBy"']);
+    });
+  });
 });
 
 describe("Kit GET /events anonymous payload", () => {

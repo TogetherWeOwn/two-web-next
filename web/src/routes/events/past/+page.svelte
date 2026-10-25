@@ -34,6 +34,9 @@ const islands =
   '<script src="/islands/copy-link.js" defer></' +
   'script> <script src="/islands/past-events.js" defer></' +
   "script>";
+// csr=false still emits a structural client route node. Keep the archive cards
+// server-only, like the home-event list, so that unused asset does not carry them.
+// Direct server compilation without Vite's env renders the cards normally.
 </script>
 
 <Shell
@@ -86,7 +89,7 @@ const islands =
         {/if}
       {/if}
     </div>
-    <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#each rows as e (e.eventKey)}<EventCard {e} archive={{ page, q }} />{/each}</ul>
+    <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#if import.meta.env?.SSR !== false}{#each rows as e (e.eventKey)}<EventCard {e} {q} archive={{ page, q }} />{/each}{/if}</ul>
     <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
