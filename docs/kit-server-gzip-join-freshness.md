@@ -2,6 +2,45 @@
 
 ## Latest base reconciliation — 2026-10-25
 
+Merge main `d01519a8f`, whose only change since the previously merged base
+`feb699e75` is the separately reviewed error-correlation budget reconciliation
+in [#1666](https://github.com/TogetherWeOwn/two-web-next/pull/1666).
+Only `ci/kit-perf-budget.json` conflicts. Preserve the complete incoming
+466041-character history verbatim, followed by the existing 3306-character
+branch-only suffix exactly once. Every non-comment value equals this main:
+client JS raw/gzip **254464/102912 bytes**, server gzip **333312 bytes**.
+This PR adds no allowance beyond main and changes no runtime or test file.
+
+Two fresh Node 24.22.1 `npm run build --prefix web && npm run kit-perf` runs
+using the committed root/web locks installed outside the checkout both pass:
+
+| Artifact | Both resolved-tree builds | Inherited limit |
+| --- | ---: | ---: |
+| Server JS files | 115 | 126 |
+| Server JS raw bytes | 1160533 | 1203200 |
+| Server JS gzip bytes | 329324 | 333312 |
+| Client JS files | 54 | 55 |
+| Client JS raw/gzip bytes | 253204/102307 | 254464/102912 |
+| Client CSS files | 2 | 4 |
+| Client CSS raw/gzip bytes | 2861/1019 | 3072/1024 |
+| Worker entry raw/gzip bytes | 2551/1219 | 3584/1536 |
+
+Server gzip margin is **3988 bytes**, client gzip margin **605 bytes**, and
+CSS gzip margin **5 bytes**. These are prerequisite-tree measurements, not
+fresh feature-integration results. The unchanged checker selftests pass
+**12/12** and `node --test ci/check-kit-perf.test.mjs` passes **13/13**, including
+actual breaches and missing/incomplete output refusal. Earlier full-check
+failures remain historical and disclosed below; no fresh full check,
+feature-integration suite, browser, staging or deployment run is claimed.
+Lint (2019 files), typecheck, documentation links (150 Markdown files), floor
+guard and staged whitespace checks pass. `context-pack --base origin/main`
+failed during MCP initialization (`MCP server exited`), so no successful caller
+analysis is claimed; the independently inspected branch delta has no runtime
+symbols or callers to update. Fresh exact-head CI and independent review still
+gate this resolution.
+
+## Earlier base reconciliation — 2026-10-25
+
 Merge main `8df87c89fa67c14b51c6a49433781f63f8adef7a`. Only the budget
 history string conflicts. This resolution retains the incoming history exactly,
 then appends the 3306-character branch-only join-freshness suffix exactly once.
