@@ -44,14 +44,14 @@ function allocationResult(clientRawBytes: number) {
   }
 }
 
-it("committed Kit allocation admits the edit feature's fixed 255766 raw client JS bytes", () => {
+it("committed Kit allocation admits the edit feature's fixed 256546 raw client JS bytes", () => {
   // Independently measured feature composition, deliberately NOT ceiling-derived.
-  // Both the prior 255488 step and original-main 254464 allowance must reject it.
-  const result = allocationResult(255_766);
+  // Both the prior 256000 ceiling and one 512B step below (256512) must reject it.
+  const result = allocationResult(256_546);
   expect(result.code, result.errors.join("\n")).toBe(0);
   expect(result.errors).toEqual([]);
   expect(result.logs).toContainEqual(
-    expect.stringMatching(/^ok client js: 1\/\d+ files, raw 255766\//),
+    expect.stringMatching(/^ok client js: 1\/\d+ files, raw 256546\//),
   );
   expect(result.logs).toContain("kit perf budget: every Kit asset fits.");
 });
