@@ -24,6 +24,8 @@ describe("isPrintableJoinDestination", () => {
     "https://fixture-user:fixture-password@call.example.test/open-room",
     "https://@call.example.test/open-room",
     "https://call.example.test/%70rivate-room",
+    "https://call.example.test/open-room;jsessionid=fixture-session",
+    "https://call.example.test/private%2fsecret",
     "https://call.example.test/%E0%A4%A",
     "not a url",
     "/relative/room",

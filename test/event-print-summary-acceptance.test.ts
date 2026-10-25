@@ -13,6 +13,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { JoinResult } from "../src/return-journey";
 import {
   CANONICAL,
   RELATED_TITLE,
@@ -93,15 +94,17 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
       ) => Promise<void>,
       width = 1280,
       js = false,
+      joinResult: JoinResult | null = null,
+      failGoingCountRefresh = false,
     ) {
-      const fixture = await renderPrintFixture(twin, row, viewer);
+      const fixture = await renderPrintFixture(twin, row, viewer, joinResult);
       expect(fixture.status, "U1 harness: preserve served event status").toBe(
         row.status === "cancelled" ? 410 : 200,
       );
       expect(fixture.html, "U1 harness: route/model must supply actual event HTML").toContain(
         "<main",
       );
-      const opened = await openPrintFixture(browser, fixture, width, js);
+      const opened = await openPrintFixture(browser, fixture, width, js, failGoingCountRefresh);
       try {
         await run(opened.page, opened, fixture.reads);
       } finally {
@@ -222,6 +225,268 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
                 .toBe(false);
             expect.soft(await printText(page)).toContain(row.title);
           });
+        });
+
+        // These joining fields exist only in Hono. Do not invent a Kit surface.
+        if (twin === "Hono") {
+          it.each([
+            [
+              "session path parameter",
+              "https://call.example.test/open-room;jsessionid=fixture-session",
+              false,
+            ],
+            ["encoded private boundary", "https://call.example.test/private%2fsecret", false],
+            ["CONTROL public room", "https://call.example.test/open-room", true],
+          ] as const)("U1.2 joining path privacy: %s", async (_name, destination, printable) => {
+            await usingPage(twin, printRow({ join_url: destination }), "member", async (page) => {
+              const link = page.getByTestId("event-public-join-link");
+              expect(await link.isVisible(), "CONTROL: real screen joining link").toBe(true);
+              expect(await link.getAttribute("href")).toBe(destination);
+              await page.emulateMedia({ media: "print" });
+              const text = await printText(page);
+              if (printable) expect(text).toContain(destination);
+              else {
+                expect
+                  .soft(text, "U1.2 path credentials/private destination stay off paper")
+                  .not.toContain(destination);
+                expect.soft(text).not.toMatch(/fixture-session|private%2fsecret|private\/secret/i);
+              }
+              expect(await link.isVisible(), "no active joining link on paper").toBe(false);
+              expect(text).toContain("Use headphones.");
+              expect(text).toContain(printRow().title);
+              await page.emulateMedia({ media: "screen" });
+              expect(await link.isVisible()).toBe(true);
+              expect(await link.getAttribute("href")).toBe(destination);
+            });
+          });
+
+          it("U1.2 joining instructions suppress sensitive lines, retain harmless lines and preserve screen originals", async () => {
+            const destination =
+              "https://call.example.test/private-room?token=fixture-bearer&session=fixture-context";
+            const instructions = `Open ${destination}\nUse headphones.`;
+            await usingPage(
+              twin,
+              printRow({ join_url: destination, join_instructions: instructions }),
+              "member",
+              async (page) => {
+                const link = page.getByTestId("event-public-join-link");
+                const original = page.getByTestId("event-join-instructions");
+                expect(await link.isVisible()).toBe(true);
+                expect(await link.getAttribute("href")).toBe(destination);
+                expect(await original.isVisible()).toBe(true);
+                expect(
+                  await original.textContent(),
+                  "CONTROL: exact unredacted screen instructions",
+                ).toBe(instructions);
+                await page.emulateMedia({ media: "print" });
+                const text = await printText(page);
+                expect.soft(text).not.toContain(destination);
+                expect
+                  .soft(text, "U1.2 instructions cannot bypass the URL privacy guard")
+                  .not.toMatch(/private-room|fixture-bearer|fixture-context/);
+                expect
+                  .soft(text, "U1.2 retain the independent harmless instruction line")
+                  .toContain("Use headphones.");
+                expect(await link.isVisible()).toBe(false);
+                await page.emulateMedia({ media: "screen" });
+                expect(await link.isVisible()).toBe(true);
+                expect(await link.getAttribute("href")).toBe(destination);
+                expect(await original.isVisible()).toBe(true);
+                expect(await original.textContent()).toBe(instructions);
+              },
+            );
+          });
+
+          it.each([
+            [
+              "unsafe",
+              "https://call.example.test/private-room?token=fixture-bearer&session=fixture-context",
+              false,
+            ],
+            ["CONTROL safe", "https://call.example.test/open-room", true],
+          ] as const)(
+            "U1.2 moderator draft destination: %s",
+            async (_name, destination, printable) => {
+              const row = printRow({ status: "draft", join_url: destination });
+              await usingPage(twin, row, "moderator", async (page) => {
+                const details = page.getByTestId("event-join-details");
+                expect(await details.isVisible()).toBe(true);
+                expect(
+                  await printText(page),
+                  "CONTROL: draft displays the raw destination on screen",
+                ).toContain(destination);
+                await page.emulateMedia({ media: "print" });
+                const text = await printText(page);
+                if (printable) expect(text).toContain(destination);
+                else {
+                  expect
+                    .soft(text, "U1.2 unsafe draft paragraph needs the screen-only guard")
+                    .not.toContain(destination);
+                  expect.soft(text).not.toMatch(/private-room|fixture-bearer|fixture-context/);
+                }
+                expect(text).toMatch(/draft/i);
+                expect(text).toContain(row.title);
+                expect(text).toContain("Use headphones.");
+                await page.emulateMedia({ media: "screen" });
+                expect(await printText(page)).toContain(destination);
+              });
+            },
+          );
+        }
+
+        it("U1.3 retained heading, metadata and body ink has at least 4.5:1 print contrast", async () => {
+          await usingPage(twin, printRow(), "guest", async (page) => {
+            await page.emulateMedia({ media: "print" });
+            const samples = await page.evaluate(() => {
+              return [
+                "h1",
+                "#event-description-heading",
+                ".event-meta dt",
+                ".event-meta time",
+                '[data-testid="event-venue"]',
+                ".event-description p",
+              ].map((selector) => {
+                const element = document.querySelector(selector)!;
+                const backgrounds: string[] = [];
+                for (let node: BrowserElement | null = element; node; node = node.parentElement)
+                  backgrounds.push(getComputedStyle(node).backgroundColor);
+                return {
+                  selector,
+                  text: element.textContent?.trim(),
+                  color: getComputedStyle(element).color,
+                  backgrounds,
+                };
+              });
+            });
+            const rgba = (value: string) => {
+              const channels = value.match(/[\d.]+/g)?.map(Number);
+              expect(channels, `parse actual computed RGB color ${value}`).toBeDefined();
+              expect(channels!.length).toBeGreaterThanOrEqual(3);
+              return [channels![0]!, channels![1]!, channels![2]!, channels![3] ?? 1];
+            };
+            const composite = (front: number[], back: number[]) =>
+              front
+                .slice(0, 3)
+                .map((channel, i) => channel * front[3]! + back[i]! * (1 - front[3]!));
+            const luminance = (rgb: number[]) =>
+              rgb
+                .map((channel) => {
+                  const c = channel / 255;
+                  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+                })
+                .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i]!, 0);
+            expect(samples.map((sample) => sample.text)).toEqual([
+              printRow().title,
+              "About this event",
+              "Starts",
+              expect.stringMatching(/2030/),
+              "The fixture lobby",
+              printRow().description,
+            ]);
+            for (const sample of samples) {
+              expect(
+                await page.locator(sample.selector).first().isVisible(),
+                `retained ${sample.selector}`,
+              ).toBe(true);
+              // Composite transparent ancestors over the browser's white paper canvas.
+              const background = sample.backgrounds
+                .reverse()
+                .reduce((back, color) => composite(rgba(color), back), [255, 255, 255]);
+              const foreground = composite(rgba(sample.color), background);
+              const a = luminance(foreground);
+              const b = luminance(background);
+              const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+              expect
+                .soft(
+                  ratio,
+                  `${twin} ${sample.selector}: ${sample.color} on rgb(${background.join(",")})`,
+                )
+                .toBeGreaterThanOrEqual(4.5);
+            }
+          });
+        });
+
+        it("U1.2 real join-result flash is screen-visible, print-hidden and restored", async () => {
+          await usingPage(
+            twin,
+            printRow(),
+            "member",
+            async (page) => {
+              const flash = page.getByTestId("join-result");
+              expect(
+                await flash.count(),
+                "CONTROL: actual route banner, not an injected stand-in",
+              ).toBe(1);
+              expect(await flash.isVisible()).toBe(true);
+              const copy = (await flash.innerText()).trim();
+              expect(copy).toContain("You are in.");
+              await page.emulateMedia({ media: "print" });
+              expect
+                .soft(
+                  await flash.isVisible(),
+                  "U1.2 join-result selector suppresses the actual flash",
+                )
+                .toBe(false);
+              expect.soft(await printText(page)).not.toContain(copy);
+              expect(await printText(page)).toContain(printRow().title);
+              await page.emulateMedia({ media: "screen" });
+              expect(await flash.isVisible()).toBe(true);
+              expect((await flash.innerText()).trim()).toBe(copy);
+            },
+            1280,
+            false,
+            "added",
+          );
+        });
+
+        it("U1.2 real failed going-count refresh retry is screen-visible, print-hidden and restored", async () => {
+          await usingPage(
+            twin,
+            printRow(),
+            "guest",
+            async (page, data, reads) => {
+              await page.waitForFunction(
+                'document.documentElement.getAttribute("data-going-count-ready") === "1"',
+              );
+              expect(await page.getByTestId("event-going-count-retry").count()).toBe(0);
+              await page.evaluate(
+                `document.dispatchEvent(new CustomEvent("going-count-updated", {detail: {eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV", viewerState: "going"}}))`,
+              );
+              const retry = page.getByTestId("event-going-count-retry");
+              await retry.waitFor({ state: "visible" });
+              expect(await retry.innerText()).toBe("Try again");
+              expect(await page.getByTestId("event-going-count-stale").innerText()).toContain(
+                "Showing the last saved count.",
+              );
+              expect(
+                data.aggregateRefreshes,
+                "CONTROL: real island issued exactly one keyed aggregate GET",
+              ).toEqual(["GET /events.json?event_key=01ARZ3NDEKTSV4RRFFQ69G5FAV"]);
+              const beforeRequests = [...data.requests];
+              const beforeReads = [...reads];
+              await page.emulateMedia({ media: "print" });
+              expect
+                .soft(
+                  await retry.isVisible(),
+                  "U1.2 retry selector suppresses the live island button",
+                )
+                .toBe(false);
+              expect.soft(await printText(page)).not.toContain("Try again");
+              expect(await printText(page)).toContain(printRow().title);
+              await page.emulateMedia({ media: "screen" });
+              expect(await retry.isVisible()).toBe(true);
+              expect(await retry.innerText()).toBe("Try again");
+              expect(data.requests, "media changes cannot retry the failed read").toEqual(
+                beforeRequests,
+              );
+              expect(reads).toEqual(beforeReads);
+              expect(data.unexpected).toEqual([]);
+            },
+            1280,
+            true,
+            null,
+            true,
+          );
         });
 
         it("U1.1 CONTROL: overnight dates follow the host zone, not the UTC calendar date", async () => {

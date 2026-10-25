@@ -324,13 +324,9 @@ export function directionsUrl(venue: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${q(venue)}`;
 }
 
-/** Print-safe join destination: an absolute http(s) URL with no query string,
- * fragment, userinfo, malformed percent encoding, or decoded private path
- * segment. Bearer tokens, session ids and return context travel in the query,
- * so only a bare room URL is readable on paper; anything credential-shaped
- * stays a screen-only hyperlink (and hides in print, so no credential survives
- * as a PDF link annotation either). Unparseable or non-http(s) values are
- * never printable. */
+/** Print-safe room URL: refuse userinfo, query/fragment context, malformed
+ * encoding, private segments and recognized credential-bearing path forms.
+ * This is a conservative paper projection, not a change to screen access. */
 export function isPrintableJoinDestination(raw: string): boolean {
   let url: URL;
   try {
@@ -342,10 +338,36 @@ export function isPrintableJoinDestination(raw: string): boolean {
   if (hasUrlUserinfo(raw) || url.username !== "" || url.password !== "") return false;
   if (url.search !== "" || url.hash !== "") return false;
   try {
-    return !url.pathname
-      .split("/")
-      .some((segment) => /^private([-_].*)?$/i.test(decodeURIComponent(segment)));
+    const path = decodeURIComponent(url.pathname);
+    // Decode before splitting: an encoded slash is still a private-path boundary.
+    // Matrix parameters can carry sessions even without a query string.
+    if (/[;?#]/.test(path)) return false;
+    return !path
+      .split(/[/\\]/)
+      .some((segment) =>
+        /^(?:private|jsessionid|phpsessid|session(?:id|[_-]id)?|sid|token|access[_-]?token|bearer)(?:[=._-].*)?$/i.test(
+          segment,
+        ),
+      );
   } catch {
     return false;
   }
+}
+
+/** Preserve harmless instruction lines on paper without copying a sensitive
+ * destination (or a labeled credential) from this sibling free-text field. */
+export function printableJoinInstructions(raw: string): string {
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (
+        /\b(?:token|session(?:id|[ _-]id)?|jsessionid|phpsessid|bearer|authorization)\s*[:=]/i.test(
+          line,
+        )
+      )
+        return false;
+      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\s<>"']+/gi) ?? [];
+      return urls.every(isPrintableJoinDestination);
+    })
+    .join("\n");
 }

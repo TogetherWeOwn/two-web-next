@@ -10,6 +10,7 @@ import {
   googleCalendarUrl,
   isPrintableJoinDestination,
   isWireInstant,
+  printableJoinInstructions,
 } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
@@ -97,6 +98,9 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const printInstructions = e.join_instructions
+    ? printableJoinInstructions(e.join_instructions)
+    : "";
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -280,7 +284,21 @@ export const EventPage: FC<{
                 )
               ) : null}
               {e.join_instructions ? (
-                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+                <>
+                  <p
+                    class={
+                      printInstructions === e.join_instructions ? undefined : "event-screen-only"
+                    }
+                    data-testid="event-join-instructions"
+                  >
+                    {e.join_instructions}
+                  </p>
+                  {printInstructions && printInstructions !== e.join_instructions ? (
+                    <p class="event-print-only" hidden>
+                      {printInstructions}
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </section>
           ) : null}
