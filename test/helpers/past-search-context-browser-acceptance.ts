@@ -355,12 +355,45 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         ).toEqual(scripts);
       });
 
-      it("PSC-010 CONTROL preserves four-read filtered responses, shared ordinary cache and no audit writes", async () => {
+      it("PSC-010 CONTROL preserves five-read misses with bounded game suggestions, shared ordinary cache and no audit writes", async () => {
         const source = archiveReadFixture();
         source.replaceRows([archiveRow(1, { title: "ORBITAL", description: "ORBITAL context" })]);
+        function assertArchiveReads() {
+          // Four existing archive/count/RSVP reads plus exactly one suggestion read;
+          // an unrelated fifth read must not satisfy this merged-feature control.
+          expect(source.statements).toHaveLength(5);
+          expect(source.statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
+          const suggestions = source.statements.filter(({ sql }) =>
+            /^select distinct\b/i.test(sql),
+          );
+          expect(suggestions).toHaveLength(1);
+          const { sql, params } = suggestions[0]!;
+          expect(sql).toMatch(/\bfrom "events"(?:\s|$)/);
+          expect(sql).toContain('"events"."game"');
+          expect(sql).toMatch(/\border by\b/i);
+          // Suggestions span the archive, not just the current text matches.
+          expect(sql).not.toMatch(/\bilike\b/i);
+          const visibility =
+            /"events"\."status" = \$(\d+) or \("events"\."status" = \$(\d+) and "events"\."ends_at" < \$(\d+)\)/.exec(
+              sql,
+            );
+          expect(
+            visibility,
+            "Suggestions must use explicit-past or elapsed-published visibility",
+          ).not.toBeNull();
+          expect(visibility!.slice(1).map((position) => params[Number(position) - 1])).toEqual([
+            "past",
+            "published",
+            ARCHIVE_NOW.toISOString(),
+          ]);
+          const limit = /\blimit \$(\d+)\b/i.exec(sql);
+          expect(limit, "Suggestion SQL must be bounded before returning rows").not.toBeNull();
+          // 100 offered games plus one row to detect truncation, not an open range.
+          expect(params[Number(limit![1]) - 1]).toBe(101);
+        }
         const ordinary = await requestArchive(twin, "/events/past", source.env, kit);
         const ordinaryHtml = await ordinary.text();
-        expect(source.statements).toHaveLength(4);
+        assertArchiveReads();
         source.statements.length = 0;
         expect(await (await requestArchive(twin, "/events/past", source.env, kit)).text()).toBe(
           ordinaryHtml,
@@ -371,8 +404,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
           expect(filtered.status).toBe(200);
           expect(filtered.headers.get("cache-control")).toBe("private, no-store");
           expect(filtered.headers.get("x-two-past-cacheable")).toBeNull();
-          expect(source.statements).toHaveLength(4);
-          expect(source.statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
+          assertArchiveReads();
           source.statements.length = 0;
         }
         const refused = await requestArchive(twin, pathFor("🛰".repeat(256)), source.env, kit);
