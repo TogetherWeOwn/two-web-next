@@ -3,11 +3,14 @@ import type { FC } from "hono/jsx";
 import {
   EVENTS_EMPTY_COPY,
   EVENT_CANCELLED_TESTID,
+  EVENT_CARD_HOST_TESTID,
   EVENT_CARD_TESTID,
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
   SPOTS_LEFT_TESTID,
+  cardDayLabel,
   cardTimeLabel,
+  wallDateIso,
   existingResponsesText,
   goingCountText,
   loginUrl,
@@ -23,6 +26,9 @@ import {
   rowTitle,
   rowZone,
 } from "./pages-calendar-row";
+
+// Shared by persisted and Discord cards; count code points, never UTF-16 units.
+const DESCRIPTION_LIMIT = 240;
 
 /**
  * One event card (legacy partials/event-card-anon): same markup for every
@@ -44,6 +50,13 @@ export const CalCard: FC<{
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
+  // Compact host line: the trimmed public organizer, already on the row (no
+  // new read). Transients carry no organizer and blank/missing renders no
+  // node, so the badge and attendance never shift for unhosted cards.
+  const host = transient ? "" : (e.organizer_name ?? "").trim();
+  const startDay = wallDateIso(e.startsAt, tz);
+  const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
+  const descriptionPoints = [...(e.description ?? "")];
   return (
     <li>
       <article
@@ -66,6 +79,7 @@ export const CalCard: FC<{
             )}
           </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}
+          {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
           {!transient && e.status === "draft" ? (
             <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>
               Draft
@@ -81,7 +95,11 @@ export const CalCard: FC<{
             {e.endsAt ? (
               <>
                 {" · "}
-                <span>{wallTimeHm(e.endsAt, tz)}</span>
+                <time datetime={e.endsAt.toISOString()}>
+                  {(endDay !== startDay
+                    ? `${cardDayLabel(e.endsAt, tz)}${endDay!.slice(0, -6) !== startDay.slice(0, -6) ? ` ${endDay!.slice(0, -6)}` : ""}, `
+                    : "") + wallTimeHm(e.endsAt, tz)}
+                </time>
               </>
             ) : null}{" "}
             <span>{tz}</span>
@@ -92,7 +110,20 @@ export const CalCard: FC<{
               </>
             ) : null}
           </p>
-          {e.description ? <p>{e.description}</p> : null}
+          {descriptionPoints.length > DESCRIPTION_LIMIT ? (
+            <details class="schedule-description">
+              <summary>
+                <span class="schedule-excerpt">
+                  {descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…
+                  <br />
+                </span>
+                Full description
+              </summary>
+              <p>{e.description}</p>
+            </details>
+          ) : e.description ? (
+            <p>{e.description}</p>
+          ) : null}
         </div>
         <div class="schedule-actions">
           {!transient ? (

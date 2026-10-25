@@ -18,6 +18,9 @@ There are two different journeys:
   returns to the homepage. A validated same-site `next` path can instead take
   them back to another page without a homepage notice. Failures render a
   recovery page with **Try again** and **Join with an invite link instead**.
+  If the approval fails to start (a store outage at `/join/discord`), the
+  journey bounces back to `/join` with a "The Discord approval failed to
+  start — try again below." banner above the unchanged one-click button.
 - **Sign-in:** `/auth/discord` → Discord approval →
   `/auth/discord/callback` → homepage. This also attempts to add them to the
   server, but an auto-join failure does not prevent website sign-in.
@@ -41,12 +44,15 @@ that sign-in succeeded, or that the person is a Discord member.
 | `already_member` | "Signed in. You're already in the TWO Discord." | On a real successful callback, Discord reported an existing member. Open the server and finish screening if needed; the notice is not a live membership check. |
 | `join_failed` | "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below." | This sign-in flow could not add the person automatically and creates a non-member session. Use **Join with an invite link instead** or `/discord`, then finish Discord screening. Do not say membership was established. |
 | `signin_failed` | "Discord sign-in didn't complete. Please try again." | This is the generic sign-in failure, not a diagnosis of cancellation or a Discord outage. Start a fresh sign-in at `/auth/discord`; if it repeats, report the failure without sharing callback parameters. |
-| `signin_denied` | "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like." | This is the cancelled-consent outcome, distinct from a generic failure or provider outage. If the person wants to continue, start again at `/auth/discord`. The query alone does not prove that consent was cancelled. |
+| `signin_denied` | "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like." | This is the cancelled-consent outcome, distinct from a generic failure or provider outage. If the person wants to continue, follow the page's **Try signing in again** link to a fresh `/auth/discord` journey. The query alone does not prove that consent was cancelled. |
 | `signin_unavailable` | "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute." | This is the provider-unavailable outcome during code exchange or user lookup. Wait a minute and try a fresh sign-in; do not infer an outage from the generic `signin_failed` copy. |
 
 The browser shows only the site's own wording; it does not expose Discord's
 `error_description`. Do not treat a notice name or sentence as evidence of
-authentication, current membership, or the cause of a failure.
+authentication, current membership, or the cause of a failure. The three
+sign-in failure notices (`signin_failed`, `signin_denied`,
+`signin_unavailable`) each render a **Try signing in again** link to a fresh
+`/auth/discord` journey; `join_failed` instead offers the invite link.
 
 `join_failed` belongs to the **sign-in** flow. A failed automatic add still
 issues a non-member session, so the notice does not mean the person joined.
@@ -188,10 +194,18 @@ The table is not a complete sign-in history: `/auth/discord/callback` does not
 write join-attempt rows, website-throttled (429 admission) requests do not reach
 the recorder, and a missing join store can leave no row. A Discord
 automatic-add backoff (`rate_limited`) is recorded; a local admission refusal
-is not. The current live add-member call also
-leaves Request ID empty; do not promise a trace ID or infer success from an
-absent row. List and detail reads attribute the returned rows' recorded Discord
-IDs directly, excluding the viewer, without requiring a current users row or
+is not. Which rows carry a Request ID depends on the outcome. The early
+`denied` and `error` rows record the website's correlation ID for that
+callback request: the ID the middleware stores in the request context, echoes
+as the `x-request-id` response header, and logs as `http.request.request_id`,
+so those rows join to request logs. The later add-member rows (`added`,
+`already_member`, `degraded`, `rate_limited`) instead carry the live adapter's
+`done.requestId`, which the production live adapter returns as null, so
+Request ID stays empty there. Not every error path records a row, and a
+callback without middleware context can still record null; do not promise a
+trace ID or infer success from an absent row. List and detail reads attribute
+the returned rows' recorded Discord IDs directly, excluding the viewer,
+without requiring a current users row or
 membership flag. Missing, invalid or partial member keys refuse the contents;
 they are not silently omitted from attribution. Empty lists and self-only reads
 create no access row. Audit-write failures always refuse protected contents;

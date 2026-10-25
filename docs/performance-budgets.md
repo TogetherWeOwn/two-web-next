@@ -42,8 +42,19 @@ dry-run builds in CI (`ci.yml` `check` job) with no size assertion.
 `ci/check-worker-bundle.mjs` gates the dry-run output `dist/worker.js`
 (raw and default-level gzip) against `ci/worker-bundle-budget.json`.
 It exits **0** when the bundle fits, **1** on breach, **2** when it cannot
-enforce (missing bundle or budget). Every failure prints a remediation
+enforce (invalid plan or missing evidence). Every failure prints a remediation
 pointer to the budget file's `$comment`. The checker never deploys.
+
+The canonical required measurement inventory is exactly `dist/worker.js`,
+defined once in `ci/bundle-inventory.mjs` and validated before the bundle is
+read. A plan that is empty, missing the canonical entry, misspelled,
+substituted, extended, or noncanonical is an invalid plan (exit 2); identity
+is fixed while numeric ceilings stay configurable in
+`ci/worker-bundle-budget.json`. `--root <dir>` selects the measurement root,
+`--format json` emits a versioned report (stable `worker.bundle` group and
+`worker.bundle.dist/worker.js` check IDs, measured bytes, fixed `error.code`
+with `next_action`), `--dry-run` is the same read-only measurement, and
+unknown flags exit 2 before any subprocess or write.
 
 Measured 2026-10-18 with wrangler 4.149.0
 (`npx wrangler deploy --dry-run --outdir dist`; the `--env production`
@@ -336,7 +347,7 @@ The staging checks run after deployment and serve different purposes:
 |---|---|---|
 | `staging-journeys` | Authenticated critical journeys against the deployed Worker; a journey ledger fails the job if every journey skips. | Post-deploy evidence, not a PR merge check. Docs-only and test-only deploys may skip it. Automatic production candidate resolution requires a successful `staging-journeys` result. |
 | `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
-| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. |
+| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. Anchors are parsed as HTML (quoted/unquoted attributes and character references, not comment/script text), resolve with browser URL semantics (including same-origin network-path references), and only count as served when a registered route or an admitted regular public file backs them. Analysis is bounded: a response body over 1 MiB, or a document over 10,000 elements, 256 levels deep or 1,000 attribute tokens on one tag (counted by the pinned parser tokenizer before duplicate-name lookup, including duplicates and end tags), becomes a route-named `HTML_TOO_LARGE`/`HTML_TOO_COMPLEX` failure (never a truncated success), and link parsing shares the route's 15 s settlement budget (`LINKS_TIMEOUT`). | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. For local debugging, `node ci/web-standards.mjs --dry-run` inventories the audited routes without starting the fixture worker, and `--format json` prints a versioned report with stable check IDs. |
 
 The staging origin runs use GET-only requests with no sign-in or writes, but
 they are not database-free: both Lighthouse runs measure `/events`, and the
@@ -420,6 +431,44 @@ Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile
 then desktop, separate attempts, three samples per planned route, corrupted and
 missing sample evidence, the field allowlist, unchanged resolved Lighthouse
 configuration/scoring, and the real LHCI median assertion.
+
+### Independent navigation admission and fixture verification
+
+A sample is one independent configuration-matched navigation, not one JSON
+file. Admission keys each report by its canonical requested URL plus its
+navigation timestamp (`fetchTime`). The same navigation reused via duplicate
+objects, separately parsed copies or renamed files fills one quota slot;
+distinct navigations with equal scores remain valid. Required native fields:
+`gatherMode: navigation`, a full UTC ISO `fetchTime`, an explicit
+`requestedUrl`, positive finite `timing.total` with `timing.entries`, and
+resolved `configSettings` matching the selected desktop or mobile profile
+(form factor, screen emulation, throttling method and values, selected
+categories, skipped audits). Missing or wrong-mode reports cannot satisfy
+quotas. Per-request URL accounting and same-origin redirects are preserved;
+unplanned or foreign requests never substitute for a planned route. This is
+admission validation, not proof against fabricated LHR metadata.
+
+Rejected reports carry bounded stable codes (`duplicate_navigation`,
+`invalid_identity`, `invalid_timing`, `settings_mismatch`, `invalid_report`,
+`unplanned_request`, `invalid_redirect`) with positive counts plus a safe
+`next_action`. Diagnostics and versioned JSON expose counts only, never report
+bodies, query values, headers, snippets or absolute paths. Route quotas,
+floors, budgets, separate-attempt archives and the single retry are unchanged;
+two short attempts never combine into a complete one.
+
+Read-only verification (no collection, network, writes or archives):
+
+```sh
+node ci/lighthouse-origin-run.mjs https://togetherweown.com --check-fixture <directory> --format json
+QUALITY_ORIGIN=https://togetherweown.com node ci/lighthouse-quality-run.mjs --check-fixture <directory> --format json
+```
+
+Both emit one JSON object via the log seam (`schemaVersion: 1`, `profile`,
+`code`, `complete`, per-URL `rows`, `rejectionCounts`, `next_action`).
+`collection_complete` exits 0, `incomplete_collection` exits 1,
+`invalid_arguments` exits 2 before any collection or network action. Only
+top-level `lhr-*.json` files are read; nested attempt archives never fill
+quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%

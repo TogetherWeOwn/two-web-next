@@ -101,6 +101,7 @@ export const EventPage: FC<{
   const printInstructions = e.join_instructions
     ? printableJoinInstructions(e.join_instructions)
     : "";
+  const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -215,17 +216,43 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Reconciliation can lag: published rows stop inviting at
+                  // their end, using the same server instant as RSVP below.
+                  // Draft previews retain the line. The binder patches existing
+                  // spots nodes only, so refresh cannot recreate it after close.
+                  showSpotsLeft:
+                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
                   announcement: null,
                 }),
               }}
             />
           </dd>
         </div>
+        <div hidden>
+          <dt>Compare in another timezone</dt>
+          <dd class="event-device-timezone" data-event-chosen-timezone>
+            <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+            <input
+              type="text"
+              id="chosen-timezone-input"
+              data-testid="event-chosen-timezone-input"
+              maxlength={64}
+              hidden
+              autocomplete="off"
+              spellcheck={false}
+            />
+            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+            <button type="button" hidden data-testid="event-chosen-timezone-button">
+              Compare times
+            </button>
+            <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+          </dd>
+        </div>
       </dl>
       <div class="event-rsvp">
         <RsvpButton
           e={e}
+          now={now}
           member={member}
           answer={answer}
           waitlistPosition={waitlistPosition}
@@ -244,7 +271,11 @@ export const EventPage: FC<{
             </section>
           ) : null}
           {accessibilityNotes ? (
-            <section class="event-description" aria-labelledby="event-accessibility-heading">
+            <section
+              class="event-description"
+              data-testid="event-accessibility"
+              aria-labelledby="event-accessibility-heading"
+            >
               <h2 id="event-accessibility-heading">Accessibility</h2>
               <p>{accessibilityNotes}</p>
             </section>
@@ -342,8 +373,33 @@ export const EventPage: FC<{
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
             </a>
+            {e.status === "published" ? (
+              <>
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+                <button
+                  type="button"
+                  hidden
+                  data-native-share
+                  data-share-title={e.title}
+                  data-share-url={canonical}
+                  data-testid="event-share"
+                >
+                  Share
+                </button>
+              </>
+            ) : null}
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          {e.status === "published" ? (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-share-status"
+              data-native-share-status
+            ></p>
+          ) : null}
         </section>
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
@@ -401,6 +457,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />
       <script

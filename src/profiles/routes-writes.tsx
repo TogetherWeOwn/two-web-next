@@ -28,6 +28,7 @@ import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import type { MemberView } from "./store";
 import { requestRoute, safeRequestId } from "../request-log";
+import { jsonRefusal } from "../json-refusal";
 import { acceptsJson, isJsonMediaType, mediaType } from "../media-type";
 import { normalizeLeaderboardOptOut, validateProfile } from "./validation";
 
@@ -106,6 +107,8 @@ export function registerWriteRoutes(
       } else {
         c.header("cache-control", "private, no-store");
         varyAccept(c);
+        if (acceptsJson(c.req.header("accept")))
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (prefersHtmlError(c)) return c.html(<BadRequestPage code="415" />, 415);
         return c.text("Unsupported Media Type", 415);
       }
@@ -143,14 +146,7 @@ export function registerWriteRoutes(
       : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
       if (acceptsJson(c.req.header("accept"))) {
-        // Additive correlation: the validated log id requestLog set on the
-        // context, never raw client header bytes. Omitted when there is no
-        // requestLog context (a bare mount has no log correlation id).
-        const requestId = safeRequestId(c.get("requestId"));
-        return c.json(
-          { errors: result.errors, ...(requestId ? { request_id: requestId } : {}) },
-          422,
-        );
+        return jsonRefusal(c, "invalid", 422, { fields: result.errors });
       }
       c.status(422);
       return c.html(
@@ -251,6 +247,8 @@ export function registerWriteRoutes(
       }
     }
     c.header("Allow", "GET, PATCH, POST");
+    varyAccept(c);
+    if (acceptsJson(c.req.header("accept"))) return jsonRefusal(c, "method_not_allowed", 405);
     return c.text("Method Not Allowed", 405);
   });
 }

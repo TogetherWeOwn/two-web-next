@@ -92,6 +92,24 @@ const SUITES = [
     title: "event print narrow wrap browser acceptance",
     min: 2,
   },
+  {
+    file: "test/profile-local-time-comparison-acceptance.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "profile local time comparison in Chromium",
+    min: 72,
+  },
+  {
+    file: "test/profile-local-time-save.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "profile local time after save in Chromium",
+    min: 40,
+  },
+  {
+    file: "test/event-chosen-timezone.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "event chosen timezone browser acceptance",
+    min: 30,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -165,9 +183,38 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
   assert.match(
     step,
     new RegExp(
-      `\\n          ${RSVP_ENV}=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus\\.tap ${escape(RSVP_FILE)}\\n`,
+      `\\n          ${RSVP_ENV}=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus\\.tap --test-reporter=spec --test-reporter-destination=stdout ${escape(RSVP_FILE)}\\n`,
     ),
-    "the RSVP step must run the Chromium gate with its TAP report",
+    "the RSVP step must run the Chromium gate with readable spec stdout beside its TAP report",
+  );
+  // Spec stdout is additive evidence: the TAP file still feeds the verifier
+  // below, the gate runs exactly once, and its exit status must not be
+  // hidden behind a pipe, tee, redirection or fallback.
+  const rsvpRun =
+    step.split("\n").find((line) => line.includes(RSVP_FILE) && line.includes("node --test")) ?? "";
+  assert.equal(
+    (step.match(new RegExp(`node --test .*${escape(RSVP_FILE)}`, "g")) ?? []).length,
+    1,
+    "the RSVP browser gate must run exactly once",
+  );
+  assert.equal(
+    (
+      step.match(
+        /--test-reporter=tap --test-reporter-destination=artifacts\/a11y\/rsvp-focus\.tap/g,
+      ) ?? []
+    ).length,
+    1,
+    "the RSVP step must keep exactly one TAP reporter bound to its artifact",
+  );
+  assert.equal(
+    (step.match(/--test-reporter=spec --test-reporter-destination=stdout/g) ?? []).length,
+    1,
+    "the RSVP step must bind exactly one spec reporter to stdout",
+  );
+  assert.doesNotMatch(
+    rsvpRun,
+    /\||\btee\b|>>?\s|&&|;/,
+    "the RSVP step must not pipe, tee, redirect or chain the test command",
   );
   assert.match(
     step,
@@ -181,6 +228,27 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
   assert(chromiumInstall >= 0, "a11y job must install Chromium");
   assert(chromiumInstall < job.indexOf(step), "Chromium install must precede the RSVP step");
 
+  const uploadStep = steps.find(
+    (entry) =>
+      entry.includes("actions/upload-artifact@") && entry.includes("path: artifacts/a11y/"),
+  );
+  assert(uploadStep, "a11y job must upload artifacts/a11y/ so the RSVP TAP evidence survives");
+  assert.match(
+    uploadStep,
+    /\n        if: always\(\)\n/,
+    "the a11y evidence upload must always run",
+  );
+  assert.match(
+    uploadStep,
+    /\n          if-no-files-found: error\n/,
+    "missing a11y evidence must fail the upload",
+  );
+  assert.match(
+    uploadStep,
+    /\n          retention-days: 14\n/,
+    "the a11y evidence upload must keep 14-day retention",
+  );
+
   const source = await readFile(new URL(`../${RSVP_FILE}`, import.meta.url), "utf8");
   assert.match(source, new RegExp(`process\\.env\\.${RSVP_ENV} !== "true"`));
   for (const title of RSVP_CASES)
@@ -190,6 +258,51 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
   const row = readme.split("\n").find((line) => line.startsWith(`| \`${RSVP_FILE}\` |`));
   assert.match(row ?? "", /rsvp-focus-require-executed\.mjs/);
   assert.doesNotMatch(row ?? "", /no executed-count verifier yet/);
+});
+
+const SHARE_FILE = "ci/event-native-share-browser.test.mjs";
+const SHARE_SUITE = "Native event sharing";
+const SHARE_MIN = 34;
+
+test("a11y job runs ci/event-native-share-browser.test.mjs unconditionally after Chromium and Kit installs", async () => {
+  const step = steps.find(
+    (entry) => entry.includes(SHARE_FILE) && entry.includes("node --import tsx --test"),
+  );
+  assert(step, `a11y job must run ${SHARE_FILE}`);
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share\\.tap ${escape(SHARE_FILE)}\\n`,
+    ),
+    "the native-share step must run the Chromium gate with its TAP report",
+  );
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node ci/rsvp-focus-require-executed\\.mjs artifacts/a11y/event-native-share\\.tap "${escape(SHARE_SUITE)}" ${SHARE_MIN}\\s*$`,
+    ),
+    "the native-share step must fail an all-skipped run via the executed-count verifier",
+  );
+  assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+  assert(chromiumInstall >= 0, "a11y job must install Chromium");
+  assert(
+    chromiumInstall < job.indexOf(step),
+    "Chromium install must precede the native-share step",
+  );
+  const kitInstall = job.indexOf("npm ci --prefix web --include=dev");
+  assert(
+    kitInstall >= 0 && kitInstall < job.indexOf(step),
+    "Kit install must precede the native-share step",
+  );
+
+  const source = await readFile(new URL(`../${SHARE_FILE}`, import.meta.url), "utf8");
+  assert.match(source, /No opt-in skips/, "the suite must stay unconditional");
+  assert.doesNotMatch(source, /_BROWSER_TESTS/, "the suite must not gain an opt-out gate");
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${SHARE_FILE}\` |`));
+  assert.match(row ?? "", /rsvp-focus-require-executed\.mjs/);
+  assert.match(row ?? "", /None—always runs/);
 });
 
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.

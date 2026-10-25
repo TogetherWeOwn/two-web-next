@@ -22,6 +22,7 @@ import {
   bufferedMemberText,
   memberReadActive,
 } from "./member-reads";
+import { jsonRefusal } from "./json-refusal";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
 import { acceptsJson } from "./media-type";
 import { requestRoute, safeRequestId } from "./request-log";
@@ -444,7 +445,7 @@ export function nonOwnerProfileWrite(c: Context): Response | Promise<Response> {
   varyAccept(c);
   c.status(403);
   if (acceptsJson(c.req.header("accept"))) {
-    return c.json({ error: "forbidden", message: "You can only edit your own profile." });
+    return jsonRefusal(c, "forbidden", 403, { message: "You can only edit your own profile." });
   }
   return c.html(<OwnProfileOnlyPage />);
 }
