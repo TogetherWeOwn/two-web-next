@@ -297,6 +297,102 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
             );
           });
 
+          // Quote/angle boundaries cannot turn a rejected complete URL into a
+          // harmless prefix. Labels deliberately avoid token/session patterns.
+          it.each([
+            [
+              "apostrophe before fragment",
+              "https://call.example.test/open-room'fixture#fixture-secret",
+              false,
+              "fixture-secret",
+            ],
+            [
+              "apostrophe before query",
+              "https://call.example.test/open-room'fixture?auth=fixture-secret",
+              false,
+              "fixture-secret",
+            ],
+            [
+              "apostrophe inside userinfo",
+              "https://o'connor:fixture-password@call.example.test/open-room",
+              false,
+              "fixture-password",
+            ],
+            [
+              "double quote before fragment",
+              'https://call.example.test/open-room"fixture#fixture-secret',
+              false,
+              "fixture-secret",
+            ],
+            [
+              "angle bracket before fragment",
+              "https://call.example.test/open-room<fixture#fixture-secret",
+              false,
+              "fixture-secret",
+            ],
+            ["CONTROL harmless apostrophe", "https://call.example.test/o'connor", true, "o'connor"],
+          ] as const)(
+            "U1.2 complete joining URL token: %s",
+            async (_name, destination, printable, marker) => {
+              const instructions = `Use headphones.\nOpen ${destination} room\nBring a board.`;
+              await usingPage(
+                twin,
+                printRow({ join_url: destination, join_instructions: instructions }),
+                "member",
+                async (page, data, reads) => {
+                  const link = page.getByTestId("event-public-join-link");
+                  const original = page.getByTestId("event-join-instructions");
+                  expect(await link.isVisible(), "CONTROL: authorized screen destination").toBe(
+                    true,
+                  );
+                  expect(await link.getAttribute("href")).toBe(destination);
+                  expect(await original.isVisible()).toBe(true);
+                  expect(await original.textContent(), "CONTROL: unredacted screen text").toBe(
+                    instructions,
+                  );
+                  expect(await printText(page)).toContain(marker);
+                  const beforeRequests = [...data.requests];
+                  const beforeReads = [...reads];
+                  await page.emulateMedia({ media: "print" });
+                  const text = await printText(page);
+                  if (printable) {
+                    expect
+                      .soft(text, "CONTROL: ordinary apostrophe URL stays readable")
+                      .toContain(`Open ${destination} room`);
+                  } else {
+                    expect
+                      .soft(text, "whole unsafe URL must stay off paper")
+                      .not.toContain(destination);
+                    expect
+                      .soft(text, "no secret suffix survives a truncated URL match")
+                      .not.toContain(marker);
+                    const sensitive = page.locator(`a[href*="${marker}"]`);
+                    expect(
+                      await sensitive.count(),
+                      "CONTROL: real destination anchor exists",
+                    ).toBeGreaterThan(0);
+                    for (let i = 0; i < (await sensitive.count()); i++)
+                      expect
+                        .soft(await sensitive.nth(i).isVisible(), "no active paper/PDF link")
+                        .toBe(false);
+                  }
+                  expect.soft(text).toContain("Use headphones.");
+                  expect.soft(text).toContain("Bring a board.");
+                  expect.soft(text).toContain(printRow().title);
+                  expect(await link.isVisible()).toBe(false);
+                  await page.emulateMedia({ media: "screen" });
+                  expect(await link.isVisible()).toBe(true);
+                  expect(await link.getAttribute("href")).toBe(destination);
+                  expect(await original.isVisible()).toBe(true);
+                  expect(await original.textContent()).toBe(instructions);
+                  expect(reads).toEqual(beforeReads);
+                  expect(data.requests).toEqual(beforeRequests);
+                  expect(data.unexpected).toEqual([]);
+                },
+              );
+            },
+          );
+
           it.each([
             [
               "unsafe",
