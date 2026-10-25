@@ -6,15 +6,15 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the twenty-sixth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `826b40e85`;
+**Current decision after the twenty-seventh base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `fcb2b9459`;
 main's independently merged allocations are not authored here. Earlier
 proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 that client fits, but that union breaches server gzip and file count. The
-[latest reconciliation](#twenty-sixth-base-conflict-reconciliation-history-only-limits-equal-base)
-verifies the actual prerequisite tree only, not a new feature union. Neither
+[latest reconciliation](#twenty-seventh-base-conflict-reconciliation-history-only-limits-equal-base)
+verifies history and unchanged ceilings only, not a new build or feature union. Neither
 this client decision nor the prerequisite-tree build releases the source
 feature's server HOLD or proves it is ready to merge.
 
@@ -1434,3 +1434,41 @@ No page differs from main. Exact-head CI and independent hosted review still
 gate merge. The unchanged source ref is `723957121b65`; its server HOLD
 persists. UNDO: this PR's history/evidence only, never #1799's independent
 allocation or prior main-side repairs.
+
+## Twenty-seventh base-conflict reconciliation: history only, limits equal base
+
+GitHub confirmed the conflict on `c8f4f62e1`. Reconciled pinned main
+`fcb2b94598bb60f33e7c2f982fb0415cde5855dd`, adding
+[#1785](https://github.com/TogetherWeOwn/two-web-next/pull/1785).
+Main changed only the budget comment since the preceding pinned base
+`826b40e85`; all non-comment values are equal on every side. No runtime,
+lockfile, checker, workflow, test or ceiling change is authored here.
+
+The sole conflict was the comment. Exact merge-base history (602303
+characters) + main suffix (3127) + branch suffix (10900) = 616330 characters.
+Each suffix is absent from the opposite input and retained exactly once;
+main's complete history is a verbatim prefix. Preserve its ASCII-escaped
+JSON representation. Only the comment and this PR's two evidence files
+differ from pinned main; the historical TSV remains unchanged.
+
+Reuse the preceding pinned build measurements as historical evidence;
+no fresh Kit build, build determinism or current feature-union claim is
+made this round. Main's incoming change is comment-only and every runtime
+input equals the preceding prerequisite tree. The client proposal remains
+withdrawn and source-feature/server HOLD persists; neither this history
+merge nor another feature's allowance grants release permission.
+
+The first focused run failed because the external dependency symlink had
+expired (`ERR_MODULE_NOT_FOUND: wrangler`). Restoring the committed root
+lock with external `npm ci --include=dev` gives **100/100** unchanged
+checker/parity/config/citation tests. Gate selftests pass: Kit **12/12**,
+Hono bundle **34/34**, performance **6/6**, parity **13/13**. An early docs
+check caught the new summary anchor before this section was written;
+completing the section fixes that draft-only link. No tests were modified.
+
+Full `npm run check`, Vitest, builds, fresh feature union/acceptance,
+browser/visual/quality gates, Hono worker dry-run, measured startup and
+staging were not rerun. No page differs from main. Exact-head hosted
+CI/security and independent review remain mandatory; an active review
+must not be superseded by a push. UNDO: our history/evidence only, not
+main's independently approved allocations or prior repairs.
