@@ -94,6 +94,8 @@
 .content-page [data-testid='about-facts'] { gap: 0; }
 .content-page [data-testid='rules-list'] { display: block; list-style: decimal; padding-left: 2rem; }
 .content-page [data-testid='rules-list'] li::marker { color: var(--brand); font-weight: 700; font-size: 1.5rem; }
+.jump{list-style:none;padding:0}
+.rules>li.card:has(>h2:target){background:var(--surface)}
 .base-theme [data-testid='faq-list'] section { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 2rem; }
 /* LCP: render offscreen faq sections only when scrolled near. */
 [data-testid='faq-list']>section{content-visibility:auto;contain-intrinsic-size:auto 20rem}

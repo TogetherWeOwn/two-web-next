@@ -372,7 +372,7 @@ describe("Kit calendar fragment auth lineage", () => {
       setHeaders,
       deleteJoinCookie,
       dbForFn: async () => ({}) as never,
-      sessionForFn: async () => ({ member: true, moderator: false }),
+      sessionForFn: async () => ({ username: "parity-member", member: true, moderator: false }),
       journeyForFn,
       modelForFn,
       discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }) as never,

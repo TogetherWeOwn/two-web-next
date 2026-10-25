@@ -1,19 +1,19 @@
 # Combined board-caption and profile-composition budget
 
-Measured 2026-10-22; refreshed 2026-10-24. This is a budget-history prerequisite for
+Measured 2026-10-22; refreshed 2026-10-25. This is a budget-history prerequisite for
 [#1493](https://github.com/TogetherWeOwn/two-web-next/pull/1493), not approval
 of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the seventeenth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `e046a2040`,
+**Current decision after the eighteenth base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `8df87c89f`,
 including main's own #1669 raw/gzip allocation (not authored here); earlier
 proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 that client fits, but that union breaches server gzip and file count. The
-[seventeenth reconciliation](#seventeenth-base-conflict-reconciliation-preserve-the-restored-write-allocation-limits-equal-base)
+[eighteenth reconciliation](#eighteenth-base-conflict-reconciliation-absorb-config-warning-record-and-fifteen-main-side-commits-limits-equal-base)
 verifies the actual prerequisite tree only, not a new feature union. Neither
 this client decision nor the prerequisite-tree build releases the source
 feature's server HOLD or proves it is ready to merge.
@@ -1212,3 +1212,69 @@ not rerun. No page differs from pinned main. The older union's server breach
 remains pinned to `d6a65b4fa`, not asserted for current main; source-feature
 server HOLD and its own exact-head CI/review remain mandatory. Rollback is
 history/evidence only relative to main; do not undo #1669's allocation.
+
+## Eighteenth base-conflict reconciliation: absorb config-warning record and fifteen main-side commits, limits equal base
+
+On 2026-10-25 GitHub confirmed the live conflict on `2a666e47` against
+pinned main `8df87c89f` (fifteen commits: #1697, #1707, #1706, #1718, #1741,
+#1731, #1709, #1745, #1725, #1747, #1754, #1762, #1743, #1750, #1680). Only
+#1680 changed `ci/kit-perf-budget.json` on main, appending its config-warning
+record; the other fourteen commits touch sources, tests, CI wiring and docs.
+The branch has no numeric delta against common base `e046a2040`; resolution
+takes main's numbers verbatim. Every cap equals merged main, including #1669's
+independent client raw 253440 / gzip 102400 allocation (not authored here).
+The original board-client increase remains withdrawn.
+
+Programmatic assertions verify the common comment prefix (390862 characters),
+main's unique suffix (20571 characters) and this branch's unique suffix
+(10900 characters). Each suffix is absent from the opposite side and appears
+exactly once in the result: common base + main suffix + branch suffix. The
+result preserves main's JSON representation (`\uXXXX` escaping, 2-space
+indent, trailing newline) with one additive comment-line diff against main;
+every non-comment value equals main. The merged tree differs from main in
+exactly three files: the budget JSON and these two evidence docs. No source,
+test, lockfile, baseline, checker or historical per-file TSV changes.
+
+Two fresh locked production builds on Node `v24.22.1` / npm `11.19.1`, using
+fresh root/web `npm ci --include=dev` installations (prior run's symlinked
+deps had expired), pass the unchanged checker (exit **0** twice, byte-identical
+across rebuilds):
+
+| Group | Actual prerequisite tree | Merged-base ceiling |
+| --- | --- | --- |
+| Client JS raw/gzip | 253204/102307 B | 253440/102400 B |
+| Client JS files | 54 | 55 |
+| Server JS raw/gzip | 1160018/329218 B | 1203200/333312 B |
+| Server JS files | 115 | 126 |
+| Worker raw/gzip | 2551/1219 B | 3584/1536 B |
+| Client CSS raw/gzip | 2861/1019 B | 3072/1024 B |
+| Client CSS files | 2 | 4 |
+| Overall checker exit | 0 twice | 0 required |
+
+All 54 client path/hash pairs match across rebuilds. Client margins are
+236 raw / 93 gzip B; CSS gzip margin remains 5 B. These thin margins are
+main's own #1669 allocation, not a new proposal here. Root/web lock SHA-256s
+remain `131c46575f340d700c1c3dd414c64d403289042b77fbaf7ec7e7a3d9449437e0`
+and `feaa492a89fb6ffe07ea4114e2111219e1f8ff4d2a99dc53fc7b7898f8be565e`,
+byte-identical to pinned main. Startup 60000 ms is a configured bound, not a
+latency measurement.
+
+Fresh verification: checker selftest **12/12** (grew from 6 via main-side
+#1745 canonical-inventory cases) plus checker tests **13/13**; parity gates
+selftest **13/13** plus parity suites **67/67**; config **34/34**; Hono bundle
+selftest **34/34**; aggregate gate selftest **6/6**; citations **12/12**.
+Lint (**2018 files**), root/CI typecheck, asset drift, floor guard plus
+**59/59** selftests, inventory **1226/1226**, ratchet **27/27** plus scan, and
+dependency-audit selftests **56/56** plus audit exit **0** pass. Docs links
+pass (**150** Markdown files). `context-pack --base origin/main` failed with
+`RuntimeError: MCP server exited` (same as prior runs); no pack was produced.
+The diff touches no functions, so no caller updates apply. Fresh-context
+local review found no blocking issues, not hosted merge approval. The Hono
+worker-bundle check was not run (needs a wrangler dry-run bundle; the Kit
+checker already enforces the `_worker.js` entry). Full `npm run check`, fresh
+feature union or acceptance, browser/visual/quality gates, startup latency
+and staging were not rerun. No page differs from pinned main. The older
+union's server breach remains pinned to `d6a65b4fa`, not asserted for current
+main; source-feature server HOLD and its own exact-head CI/review remain
+mandatory. Rollback is history/evidence only relative to main; do not undo
+#1669's allocation.
