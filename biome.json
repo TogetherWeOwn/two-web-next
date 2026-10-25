@@ -46,7 +46,9 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/admin-rsvp-review.css",
         "public/styles.css",
+        "public/admin-rsvp-review.css",
         "public/theme.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",

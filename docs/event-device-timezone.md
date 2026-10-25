@@ -19,6 +19,23 @@ Calendar** instead. Without JavaScript, the complete host schedule and calendar
 links remain available. Check your device settings if its timezone is not the
 one you intended.
 
+## Compare the range in a chosen timezone
+
+Planning with friends elsewhere? Under **Compare in another timezone**, type an
+IANA timezone identifier (for example `Europe/London`) and select **Compare
+times**. The comparison shows BOTH the start and the end instants as full dates
+and times in that zone, with the UTC/GMT offset that applies to each instant,
+so a range that crosses midnight or a daylight-saving change reads correctly.
+
+This converts the event's scheduled range, not your device clock: the
+device-timezone buttons above convert one instant each using your device
+setting, while the profile editor helper only previews the zone saved on your
+profile. The chosen zone is used for this one comparison only. Nothing is saved
+to your profile, cookies or storage, and no request is sent; typing alone never
+converts. Surrounding whitespace is ignored. An unknown or overlong identifier, or a browser without Intl
+formatting, yields honest guidance pointing back at the host schedule and
+calendar links.
+
 ## UI contract
 
 Audience: guests and members comparing the start or end instant without
@@ -32,7 +49,10 @@ Keep each host `<time>` unchanged. Place a secondary native button below each
 one, then a polite status paragraph for either the comparison or honest
 fallback guidance. The Ends mount reuses the Starts shape verbatim; both mounts
 carry button/status testids (`event-device-timezone-{starts,ends}-{button,status}`)
-so each conversion is addressed separately. Retain the current typography and
+so each conversion is addressed separately. The chosen-range mount reuses the
+same block class after the Ends block: a labelled bounded native input with
+compact examples, an explicit Compare action and one polite status showing both
+instants with per-instant offsets. Retain the current typography and
 color tokens; wrap long zones/dates inside the metadata cell and retain the
 existing mobile single-column grid. Do not move focus or convert on page load.
 Hide the actions until JavaScript binds them; no-JS keeps the host presentation.
