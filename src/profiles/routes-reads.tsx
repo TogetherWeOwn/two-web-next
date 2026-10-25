@@ -8,6 +8,7 @@ import { readJoinResult } from "../return-journey";
 import { ProfilePage } from "./pages";
 import { type Ctx, type ProfileApp, SNOWFLAKE } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
+import { findSharedGames } from "./shared-games";
 
 export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: ProfileStores) {
   const render = async (c: Ctx, id: string) => {
@@ -28,6 +29,17 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
     declareMemberResult(member ? [member.id] : []);
     if (!member) return notFound();
     const viewer = c.get("viewer");
+    const isOwner = viewer.id === member.id;
+    // Another member's page marks the games the viewer also plays: at most one
+    // extra keyed read of the viewer's own stored row, bounded by the stored
+    // list. The boundary filters the viewer out of the audit subjects, so the
+    // access log keeps exactly one row for the viewed member. Self reads skip
+    // it, as do reads of a member listing no games: findSharedGames([], ...)
+    // is [] for any viewer list, so the read would be pure waste and would
+    // trip the single-keyed-read pins on game-less profiles.
+    const needsMatch = !isOwner && member.games.length > 0;
+    const viewerRow = needsMatch ? await store.find(viewer.id) : null;
+    const sharedGames = needsMatch ? findSharedGames(member.games, viewerRow?.games ?? []) : [];
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
     return bufferedMemberHtml(
@@ -35,10 +47,11 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
       <ProfilePage
         member={member}
         stats={stats}
-        isOwner={viewer.id === member.id}
+        isOwner={isOwner}
         isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
+        sharedGames={sharedGames}
       />,
     );
   };

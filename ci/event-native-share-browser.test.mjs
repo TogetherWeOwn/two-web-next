@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { after, before, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { chromium, expect } from "@playwright/test";
 import {
   nativeShareFixture,
@@ -249,217 +249,223 @@ async function calendarAndCopy(page) {
   );
 }
 
-for (const view of SHARE_VIEWS) {
-  for (const viewer of ["guest", "member"]) {
-    test(`${view}: CONTROL supported ${viewer} load never shares, prompts, copies, or steals focus`, async (t) => {
-      const f = await open(t, view, { viewer });
-      assert.deepEqual(await trace(f.page), {
-        calls: [],
-        copied: [],
-        permissionQueries: [],
-        rejections: [],
-      });
-      assert.equal(await f.page.evaluate(() => document.activeElement.tagName), "BODY");
-      await calendarAndCopy(f.page);
-      await noEscapedEffects(f);
-    });
-  }
-  test(`${view}: keyboard activation shares only the public title and canonical URL; guest/member payloads match`, async (t) => {
-    const payloads = [];
+describe("Native event sharing", () => {
+  for (const view of SHARE_VIEWS) {
     for (const viewer of ["guest", "member"]) {
-      const f = await open(t, view, { viewer });
-      assert.deepEqual((await trace(f.page)).calls, [], "no native call on load");
-      const button = await readyButton(f.page);
-      await calendarAndCopy(f.page);
-      const cookies = await f.context.cookies();
-      const before = await liveText(f.page);
-      await tabTo(f.page, button);
-      await f.page.keyboard.press("Enter");
-      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
-      const state = await trace(f.page);
-      payloads.push(state.calls[0].payload);
-      assert.deepEqual(state.calls[0].payload, expectedPayload);
-      assert.equal(state.calls[0].active, true, "native call must run within the user activation");
-      assert.deepEqual(state.copied, [], "Share must remain separate from Copy link");
-      assert.ok(!JSON.stringify(state.calls[0].payload).includes(PRIVATE_ID));
-      assert.ok(!JSON.stringify(state.calls[0].payload).includes(PRIVATE_NAME));
-      await expect(button).toBeFocused();
-      await expect(button).toBeEnabled();
-      assert.deepEqual(await f.context.cookies(), cookies);
-      assert.equal(f.page.url(), SHARE_ORIGIN + SHARE_PATH + SHARE_QUERY);
-      // An optional success announcement is allowed only after resolution;
-      // this test does not impose UI wording or require a success toast.
-      assert.ok(before.every((text) => !/shared successfully/i.test(text)));
-      await noEscapedEffects(f);
+      test(`${view}: CONTROL supported ${viewer} load never shares, prompts, copies, or steals focus`, async (t) => {
+        const f = await open(t, view, { viewer });
+        assert.deepEqual(await trace(f.page), {
+          calls: [],
+          copied: [],
+          permissionQueries: [],
+          rejections: [],
+        });
+        assert.equal(await f.page.evaluate(() => document.activeElement.tagName), "BODY");
+        await calendarAndCopy(f.page);
+        await noEscapedEffects(f);
+      });
     }
-    assert.deepEqual(payloads, [expectedPayload, expectedPayload]);
-  });
-
-  for (const mode of ["cancel", "failure", "sync-failure"]) {
-    test(`${view}: ${mode} restores the same keyboard action without false success or broken Copy link`, async (t) => {
-      const f = await open(t, view, { mode });
-      const button = await readyButton(f.page);
-      const before = await liveText(f.page);
-      await tabTo(f.page, button);
-      await f.page.keyboard.press("Space");
-      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
-      await expect(button).toBeEnabled();
-      assert.notEqual(await button.getAttribute("aria-disabled"), "true");
-      await expect(button).toBeFocused();
-      const after = await liveText(f.page);
-      if (mode === "cancel") assert.deepEqual(after, before, "AbortError cancellation is silent");
-      else
-        assert.doesNotMatch(
-          after.join(" "),
-          /\b(?:event shared|shared successfully|share succeeded|success(?:ful(?:ly)?)|event link copied)\b|^\s*shared[.!]?\s*$/i,
-          "failure must never claim success",
+    test(`${view}: keyboard activation shares only the public title and canonical URL; guest/member payloads match`, async (t) => {
+      const payloads = [];
+      for (const viewer of ["guest", "member"]) {
+        const f = await open(t, view, { viewer });
+        assert.deepEqual((await trace(f.page)).calls, [], "no native call on load");
+        const button = await readyButton(f.page);
+        await calendarAndCopy(f.page);
+        const cookies = await f.context.cookies();
+        const before = await liveText(f.page);
+        await tabTo(f.page, button);
+        await f.page.keyboard.press("Enter");
+        await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
+        const state = await trace(f.page);
+        payloads.push(state.calls[0].payload);
+        assert.deepEqual(state.calls[0].payload, expectedPayload);
+        assert.equal(
+          state.calls[0].active,
+          true,
+          "native call must run within the user activation",
         );
-      assert.deepEqual((await trace(f.page)).copied, []);
-      // A second explicit gesture works: recovery must not leave a stuck pending flag.
-      await f.page.keyboard.press("Enter");
-      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(2);
-      await expect(button).toBeFocused();
-      await calendarAndCopy(f.page);
-      await f.page.getByTestId("event-copy-link").click();
-      await expect(f.page.getByTestId("event-copy-toast")).toHaveText("Event link copied.");
-      assert.deepEqual((await trace(f.page)).copied, [SHARE_CANONICAL]);
-      await noEscapedEffects(f);
+        assert.deepEqual(state.copied, [], "Share must remain separate from Copy link");
+        assert.ok(!JSON.stringify(state.calls[0].payload).includes(PRIVATE_ID));
+        assert.ok(!JSON.stringify(state.calls[0].payload).includes(PRIVATE_NAME));
+        await expect(button).toBeFocused();
+        await expect(button).toBeEnabled();
+        assert.deepEqual(await f.context.cookies(), cookies);
+        assert.equal(f.page.url(), SHARE_ORIGIN + SHARE_PATH + SHARE_QUERY);
+        // An optional success announcement is allowed only after resolution;
+        // this test does not impose UI wording or require a success toast.
+        assert.ok(before.every((text) => !/shared successfully/i.test(text)));
+        await noEscapedEffects(f);
+      }
+      assert.deepEqual(payloads, [expectedPayload, expectedPayload]);
     });
-  }
 
-  for (const settlement of ["resolve", "cancel", "failure"]) {
-    test(`${view}: pending duplicate activations are ignored, then ${settlement} permits a fresh share`, async (t) => {
-      const f = await open(t, view, { mode: "pending" });
-      const button = await readyButton(f.page);
-      const before = await liveText(f.page);
-      await tabTo(f.page, button);
-      await f.page.keyboard.press("Enter");
-      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
-      await f.page.keyboard.press("Enter");
-      // Even a queued duplicate event must respect the pending guard.
-      await button.evaluate((node) =>
-        node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-      );
-      assert.equal((await trace(f.page)).calls.length, 1);
-      assert.doesNotMatch(
-        (await liveText(f.page)).join(" "),
-        /\b(?:event shared|shared successfully|share succeeded|success(?:ful(?:ly)?)|event link copied)\b|^\s*shared[.!]?\s*$/i,
-        "no success claim before the native promise settles; neutral pending guidance is allowed",
-      );
-      await calendarAndCopy(f.page);
-      await f.page.evaluate((outcome) => {
-        const pending = window.shareTrace.settlements.shift();
-        if (outcome === "resolve") pending.resolve();
+    for (const mode of ["cancel", "failure", "sync-failure"]) {
+      test(`${view}: ${mode} restores the same keyboard action without false success or broken Copy link`, async (t) => {
+        const f = await open(t, view, { mode });
+        const button = await readyButton(f.page);
+        const before = await liveText(f.page);
+        await tabTo(f.page, button);
+        await f.page.keyboard.press("Space");
+        await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
+        await expect(button).toBeEnabled();
+        assert.notEqual(await button.getAttribute("aria-disabled"), "true");
+        await expect(button).toBeFocused();
+        const after = await liveText(f.page);
+        if (mode === "cancel") assert.deepEqual(after, before, "AbortError cancellation is silent");
         else
-          pending.reject(
-            new DOMException(
-              "Fixture settlement",
-              outcome === "cancel" ? "AbortError" : "NotAllowedError",
-            ),
+          assert.doesNotMatch(
+            after.join(" "),
+            /\b(?:event shared|shared successfully|share succeeded|success(?:ful(?:ly)?)|event link copied)\b|^\s*shared[.!]?\s*$/i,
+            "failure must never claim success",
           );
-      }, settlement);
-      await expect(button).toBeEnabled();
-      await expect(button).toBeFocused();
-      assert.notEqual(await button.getAttribute("aria-disabled"), "true");
-      if (settlement === "cancel") assert.deepEqual(await liveText(f.page), before);
-      if (settlement === "failure")
+        assert.deepEqual((await trace(f.page)).copied, []);
+        // A second explicit gesture works: recovery must not leave a stuck pending flag.
+        await f.page.keyboard.press("Enter");
+        await expect.poll(async () => (await trace(f.page)).calls.length).toBe(2);
+        await expect(button).toBeFocused();
+        await calendarAndCopy(f.page);
+        await f.page.getByTestId("event-copy-link").click();
+        await expect(f.page.getByTestId("event-copy-toast")).toHaveText("Event link copied.");
+        assert.deepEqual((await trace(f.page)).copied, [SHARE_CANONICAL]);
+        await noEscapedEffects(f);
+      });
+    }
+
+    for (const settlement of ["resolve", "cancel", "failure"]) {
+      test(`${view}: pending duplicate activations are ignored, then ${settlement} permits a fresh share`, async (t) => {
+        const f = await open(t, view, { mode: "pending" });
+        const button = await readyButton(f.page);
+        const before = await liveText(f.page);
+        await tabTo(f.page, button);
+        await f.page.keyboard.press("Enter");
+        await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
+        await f.page.keyboard.press("Enter");
+        // Even a queued duplicate event must respect the pending guard.
+        await button.evaluate((node) =>
+          node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+        );
+        assert.equal((await trace(f.page)).calls.length, 1);
         assert.doesNotMatch(
           (await liveText(f.page)).join(" "),
           /\b(?:event shared|shared successfully|share succeeded|success(?:ful(?:ly)?)|event link copied)\b|^\s*shared[.!]?\s*$/i,
+          "no success claim before the native promise settles; neutral pending guidance is allowed",
         );
-      await f.page.keyboard.press("Enter");
-      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(2);
-      await f.page.evaluate(() => window.shareTrace.settlements.shift().resolve());
+        await calendarAndCopy(f.page);
+        await f.page.evaluate((outcome) => {
+          const pending = window.shareTrace.settlements.shift();
+          if (outcome === "resolve") pending.resolve();
+          else
+            pending.reject(
+              new DOMException(
+                "Fixture settlement",
+                outcome === "cancel" ? "AbortError" : "NotAllowedError",
+              ),
+            );
+        }, settlement);
+        await expect(button).toBeEnabled();
+        await expect(button).toBeFocused();
+        assert.notEqual(await button.getAttribute("aria-disabled"), "true");
+        if (settlement === "cancel") assert.deepEqual(await liveText(f.page), before);
+        if (settlement === "failure")
+          assert.doesNotMatch(
+            (await liveText(f.page)).join(" "),
+            /\b(?:event shared|shared successfully|share succeeded|success(?:ful(?:ly)?)|event link copied)\b|^\s*shared[.!]?\s*$/i,
+          );
+        await f.page.keyboard.press("Enter");
+        await expect.poll(async () => (await trace(f.page)).calls.length).toBe(2);
+        await f.page.evaluate(() => window.shareTrace.settlements.shift().resolve());
+        await noEscapedEffects(f);
+      });
+    }
+
+    for (const capability of ["unsupported", "insecure"]) {
+      test(`${view}: CONTROL ${capability} hides native Share and preserves the actual keyboard Copy link journey`, async (t) => {
+        const f = await open(t, view, {
+          mode: capability === "unsupported" ? "unsupported" : "success",
+          insecure: capability === "insecure",
+        });
+        assert.equal(await nativeButton(f.page).count(), 0);
+        assert.deepEqual((await trace(f.page)).calls, []);
+        if (capability === "insecure")
+          assert.equal(await f.page.evaluate(() => navigator.clipboard), undefined);
+        await calendarAndCopy(f.page);
+        const copy = f.page.getByTestId("event-copy-link");
+        await tabTo(f.page, copy);
+        await f.page.keyboard.press("Enter");
+        await expect(f.page.getByTestId("event-copy-toast")).toHaveText("Event link copied.");
+        assert.deepEqual((await trace(f.page)).copied, [SHARE_CANONICAL]);
+        await expect(copy).toBeFocused();
+        await noEscapedEffects(f);
+      });
+    }
+
+    test(`${view}: CONTROL clipboard refusal remains truthful and usable without native Share`, async (t) => {
+      const f = await open(t, view, { mode: "unsupported", clipboard: "denied" });
+      await f.page.getByTestId("event-copy-link").click();
+      await expect(f.page.getByTestId("event-copy-toast")).toHaveText(
+        "That link didn't copy — copy it from the address bar.",
+      );
+      assert.deepEqual((await trace(f.page)).calls, []);
+      await expect(f.page.getByTestId("event-copy-link")).toBeFocused();
+      await calendarAndCopy(f.page);
       await noEscapedEffects(f);
     });
-  }
 
-  for (const capability of ["unsupported", "insecure"]) {
-    test(`${view}: CONTROL ${capability} hides native Share and preserves the actual keyboard Copy link journey`, async (t) => {
-      const f = await open(t, view, {
-        mode: capability === "unsupported" ? "unsupported" : "success",
-        insecure: capability === "insecure",
-      });
+    test(`${view}: CONTROL real no-JS client keeps calendar and canonical Copy link navigation, no focusable Share`, async (t) => {
+      const f = await open(t, view, { javaScriptEnabled: false });
       assert.equal(await nativeButton(f.page).count(), 0);
-      assert.deepEqual((await trace(f.page)).calls, []);
-      if (capability === "insecure")
-        assert.equal(await f.page.evaluate(() => navigator.clipboard), undefined);
       await calendarAndCopy(f.page);
       const copy = f.page.getByTestId("event-copy-link");
       await tabTo(f.page, copy);
       await f.page.keyboard.press("Enter");
-      await expect(f.page.getByTestId("event-copy-toast")).toHaveText("Event link copied.");
-      assert.deepEqual((await trace(f.page)).copied, [SHARE_CANONICAL]);
-      await expect(copy).toBeFocused();
+      await expect(f.page).toHaveURL(SHARE_CANONICAL);
+      assert.deepEqual(f.errors, []);
+      assert.deepEqual(f.dialogs, []);
+      assert.deepEqual(f.blocked, []);
+    });
+
+    for (const scenario of [
+      { name: "moderator draft", viewer: "moderator", status: "draft" },
+      { name: "gone", status: "cancelled" },
+      { name: "missing", missing: true },
+    ]) {
+      test(`${view}: CONTROL ${scenario.name} never offers or automatically starts native sharing`, async (t) => {
+        const f = await open(t, view, scenario);
+        assert.equal(
+          await f.page.getByRole("button", { name: SHARE_NAME, includeHidden: true }).count(),
+          0,
+        );
+        assert.deepEqual((await trace(f.page)).calls, []);
+        await noEscapedEffects(f);
+      });
+    }
+
+    test(`${view}: hostile public title is shared literally, never executed or enriched with private context`, async (t) => {
+      const title = 'Chess "night" </button><img src=x onerror="window.__titleExecuted=true"> ♟';
+      const f = await open(t, view, { title, viewer: "member" });
+      assert.equal(await f.page.evaluate(() => window.__titleExecuted), undefined);
+      const button = await readyButton(f.page);
+      await button.click();
+      await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
+      assert.deepEqual((await trace(f.page)).calls[0].payload, { title, url: SHARE_CANONICAL });
       await noEscapedEffects(f);
     });
+
+    if (evidence)
+      test(`${view}: capture current fixture at both required widths`, async (t) => {
+        const f = await open(t, view);
+        for (const [width, height] of [
+          [1280, 800],
+          [390, 844],
+        ]) {
+          await f.page.setViewportSize({ width, height });
+          await f.page.screenshot({
+            path: resolve(evidence, `${view.toLowerCase()}-${width}x${height}.png`),
+            fullPage: true,
+          });
+        }
+        assert.equal(await f.page.getByTestId("event-copy-link").count(), 1);
+      });
   }
-
-  test(`${view}: CONTROL clipboard refusal remains truthful and usable without native Share`, async (t) => {
-    const f = await open(t, view, { mode: "unsupported", clipboard: "denied" });
-    await f.page.getByTestId("event-copy-link").click();
-    await expect(f.page.getByTestId("event-copy-toast")).toHaveText(
-      "That link didn't copy — copy it from the address bar.",
-    );
-    assert.deepEqual((await trace(f.page)).calls, []);
-    await expect(f.page.getByTestId("event-copy-link")).toBeFocused();
-    await calendarAndCopy(f.page);
-    await noEscapedEffects(f);
-  });
-
-  test(`${view}: CONTROL real no-JS client keeps calendar and canonical Copy link navigation, no focusable Share`, async (t) => {
-    const f = await open(t, view, { javaScriptEnabled: false });
-    assert.equal(await nativeButton(f.page).count(), 0);
-    await calendarAndCopy(f.page);
-    const copy = f.page.getByTestId("event-copy-link");
-    await tabTo(f.page, copy);
-    await f.page.keyboard.press("Enter");
-    await expect(f.page).toHaveURL(SHARE_CANONICAL);
-    assert.deepEqual(f.errors, []);
-    assert.deepEqual(f.dialogs, []);
-    assert.deepEqual(f.blocked, []);
-  });
-
-  for (const scenario of [
-    { name: "moderator draft", viewer: "moderator", status: "draft" },
-    { name: "gone", status: "cancelled" },
-    { name: "missing", missing: true },
-  ]) {
-    test(`${view}: CONTROL ${scenario.name} never offers or automatically starts native sharing`, async (t) => {
-      const f = await open(t, view, scenario);
-      assert.equal(
-        await f.page.getByRole("button", { name: SHARE_NAME, includeHidden: true }).count(),
-        0,
-      );
-      assert.deepEqual((await trace(f.page)).calls, []);
-      await noEscapedEffects(f);
-    });
-  }
-
-  test(`${view}: hostile public title is shared literally, never executed or enriched with private context`, async (t) => {
-    const title = 'Chess "night" </button><img src=x onerror="window.__titleExecuted=true"> ♟';
-    const f = await open(t, view, { title, viewer: "member" });
-    assert.equal(await f.page.evaluate(() => window.__titleExecuted), undefined);
-    const button = await readyButton(f.page);
-    await button.click();
-    await expect.poll(async () => (await trace(f.page)).calls.length).toBe(1);
-    assert.deepEqual((await trace(f.page)).calls[0].payload, { title, url: SHARE_CANONICAL });
-    await noEscapedEffects(f);
-  });
-
-  if (evidence)
-    test(`${view}: capture current fixture at both required widths`, async (t) => {
-      const f = await open(t, view);
-      for (const [width, height] of [
-        [1280, 800],
-        [390, 844],
-      ]) {
-        await f.page.setViewportSize({ width, height });
-        await f.page.screenshot({
-          path: resolve(evidence, `${view.toLowerCase()}-${width}x${height}.png`),
-          fullPage: true,
-        });
-      }
-      assert.equal(await f.page.getByTestId("event-copy-link").count(), 1);
-    });
-}
+});

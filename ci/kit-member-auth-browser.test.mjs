@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, mkdir } from "node:fs/promises";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { before, after, test } from "node:test";
+import { before, after, describe, test } from "node:test";
 import { chromium } from "playwright";
 import {
   BOARD,
@@ -272,205 +272,208 @@ async function screenshots(page, prefix) {
   }
 }
 
-for (const path of [BOARD, SELF, OTHER_PROFILE]) {
-  test(`Kit ${path} emits and executes the single shipped controller`, async (t) => {
-    const f = await fixture(t);
-    const page = await f.page(path);
-    if (path === SELF) await screenshots(page, "kit-baseline-self");
-    await mounted(page);
-    assert.equal(await page.evaluate(() => window.TwoAuth.check()), true);
-    assert.equal(
-      (await f.context.cookies()).filter((cookie) => cookie.name === "__Host-two_session_status")
-        .length,
-      1,
-    );
-  });
-}
-
-// The Hono cases are healthy controls, not substitute evidence for Kit. Both
-// modes execute the same minified bytes; Kit must obtain them from its own SSR.
-for (const mode of ["reference", "kit"]) {
-  test(`${mode}: focus/visibility and two-tab messages recheck read-only; 503 never invents logout`, async (t) => {
-    const f = await fixture(t, mode);
-    const a = await f.page(SELF);
-    const b = await f.page(mode === "kit" ? BOARD : OTHER_PROFILE);
-    await mounted(a);
-    await mounted(b);
-    await draft(a);
-    assert.equal(await a.evaluate(() => window.TwoAuth.check()), true);
-    const before = f.requests.filter((r) => r.path === "/auth/status").length;
-    const status = a.waitForResponse((r) => new URL(r.url()).pathname === "/auth/status");
-    await a.evaluate(() => {
-      for (let i = 0; i < 20; i++) window.dispatchEvent(new Event("focus"));
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    await a.clock.runFor(1100);
-    await status;
-    const burst = f.requests.filter((r) => r.path === "/auth/status").length - before;
-    assert.ok(burst >= 1 && burst <= 2, `coalesced focus/visibility burst sent ${burst} probes`);
-    const received = a.waitForResponse((r) => new URL(r.url()).pathname === "/auth/status");
-    await b.evaluate(() => window.TwoAuth.notify());
-    await a.waitForFunction(() => window.authTrace.statusRequests.length >= 2);
-    await a.clock.runFor(1100);
-    await received;
-    // A response event means headers arrived, not that the controller consumed JSON.
-    // Drain its in-flight check before installing the next fault response.
-    assert.equal(await a.evaluate(() => window.TwoAuth.check()), true);
-    for (const reply of [
-      { status: 503, body: '{"authenticated":false}' },
-      { status: 401, body: '{"authenticated":false}' },
-      { status: 200, body: '{"authenticated":false,"extra":true}' },
-      { status: 200, body: "not-json" },
-    ]) {
-      await a.route("**/auth/status", (route) =>
-        route.fulfill({ ...reply, contentType: "application/json" }),
+// Named suite: the executed-count verifier admits only cases under this title.
+describe("Kit member auth in Chromium", () => {
+  for (const path of [BOARD, SELF, OTHER_PROFILE]) {
+    test(`Kit ${path} emits and executes the single shipped controller`, async (t) => {
+      const f = await fixture(t);
+      const page = await f.page(path);
+      if (path === SELF) await screenshots(page, "kit-baseline-self");
+      await mounted(page);
+      assert.equal(await page.evaluate(() => window.TwoAuth.check()), true);
+      assert.equal(
+        (await f.context.cookies()).filter((cookie) => cookie.name === "__Host-two_session_status")
+          .length,
+        1,
       );
-      assert.equal(await a.evaluate(() => window.TwoAuth.check()), null);
-      await a.unroute("**/auth/status");
-      assert.equal(await a.getByTestId("profile-session-expired").count(), 0);
-      await retained(a);
-    }
-    for (const request of f.requests.filter((r) => r.path === "/auth/status")) {
-      assert.equal(request.method, "GET");
-      assert.equal(request.body, "");
-      assert.deepEqual(request.cookies, []);
-    }
-    assert.equal(f.profileState.writes, 0);
-  });
-
-  test(`${mode}: real revocation recovers the board/other tab but a dirty self draft vetoes replacement`, async (t) => {
-    const f = await fixture(t, mode);
-    const a = await f.page(SELF);
-    const b = await f.page(mode === "kit" ? BOARD : OTHER_PROFILE);
-    await mounted(a);
-    await mounted(b);
-    await draft(a);
-    await f.sessions.revokeLineage(f.lineage);
-    assert.equal(await a.evaluate(() => window.TwoAuth.check()), false);
-    assert.equal(await a.getByTestId("profile-session-expired").count(), 1);
-    assert.equal(new URL(a.url()).pathname, "/profile");
-    await retained(a);
-    await b.evaluate(() => {
-      window.expiryCount = 0;
-      window.addEventListener("two:session-expired", () => {
-        window.expiryCount++;
-        sessionStorage.setItem("expiry-seen", "yes");
-      });
     });
-    const navigation = b.waitForNavigation();
-    await b.evaluate(() => {
-      void window.TwoAuth.check();
-    });
-    await navigation;
-    assert.equal(await b.evaluate(() => sessionStorage.getItem("expiry-seen")), "yes");
-    assert.equal(await b.locator('form[action="/logout"]').count(), 0);
-    assert.equal(f.profileState.writes, 0);
-  });
+  }
 
-  test(`${mode}: actual expiry is a recovery decision, not an outage or silent draft replacement`, async (t) => {
-    const f = await fixture(t, mode);
-    const page = await f.page(SELF);
-    await mounted(page);
-    await draft(page);
-    f.clock.offset = 7_200_001;
-    assert.equal(await page.evaluate(() => window.TwoAuth.check()), false);
-    assert.equal(await page.getByTestId("profile-session-expired").count(), 1);
-    await retained(page);
-    assert.equal(new URL(page.url()).pathname, "/profile");
-    assert.equal(f.profileState.writes, 0);
-    f.clock.offset = 0;
-  });
-
-  test(`${mode}: successful logout broadcasts once and navigates; storage fallback rechecks a dirty peer`, async (t) => {
-    for (const storage of [false, true]) {
-      const f = await fixture(t, mode, storage);
+  // The Hono cases are healthy controls, not substitute evidence for Kit. Both
+  // modes execute the same minified bytes; Kit must obtain them from its own SSR.
+  for (const mode of ["reference", "kit"]) {
+    test(`${mode}: focus/visibility and two-tab messages recheck read-only; 503 never invents logout`, async (t) => {
+      const f = await fixture(t, mode);
       const a = await f.page(SELF);
-      const b = await f.page(SELF);
+      const b = await f.page(mode === "kit" ? BOARD : OTHER_PROFILE);
       await mounted(a);
       await mounted(b);
-      await draft(b);
+      await draft(a);
+      assert.equal(await a.evaluate(() => window.TwoAuth.check()), true);
       const before = f.requests.filter((r) => r.path === "/auth/status").length;
-      await submit(a);
-      await a.waitForURL(f.env.APP_URL + "/");
-      const logout = f.requests.filter((r) => r.path === "/logout");
-      assert.equal(logout.length, 1);
-      assert.equal(logout[0].status, 303);
-      await b.clock.runFor(1100);
-      await b.waitForFunction(
-        () => !!document.querySelector('[data-testid="profile-session-expired"]'),
-      );
-      await retained(b);
-      assert.ok(f.requests.filter((r) => r.path === "/auth/status").length > before);
-      assert.equal(await f.sessions.isActive(f.lineage), false);
-      assert.equal(await a.evaluate(() => sessionStorage.getItem("auth-published")), "1");
-    }
-  });
+      const status = a.waitForResponse((r) => new URL(r.url()).pathname === "/auth/status");
+      await a.evaluate(() => {
+        for (let i = 0; i < 20; i++) window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await a.clock.runFor(1100);
+      await status;
+      const burst = f.requests.filter((r) => r.path === "/auth/status").length - before;
+      assert.ok(burst >= 1 && burst <= 2, `coalesced focus/visibility burst sent ${burst} probes`);
+      const received = a.waitForResponse((r) => new URL(r.url()).pathname === "/auth/status");
+      await b.evaluate(() => window.TwoAuth.notify());
+      await a.waitForFunction(() => window.authTrace.statusRequests.length >= 2);
+      await a.clock.runFor(1100);
+      await received;
+      // A response event means headers arrived, not that the controller consumed JSON.
+      // Drain its in-flight check before installing the next fault response.
+      assert.equal(await a.evaluate(() => window.TwoAuth.check()), true);
+      for (const reply of [
+        { status: 503, body: '{"authenticated":false}' },
+        { status: 401, body: '{"authenticated":false}' },
+        { status: 200, body: '{"authenticated":false,"extra":true}' },
+        { status: 200, body: "not-json" },
+      ]) {
+        await a.route("**/auth/status", (route) =>
+          route.fulfill({ ...reply, contentType: "application/json" }),
+        );
+        assert.equal(await a.evaluate(() => window.TwoAuth.check()), null);
+        await a.unroute("**/auth/status");
+        assert.equal(await a.getByTestId("profile-session-expired").count(), 0);
+        await retained(a);
+      }
+      for (const request of f.requests.filter((r) => r.path === "/auth/status")) {
+        assert.equal(request.method, "GET");
+        assert.equal(request.body, "");
+        assert.deepEqual(request.cookies, []);
+      }
+      assert.equal(f.profileState.writes, 0);
+    });
 
-  test(`${mode}: refused/uncertain/body-hung logout preserves drafts and never publishes success`, async (t) => {
-    const f = await fixture(t, mode);
-    const page = await f.page(SELF);
-    await mounted(page);
-    await draft(page);
-    for (const outcome of [429, 503, 200, "body-hang", "network"]) {
-      await page.evaluate((outcome) => {
-        const original = window.fetch;
-        window.restoreLogout = () => {
-          window.fetch = original;
-        };
-        window.fetch = function (input, init) {
-          if (input !== "/logout") return original.call(this, input, init);
-          if (outcome === "network")
-            return Promise.reject(new TypeError("fixture network failure"));
-          if (outcome === "body-hang")
-            return Promise.resolve(
-              new Response(new ReadableStream({ start() {} }), { status: 200 }),
-            );
-          return Promise.resolve(new Response(null, { status: outcome }));
-        };
-      }, outcome);
-      await submit(page);
-      await page.waitForFunction(() => !!document.querySelector('[data-testid="logout-error"]'));
-      await feedback(page, "logout-error");
+    test(`${mode}: real revocation recovers the board/other tab but a dirty self draft vetoes replacement`, async (t) => {
+      const f = await fixture(t, mode);
+      const a = await f.page(SELF);
+      const b = await f.page(mode === "kit" ? BOARD : OTHER_PROFILE);
+      await mounted(a);
+      await mounted(b);
+      await draft(a);
+      await f.sessions.revokeLineage(f.lineage);
+      assert.equal(await a.evaluate(() => window.TwoAuth.check()), false);
+      assert.equal(await a.getByTestId("profile-session-expired").count(), 1);
+      assert.equal(new URL(a.url()).pathname, "/profile");
+      await retained(a);
+      await b.evaluate(() => {
+        window.expiryCount = 0;
+        window.addEventListener("two:session-expired", () => {
+          window.expiryCount++;
+          sessionStorage.setItem("expiry-seen", "yes");
+        });
+      });
+      const navigation = b.waitForNavigation();
+      await b.evaluate(() => {
+        void window.TwoAuth.check();
+      });
+      await navigation;
+      assert.equal(await b.evaluate(() => sessionStorage.getItem("expiry-seen")), "yes");
+      assert.equal(await b.locator('form[action="/logout"]').count(), 0);
+      assert.equal(f.profileState.writes, 0);
+    });
+
+    test(`${mode}: actual expiry is a recovery decision, not an outage or silent draft replacement`, async (t) => {
+      const f = await fixture(t, mode);
+      const page = await f.page(SELF);
+      await mounted(page);
+      await draft(page);
+      f.clock.offset = 7_200_001;
+      assert.equal(await page.evaluate(() => window.TwoAuth.check()), false);
+      assert.equal(await page.getByTestId("profile-session-expired").count(), 1);
       await retained(page);
       assert.equal(new URL(page.url()).pathname, "/profile");
-      assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
-      await page.evaluate(() => window.restoreLogout());
-    }
-    await screenshots(page, `${mode}-logout-refused`);
-  });
-
-  test(`${mode}: header hang settles at 10 seconds, deduplicates submits and ignores late success`, async (t) => {
-    const f = await fixture(t, mode);
-    const page = await f.page(SELF);
-    await mounted(page);
-    await draft(page);
-    await page.evaluate(() => {
-      const original = window.fetch;
-      window.fetch = function (input, init) {
-        if (input !== "/logout") return original.call(this, input, init);
-        window.authTrace.logoutPosts++;
-        return new Promise((done) => {
-          window.releaseLogout = () => done(new Response(null, { status: 303 }));
-        });
-      };
+      assert.equal(f.profileState.writes, 0);
+      f.clock.offset = 0;
     });
-    await submit(page);
-    await page.clock.runFor(9000);
-    assert.equal(await page.locator('form[action="/logout"]').getAttribute("aria-busy"), "true");
-    assert.equal(await page.getByTestId("logout-unconfirmed").count(), 0);
-    await submit(page);
-    await submit(page);
-    assert.equal(await page.evaluate(() => window.authTrace.logoutPosts), 1);
-    await page.clock.runFor(1000);
-    await feedback(page, "logout-unconfirmed");
-    await retained(page);
-    assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
-    await page.evaluate(() => window.releaseLogout());
-    await page.clock.runFor(1000);
-    assert.equal(new URL(page.url()).pathname, "/profile");
-    await feedback(page, "logout-unconfirmed");
-    await retained(page);
-    assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
-    await screenshots(page, `${mode}-logout-unconfirmed`);
-  });
-}
+
+    test(`${mode}: successful logout broadcasts once and navigates; storage fallback rechecks a dirty peer`, async (t) => {
+      for (const storage of [false, true]) {
+        const f = await fixture(t, mode, storage);
+        const a = await f.page(SELF);
+        const b = await f.page(SELF);
+        await mounted(a);
+        await mounted(b);
+        await draft(b);
+        const before = f.requests.filter((r) => r.path === "/auth/status").length;
+        await submit(a);
+        await a.waitForURL(f.env.APP_URL + "/");
+        const logout = f.requests.filter((r) => r.path === "/logout");
+        assert.equal(logout.length, 1);
+        assert.equal(logout[0].status, 303);
+        await b.clock.runFor(1100);
+        await b.waitForFunction(
+          () => !!document.querySelector('[data-testid="profile-session-expired"]'),
+        );
+        await retained(b);
+        assert.ok(f.requests.filter((r) => r.path === "/auth/status").length > before);
+        assert.equal(await f.sessions.isActive(f.lineage), false);
+        assert.equal(await a.evaluate(() => sessionStorage.getItem("auth-published")), "1");
+      }
+    });
+
+    test(`${mode}: refused/uncertain/body-hung logout preserves drafts and never publishes success`, async (t) => {
+      const f = await fixture(t, mode);
+      const page = await f.page(SELF);
+      await mounted(page);
+      await draft(page);
+      for (const outcome of [429, 503, 200, "body-hang", "network"]) {
+        await page.evaluate((outcome) => {
+          const original = window.fetch;
+          window.restoreLogout = () => {
+            window.fetch = original;
+          };
+          window.fetch = function (input, init) {
+            if (input !== "/logout") return original.call(this, input, init);
+            if (outcome === "network")
+              return Promise.reject(new TypeError("fixture network failure"));
+            if (outcome === "body-hang")
+              return Promise.resolve(
+                new Response(new ReadableStream({ start() {} }), { status: 200 }),
+              );
+            return Promise.resolve(new Response(null, { status: outcome }));
+          };
+        }, outcome);
+        await submit(page);
+        await page.waitForFunction(() => !!document.querySelector('[data-testid="logout-error"]'));
+        await feedback(page, "logout-error");
+        await retained(page);
+        assert.equal(new URL(page.url()).pathname, "/profile");
+        assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
+        await page.evaluate(() => window.restoreLogout());
+      }
+      await screenshots(page, `${mode}-logout-refused`);
+    });
+
+    test(`${mode}: header hang settles at 10 seconds, deduplicates submits and ignores late success`, async (t) => {
+      const f = await fixture(t, mode);
+      const page = await f.page(SELF);
+      await mounted(page);
+      await draft(page);
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.fetch = function (input, init) {
+          if (input !== "/logout") return original.call(this, input, init);
+          window.authTrace.logoutPosts++;
+          return new Promise((done) => {
+            window.releaseLogout = () => done(new Response(null, { status: 303 }));
+          });
+        };
+      });
+      await submit(page);
+      await page.clock.runFor(9000);
+      assert.equal(await page.locator('form[action="/logout"]').getAttribute("aria-busy"), "true");
+      assert.equal(await page.getByTestId("logout-unconfirmed").count(), 0);
+      await submit(page);
+      await submit(page);
+      assert.equal(await page.evaluate(() => window.authTrace.logoutPosts), 1);
+      await page.clock.runFor(1000);
+      await feedback(page, "logout-unconfirmed");
+      await retained(page);
+      assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
+      await page.evaluate(() => window.releaseLogout());
+      await page.clock.runFor(1000);
+      assert.equal(new URL(page.url()).pathname, "/profile");
+      await feedback(page, "logout-unconfirmed");
+      await retained(page);
+      assert.deepEqual(await page.evaluate(() => window.authTrace.broadcasts), []);
+      await screenshots(page, `${mode}-logout-unconfirmed`);
+    });
+  }
+});
