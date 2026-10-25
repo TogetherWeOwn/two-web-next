@@ -9,7 +9,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
-      <div class="actions">
+      <div class="actions rsvp-actions">
         {row.status === "draft" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
             <button type="submit" class="btn" data-testid="publish-event">
