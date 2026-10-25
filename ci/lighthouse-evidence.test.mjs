@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { initializeConfig } from "lighthouse/core/config/config.js";
 import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
+import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
 import { main as mobile } from "./lighthouse-origin-run.mjs";
 import { main as desktop, loadCollectedLhrs } from "./lighthouse-quality-run.mjs";
@@ -46,10 +47,10 @@ const lib = require("./lighthouse-origin-lib.cjs");
 const origin = "https://next.togetherweown.com";
 const { collect } = lib.buildConfig({ origin }).ci;
 const urls = collect.url.flatMap((url) => Array(collect.numberOfRuns).fill(url));
-const lhr = (url, server = 100) => ({
+const lhr = (url, server = 100, profile = "mobile") => ({
+  ...navigationMetadata(profile, { deployed: true }),
   requestedUrl: url,
   finalUrl: url,
-  fetchTime: "2026-10-22T12:00:00.000Z",
   categories: Object.fromEntries(
     ["performance", "accessibility", "best-practices", "seo"].map((id) => [id, { score: 1 }]),
   ),
@@ -103,7 +104,7 @@ async function runDesktop(dir) {
     run: async () => {
       await mkdir(join(dir, "quality"), { recursive: true });
       for (const [i, url] of urls.entries()) {
-        await writeFile(join(dir, `lhr-${9000 + i}.json`), JSON.stringify(lhr(url, 25)));
+        await writeFile(join(dir, `lhr-${9000 + i}.json`), JSON.stringify(lhr(url, 25, "desktop")));
       }
       return { exitCode: 0, output: "desktop fixture" };
     },

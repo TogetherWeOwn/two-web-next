@@ -8,7 +8,9 @@ import {
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
   SPOTS_LEFT_TESTID,
+  cardDayLabel,
   cardTimeLabel,
+  wallDateIso,
   existingResponsesText,
   goingCountText,
   loginUrl,
@@ -24,6 +26,9 @@ import {
   rowTitle,
   rowZone,
 } from "./pages-calendar-row";
+
+// Shared by persisted and Discord cards; count code points, never UTF-16 units.
+const DESCRIPTION_LIMIT = 240;
 
 /**
  * One event card (legacy partials/event-card-anon): same markup for every
@@ -49,6 +54,9 @@ export const CalCard: FC<{
   // new read). Transients carry no organizer and blank/missing renders no
   // node, so the badge and attendance never shift for unhosted cards.
   const host = transient ? "" : (e.organizer_name ?? "").trim();
+  const startDay = wallDateIso(e.startsAt, tz);
+  const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
+  const descriptionPoints = [...(e.description ?? "")];
   return (
     <li>
       <article
@@ -87,7 +95,11 @@ export const CalCard: FC<{
             {e.endsAt ? (
               <>
                 {" · "}
-                <span>{wallTimeHm(e.endsAt, tz)}</span>
+                <time datetime={e.endsAt.toISOString()}>
+                  {(endDay !== startDay
+                    ? `${cardDayLabel(e.endsAt, tz)}${endDay!.slice(0, -6) !== startDay.slice(0, -6) ? ` ${endDay!.slice(0, -6)}` : ""}, `
+                    : "") + wallTimeHm(e.endsAt, tz)}
+                </time>
               </>
             ) : null}{" "}
             <span>{tz}</span>
@@ -98,7 +110,20 @@ export const CalCard: FC<{
               </>
             ) : null}
           </p>
-          {e.description ? <p>{e.description}</p> : null}
+          {descriptionPoints.length > DESCRIPTION_LIMIT ? (
+            <details class="schedule-description">
+              <summary>
+                <span class="schedule-excerpt">
+                  {descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…
+                  <br />
+                </span>
+                Full description
+              </summary>
+              <p>{e.description}</p>
+            </details>
+          ) : e.description ? (
+            <p>{e.description}</p>
+          ) : null}
         </div>
         <div class="schedule-actions">
           {!transient ? (
