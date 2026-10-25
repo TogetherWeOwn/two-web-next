@@ -56,7 +56,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   and quoted multiline values cannot hide forwarded arguments. A workflow
   step or invoked package script that runs Playwright must run at the repo
   root: any other `working-directory:` or a preceding `cd`, `pushd` or `popd`
-  fails closed (including compound shell commands and nested npm runs).
+  fails closed (including compound shell commands, Bash `time [-p] [--]`
+  prefixes and nested npm runs).
   `--json` prints the Playwright
   summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
   `next_action`). The step runs `npm run test:inventory -- --strict` with

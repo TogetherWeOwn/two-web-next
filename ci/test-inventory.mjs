@@ -791,11 +791,11 @@ function stepScriptSlices(lines, start, end, content) {
 }
 
 // Directory commands in simple or compound command position: separators,
-// groups, case arms and control keywords can all precede a cwd change. Reject
-// them conservatively even if a branch might not execute. `$(cd ...)` and
-// backticks run in a child shell and do not move the caller.
+// groups, case arms, control keywords and Bash's `time [-p] [--]` can precede
+// a cwd change in the same shell. Reject them conservatively even if a branch
+// might not execute. `$(cd ...)` and backticks do not move the caller.
 const STEP_CD_RE =
-  /(?:^|[;&|{})]|(?<!\$)\()\s*(?:(?:if|then|elif|else|do|while|until|!)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
+  /(?:^|[;&|{})]|(?<!\$)\()\s*(?:(?:if|then|elif|else|do|while|until|!|time(?:\s+-p)?(?:\s+--)?)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
 const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
@@ -3727,6 +3727,20 @@ function selftest() {
         "{ command cd e2e/sub; };",
         "if true; then { X=y builtin cd e2e/sub; }; fi;",
         "if true; then popd; fi;",
+        "time cd e2e/sub;",
+        "time -p cd e2e/sub;",
+        "if time cd e2e/sub; then :; fi;",
+        "time -- cd e2e/sub;",
+        "time -p -- cd e2e/sub;",
+        "time ! cd e2e/sub;",
+        "! time cd e2e/sub;",
+        "time time cd e2e/sub;",
+        "if true; then time -p builtin cd e2e/sub; fi;",
+        "{ time cd e2e/sub; };",
+        "time pushd e2e/sub;",
+        "time -p popd;",
+        "time \\\ncd e2e/sub;",
+        "time -p X=y command cd e2e/sub;",
       ].flatMap((prefix) => [
         {
           name: `workflow compound: ${prefix}`,
@@ -3788,6 +3802,32 @@ function selftest() {
         name: "split npm name retains step cwd",
         run: ">-\n          npm run\n          b\n        working-directory: e2e/sub",
         scripts: { b: "playwright test" },
+      },
+      ...[
+        "time echo cd e2e/sub;",
+        "time -p echo cd e2e/sub;",
+        "echo time cd e2e/sub;",
+        "echo $(time cd .. && pwd);",
+        "echo `time cd e2e/sub`;",
+        "cat <<'EOF'\ntime cd e2e/sub\nEOF\n",
+      ].flatMap((prefix) => [
+        {
+          name: `workflow timed control: ${prefix}`,
+          run: JSON.stringify(`${prefix} npx playwright test`),
+          clean: true,
+        },
+        {
+          name: `script timed control: ${prefix}`,
+          run: "npm run b",
+          scripts: { b: `${prefix} playwright test` },
+          clean: true,
+        },
+      ]),
+      {
+        name: "later timed script cd",
+        run: "npm run b",
+        scripts: { b: "playwright test; time cd e2e/sub" },
+        clean: true,
       },
       // Controls: compound syntax alone does not move cwd, changes in a child
       // shell do not move its parent, later changes cannot affect an earlier
