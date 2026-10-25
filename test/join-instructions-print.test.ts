@@ -20,6 +20,7 @@ describe("printableJoinInstructions", () => {
     "Use headphones.",
     "Use headphones.\nBring a board.",
     "Open https://call.example.test/open-room",
+    "Use headphones.\nOpen https://call.example.test/o'connor room\nBring a board.",
     "There is a session for beginners.",
   ])("retains harmless instructions: %s", (instructions) => {
     expect(printableJoinInstructions(instructions)).toBe(instructions);
@@ -32,6 +33,19 @@ describe("printableJoinInstructions", () => {
     "https://fixture-user:fixture-password@call.example.test/open-room",
     "//call.example.test/private-room",
   ])("omits a sensitive URL line without losing harmless lines: %s", (url) => {
+    expect(printableJoinInstructions(`Use headphones.\nOpen ${url}\nBring a board.`)).toBe(
+      "Use headphones.\nBring a board.",
+    );
+  });
+
+  it.each([
+    "https://call.example.test/open-room'fixture#fixture-secret",
+    "https://call.example.test/open-room'fixture?auth=fixture-secret",
+    "https://o'connor:fixture-password@call.example.test/open-room",
+    'https://call.example.test/open-room"fixture#fixture-secret',
+    "https://call.example.test/open-room<fixture#fixture-secret",
+  ])("classifies the complete URL before retaining its instruction line: %s", (url) => {
+    expect(isPrintableJoinDestination(url), "CONTROL: the whole destination is unsafe").toBe(false);
     expect(printableJoinInstructions(`Use headphones.\nOpen ${url}\nBring a board.`)).toBe(
       "Use headphones.\nBring a board.",
     );
