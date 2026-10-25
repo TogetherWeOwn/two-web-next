@@ -45,6 +45,39 @@ version.
   vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), never in an
   issue.
 
+### Product evidence
+
+Under Verification, fill the template's three product-evidence prompts with linked
+proof, a concrete reason for **N/A**, or an explicit **unverified** gap and follow-up.
+These are descriptive conventions, not a new CI gate; an unverified gap is not a pass.
+Link the existing [machine-interface](docs/machine-interface.md),
+[machine-errors](docs/machine-errors.md), [RSVP recovery](docs/rsvp-recovery.md) and
+[staging explorer](docs/explore-staging.md) contracts where relevant; they remain
+authoritative. Do not add an API or asynchronous feature merely to fill a row.
+
+- **Agent interface:** Name the consumer, discovery surface, stable identifiers/schema
+  and repeatable read-only or fixture check. Explain error remediation and safe
+  retry/idempotency where applicable; do not create a new agent write surface.
+- **Async truth and recovery:** Record only observable states, including unknown
+  outcomes, stale/partial data and recovery. Queued is not complete; a timed-out
+  write is unknown until read-back proves its outcome, not permission to resubmit.
+  Explain duplicate suppression, bounded retry and keyboard/status behavior where
+  applicable. Use indeterminate progress rather than invented percentages or ETAs.
+- **Dogfood outcome and feedback:** Record the task, environment, revision, actor
+  type, expected versus observed result, evidence and follow-up or justified
+  no-change decision. Separate fixture/browser simulation, agent dogfood and
+  actual human feedback; say when no human feedback was collected. A request or
+  completed checklist is not task success. Keep member data, credentials and raw
+  support transcripts out of public evidence.
+
+Illustrative example, **not an observed outcome**: “Agent; local RSVP fixture;
+revision `<sha>`; task: recover after a lost write response. Expected: unknown
+notice, then read-back before another write. Observed: `<result and evidence>`.
+Human feedback: not collected. Follow-up: `<action or justified no-change>`.”
+A justified N/A example is “Async: N/A — contribution-guide wording only; no
+product request, progress state or recovery behavior changes.” Missing verification
+of an applicable state is **unverified**, not N/A.
+
 ### Branch protection and required checks
 
 The repository rulesets enforce the following on `main`:

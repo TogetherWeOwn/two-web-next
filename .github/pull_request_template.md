@@ -32,6 +32,25 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 
 -
 
+### Product evidence
+
+<!-- For each prompt: linked evidence, concrete justified N/A, or an explicit unverified gap and follow-up.
+These are descriptive prompts, not a new CI gate. An unverified gap is not a pass.
+See CONTRIBUTING.md, "Product evidence", for applicability and labelled examples. -->
+
+- **Agent interface:** Consumer, discovery surface, stable identifiers/schema and
+  repeatable read-only/fixture check; error remediation and safe retry/idempotency
+  where applicable. See [machine interfaces](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/machine-interface.md) and
+  [machine errors](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/machine-errors.md). Do not invent an agent write surface.
+- **Async truth and recovery:** Observable states, uncertainty, stale/partial data,
+  recovery, duplicate suppression, bounded retry and keyboard/status behavior where
+  applicable. Queued is not complete; read back an unknown write before another
+  submission. No invented progress or ETA. See [RSVP recovery](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/rsvp-recovery.md).
+- **Dogfood outcome and feedback:** Task, environment, revision, actor type, expected
+  versus observed result, evidence and follow-up or justified no-change decision.
+  Distinguish fixture/browser simulation, agent dogfood and actual human feedback;
+  say if human feedback was not collected. See [staging exploration](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/explore-staging.md).
+  Keep member data, credentials and raw support transcripts out of public evidence.
 
 ## Notes for reviewers (optional)
 
