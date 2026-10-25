@@ -16,7 +16,12 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { PUBLIC_DATA_BOUNDS, PUBLIC_EVENT_STATUS } from "../public-data/contracts";
+import { containsControlCharacters } from "../admin/validation-shared";
+import {
+  PUBLIC_API_GAME_MAX_LENGTH,
+  PUBLIC_DATA_BOUNDS,
+  PUBLIC_EVENT_STATUS,
+} from "../public-data/contracts";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
@@ -1205,12 +1210,32 @@ export type PublicApiEvent = Omit<PublicEvent, "goingCount" | "goingOccupancy"> 
  * bound as `listJson`, but the going-count aggregate degrades to null instead
  * of failing the page — an unreadable RSVP rollup reads as unknown, never 0.
  * `listJson` stays untouched for the session-gated `/events.json` contract.
+ * Optional `game` narrows to one stored game, trim + case-insensitive exact
+ * via `gameCondition` (the schedule-facet and leaderboard `?activity=`
+ * precedent): the value arrives as a bound parameter, never interpolated, so
+ * stored NULL/blank games never match and hostile input matches nothing.
  */
 export async function listPublicApiEvents(
   db: Db,
-  opts: { limit: number; offset: number },
+  opts: { limit: number; offset: number; game?: string },
 ): Promise<{ rows: PublicApiEvent[]; total: number; page: number }> {
-  const predicate = eq(events.status, PUBLIC_EVENT_STATUS);
+  // Defense-in-depth: direct callers must not read unfiltered for a blank
+  // game or send a NUL to PostgreSQL. Invalid games answer empty without a
+  // database read, matching the route and the save-side character rule.
+  if (opts.game !== undefined) {
+    const trimmed = opts.game.trim();
+    if (
+      trimmed === "" ||
+      [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+      containsControlCharacters(trimmed)
+    ) {
+      return { rows: [], total: 0, page: 1 };
+    }
+  }
+  const gameClause = opts.game !== undefined ? gameCondition(opts.game) : undefined;
+  const predicate = gameClause
+    ? and(eq(events.status, PUBLIC_EVENT_STATUS), gameClause)
+    : eq(events.status, PUBLIC_EVENT_STATUS);
   const [total] = await db.select({ n: count() }).from(events).where(predicate);
   const n = Number(total?.n ?? 0);
   const lastPage = Math.max(1, Math.ceil(n / opts.limit));

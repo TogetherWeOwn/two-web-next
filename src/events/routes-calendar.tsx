@@ -195,6 +195,7 @@ export function registerCalendarRoutes(
           games={games}
           gameFilter={gameFilter}
           member={session?.member ?? false}
+          session={session}
           inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
           appUrl={c.env.APP_URL}
           loginReturnTo={loginReturnTo}

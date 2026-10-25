@@ -21,6 +21,16 @@ export const API_PUBLIC_BOUNDS = {
   maxPage: 1000,
 } as const;
 
+/**
+ * Longest accepted `?game=` value on the public events feed (after trimming,
+ * in code points, counted before lowercasing — exactly as the event form
+ * counts). Aligned to the event-form saved-game max
+ * (src/admin/validation-event-form.ts) and the leaderboard `?activity=` bound:
+ * every game name the form can save is admitted by the filter. Longer values
+ * degrade to the empty page, never a 422.
+ */
+export const PUBLIC_API_GAME_MAX_LENGTH = 100;
+
 /** One published event as the public API serves it. `going_count` is null — never 0 — when the RSVP aggregate cannot be read. */
 export interface PublicApiEventDto extends Omit<PublicEventDto, "going_count" | "going_occupancy"> {
   going_count: number | null;

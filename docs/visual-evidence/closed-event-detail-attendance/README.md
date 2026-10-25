@@ -1,0 +1,203 @@
+# Closed event detail shows final attendance
+
+## Design contract
+
+Guests and members opening a past or cancelled event page must see final
+attendance, never a seat invitation. Past detail keeps the going count and
+drops the spots-left/full line; cancelled detail (the 410 page) shows the
+retained-responses history line with no capacity; future published detail keeps
+count plus spots-left byte-identical. Elapsed published rows also suppress spots,
+without waiting for stored-status reconciliation.
+
+The precedent is the schedule card
+(`src/events/pages-calendar-card.tsx:96-118`): past and cancelled cards stay
+unmarked, cancelled cards read `existingResponsesText`. The lineup badge keeps
+its island mount, testids, roles and copy helpers; the gone page gains one
+static line after the title (no island mount: a closed event takes no RSVPs,
+so there is nothing to refresh). No new query, read, client script, CSS or
+copy vocabulary. Required states: past full/nearly-full/no-capacity/
+zero-going, cancelled including singular, published unchanged, island
+refresh/retry/stale on closed events materializing no spots node, native
+keyboard/no-JS journeys unchanged.
+
+## Before and after
+
+All images were captured and opened. Desktop viewports are 1280×800
+(viewport captures); mobile viewports are 390×844 (full-page captures, so
+the below-fold lineup is visible). Synthetic fixture only: "Chess night",
+past full (10 of 10), cancelled with 9 responses, published nearly-full
+(9 of 10, 1 spot left).
+
+| Renderer / state | Before (1280) | After (1280) | Before (390) | After (390) |
+| --- | --- | --- | --- | --- |
+| Hono / past | [Before](hono-past-1280-before.png) | [After](hono-past-1280-after.png) | [Before](hono-past-390-before.png) | [After](hono-past-390-after.png) |
+| Hono / cancelled | [Before](hono-cancelled-1280-before.png) | [After](hono-cancelled-1280-after.png) | [Before](hono-cancelled-390-before.png) | [After](hono-cancelled-390-after.png) |
+| Hono / published | [Before](hono-published-1280-before.png) | [After](hono-published-1280-after.png) | [Before](hono-published-390-before.png) | [After](hono-published-390-after.png) |
+| Kit / past | [Before](kit-past-1280-before.png) | [After](kit-past-1280-after.png) | [Before](kit-past-390-before.png) | [After](kit-past-390-after.png) |
+| Kit / cancelled | [Before](kit-cancelled-1280-before.png) | [After](kit-cancelled-1280-after.png) | [Before](kit-cancelled-390-before.png) | [After](kit-cancelled-390-after.png) |
+| Kit / published | [Before](kit-published-1280-before.png) | [After](kit-published-1280-after.png) | [Before](kit-published-390-after.png) | [After](kit-published-390-after.png) |
+
+Byte proof: both published pairs are `cmp`-identical HTML; each closed pair
+differs in exactly one contiguous region (the removed spots node, or the
+added `event-existing-responses` line). Both published PNG pairs are
+pixel-identical (`cmp`); the four closed pairs differ.
+
+The fixture calls the real Hono route (`test/app.ts` under tsx) and the
+real Kit resolver plus SSR-compiled `EventDetail`/`EventGone` components.
+Only bindings, SQL transport and session state are synthetic. Hono shots
+serve the real `public/` assets; Kit shots link the real `/event-theme.css`
+and the compiled `web/src/app.css` token sheet (built with the repo's
+Tailwind pipeline), inside a screenshot-only shell shared byte-for-byte by
+before and after. Kit is server-rendered only, not a booted or hydrated
+deployment. These screenshots are not staging or production evidence.
+
+## Executed verification
+
+```sh
+npx vitest run test/closed-event-detail-attendance-acceptance.test.ts
+# 36 passed (was 20 failed / 16 passed at the base pin)
+npx vitest run test/kit-event-detail.test.ts test/kit-event-states.test.ts \
+  test/event-page.test.ts test/event-theme.test.ts test/event-navigation.test.ts \
+  test/islands-going-count.test.ts test/event-page-spots.test.ts \
+  test/event-page-share.test.ts test/event-gone-alternatives-acceptance.test.ts \
+  test/calendar-cancellation-copy.test.ts test/calendar-card-fullness-pins.test.ts \
+  test/islands-paused-cancelled-a11y.test.ts
+# 12 files, 189 passed, 21 skipped (DB-gated)
+npm run lint        # clean
+npm run typecheck   # clean
+npm run a11y        # 146 PASS, exit 0
+```
+
+## CI visual-baseline review
+
+The [browser-smoke run](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39988487720)
+reported exactly two visual failures: `event-cancelled-desktop.png` and
+`event-cancelled-mobile.png`; the other 15 visual cases passed. Its ordinary
+journeys passed 236/236 and Kit parity passed 75/75. The required `e2e-ok`
+aggregator remained red because the visual comparison failed.
+
+Downloaded `e2e-failure-39988487720-1` and opened both expected, actual and
+diff images. Both actuals add the intended `0 existing responses` line
+below the cancelled title. The alternatives, CTA and footer move down with
+that line; no other intended visual change. Desktop grows from 1280×1322
+to 1280×1374; mobile grows from 390×1256 to 390×1308. Accepted only these
+two actuals with `node ci/visual-accept.mjs <artifact-dir>` (2 baselines;
+2 stale artifact copies superseded). Thresholds, masks, specs and the
+paired acceptance file were not edited by the implementation author.
+
+Accepted PNG SHA-256:
+
+- Desktop: `e3a4843d8243c454f3ee12c6bad0d633dd0a96c5ffa58613dd6c9c46e67b0e32`
+- Mobile: `38d4bde5bbaba578e3b69355bed76c7917ee3aa6422d99ac9130b5050a8b8451`
+
+The unchanged acceptance suite was rerun: 36/36 passed (the existing
+`$app/tsconfig` base-config warning remains). `node --test
+ci/visual-accept.test.mjs` passed 40/40, and `npm run lint` passed. These
+local checks do not replace a fresh pinned-runner visual comparison after
+push. At head `30b81c7b`, CI `ci-ok`, `lighthouse`, `a11y`, `gitleaks` and
+`pr-lint` passed; CodeQL separately identified the test helper's HTML
+filtering regex and requires its author-owned correction before merge.
+
+## Author-owned test correction
+
+Consumed commit [`98b7e016830fb9bb0dc705d81bf25b88ef28c2e0`](https://github.com/TogetherWeOwn/two-web-next/commit/98b7e016830fb9bb0dc705d81bf25b88ef28c2e0)
+unchanged. Its acceptance-file bytes match the correction commit exactly.
+The helper now extracts visible text with the existing Miniflare
+HTMLRewriter rather than HTML-filtering regexes, and adds a mixed-case /
+permissive-closing regression. No product code, dependency, assertions or
+thresholds were removed or weakened in this repair.
+
+Fresh verification after consumption: the acceptance suite passes 37/37;
+`npm run lint`, `npm run typecheck`, `node --test
+ci/visual-accept.test.mjs` (40/40) and `git diff --check` pass. The initial
+acceptance attempt could not start because the prior run's external
+dependency directory had been removed; reinstalling the locked dependencies
+outside the checkout restored verification. The existing `$app/tsconfig`
+warning remains. Fresh CodeQL and pinned-runner visual CI are still
+required; these local results do not substitute for either gate.
+
+## Elapsed published detail: review correction
+
+The [review of `2b167c2b`](https://github.com/TogetherWeOwn/two-web-next/pull/1709#issuecomment-6375965703)
+identified the interval between an event ending and its stored status being
+reconciled to `past`. Both real renderers reproduced a closed RSVP notice
+beside `1 of 10 spots left`. The correction uses one server instant for the
+Hono lineup and RSVP button; Kit reuses its existing server-decided RSVP
+verdict. Draft previews keep their existing spots line. No browser-clock
+verdict, extra read, query, CSS or client script was added.
+
+Design-contract extension: the audience, screen job, layout, tokens and
+non-goals above remain unchanged. Add elapsed-but-still-published (including
+the exact end boundary) to required closed states; future published and draft
+remain controls. No new design direction or baseline acceptance is needed.
+
+### Additional opened captures
+
+All eight images below were captured and individually opened, with JavaScript
+disabled. Desktop is a 1280×800 viewport capture; mobile uses a 390×844
+viewport and captures the full page. The synthetic published event ended in
+2020, with nine named responses, nine occupied seats and capacity ten.
+The lineup changes from `9 of 10 going · 1 of 10 spots left` to `9 of 10 going`;
+the closed RSVP notice remains. No other visual change was observed.
+
+| Renderer | Before (1280) | After (1280) | Before (390) | After (390) |
+| --- | --- | --- | --- | --- |
+| Hono / elapsed published | [Before](hono-elapsed-published-1280-before.png) | [After](hono-elapsed-published-1280-after.png) | [Before](hono-elapsed-published-390-before.png) | [After](hono-elapsed-published-390-after.png) |
+| Kit / elapsed published | [Before](kit-elapsed-published-1280-before.png) | [After](kit-elapsed-published-1280-after.png) | [Before](kit-elapsed-published-390-before.png) | [After](kit-elapsed-published-390-after.png) |
+
+These use the real Hono route and Kit resolver/SSR component with hermetic
+SQL transport/session fixtures. Public assets are served unchanged. Kit links
+the actual built root CSS from the locked Vite/Tailwind build. A bounded
+fixture server and Chromium close in the capture script's `finally` block;
+no persistent preview service is claimed. This is local fixture evidence,
+not staging or production evidence; the Hono quality gates do not exercise
+the Kit route. The twins' existing theme differences were not changed.
+
+### Fresh continuation checks
+
+- Real-route/SSR probe before the fix: both elapsed-published no-spots checks
+  failed; future-published, explicit-past and cancelled controls passed.
+- After the fix: all eight renderer/state assertions passed. Future-published,
+  explicit-past and cancelled HTML remains byte-identical before/after on
+  both twins (six exact comparisons).
+- The unchanged protected acceptance suite plus twelve neighbours: 13 files,
+  **226 passed / 21 DB-gated skips**. Skips are not database verification.
+- Four additional context-pack caller suites (`event-attendees-document-admission-acceptance`,
+  `avatar-failure-render`, `kit-error-no-store-vary-acceptance`,
+  `kit-public-read-503-alerts-pins`): **105 passed**.
+- `npm run a11y` with its permitted schema-isolated test database: **146 PASS**,
+  zero FAIL, exit 0. Mobile and desktop Lighthouse commands were started
+  separately; no completed verdict is claimed here yet.
+- `npm run lint`, `npm run typecheck`, `git diff --check`: pass after applying
+  the formatter to the changed Svelte expression. Initial lint correctly
+  rejected the line wrapping; no lint configuration changed.
+- `npm run build --prefix web` and `npm run kit-perf`: pass. Server JS gzip
+  **329025/329472 B**, client JS gzip **99005/101632 B**, client CSS gzip
+  **983/1024 B**. No ceiling was changed.
+- The independently authored acceptance additions were consumed unchanged from
+  [`072df8ce4b35b18228303b33b163c21e0e472f63`](https://github.com/TogetherWeOwn/two-web-next/commit/072df8ce4b35b18228303b33b163c21e0e472f63).
+  File SHA-256: `1f11cf51a8be6e2bd7f3eadf93a904b1f88480d09ef28434e324c3e0ddbf7fe0`.
+  The author's pinned-base run reports four elapsed/boundary assertion failures
+  and 47 passes; each independent wrong-count mutant fails its targeted case.
+- Combined repair verification: the acceptance file plus the same twelve
+  neighbours and four caller suites above: **17 files, 345 passed / 21 DB-gated
+  skips**. The protected file alone is **51/51**, zero skips. Fresh lint,
+  typecheck, floor guard, documentation links and diff-check pass. Fresh Kit
+  build/perf pass: server gzip **329026/329472 B**, client JS **99005/101632 B**,
+  CSS **983/1024 B**. Initial test startup failed because the previous run's
+  scratch dependencies had expired; installing the locked dependencies outside
+  the checkout restored execution. No protected test bytes were edited here.
+- Fresh `npm run deps:audit` exits 1: seven high package rows in the root
+  lockfile (Lighthouse/Zod and both body-parser paths); the web lock is clean.
+  This is a real security gate, not a flake. The root lock blob is identical on
+  this branch, the reviewed head and current fetched main
+  (`a7ff57064f68d32119c3561edc84972fbc0c3e21`). Separate dependency remediation
+  owns the repair; no exception, threshold or dependency was changed here.
+- Both local Lighthouse commands initially fail healthcheck because Chrome
+  is not auto-discovered. A configured-Chromium run is recorded separately;
+  no completed local Lighthouse pass is claimed by this appendix. Prior
+  in-flight results were not recoverable after scratch cleanup. Exact-head
+  hosted Lighthouse and all other required checks remain mandatory.
+
+No main merge/rebase or partial review-fix push was performed. Exact-head CI
+and independent review are still required after the combined repair push.
