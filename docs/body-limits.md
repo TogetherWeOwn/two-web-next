@@ -58,13 +58,13 @@ shield hit; the SQL client is closed on shield refusals and normal replies
 (413 and source-read failures never reach admission, so no client opens for
 them).
 The QA environment gate runs first, so a disabled seam always returns 404 without
-reads or throttle queries. `POST /logout` and `POST /auth/qa/:identity` (after
-its QA identity/token gate) apply the `action` cap before the throttle: an
-oversized body returns 413 with zero throttle-budget spend even when the bucket
-is exhausted, while bodies at or under the cap keep the existing
-throttle-then-work order. Unauthenticated QA probes still 404 at the gate
-before either. Source-read failures return a static 400; downstream
-route and store exceptions still reach their existing handlers.
+reads or throttle queries. `POST /logout`, `POST /logout/everywhere` and
+`POST /auth/qa/:identity` (after its QA identity/token gate) apply the `action`
+cap before the throttle: an oversized body returns 413 with zero
+throttle-budget spend even when the bucket is exhausted, while bodies at or
+under the cap keep the existing throttle-then-work order. Unauthenticated QA
+probes still 404 at the gate before either. Source-read failures return a static
+400; downstream route and store exceptions still reach their existing handlers.
 
 `POST /mcp` is likewise cap-first: `requestBodyLimit("mcp")` runs before
 `mcpRefused()` in [`src/mcp/routes.ts`](../src/mcp/routes.ts), so an over-cap
