@@ -28,7 +28,7 @@ import { body, dbUnavailableJson, type App, type Ctx, type SessionReader } from 
 const rsvpBody = (a: RsvpAnswer) => ({
   data: {
     status: a.status,
-    synced_to_discord_at: "2000-01-01T00:00:00.000Z",
+    synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
     waitlist_position: a.waitlistPosition,
   },
 });
