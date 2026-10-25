@@ -54,6 +54,12 @@ const SUITES = [
         registrarFile: "test/helpers/admin-read-retry-browser-acceptance.ts",
         registrar: "registerAdminReadRetryBrowserAcceptance",
       },
+      {
+        title: "archive game real-browser acceptance",
+        min: 20,
+        registrarFile: "test/helpers/archive-game-browser-acceptance.ts",
+        registrar: "registerArchiveGameBrowserAcceptance",
+      },
     ],
   },
   {

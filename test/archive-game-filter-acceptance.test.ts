@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { events } from "../src/db/admin-schema";
 import * as anonCache from "../src/events/anon-cache";
+import { loadPastArchivePage } from "../src/kit-past-events";
 import {
   GAME,
   SPECIAL_GAME,
@@ -240,6 +241,60 @@ for (const twin of archiveTwins) {
       expect(html).not.toContain("<club>");
     });
 
+    // Offered-name regression: JS and PostgreSQL fold these names
+    // differently (U+0130 loses its combining dot in PG `lower`, and PG
+    // never applies the contextual final-sigma rule JS applies), so a
+    // JS-folded parameter can never equal the PG-folded stored value.
+    // Selecting the exact offered option must still find its own row.
+    it.each([
+      ["İstanbul", 201],
+      ["ΟΣ", 202],
+    ] as const)(
+      "finds the exact row and count for offered Unicode game %j whose JS/PG case folds differ",
+      async (stored, n) => {
+        await source.seed([
+          gameRow(201, { game: "İstanbul" }),
+          gameRow(202, { game: "ΟΣ" }),
+          gameRow(203, { game: GAME }),
+        ]);
+        const offered = gameOptions(await (await get("/events/past")).text()).find(
+          (o) => o.value === stored,
+        );
+        expect(offered, "the stored Unicode game is offered in the native select").toBeDefined();
+        const response = await get(archiveGamePath(offered!.value));
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(eventKeys(html)).toEqual([gameKey(n)]);
+        expect(totalPages(html)).toBe(1);
+        expect(gameOptions(html).find((o) => o.selected)?.value).toBe(stored);
+      },
+    );
+
+    // Accepted stored CRLF: request normalization turns CRLF into LF (and a
+    // real browser's attribute parsing does the same to the offered option
+    // value), so every submitted representation must find the stored row.
+    it("finds a stored CRLF game from its offered option and from both newline forms", async () => {
+      const stored = "alpha\r\nbeta";
+      await source.seed([
+        gameRow(211, { game: stored }),
+        gameRow(212, { game: "alpha beta" }),
+        gameRow(213, { game: GAME }),
+      ]);
+      const offered = gameOptions(await (await get("/events/past")).text()).find(
+        (o) => o.value.replace(/\r\n?/g, "\n") === "alpha\nbeta",
+      );
+      expect(offered, "the stored CRLF game is offered in the native select").toBeDefined();
+      for (const submitted of [offered!.value, stored, "alpha\nbeta"]) {
+        const response = await get(archiveGamePath(submitted));
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        expect(eventKeys(html)).toEqual([gameKey(211)]);
+        expect(totalPages(html)).toBe(1);
+        const selected = gameOptions(html).find((o) => o.selected);
+        expect(selected?.value.replace(/\r\n?/g, "\n")).toBe("alpha\nbeta");
+      }
+    });
+
     it.each(["%", "_", "\\"])("keeps text %j literal while game is selected", async (literal) => {
       await source.seed([
         gameRow(1, { title: `Literal ${literal} meeting` }),
@@ -406,7 +461,36 @@ for (const twin of archiveTwins) {
       const cacheRead = vi.spyOn(anonCache, "readAnonCache");
       const cacheWrite = vi.spyOn(anonCache, "writeAnonCache");
       const response = await requestArchive(twin, `/events/past?${query}`, env, kit);
-      expect([400, 422]).toContain(response.status);
+      // Exactly the branded 400 on both twins: accepting 422 here would let
+      // a status-swap mutant pass while breaking the twin-agreed contract.
+      expect(response.status).toBe(400);
+      expect(cacheRead).not.toHaveBeenCalled();
+      expect(cacheWrite).not.toHaveBeenCalled();
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(acquisitions).toBe(0);
+      expect(source.statements).toHaveLength(0);
+    });
+
+    it("keeps oversized text at exactly 422, separately from the invalid-game 400", async () => {
+      await (await get("/events/past")).text();
+      source.statements.length = 0;
+      let acquisitions = 0;
+      const env = { ...source.env };
+      Object.defineProperty(env, "ADMIN_DB", {
+        get() {
+          acquisitions++;
+          return source.db;
+        },
+      });
+      const cacheRead = vi.spyOn(anonCache, "readAnonCache");
+      const cacheWrite = vi.spyOn(anonCache, "writeAnonCache");
+      const response = await requestArchive(
+        twin,
+        `/events/past?game=${GAME}&q=${"x".repeat(256)}`,
+        env,
+        kit,
+      );
+      expect(response.status).toBe(422);
       expect(cacheRead).not.toHaveBeenCalled();
       expect(cacheWrite).not.toHaveBeenCalled();
       expect(response.headers.get("cache-control")).toContain("no-store");
@@ -439,3 +523,105 @@ for (const twin of archiveTwins) {
     });
   });
 }
+
+// Direct helper admission: the Kit dispatch forwards refused input to the
+// loader, so loadPastArchivePage's own game admission is the last fail-closed
+// gate. Deleting it must go red here even though no route is involved.
+describe("loadPastArchivePage direct admission (fail closed)", () => {
+  const refused: Array<{
+    label: string;
+    status: number;
+    args: {
+      queryParam?: string | null;
+      gameParam?: string | null;
+      gameValues?: readonly string[] | null;
+      qValues?: readonly string[] | null;
+    };
+  }> = [
+    {
+      label: "overlong game",
+      status: 400,
+      args: { gameParam: "x".repeat(256), gameValues: ["x".repeat(256)] },
+    },
+    { label: "NUL game", status: 400, args: { gameParam: "Go\0", gameValues: ["Go\0"] } },
+    {
+      label: "duplicate game",
+      status: 400,
+      args: { gameParam: "Go", gameValues: ["Go", "Chess"] },
+    },
+    {
+      label: "duplicate q with a game",
+      status: 400,
+      args: {
+        gameParam: "Go",
+        gameValues: ["Go"],
+        queryParam: "Table",
+        qValues: ["Table", "other"],
+      },
+    },
+    {
+      label: "duplicate q without a game",
+      status: 400,
+      args: { queryParam: "Table", qValues: ["Table", "other"] },
+    },
+    {
+      label: "oversized text stays 422",
+      status: 422,
+      args: { gameParam: "Go", gameValues: ["Go"], queryParam: "x".repeat(256) },
+    },
+  ];
+
+  it.each(refused)(
+    "refuses $label with private/no-store and zero DB, suggestion or row reads",
+    async ({ status, args }) => {
+      const headers: Record<string, string> = {};
+      const dbForFn = vi.fn(async () => ({}) as never);
+      const listArchiveGamesFn = vi.fn(async () => ({ games: [GAME], omitted: false }));
+      const listPastFn = vi.fn(async () => ({ rows: [], hasMore: false, totalPages: 0 }));
+      await expect(
+        loadPastArchivePage({
+          env: { APP_URL: "https://example.test" } as never,
+          pageParam: "1",
+          ...args,
+          setHeaders: (next) => Object.assign(headers, next),
+          dbForFn,
+          listPastFn,
+          listArchiveGamesFn,
+        }),
+      ).rejects.toMatchObject({ status });
+      expect(headers["cache-control"]).toBe("private, no-store");
+      expect(dbForFn).not.toHaveBeenCalled();
+      expect(listArchiveGamesFn).not.toHaveBeenCalled();
+      expect(listPastFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("CONTROL: a valid single game reaches each read once and filters by the canonical stored game", async () => {
+    const headers: Record<string, string> = {};
+    const dbForFn = vi.fn(async () => ({}) as never);
+    const listArchiveGamesFn = vi.fn(async () => ({ games: ["Chess", GAME], omitted: false }));
+    const listPastFn = vi.fn(async (..._args: unknown[]) => ({
+      rows: [] as never[],
+      hasMore: false,
+      totalPages: 0,
+    }));
+    const result = await loadPastArchivePage({
+      env: { APP_URL: "https://example.test" } as never,
+      pageParam: "1",
+      queryParam: TEXT,
+      qValues: [TEXT],
+      gameParam: "go",
+      gameValues: ["go"],
+      setHeaders: (next) => Object.assign(headers, next),
+      dbForFn,
+      listPastFn,
+      listArchiveGamesFn,
+    });
+    expect(result.game).toBe(GAME);
+    expect(dbForFn).toHaveBeenCalledOnce();
+    expect(listArchiveGamesFn).toHaveBeenCalledOnce();
+    expect(listPastFn).toHaveBeenCalledOnce();
+    expect(listPastFn.mock.calls[0]![4]).toBe(GAME);
+    expect(headers["cache-control"]).toBe("private, no-store");
+  });
+});

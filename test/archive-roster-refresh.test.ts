@@ -98,4 +98,62 @@ describe.each(["assets", "public"])("%s roster refresh archive continuity", (dir
     expect(url.searchParams.has("archivePage")).toBe(false);
     expect(url.searchParams.has("archiveQuery")).toBe(false);
   });
+
+  // The live roster refresh re-reads the detail page; dropping archiveGame
+  // there silently returns the member to the unfiltered archive afterwards.
+  it("propagates the archive game with page, query and attendee paging", () => {
+    const url = new URL(
+      refresh(source, "?attendees=2&archivePage=2&archiveQuery=Table&archiveGame=Go"),
+      "https://example.test",
+    );
+    expect(url.pathname).toBe("/e/evt-1");
+    expect(url.searchParams.get("attendees")).toBe("2");
+    expect(url.searchParams.getAll("archiveGame")).toEqual(["Go"]);
+    expect(archiveContext(url.search)).toEqual({ page: 2, q: "Table", game: "Go" });
+  });
+
+  it("does not invent archive context from a game without an archive page", () => {
+    const url = new URL(refresh(source, "?attendees=2&archiveGame=Go"), "https://example.test");
+    expect([...url.searchParams]).toEqual([["attendees", "2"]]);
+  });
+
+  describe.each(["x", "🌌"])("game admission counted in %s code points", (character) => {
+    it.each([255, 256])("checks the outbound URL at %i code points", (length) => {
+      const game = character.repeat(length);
+      const search = new URLSearchParams({
+        attendees: "2",
+        archivePage: "2",
+        archiveQuery: "Table",
+        archiveGame: game,
+      });
+      const url = new URL(refresh(source, `?${search}`), "https://example.test");
+      expect(url.pathname).toBe("/e/evt-1");
+      expect(url.searchParams.get("attendees")).toBe("2");
+      if (length <= 255) {
+        expect(url.searchParams.getAll("archiveGame")).toEqual([game]);
+        expect(archiveContext(url.search)).toEqual({ page: 2, q: "Table", game });
+      } else {
+        // Over-bound game rejects the entire archive context, never just the
+        // game: a partial context would return to a different search.
+        expect(archiveContext(url.search)).toBeNull();
+        expect(url.searchParams.has("archivePage")).toBe(false);
+        expect(url.searchParams.has("archiveQuery")).toBe(false);
+        expect(url.searchParams.has("archiveGame")).toBe(false);
+      }
+    });
+  });
+
+  it.each([
+    "archivePage=2&archiveQuery=Table&archiveGame=Go&archiveGame=Go",
+    "archivePage=2&archiveQuery=Table&archiveGame=Go&archiveGame=Chess",
+    "archivePage=2&archiveQuery=Table&archiveGame=Go%00",
+    "archivePage=2&archiveQuery=Table&archiveGame=%E0%A4%A",
+  ])("rejects the entire archive context for an invalid game during refresh %s", (archive) => {
+    const url = new URL(refresh(source, `?attendees=2&${archive}`), "https://example.test");
+    expect(url.searchParams.get("attendees")).toBe("2");
+    expect(archiveContext(url.search)).toBeNull();
+    expect(url.searchParams.has("archivePage")).toBe(false);
+    expect(url.searchParams.has("archiveQuery")).toBe(false);
+    expect(url.searchParams.has("archiveGame")).toBe(false);
+  });
 });
