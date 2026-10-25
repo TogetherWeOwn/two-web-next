@@ -109,7 +109,8 @@ type KitRuntime = {
 let compiled: Promise<KitRuntime> | undefined;
 export function compileFeaturedReturnKit(): Promise<KitRuntime> {
   return (compiled ??= (async () => {
-    const { compile } = createRequire(resolve(root, "web/package.json"))("svelte/compiler");
+    const webRequire = createRequire(resolve(root, "web/package.json"));
+    const { compile } = webRequire("svelte/compiler");
     const styles: string[] = [];
     const result = await build({
       stdin: {
