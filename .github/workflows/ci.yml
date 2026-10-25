@@ -187,7 +187,7 @@ jobs:
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
         run: |
           mkdir -p artifacts/a11y
-          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap ci/rsvp-focus-browser.test.mjs
+          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap --test-reporter=spec --test-reporter-destination=stdout ci/rsvp-focus-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/rsvp-focus.tap "RSVP outcome focus in Chromium" 16
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
