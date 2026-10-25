@@ -81,24 +81,36 @@ beforeAll(async () => {
 });
 
 describe("Hono refused transition recovery", () => {
-  for (const [action, status, explanation] of [
+  for (const [action, state, explanation] of [
     ["publish", "cancelled", /cancelled/i],
+    ["publish", "ended draft", /already ended/i],
     ["cancel", "past", /Only a draft or a published event can be cancelled/i],
     ["rsvp-pause", "draft", /Only published events/],
     ["rsvp-reopen", "draft", /Only published events/],
   ] as const) {
-    it(`${action} keeps its real 422 explanation and offers only safe GET recovery`, async () => {
-      const row = refusedEvent({ status });
+    it(`${action} from ${state} keeps its real 422 explanation and offers only safe GET recovery`, async () => {
+      const row = refusedEvent(
+        state === "ended draft"
+          ? {
+              status: "draft",
+              startsAt: new Date("2000-01-01T18:00:00Z"),
+              endsAt: new Date("2000-01-01T20:00:00Z"),
+            }
+          : { status: state },
+      );
+      const originalStatus = row.status;
       const result = await honoRecovery(
         `/admin/events/${recoveryEvent}/${action}?next=https://evil.example/`,
         recoveryDb([row]),
         "POST",
       );
       expect(result.status).toBe(422);
+      expect(result.headers.get("cache-control")).toMatch(/private/);
+      expect(result.headers.get("cache-control")).toMatch(/no-store/);
       expect(text(content(result.html))).toMatch(explanation);
       expect(result.probe.writes).toEqual([]);
       expect(result.probe.audits).toEqual([]);
-      expect(row.status).toBe(status);
+      expect(row.status).toBe(originalStatus);
       expect(elements(content(result.html), (n) => n.tagName === "form")).toEqual([]);
       expect(links(result.html).some((a) => a.href === "/admin")).toBe(true);
       expect(
