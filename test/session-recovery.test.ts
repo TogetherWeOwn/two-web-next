@@ -188,7 +188,7 @@ describe("explicit expired-write recovery, never replay", () => {
       expect(response.headers.getSetCookie()).toEqual([]);
       expect(response.headers.get("location")).toBeNull();
       expect(await response.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: "/auth/recover?next=%2Fprofile",
       });
     }
@@ -212,7 +212,7 @@ describe("explicit expired-write recovery, never replay", () => {
     expect(patch.headers.get("cache-control")).toBe("no-store, private");
     expect(patch.headers.get("vary")).toBe("Cookie");
     expect(await patch.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
     });
     expect(patch.headers.getSetCookie()).toEqual([]);

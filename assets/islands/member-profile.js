@@ -512,7 +512,9 @@
   function validationMessages(j) {
     var out = [];
     if (j && typeof j === "object" && !Array.isArray(j)) {
-      var bag = j.errors;
+      // Unified refusal envelope ({ error: "invalid", fields }); `errors` is the
+      // pre-unification key, read so a cached island survives the rollout.
+      var bag = j.fields || j.errors;
       if (bag && typeof bag === "object" && !Array.isArray(bag)) {
         Object.keys(bag).forEach(function (k) {
           var m = bag[k];
