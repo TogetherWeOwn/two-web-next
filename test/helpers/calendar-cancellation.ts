@@ -93,6 +93,7 @@ export function cancellationData(member = false): KitEventsLoadData {
     games: [],
     gameFilter: null,
     member,
+    session: member ? { username: "Fixture member", member } : null,
     moderator: false,
     inviteUrl: "https://discord.gg/example",
     appUrl: "https://next.example.test",

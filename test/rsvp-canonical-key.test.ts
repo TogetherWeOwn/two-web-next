@@ -260,7 +260,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           status: "going",
         });
         expect(landed.status).toBe(404);
-        expect(await landed.json()).toEqual({ error: "not_found" });
+        expect(await landed.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
       });
 
       it("PUT a lowercase ULID on a closed event redirects first; the canonical URL still refuses as closed", async () => {
@@ -324,7 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const ev = await seed();
         const res = await del(ev.key, "never-answered");
         expect(res.status).toBe(404);
-        expect(await res.json()).toEqual({ error: "not_found" });
+        expect(await res.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
         expect(await rows(ev.id)).toHaveLength(0);
         expect(sent).toHaveLength(0);
       });
@@ -334,7 +334,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect((await put(ev.key, "someone-else")).status).toBe(201);
         const res = await del(ev.key, "not-the-owner");
         expect(res.status).toBe(404);
-        expect(await res.json()).toEqual({ error: "not_found" });
+        expect(await res.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
         expect(await rowUsers(ev.id)).toEqual(["someone-else"]);
       });
 
@@ -342,7 +342,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const user = "unknown-delete";
         const res = await del(UNKNOWN_KEY, user);
         expect(res.status).toBe(404);
-        expect(await res.json()).toEqual({ error: "not_found" });
+        expect(await res.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
         expect(await hits(user)).toBe(0);
       });
 
@@ -352,7 +352,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await del(key, user);
           expect(res.status, key).toBe(404);
           expect(res.headers.get("location"), key).toBeNull();
-          expect(await res.json(), key).toEqual({ error: "not_found" });
+          expect(await res.json(), key).toEqual({
+            error: "not_found",
+            request_id: expect.any(String),
+          });
         }
         expect(await hits(user)).toBe(0);
       });
@@ -366,7 +369,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await rows(ev.id)).toHaveLength(0);
         const second = await del(ev.key, user);
         expect(second.status).toBe(404);
-        expect(await second.json()).toEqual({ error: "not_found" });
+        expect(await second.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
       });
     });
 
@@ -399,7 +402,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await put(key, user);
           expect(res.status, key).toBe(404);
           expect(res.headers.get("location"), key).toBeNull();
-          expect(await res.json(), key).toEqual({ error: "not_found" });
+          expect(await res.json(), key).toEqual({
+            error: "not_found",
+            request_id: expect.any(String),
+          });
         }
       });
 
