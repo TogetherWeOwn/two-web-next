@@ -390,7 +390,8 @@ export function printableJoinInstructions(raw: string): string {
         )
       )
         return false;
-      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\s<>"']+/gi) ?? [];
+      // Quotes and angle brackets can be URL content, not safe token boundaries.
+      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/\S+/gi) ?? [];
       return urls.every(isPrintableJoinDestination);
     })
     .join("\n");
