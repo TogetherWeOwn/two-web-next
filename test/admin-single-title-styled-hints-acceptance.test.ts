@@ -259,6 +259,12 @@ const kitEditData = () => ({
     showPublish: false,
     showCancel: true,
     rsvpAction: null,
+    savedReview: {
+      href: `/events/${eventRow.eventKey}`,
+      updatedAt: eventRow.updatedAt.toISOString(),
+      guidance: "This saved event is already published. Saving edits updates the published record.",
+      corrections: [],
+    },
     roster: {
       total: 1,
       query: { q: "", status: "", sort: "answered", order: "desc", page: 1 },
