@@ -271,14 +271,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const body = await response.text();
         expect(body).toContain('data-testid="featured-preview"');
         expect(body).toContain("Last saved content");
-        if (published) {
-          expect(body).toContain('data-testid="featured-item"');
-          expect(body).toContain('src="https://cdn.discordapp.com/preview.png"');
-          expect(body).not.toContain('data-testid="featured-preview-hidden"');
-        } else {
-          expect(body).toContain('data-testid="featured-preview-hidden"');
-          expect(body).not.toContain('data-testid="featured-item"');
-        }
+        expect(body).toContain('data-testid="featured-item"');
+        expect(body).toContain('src="https://cdn.discordapp.com/preview.png"');
+        expect(body).not.toContain('data-testid="featured-preview-hidden"');
+        expect(body).toContain(`data-status="${published ? "live" : "unpublished"}"`);
+        expect(body).toMatch(/<article\b[\s\S]*?Saved editorial body[\s\S]*?<\/article>/);
         expect(await logs()).toHaveLength(0);
       },
     );

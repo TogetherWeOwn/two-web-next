@@ -25,8 +25,9 @@ import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
+import { searchContext } from "./search-context";
 
-const Card: FC<{ e: PublicEvent; archive: ArchiveContext }> = ({ e, archive }) => {
+const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q, archive }) => {
   // Same compact host line as the upcoming CalCard: trimmed public organizer,
   // already on the row (no new read); blank/missing renders no node.
   const host = (e.organizer_name ?? "").trim();
@@ -35,7 +36,17 @@ const Card: FC<{ e: PublicEvent; archive: ArchiveContext }> = ({ e, archive }) =
       <ScheduleDate date={e.startsAt} zone={e.timezone} />
       <div class="schedule-info">
         <h2>
-          <a href={archiveEventHref(e.eventKey, archive)}>{e.title}</a>
+          <a href={archiveEventHref(e.eventKey, archive)}>
+            {q ? (
+              <span>
+                {searchContext(e.title, q).map((part) =>
+                  part.match ? <mark>{part.text}</mark> : part.text,
+                )}
+              </span>
+            ) : (
+              e.title
+            )}
+          </a>
         </h2>
         {/* Upcoming-card shape (time · zone · location): the zone always
             renders, the location only when the row has one. */}
@@ -51,6 +62,13 @@ const Card: FC<{ e: PublicEvent; archive: ArchiveContext }> = ({ e, archive }) =
         </p>
         {e.game ? <p>{e.game}</p> : null}
         {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
+        {q && e.description ? (
+          <p class="archive-passage">
+            {searchContext(e.description, q, true).map((part) =>
+              part.match ? <mark>{part.text}</mark> : part.text,
+            )}
+          </p>
+        ) : null}
       </div>
       <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
     </li>
@@ -128,7 +146,7 @@ export const PastEventsPage: FC<{
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} archive={{ page, q }} />
+          <Card e={e} q={q} archive={{ page, q }} />
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
