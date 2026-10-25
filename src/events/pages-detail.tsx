@@ -92,6 +92,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -200,7 +201,12 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Reconciliation can lag: published rows stop inviting at
+                  // their end, using the same server instant as RSVP below.
+                  // Draft previews retain the line. The binder patches existing
+                  // spots nodes only, so refresh cannot recreate it after close.
+                  showSpotsLeft:
+                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
                   announcement: null,
                 }),
               }}
@@ -211,6 +217,7 @@ export const EventPage: FC<{
       <div class="event-rsvp">
         <RsvpButton
           e={e}
+          now={now}
           member={member}
           answer={answer}
           waitlistPosition={waitlistPosition}
