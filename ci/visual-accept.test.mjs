@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
+  readlinkSync,
+  symlinkSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -70,8 +73,8 @@ test("duplicate actual baselines for one destination are refused before any writ
   const workspace = scratchRoot("visual-accept-collision-");
   const artifact = join(workspace, "artifact");
   // Two admitted candidates in different subtrees flatten to the same name.
-  writeBytes(join(artifact, "a", "home-actual.png"), "candidate-a-bytes");
-  writeBytes(join(artifact, "b", "home-actual.png"), "candidate-b-bytes");
+  writeBytes(join(artifact, "test-results-visual", "a", "home-actual.png"), "candidate-a-bytes");
+  writeBytes(join(artifact, "test-results-visual", "b", "home-actual.png"), "candidate-b-bytes");
   // A pre-existing baseline that must survive the refusal byte-for-byte.
   writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "home.png"), "baseline-bytes");
   writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "other.png"), "other-bytes");
@@ -91,12 +94,12 @@ test("a reviewed actual supersedes a stale committed copy of the same destinatio
   const artifact = join(workspace, "artifact");
   // The failure artifact carries the whole __screenshots__ dir (stale committed
   // copies) next to the reviewed actuals; the actual must win, not refuse.
-  writeBytes(join(artifact, "run", "home-actual.png"), "actual-bytes");
+  writeBytes(join(artifact, "test-results-visual", "run", "home-actual.png"), "actual-bytes");
   writeBytes(
     join(artifact, "run", "e2e", "visual", "__screenshots__", "home.png"),
     "stale-baseline-bytes",
   );
-  writeBytes(join(artifact, "run", "about-actual.png"), "about-bytes");
+  writeBytes(join(artifact, "test-results-visual", "run", "about-actual.png"), "about-bytes");
   writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "home.png"), "baseline-bytes");
   const before = listFilesRecursive(join(workspace, "e2e", "visual", "__screenshots__"));
 
@@ -138,8 +141,8 @@ test("a changed page next to a full committed screenshots dir is accepted", () =
 test("byte-identical duplicate actuals are accepted once, not refused", () => {
   const workspace = scratchRoot("visual-accept-identical-");
   const artifact = join(workspace, "artifact");
-  writeBytes(join(artifact, "a", "home-actual.png"), "same-bytes");
-  writeBytes(join(artifact, "b", "home-actual.png"), "same-bytes");
+  writeBytes(join(artifact, "test-results-visual", "a", "home-actual.png"), "same-bytes");
+  writeBytes(join(artifact, "test-results-visual", "b", "home-actual.png"), "same-bytes");
 
   const { result, destDir } = runAccept(workspace, artifact);
 
@@ -164,8 +167,8 @@ test("differing duplicate new baselines are refused without partial writes", () 
 test("collision refusal does not create the destination directory", () => {
   const workspace = scratchRoot("visual-accept-nodest-");
   const artifact = join(workspace, "artifact");
-  writeBytes(join(artifact, "a", "home-actual.png"), "candidate-a-bytes");
-  writeBytes(join(artifact, "b", "home-actual.png"), "candidate-b-bytes");
+  writeBytes(join(artifact, "test-results-visual", "a", "home-actual.png"), "candidate-a-bytes");
+  writeBytes(join(artifact, "test-results-visual", "b", "home-actual.png"), "candidate-b-bytes");
 
   const { result } = runAccept(workspace, artifact);
 
@@ -177,7 +180,7 @@ test("collision refusal does not create the destination directory", () => {
 test("non-colliding actual and new baselines are still accepted", () => {
   const workspace = scratchRoot("visual-accept-ok-");
   const artifact = join(workspace, "artifact");
-  writeBytes(join(artifact, "run", "home-actual.png"), "home-bytes");
+  writeBytes(join(artifact, "test-results-visual", "run", "home-actual.png"), "home-bytes");
   writeBytes(join(artifact, "run", "e2e", "visual", "__screenshots__", "about.png"), "about-bytes");
 
   const { result, destDir } = runAccept(workspace, artifact);
@@ -219,7 +222,7 @@ test("acceptBaselines reports counts and throws a diagnostic on collision", () =
   const root = scratchRoot("visual-accept-api-");
   const artifact = join(root, "artifact");
   const destDir = join(root, "dest");
-  writeBytes(join(artifact, "run", "home-actual.png"), "actual-bytes");
+  writeBytes(join(artifact, "test-results-visual", "run", "home-actual.png"), "actual-bytes");
   writeBytes(join(artifact, "run", "e2e", "visual", "__screenshots__", "home.png"), "stale-bytes");
 
   const { written, dropped } = acceptBaselines(artifact, destDir);
@@ -228,7 +231,7 @@ test("acceptBaselines reports counts and throws a diagnostic on collision", () =
   assert.equal(dropped, 1);
   assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "actual-bytes");
 
-  writeBytes(join(artifact, "other", "home-actual.png"), "different-bytes");
+  writeBytes(join(artifact, "test-results-visual", "other", "home-actual.png"), "different-bytes");
   assert.throws(() => acceptBaselines(artifact, join(root, "dest2")), /home\.png/);
 });
 
@@ -560,6 +563,597 @@ test("Kit: lookalike-only suite directories do not admit Hono actuals", (t) => {
   assert.deepEqual(baselineBytes(dest), { "kit.png": "reviewed-kit" });
 });
 
+// Independent boundary handoff. Only synthetic bytes in run-owned trees; no
+// image baselines, browser, database or downloaded artifact is involved.
+// The CLI contract is the shared runner's versioned verdict
+// { version, tool, mode, ok, code, next_action, destinations, sources } plus
+// the dry-run plan; boundary refusals carry a fixed code and a bounded safe
+// relative path. Plans are deterministic across extraction roots, discovery
+// order and mode.
+const BOUNDARY_SUITES = ACCEPTANCE_SUITES.map((suite) => ({
+  ...suite,
+  id: suite.name.toLowerCase(),
+  tool: suite.name === "Kit" ? "kit-visual-accept" : "visual-accept",
+}));
+
+function boundaryFixture(t, suite) {
+  const root = scratchRoot("artifact-boundary-");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "checkout");
+  const artifact = join(root, "artifact");
+  const outside = join(root, "outside");
+  mkdirSync(workspace);
+  mkdirSync(artifact);
+  writeBytes(join(outside, "canary.png"), "outside-canary");
+  return { root, workspace, artifact, outside, dest: join(workspace, suite.snapshots) };
+}
+
+// Never follow links while observing the fixture. Include directories and file
+// mtimes so a failed preflight cannot hide mkdir or identical-byte rewrites.
+function boundaryTree(root) {
+  const rows = [];
+  function walk(path, relative) {
+    const st = lstatSync(path);
+    if (st.isSymbolicLink()) rows.push([relative, "link", readlinkSync(path)]);
+    else if (st.isDirectory()) {
+      rows.push([relative, "dir"]);
+      for (const name of readdirSync(path).sort()) walk(join(path, name), `${relative}/${name}`);
+    } else rows.push([relative, "file", readFileSync(path).toString("hex"), st.mtimeMs]);
+  }
+  walk(root, ".");
+  return rows;
+}
+
+function boundaryCli(suite, f, flags = [], artifact = f.artifact) {
+  const result = spawnSync(process.execPath, [suite.script.pathname, artifact, ...flags], {
+    cwd: f.workspace,
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 128 * 1024,
+  });
+  assert.equal(result.error, undefined, "CLI must settle without a timeout or spawn error");
+  assert.equal(result.signal, null);
+  return result;
+}
+
+function boundaryJson(suite, result, expectedMode) {
+  let report;
+  assert.doesNotThrow(() => {
+    report = JSON.parse(result.stdout);
+  }, "--format json must emit one JSON document on stdout");
+  assert.equal(report.version, 1);
+  assert.equal(report.tool, suite.tool);
+  assert.equal(report.mode, expectedMode);
+  assert.equal(typeof report.ok, "boolean");
+  assert.equal(typeof report.code, "string");
+  assert.equal(typeof report.next_action, "string");
+  assert.ok(report.next_action.length > 9 && report.next_action.length <= 256);
+  assert.equal(typeof report.destinations, "number");
+  assert.equal(typeof report.sources, "number");
+  assert.equal(result.stderr, "", "machine output must not mix prose or raw filesystem errors");
+  function safeStrings(value) {
+    if (typeof value === "string") {
+      for (const ch of value) {
+        const ordinal = ch.charCodeAt(0);
+        assert.ok(ordinal >= 32 && ordinal !== 127, "machine output must not carry control bytes");
+      }
+    } else if (value && typeof value === "object") {
+      for (const nested of Object.values(value)) safeStrings(nested);
+    }
+  }
+  safeStrings(report);
+  return report;
+}
+
+const LINK_CASES = [
+  [
+    "source file",
+    "SOURCE_SYMLINK",
+    (f, s) => {
+      symlinkSync(join(f.outside, "canary.png"), join(f.artifact, s.actuals, "z-link-actual.png"));
+    },
+  ],
+  [
+    "source directory",
+    "SOURCE_SYMLINK",
+    (f, s) => {
+      writeBytes(join(f.outside, "z-link-actual.png"), "outside-source");
+      symlinkSync(f.outside, join(f.artifact, s.actuals, "z-linked"), "dir");
+    },
+  ],
+  [
+    "source cycle",
+    "SOURCE_SYMLINK",
+    (f, s) => {
+      symlinkSync(f.artifact, join(f.artifact, s.actuals, "z-cycle"), "dir");
+    },
+  ],
+  [
+    "source root",
+    "SOURCE_SYMLINK",
+    (f) => {
+      const alias = join(f.root, "artifact-alias");
+      symlinkSync(f.artifact, alias, "dir");
+      f.artifact = alias;
+    },
+  ],
+  [
+    "source root ancestor",
+    "SOURCE_SYMLINK",
+    (f) => {
+      const alias = join(f.root, "source-parent-alias");
+      symlinkSync(f.root, alias, "dir");
+      f.artifact = join(alias, "artifact");
+    },
+  ],
+  [
+    "destination file",
+    "DESTINATION_SYMLINK",
+    (f) => {
+      mkdirSync(f.dest, { recursive: true });
+      symlinkSync(join(f.outside, "canary.png"), join(f.dest, "a-page.png"));
+    },
+  ],
+  [
+    "dangling destination file",
+    "DESTINATION_SYMLINK",
+    (f) => {
+      mkdirSync(f.dest, { recursive: true });
+      symlinkSync(join(f.outside, "missing.png"), join(f.dest, "a-page.png"));
+    },
+  ],
+  [
+    "destination root",
+    "DESTINATION_SYMLINK",
+    (f) => {
+      mkdirSync(join(f.dest, ".."), { recursive: true });
+      symlinkSync(f.outside, f.dest, "dir");
+    },
+  ],
+  [
+    "destination ancestor",
+    "DESTINATION_SYMLINK",
+    (f) => {
+      symlinkSync(f.outside, join(f.workspace, "e2e"), "dir");
+    },
+  ],
+  [
+    "destination ancestor cycle",
+    "DESTINATION_SYMLINK",
+    (f) => {
+      symlinkSync("e2e", join(f.workspace, "e2e"), "dir");
+    },
+  ],
+];
+
+for (const suite of BOUNDARY_SUITES) {
+  test(`${suite.name} boundary CONTROL: default accepts real suite actuals and baseline additions`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "reviewed");
+    writeBytes(join(f.artifact, suite.snapshots, "new.png"), "new-copy");
+    writeBytes(join(f.dest, "a-page.png"), "checkout");
+    const outside = boundaryTree(f.outside);
+    const result = boundaryCli(suite, f);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(baselineBytes(f.dest), { "a-page.png": "reviewed", "new.png": "new-copy" });
+    assert.deepEqual(boundaryTree(f.outside), outside);
+  });
+
+  for (const foreign of [
+    "test-results-staging",
+    "test-results-visual-backup",
+    "prefix-test-results-visual",
+    "test-results-kit-visual-backup",
+    "prefix-test-results-kit-parity",
+    "random",
+    ".",
+  ]) {
+    test(`${suite.name} boundary: ${foreign} actual has no replacement authority`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.dest, "page.png"), "newer-checkout");
+      writeBytes(join(f.artifact, foreign, "page-actual.png"), "foreign-screenshot");
+      writeBytes(join(f.artifact, suite.snapshots, "new.png"), "valid-addition");
+      const result = boundaryCli(suite, f);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(
+        baselineBytes(f.dest),
+        {
+          "new.png": "valid-addition",
+          "page.png": "newer-checkout",
+        },
+        "an unrelated actual cannot grant overwrite authority",
+      );
+    });
+  }
+
+  test(`${suite.name} boundary: extraction root named like a suite grants no authority`, (t) => {
+    const f = boundaryFixture(t, suite);
+    const namedRoot = join(f.root, suite.actuals);
+    writeBytes(join(namedRoot, "page-actual.png"), "not-a-suite-descendant");
+    writeBytes(join(namedRoot, suite.snapshots, "new.png"), "valid-copy");
+    writeBytes(join(f.dest, "page.png"), "newer-checkout");
+    const result = boundaryCli(suite, f, [], namedRoot);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(baselineBytes(f.dest), {
+      "new.png": "valid-copy",
+      "page.png": "newer-checkout",
+    });
+  });
+
+  for (const [name, code, link] of LINK_CASES) {
+    test(`${suite.name} boundary: ${name} link refuses the whole plan without mkdir or writes`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "reviewed");
+      writeBytes(join(f.artifact, suite.snapshots, "b-new.png"), "new-copy");
+      link(f, suite);
+      const before = boundaryTree(f.root);
+      const result = boundaryCli(suite, f);
+      assert.deepEqual(
+        boundaryTree(f.root),
+        before,
+        "refusal must preserve all fixture bytes and directories",
+      );
+      assert.notEqual(result.status, 0, "a link is a boundary failure, not an ignored candidate");
+      const diagnostic = result.stdout + result.stderr;
+      assert.ok(diagnostic.length <= 16_384);
+      assert.ok(
+        !diagnostic.includes(f.root),
+        "human diagnostics must also use safe relative paths",
+      );
+    });
+
+    test(`${suite.name} boundary JSON: ${name} uses fixed ${code} and bounded diagnostics`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "reviewed");
+      link(f, suite);
+      const before = boundaryTree(f.root);
+      const result = boundaryCli(suite, f, ["--dry-run", "--format", "json"]);
+      assert.deepEqual(boundaryTree(f.root), before);
+      assert.equal(result.status, 1, "boundary refusal exits 1");
+      const report = boundaryJson(suite, result, "dry-run");
+      assert.equal(report.code, code);
+      assert.equal(report.ok, false);
+      assert.ok(result.stdout.length <= 16_384, "diagnostics must be bounded");
+      assert.ok(!result.stdout.includes(f.root), "do not expose absolute fixture paths");
+      assert.ok(!result.stdout.includes("outside-canary"), "do not echo source bytes");
+      const boundary = report.plan.boundary;
+      assert.equal(boundary.code, code);
+      assert.equal(typeof boundary.path, "string");
+      assert.ok(boundary.path.length <= 256);
+      assert.doesNotMatch(boundary.path, /^(?:\/|[a-z]:)|(?:^|\/)\.\.(?:\/|$)/i);
+    });
+  }
+
+  test(`${suite.name} boundary: linked source inside the artifact is still refused`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "reviewed");
+    writeBytes(join(f.artifact, "plain.png"), "inside-source");
+    symlinkSync(
+      join(f.artifact, "plain.png"),
+      join(f.artifact, suite.actuals, "z-link-actual.png"),
+    );
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(suite, f);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.notEqual(result.status, 0);
+  });
+
+  test(`${suite.name} boundary: linked baseline copy never becomes an addition`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "reviewed");
+    mkdirSync(join(f.artifact, suite.snapshots), { recursive: true });
+    symlinkSync(join(f.outside, "canary.png"), join(f.artifact, suite.snapshots, "z-copy.png"));
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(suite, f);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.notEqual(result.status, 0);
+  });
+
+  test(`${suite.name} boundary: dry-run plan is deterministic and matches apply`, (t) => {
+    const previews = [];
+    for (const reverse of [false, true]) {
+      const f = boundaryFixture(t, suite);
+      const entries = [
+        [join(suite.actuals, "page-actual.png"), "actual"],
+        [join(suite.snapshots, "page.png"), "stale"],
+        [join(suite.snapshots, "new.png"), "new"],
+        [join(suite.snapshots, "unchanged.png"), "same"],
+      ];
+      for (const [name, bytes] of reverse ? entries.toReversed() : entries)
+        writeBytes(join(f.artifact, name), bytes);
+      writeBytes(join(f.dest, "page.png"), "checkout");
+      writeBytes(join(f.dest, "unchanged.png"), "same");
+      utimesSync(join(f.dest, "unchanged.png"), 946684800, 946684800);
+      const before = boundaryTree(f.root);
+      const preview = boundaryCli(suite, f, ["--dry-run", "--format", "json"]);
+      assert.deepEqual(
+        boundaryTree(f.root),
+        before,
+        "preview must not write or create a directory",
+      );
+      assert.equal(preview.status, 0, preview.stderr);
+      const dryReport = boundaryJson(suite, preview, "dry-run");
+      assert.equal(dryReport.ok, true);
+      assert.equal(dryReport.code, "OK");
+      assert.deepEqual(dryReport.plan.destinations, ["new.png", "page.png"]);
+      const applied = boundaryCli(suite, f, ["--format", "json"]);
+      assert.equal(applied.status, 0, applied.stderr);
+      const applyReport = boundaryJson(suite, applied, "accept");
+      assert.equal(applyReport.ok, true);
+      assert.deepEqual(applyReport.accepted, dryReport.plan.destinations);
+      assert.deepEqual(baselineBytes(f.dest), {
+        "new.png": "new",
+        "page.png": "actual",
+        "unchanged.png": "same",
+      });
+      assert.equal(statSync(join(f.dest, "unchanged.png")).mtimeMs, 946684800000);
+      previews.push(preview.stdout);
+    }
+    assert.equal(
+      previews[0],
+      previews[1],
+      "dry-run output must not depend on absolute extraction path or enumeration order",
+    );
+  });
+
+  test(`${suite.name} boundary: dry-run never creates an absent destination`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "page-actual.png"), "actual");
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(suite, f, ["--dry-run"]);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  for (const [kind, code] of [
+    ["collision", "COLLISION"],
+    ["stale copy", "STALE_COPY_CONFLICT"],
+  ]) {
+    test(`${suite.name} boundary: dry-run and apply both refuse ${kind} with ${code}`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.dest, "a-page.png"), "checkout");
+      writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "actual");
+      writeBytes(join(f.artifact, suite.snapshots, "b-new.png"), "addition");
+      if (kind === "collision") {
+        writeBytes(join(f.artifact, suite.actuals, "x/z-conflict-actual.png"), "one");
+        writeBytes(join(f.artifact, suite.actuals, "y/z-conflict-actual.png"), "two");
+      } else {
+        writeBytes(join(f.dest, "z-unrelated.png"), "newer-checkout");
+        writeBytes(join(f.artifact, suite.snapshots, "z-unrelated.png"), "stale-copy");
+      }
+      const before = boundaryTree(f.root);
+      for (const [flags, mode] of [
+        [["--dry-run", "--format", "json"], "dry-run"],
+        [["--format", "json"], "accept"],
+      ]) {
+        const result = boundaryCli(suite, f, flags);
+        assert.deepEqual(boundaryTree(f.root), before);
+        assert.equal(result.status, 1);
+        const report = boundaryJson(suite, result, mode);
+        assert.equal(report.code, code);
+        assert.equal(report.ok, false);
+      }
+    });
+  }
+
+  test(`${suite.name} boundary: real destination files survive one later source link`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.dest, "a-page.png"), "checkout");
+    writeBytes(join(f.dest, "sentinel.png"), "untouched");
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "actual");
+    symlinkSync(
+      join(f.outside, "canary.png"),
+      join(f.artifact, suite.actuals, "z-link-actual.png"),
+    );
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(suite, f);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.notEqual(result.status, 0);
+  });
+
+  test(`${suite.name} boundary: API rejects a linked workspace ancestor`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "page-actual.png"), "actual");
+    const alias = join(f.root, "checkout-alias");
+    symlinkSync(f.workspace, alias, "dir");
+    const before = boundaryTree(f.root);
+    const result = attemptAcceptance(suite, f.artifact, alias);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.equal(result.ok, false);
+  });
+
+  for (const kind of ["actual", "baseline copy"]) {
+    test(`${suite.name} boundary: apply uses ${kind} bytes cached during preflight`, (t) => {
+      const f = boundaryFixture(t, suite);
+      const source =
+        kind === "actual"
+          ? join(f.artifact, suite.actuals, "page-actual.png")
+          : join(f.artifact, suite.snapshots, "page.png");
+      writeBytes(source, "reviewed-original");
+      const runner = `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      import { join } from "node:path";
+      const [script, suite, artifact, workspace, source] = process.argv.slice(1);
+      const original = fs.readFileSync;
+      let observed = false;
+      fs.readFileSync = function(path, ...args) {
+        const bytes = original.call(this, path, ...args);
+        if (String(path) === source && !observed) {
+          observed = true;
+          fs.writeFileSync(source, "changed-after-read");
+        }
+        return bytes;
+      };
+      syncBuiltinESMExports();
+      const { acceptBaselines } = await import(script);
+      const result = suite === "Kit"
+        ? acceptBaselines(artifact, { cwd: workspace })
+        : acceptBaselines(artifact, join(workspace, "e2e/visual/__screenshots__"));
+      if (!observed || result.ok === false) process.exitCode = 1;
+    `;
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          runner,
+          suite.script.href,
+          suite.name,
+          f.artifact,
+          f.workspace,
+          source,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 5_000,
+          cwd: f.workspace,
+        },
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        readFileSync(source, "utf8"),
+        "changed-after-read",
+        "the mutation must actually run",
+      );
+      assert.equal(readFileSync(join(f.dest, "page.png"), "utf8"), "reviewed-original");
+    });
+  }
+
+  test(`${suite.name} boundary JSON: unreadable source fails safely before any writes`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.dest, "a-page.png"), "checkout");
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "actual");
+    const unreadable = join(f.artifact, suite.actuals, "z-unreadable-actual.png");
+    writeBytes(unreadable, "unreadable-source");
+    // Inject only the read failure: permission bits are ineffective under root.
+    const preload = `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const original = fs.readFileSync;
+      fs.readFileSync = function(path, ...args) {
+        if (String(path) === ${JSON.stringify(unreadable)}) {
+          const error = new Error("EACCES sensitive-raw-diagnostic " + path);
+          error.code = "EACCES";
+          throw error;
+        }
+        return original.call(this, path, ...args);
+      };
+      syncBuiltinESMExports();
+    `;
+    const before = boundaryTree(f.root);
+    for (const [flags, mode] of [
+      [["--dry-run", "--format", "json"], "dry-run"],
+      [["--format", "json"], "accept"],
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+          suite.script.pathname,
+          f.artifact,
+          ...flags,
+        ],
+        { encoding: "utf8", timeout: 5_000, cwd: f.workspace },
+      );
+      assert.equal(result.error, undefined);
+      assert.deepEqual(boundaryTree(f.root), before);
+      assert.equal(result.status, 1);
+      const report = boundaryJson(suite, result, mode);
+      assert.equal(report.code, "IO_ERROR");
+      assert.ok(!result.stdout.includes(f.root));
+      assert.ok(!result.stdout.includes("sensitive-raw-diagnostic"));
+    }
+  });
+
+  for (const [name, build] of [
+    ["depth", (f) => writeBytes(join(f.artifact, ...Array(65).fill("d"), "ignored.txt"), "deep")],
+    [
+      "entry count",
+      (f) => {
+        for (let i = 0; i < 4097; i++) writeBytes(join(f.artifact, `unrelated-${i}.txt`), "entry");
+      },
+    ],
+  ]) {
+    test(`${suite.name} boundary: traversal has a shared finite ${name} budget`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.artifact, suite.actuals, "page-actual.png"), "actual");
+      build(f);
+      const before = boundaryTree(f.root);
+      const result = boundaryCli(suite, f, ["--format", "json"]);
+      assert.deepEqual(boundaryTree(f.root), before);
+      assert.equal(result.status, 1);
+      const report = boundaryJson(suite, result, "accept");
+      assert.equal(report.code, "ARTIFACT_LIMIT");
+      assert.ok(result.stdout.length <= 16_384);
+    });
+  }
+
+  test(`${suite.name} boundary JSON: hostile link names cannot inject raw diagnostics`, (t) => {
+    const f = boundaryFixture(t, suite);
+    writeBytes(join(f.artifact, suite.actuals, "a-page-actual.png"), "actual");
+    symlinkSync(
+      join(f.outside, "canary.png"),
+      join(f.artifact, suite.actuals, `z-${"x".repeat(170)}-\u001b[31m\n-actual.png`),
+    );
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(suite, f, ["--format", "json"]);
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.equal(result.status, 1);
+    const report = boundaryJson(suite, result, "accept");
+    assert.equal(report.code, "SOURCE_SYMLINK");
+    assert.ok(result.stdout.length <= 16_384);
+    assert.ok(!result.stdout.includes(f.root));
+    assert.ok(report.boundary.path.length <= 256);
+  });
+
+  test(`${suite.name} boundary flags: invalid arguments win before filesystem validation`, (t) => {
+    const f = boundaryFixture(t, suite);
+    const before = boundaryTree(f.root);
+    const result = boundaryCli(
+      suite,
+      f,
+      ["--format", "json", "--unknown"],
+      join(f.root, "missing-artifact"),
+    );
+    assert.deepEqual(boundaryTree(f.root), before);
+    assert.equal(result.status, 2);
+    const report = boundaryJson(suite, result, "accept");
+    assert.equal(report.code, "UNKNOWN_FLAG");
+  });
+
+  for (const [flags, code] of [
+    [["--unknown"], "UNKNOWN_FLAG"],
+    [["extra-artifact"], "EXTRA_ARGS"],
+    [["--dry-run=true"], "UNKNOWN_FLAG"],
+    [["--dry-run", "false"], "EXTRA_ARGS"],
+    [["--format"], "UNKNOWN_FLAG"],
+    [["--format", "yaml"], "UNKNOWN_FLAG"],
+    [["--format=json"], "UNKNOWN_FLAG"],
+    [["--format", "json", "--format", "json"], "UNKNOWN_FLAG"],
+    [["--dry-run", "--dry-run"], "UNKNOWN_FLAG"],
+    [["--format", "json", "--unknown"], "UNKNOWN_FLAG"],
+  ]) {
+    test(`${suite.name} boundary flags: ${flags.join(" ")} refuses before writes`, (t) => {
+      const f = boundaryFixture(t, suite);
+      writeBytes(join(f.artifact, suite.actuals, "page-actual.png"), "actual");
+      const before = boundaryTree(f.root);
+      const result = boundaryCli(suite, f, flags);
+      assert.deepEqual(
+        boundaryTree(f.root),
+        before,
+        "invalid arguments must not apply the valid plan",
+      );
+      assert.equal(result.status, 2, "usage errors exit 2");
+      if (flags.includes("json")) {
+        const report = boundaryJson(suite, result, "accept");
+        assert.equal(report.code, code);
+      }
+    });
+  }
+}
 // CLI contract (flags, dry run, stable codes). Black-box coverage of both
 // scripts lives in test/visual-accept-cli-safety-acceptance.test.ts; these
 // selftests pin the parser and the properties that file does not: the dry-run
@@ -844,15 +1438,15 @@ test("Hono collision diagnostics print artifact-relative sources, never absolute
   const workspace = join(root, "checkout");
   const artifact = join(root, "artifact");
   mkdirSync(workspace, { recursive: true });
-  writeBytes(join(artifact, "a", "home-actual.png"), "bytes-A");
-  writeBytes(join(artifact, "b", "home-actual.png"), "bytes-B");
+  writeBytes(join(artifact, "test-results-visual", "a", "home-actual.png"), "bytes-A");
+  writeBytes(join(artifact, "test-results-visual", "b", "home-actual.png"), "bytes-B");
 
   const human = runScript(suite, [artifact], workspace);
   assert.equal(human.status, 1);
   assert.equal(human.stdout, "");
   assert.match(human.stderr, /home\.png/);
-  assert.match(human.stderr, /a\/home-actual\.png/);
-  assert.match(human.stderr, /b\/home-actual\.png/);
+  assert.match(human.stderr, /test-results-visual\/a\/home-actual\.png/);
+  assert.match(human.stderr, /test-results-visual\/b\/home-actual\.png/);
   assert.match(human.stderr, /code=COLLISION/);
   assert.ok(!human.stderr.includes(artifact), human.stderr);
   assert.ok(!human.stderr.includes(workspace), human.stderr);
@@ -861,8 +1455,8 @@ test("Hono collision diagnostics print artifact-relative sources, never absolute
   const dry = runScript(suite, ["--dry-run", artifact], workspace);
   assert.equal(dry.status, 1);
   assert.equal(dry.stderr, "");
-  assert.match(dry.stdout, /a\/home-actual\.png/);
-  assert.match(dry.stdout, /b\/home-actual\.png/);
+  assert.match(dry.stdout, /test-results-visual\/a\/home-actual\.png/);
+  assert.match(dry.stdout, /test-results-visual\/b\/home-actual\.png/);
   assert.match(dry.stdout, /code=COLLISION/);
   assert.ok(!dry.stdout.includes(artifact), dry.stdout);
   assert.ok(!dry.stdout.includes(workspace), dry.stdout);
