@@ -519,7 +519,7 @@ describe("pre-admission refusals never echo drafts or add reads", () => {
     );
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile",
     });
     expect(save).not.toHaveBeenCalled();

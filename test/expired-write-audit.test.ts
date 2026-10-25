@@ -146,7 +146,7 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
     });
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -361,7 +361,7 @@ describe("admin: every POST bounces on a dead session with no write and no echo"
       });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: `/auth/recover?next=${encodeURIComponent(next)}`,
       });
       expect(res.headers.getSetCookie()).toEqual([]);

@@ -1,6 +1,6 @@
 import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Session } from "./env";
+import type { HeaderSession, Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
@@ -171,7 +171,9 @@ const signInUrl = (returnTo: string | null) =>
 // guests and non-members cannot open the board, so they are not offered it.
 export const SiteHeader: FC<
   PropsWithChildren<{
-    session?: Session | null;
+    // HeaderSession is type-only: the header reads .member and .username,
+    // both present, so narrow crossings render identically to full sessions.
+    session?: Session | HeaderSession | null;
     active?: "home" | "events" | "event" | "leaderboard";
     loginReturnTo?: string | null;
     account?: boolean;
