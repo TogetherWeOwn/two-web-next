@@ -1,10 +1,14 @@
 # Featured inventory return: server gzip allocation
 
-Measured 2026-10-25. This separate budget change supports the native navigation
+Measured 2026-10-25. This separate budget decision supports the native navigation
 in [#1805](https://github.com/TogetherWeOwn/two-web-next/pull/1805); it does not
-ship or approve that feature. Only `server.js.maxGzipBytes` changes numerically
-in [`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json): **333568 → 333824 B**.
-Existing decision history is retained verbatim and the new decision is appended.
+ship or approve that feature. The initial proposal changed only
+`server.js.maxGzipBytes` in [`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json):
+**333568 → 333824 B**. Main subsequently allocated the same ceiling in
+[#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799). After conflict
+reconciliation, **no numeric ceiling changes relative to main**. Both unique
+decision histories are retained; the remeasurement below confirms the featured
+return tree fits the inherited ceiling without an additional allowance.
 
 ## Locked inputs and method
 
@@ -105,10 +109,46 @@ and retain all normal CI/security/independent-review gates. The feature remains
 non-reviewable until its separate acceptance corrections and prerequisite work
 are resolved.
 
+## Reconciliation after main adopts the same ceiling
+
+Main `826b40e85ab3201f199e4613f7f488a1e5d8b314` merges #1799. The diff from the
+original pristine main `847bf4647` changes **only** `ci/kit-perf-budget.json`:
+server gzip becomes 333824 B and a different feature's decision is appended.
+Application sources, lockfiles and checkers are identical. Preserve main's full
+history as an exact prefix, retain this feature's original decision once, and
+append this reconciliation. Do not add the two identical steps together.
+
+Fresh repeat builds with the resolved plan and the same locked dependencies:
+
+| Group | Pristine current main raw / gzip B | Frozen featured-return composition raw / gzip B | Files / cap |
+| --- | ---: | ---: | ---: |
+| Worker entry | 2551 / 1219 | 2551 / 1219 | one entry |
+| Server JS | 1176054–1176056 / 333150–333152 | 1178091 / 333743–333744 | 115 / 126 |
+| Client JS | 253949 / 102273 | 254365 / 102446 | 54 / 55 |
+| Client CSS | 2833 / 1006 | 2833 / 1006 | 2 / 4 |
+
+All four checker runs pass. The measurement-only composition uses frozen feature
+`576d7051f7d58fd7da55fdca5a047ed1de00b307` plus the resolved budget; the budget-only
+base move leaves its application tree identical. These measurements do not
+compose the other unmerged feature from #1799. Any future application-source
+combination needs its own fresh measurement.
+
+On the second composed artifact, the old 333568 B cap still fails by 176 B;
+333824 B passes with 80 B margin. Exact measured server limits pass, while
+actual-minus-one gzip, raw and file-count limits each fail. The unchanged checker
+selftests pass 12/12 and the two checker suites pass 64/64 with no skips. No numeric
+field differs from current main, and no acceptance test is edited.
+
+ACT: reconcile the conflict and record a no-additional-allowance decision.
+WHY: the complete frozen featured-return tree fits the now-inherited cap.
+UNDO: remove only this feature's appended history and this note; leave main's
+independently reviewed 333824 B ceiling and its decision intact.
+
 ## Undo and scope
 
-Revert the single numeric change and the appended decision/note. This restores
-333568 B and intentionally rejects the measured feature until its bytes shrink
-or a new allocation is independently justified. No application, schema, test,
-dependency, workflow, checker, mask, skip or exemption changes are included.
-No deployment or production/staging database test is part of this work.
+The original pre-main proposal's undo was 333824 → 333568 B, intentionally
+refusing the measured feature. That numeric change now belongs to #1799, not
+this reconciled PR. Reverting this PR removes only its appended history/note;
+it must not undo main's allocation. No application, schema, test, dependency,
+workflow, checker, mask, skip or exemption changes are included. No deployment
+or production/staging database test is part of this work.
