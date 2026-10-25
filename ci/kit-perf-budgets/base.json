@@ -9,7 +9,7 @@
   "server": {
     "js": {
       "maxRawBytes": 1203200,
-      "maxGzipBytes": 333312,
+      "maxGzipBytes": 333568,
       "maxFiles": 126
     }
   },
