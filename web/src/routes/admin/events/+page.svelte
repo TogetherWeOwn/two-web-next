@@ -55,8 +55,9 @@ const now = new Date();
     <input type="hidden" name="sort" value={query.sort} />
     <input type="hidden" name="order" value={query.order} />
     <div class="field">
-      <label for="q">Search</label>
-      <input id="q" name="q" type="search" value={query.q} />
+      <label for="q">Search titles and games</label>
+      <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+      <p class="hint" id="q-help">Matches event titles and saved games.</p>
     </div>
     <div class="field">
       <label for="status">Status</label>
@@ -136,6 +137,9 @@ const now = new Date();
             <tr>
               <td>
                 <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                {#if r.game?.trim()}
+                  <span class="hint"><br />{r.game}</span>
+                {/if}
               </td>
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
