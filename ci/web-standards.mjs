@@ -18,7 +18,7 @@ import {
 import { createRequire } from "node:module";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parse } from "parse5";
+import { defaultTreeAdapter, parse } from "parse5";
 
 const origin = "http://127.0.0.1:8787";
 const fixtureKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -41,6 +41,58 @@ const maxMalformedPerRoute = 10;
 const malformedPreviewLength = 60;
 const reportMessageLength = 300;
 const argErrorLength = 500;
+// Admission limits, not truncated-success coverage: reject oversized or complex
+// documents before full-tree construction can monopolize the event loop.
+export const MAX_HTML_BODY_BYTES = 1_048_576;
+export const MAX_HTML_ELEMENTS = 10_000;
+export const MAX_HTML_DEPTH = 256;
+
+function analysisError(code) {
+  const err = new Error("HTML analysis exceeded its admission limit");
+  err.code = code;
+  return err;
+}
+
+function checkAnalysisDeadline(deadlineAt) {
+  if (performance.now() >= deadlineAt) throw analysisError("LINKS_TIMEOUT");
+}
+
+function admitHtml(html, deadlineAt) {
+  checkAnalysisDeadline(deadlineAt);
+  if (Buffer.byteLength(html, "utf8") > MAX_HTML_BODY_BYTES)
+    throw analysisError("ROUTE_BODY_TOO_LARGE");
+}
+
+// parse5's supported adapter hooks run during tree construction, not after it.
+// Bound allocated elements and depth before the next insertion; the wall-clock
+// checks share the route's remaining budget instead of starting a fresh timer.
+function boundedTreeAdapter(deadlineAt) {
+  let elements = 0;
+  const depths = new WeakMap();
+  const admitInsertion = (parent, child) => {
+    checkAnalysisDeadline(deadlineAt);
+    const depth = (depths.get(parent) ?? 0) + 1;
+    if (depth > MAX_HTML_DEPTH) throw analysisError("HTML_TOO_COMPLEX");
+    depths.set(child, depth);
+  };
+  return {
+    ...defaultTreeAdapter,
+    createElement(...args) {
+      checkAnalysisDeadline(deadlineAt);
+      elements += 1;
+      if (elements > MAX_HTML_ELEMENTS) throw analysisError("HTML_TOO_COMPLEX");
+      return defaultTreeAdapter.createElement(...args);
+    },
+    appendChild(parent, child) {
+      admitInsertion(parent, child);
+      defaultTreeAdapter.appendChild(parent, child);
+    },
+    insertBefore(parent, child, reference) {
+      admitInsertion(parent, child);
+      defaultTreeAdapter.insertBefore(parent, child, reference);
+    },
+  };
+}
 
 export function headerFindings(path, headers) {
   const out = [];
@@ -82,7 +134,9 @@ export function classifyHref(href, documentUrl) {
     if (url.origin !== base.origin) return { kind: "external" };
     const target = `${url.pathname}${url.search}`;
     try {
-      decodeURI(target);
+      // Only the pathname is percent-decoded for lookup; a bare % in a query
+      // is a valid browser URL and must not become a false malformed finding.
+      decodeURI(url.pathname);
     } catch {
       return { kind: "malformed" };
     }
@@ -96,8 +150,11 @@ export function classifyHref(href, documentUrl) {
 // quoting, duplicate attributes and character references follow the browser
 // tokenizer, so marker-shaped attribute text cannot hide later anchors. Walk
 // the document tree only: template contents are a separate, inert fragment.
-function rawHrefs(html) {
-  const document = parse(typeof html === "string" ? html : "");
+function rawHrefs(html, deadlineAt = performance.now() + ROUTE_READ_TIMEOUT_MS) {
+  const text = typeof html === "string" ? html : "";
+  admitHtml(text, deadlineAt);
+  const document = parse(text, { treeAdapter: boundedTreeAdapter(deadlineAt) });
+  checkAnalysisDeadline(deadlineAt);
   const pending = [document];
   const out = [];
   while (pending.length) {
@@ -112,12 +169,12 @@ function rawHrefs(html) {
   return out;
 }
 
-function splitDocumentLinks(html, documentUrl) {
+function splitDocumentLinks(html, documentUrl, deadlineAt) {
   const internal = [];
   const seenInternal = new Set();
   const malformed = [];
   const seenMalformed = new Set();
-  for (const href of rawHrefs(html)) {
+  for (const href of rawHrefs(html, deadlineAt)) {
     const classified = classifyHref(href, documentUrl);
     if (classified.kind === "internal") {
       if (!seenInternal.has(classified.target)) {
@@ -318,12 +375,28 @@ async function readBodyText(res, refs) {
   if (refs) refs.reader = reader;
   const textChunks = [];
   const byteChunks = [];
+  let received = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (typeof value === "string") textChunks.push(value);
-      else if (value) byteChunks.push(value);
+      if (typeof value === "string") {
+        received += Buffer.byteLength(value, "utf8");
+        textChunks.push(value);
+      } else if (value) {
+        received += value.byteLength;
+        byteChunks.push(value);
+      }
+      if (received > MAX_HTML_BODY_BYTES) {
+        // The verdict is known: cancel in the background (a stalled cancel must
+        // not hold the collector) before the lock is released below.
+        try {
+          reader.cancel()?.catch?.(() => {});
+        } catch {
+          // Best-effort cleanup only.
+        }
+        throw analysisError("ROUTE_BODY_TOO_LARGE");
+      }
     }
   } finally {
     try {
@@ -382,6 +455,7 @@ export async function fetchRoute(fetchImpl, url, options = {}) {
     return { status: res.status, headers: res.headers, html };
   } catch (err) {
     clearTimeout(timer);
+    if (err?.code === "ROUTE_BODY_TOO_LARGE") throw err;
     try {
       await refs.reader?.cancel();
     } catch {
@@ -429,10 +503,19 @@ export async function collectStandards(options = {}) {
     let status;
     let headers;
     let html;
+    // One budget per route: link analysis spends what the fetch left over.
+    const deadlineAt = performance.now() + timeoutMs;
     try {
       ({ status, headers, html } = await fetchRoute(fetchImpl, base + path, { timeoutMs }));
     } catch (err) {
-      if (err?.code === "ROUTE_READ_TIMEOUT")
+      if (err?.code === "ROUTE_BODY_TOO_LARGE")
+        pushRouteFinding(
+          path,
+          "html",
+          "HTML_TOO_LARGE",
+          `${path}: response body exceeds ${MAX_HTML_BODY_BYTES} bytes; not analyzed`,
+        );
+      else if (err?.code === "ROUTE_READ_TIMEOUT")
         pushRouteFinding(
           path,
           "status",
@@ -448,7 +531,28 @@ export async function collectStandards(options = {}) {
       pushRouteFinding(path, "headers", headerFindingCode(detail), detail);
     for (const detail of htmlFindings(path, html))
       pushRouteFinding(path, "html", htmlFindingCode(detail), detail);
-    const document = splitDocumentLinks(html, base + path);
+    let document;
+    try {
+      document = splitDocumentLinks(html, base + path, deadlineAt);
+    } catch (err) {
+      if (err?.code === "LINKS_TIMEOUT")
+        pushRouteFinding(
+          path,
+          "links",
+          "LINKS_TIMEOUT",
+          `${path}: link analysis timed out within the ${timeoutMs}ms route budget; no links collected`,
+        );
+      else if (err?.code === "HTML_TOO_COMPLEX")
+        pushRouteFinding(
+          path,
+          "html",
+          "HTML_TOO_COMPLEX",
+          `${path}: document exceeds ${MAX_HTML_ELEMENTS} elements or depth ${MAX_HTML_DEPTH}; not analyzed`,
+        );
+      else
+        pushRouteFinding(path, "links", "LINKS_ANALYSIS_FAILED", `${path}: link analysis failed`);
+      continue;
+    }
     for (const link of document.internal) links.add(link);
     for (const raw of document.malformed.slice(0, maxMalformedPerRoute))
       pushRouteFinding(
@@ -493,6 +597,14 @@ const NEXT_ACTION_BY_CODE = {
   LINK_MALFORMED: "Fix or remove the malformed href, then re-run the web-standards gate.",
   LINK_UNRESOLVED:
     "Point the link at a served route or public file, then re-run the web-standards gate.",
+  HTML_TOO_LARGE:
+    "Serve a smaller document for this route (under the body cap), then re-run the web-standards gate.",
+  HTML_TOO_COMPLEX:
+    "Reduce the element count or nesting depth of the document, then re-run the web-standards gate.",
+  LINKS_TIMEOUT:
+    "Reduce the document size or complexity so links are analyzed within the route budget, then re-run the web-standards gate.",
+  LINKS_ANALYSIS_FAILED:
+    "Fix the document so link analysis completes, then re-run the web-standards gate.",
   LINKS_TRUNCATED:
     "Expand link coverage so every collected link is checked, then re-run the web-standards gate.",
 };
