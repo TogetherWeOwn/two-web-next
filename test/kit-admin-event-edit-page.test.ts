@@ -102,9 +102,14 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain("/cancel");
     expect(source).toContain('data-testid="cancel-event"');
     expect(source).toContain("Cancel event");
-    expect(source).toContain("rsvp-pause");
+    // Pause renders through pre-rendered server HTML ({@html}): the action
+    // and copy live in the load data, never as literals here (client gzip
+    // ceiling). Reopen stays an inlined one-click form.
+    expect(source).toContain('view.rsvpAction === "rsvp-pause"');
+    expect(source).toContain("{@html view.pauseReviewHtml");
+    expect(source).not.toMatch(/action=\{[^}]*rsvp-pause/);
+    expect(source).not.toMatch(/action="[^"]*rsvp-pause/);
     expect(source).toContain("rsvp-reopen");
-    expect(source).toContain("Pause RSVPs");
     expect(source).toContain("Reopen RSVPs");
   });
 
