@@ -161,6 +161,31 @@ describe("Kit activity-log load: guard ordering", () => {
     expect(out).toMatchObject({ hasNext: false });
   });
 
+  it.each([
+    "?event=01ARZ3NDEKTSV4RRFFQ69G5FAA&event=01ARZ3NDEKTSV4RRFFQ69G5FAB",
+    "?event=&event=01ARZ3NDEKTSV4RRFFQ69G5FAA",
+    "?%65vent=01ARZ3NDEKTSV4RRFFQ69G5FAA&event=",
+  ])("forwards the raw duplicate count for %s", async (qs) => {
+    await load({ parent: async () => ({ actor }), url: url(qs), setHeaders });
+    expect(globalThis.__kitActivityLogCalls).toHaveLength(1);
+    expect(globalThis.__kitActivityLogCalls[0]).toMatchObject({
+      eventParam: url(qs).searchParams.get("event"),
+      eventParamCount: 2,
+    });
+  });
+
+  it.each([400, 422])(
+    "preserves helper invalid-scope status %i instead of an outage",
+    async (status) => {
+      globalThis.__kitActivityLogImpl = async () => {
+        throw Object.assign(new Error("invalid-input-canary"), { status });
+      };
+      await expect(
+        load({ parent: async () => ({ actor }), url: url("?event=bad"), setHeaders }),
+      ).rejects.toMatchObject({ status, message: "Invalid event scope" });
+    },
+  );
+
   it("a helper failure after the guard passes still maps to 503", async () => {
     globalThis.__kitActivityLogImpl = async () => {
       throw new Error("seam down");
