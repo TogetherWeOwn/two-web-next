@@ -1,4 +1,5 @@
 import { test, expect, qaLogin } from "./fixtures";
+import { assertFreshPendingRsvp, assertNoRsvpSyncNotes } from "./rsvp-pending";
 
 const eventKey = "01J00000000000000000000001";
 
@@ -21,7 +22,9 @@ test("member opens an event from the list, RSVPs going, then withdraws", async (
       response.url().endsWith(`/events/${eventKey}/rsvp`) && response.request().method() === "PUT",
   );
   await page.getByTestId("rsvp-going").click();
-  expect((await going).status()).toBe(201);
+  const goingResponse = await going;
+  expect(goingResponse.status()).toBe(201);
+  await assertFreshPendingRsvp(page, goingResponse);
   await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
   await page.reload();
   await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
@@ -33,6 +36,7 @@ test("member opens an event from the list, RSVPs going, then withdraws", async (
   await page.getByTestId("rsvp-withdraw").click();
   expect((await withdrawn).status()).toBe(204);
   await expect(page.getByTestId("rsvp-going")).toBeVisible();
+  await assertNoRsvpSyncNotes(page);
   await page.reload();
   await expect(page.getByTestId("rsvp-going")).toBeVisible();
   await expect(page.getByTestId("rsvp-confirmed")).toHaveCount(0);
