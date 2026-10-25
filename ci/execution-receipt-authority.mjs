@@ -174,6 +174,9 @@ export function emitFailure({ adapter, suite, format, error }) {
 
 export function emitSuccess({ suite, count, min, format, receipt }) {
   const line = humanSuccessLine(suite, count, min);
+  const output = `${format === "json" ? JSON.stringify(receipt) : line}\n`;
+  if (Buffer.byteLength(output, "utf8") > RECEIPT_STDOUT_BYTES_MAX)
+    throw new ReceiptFailure("execution receipt refused (receipt-output-too-large)");
   // Append the CI summary before emitting stdout: if the append fails, the
   // refusal must not follow an already-written pass receipt or success line.
   const summary = process.env.GITHUB_STEP_SUMMARY;
@@ -186,7 +189,6 @@ export function emitSuccess({ suite, count, min, format, receipt }) {
       );
     }
   }
-  if (format === "json") process.stdout.write(`${JSON.stringify(receipt)}\n`);
-  else process.stdout.write(`${line}\n`);
+  process.stdout.write(output);
   return line;
 }

@@ -31,16 +31,30 @@ const report = (statuses) => {
   const cases = [other, ...target];
   const count = (wanted) => cases.filter((entry) => entry.status === wanted).length;
   return {
+    numTotalTestSuites: 3,
+    numPassedTestSuites: 3,
+    numFailedTestSuites: 0,
+    numPendingTestSuites: 0,
     numTotalTests: cases.length,
     numPassedTests: count("passed"),
     numFailedTests: count("failed"),
     numPendingTests: count("pending") + count("skipped"),
     numTodoTests: count("todo"),
     success: true,
-    testResults: [{ name: "test/admin-event-native-unicode.test.ts", assertionResults: cases }],
+    testResults: [
+      {
+        name: "test/admin-event-native-unicode.test.ts",
+        status: "passed",
+        assertionResults: cases,
+      },
+    ],
   };
 };
 const emptyReport = {
+  numTotalTestSuites: 0,
+  numPassedTestSuites: 0,
+  numFailedTestSuites: 0,
+  numPendingTestSuites: 0,
   numTotalTests: 0,
   numPassedTests: 0,
   numFailedTests: 0,

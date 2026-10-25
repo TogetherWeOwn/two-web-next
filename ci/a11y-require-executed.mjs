@@ -30,6 +30,12 @@ const SUMMARY_KEYS = [
   "numPendingTests",
   "numTodoTests",
 ];
+const SUITE_SUMMARY_KEYS = [
+  "numTotalTestSuites",
+  "numPassedTestSuites",
+  "numFailedTestSuites",
+  "numPendingTestSuites",
+];
 const KNOWN_STATUSES = new Set(["passed", "failed", "pending", "todo", "skipped", "cancelled"]);
 
 function isRecord(value) {
@@ -44,31 +50,21 @@ export function assertNoDuplicateKeys(raw) {
   const frames = [];
   let index = 0;
   const readString = () => {
-    let out = "";
+    const start = index;
     index += 1;
     while (index < raw.length) {
       const char = raw[index];
       if (char === '"') {
         index += 1;
-        return out;
-      }
-      if (char === "\\") {
-        const next = raw[index + 1];
-        if (next === "u" && /^[0-9a-fA-F]{4}$/.test(raw.slice(index + 2, index + 6))) {
-          out += String.fromCharCode(Number.parseInt(raw.slice(index + 2, index + 6), 16));
-          index += 6;
-          continue;
-        }
-        if (next !== undefined) {
-          out += next;
-          index += 2;
-          continue;
+        try {
+          return JSON.parse(raw.slice(start, index));
+        } catch {
+          return null; // The full JSON.parse below reports malformed input.
         }
       }
-      out += char;
-      index += 1;
+      index += char === "\\" ? 2 : 1;
     }
-    return out;
+    return null;
   };
   const skipGap = () => {
     while (index < raw.length && /\s/.test(raw[index])) index += 1;
@@ -79,6 +75,7 @@ export function assertNoDuplicateKeys(raw) {
     const char = raw[index];
     if (char === '"') {
       const text = readString();
+      if (text === null) return;
       skipGap();
       const top = frames[frames.length - 1];
       if (raw[index] === ":" && top?.type === "object" && top.expectKey) {
@@ -143,7 +140,15 @@ function admitVitest(report, suite, min) {
   validateMinimum(min);
   if (!isRecord(report)) throw new ReceiptFailure("execution receipt refused (malformed-report)");
   const expected = {};
-  for (const key of SUMMARY_KEYS) expected[key] = validCount(report, key);
+  for (const key of [...SUMMARY_KEYS, ...SUITE_SUMMARY_KEYS])
+    expected[key] = validCount(report, key);
+  if (
+    expected.numFailedTestSuites !== 0 ||
+    expected.numPendingTestSuites !== 0 ||
+    expected.numTotalTestSuites !== expected.numPassedTestSuites ||
+    report.snapshot?.failure === true
+  )
+    throw new ReceiptFailure("execution receipt refused (unclean-suite-summary)");
   if (!Array.isArray(report.testResults))
     throw new ReceiptFailure("execution receipt refused (invalid-test-summary: testResults)");
   const names = new Set();
@@ -156,6 +161,8 @@ function admitVitest(report, suite, min) {
     if (names.has(file.name))
       throw new ReceiptFailure("execution receipt refused (duplicate-file-result)");
     names.add(file.name);
+    if (file.status !== "passed")
+      throw new ReceiptFailure("execution receipt refused (unclean-file-status)");
     if (!Array.isArray(file.assertionResults))
       throw new ReceiptFailure("execution receipt refused (invalid-assertion-results)");
     for (const entry of file.assertionResults) {
@@ -177,6 +184,11 @@ function admitVitest(report, suite, min) {
         throw new ReceiptFailure("execution receipt refused (conflicting-case-identity)");
       if (typeof entry.status !== "string" || !KNOWN_STATUSES.has(entry.status))
         throw new ReceiptFailure("execution receipt refused (unknown-case-status)");
+      if (
+        entry.failureMessages !== undefined &&
+        (!Array.isArray(entry.failureMessages) || entry.failureMessages.length !== 0)
+      )
+        throw new ReceiptFailure("execution receipt refused (unclean-case-diagnostics)");
       parsed.push({
         file: file.name,
         fullName: entry.fullName,
@@ -192,6 +204,8 @@ function admitVitest(report, suite, min) {
       status: canonicalStatus(entry.status),
     }));
   admitCases(suite, min, cases);
+  if (parsed.some((entry) => entry.status !== "passed"))
+    throw new ReceiptFailure("execution receipt refused (unclean-report-case)");
   const observed = {
     numTotalTests: parsed.length,
     numPassedTests: parsed.filter((entry) => entry.status === "passed").length,

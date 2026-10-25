@@ -63,20 +63,32 @@ function parseTapTree(tap) {
   const roots = [];
   const stack = [];
   let topPlan = null;
-  let inYaml = false;
+  let yamlIndent = null;
+  let diagnosticOwner = null;
   const lines = tap.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const raw = lines[index];
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const indent = /^ */.exec(line)[0].length;
+    if (yamlIndent !== null) {
+      if (line.trim() === "") continue;
+      if (indent < yamlIndent || /\t/.test(line.slice(0, indent + 1)))
+        throw new ReceiptFailure("execution receipt refused (malformed-diagnostics)");
+      if (indent === yamlIndent && line.trim() === "...") yamlIndent = null;
+      continue;
+    }
     if (/^\s*---\s*$/.test(line)) {
-      inYaml = true;
+      // Node diagnostics immediately follow their test point, two spaces
+      // deeper. An unattached fence must not hide a bailout or more results.
+      if (diagnosticOwner === null || line !== `${" ".repeat(diagnosticOwner + 2)}---`)
+        throw new ReceiptFailure("execution receipt refused (misplaced-diagnostics)");
+      yamlIndent = diagnosticOwner + 2;
+      diagnosticOwner = null;
       continue;
     }
-    if (/^\s*\.\.\.\s*$/.test(line)) {
-      inYaml = false;
-      continue;
-    }
-    if (inYaml) continue;
+    if (/^\s*\.\.\.\s*$/.test(line))
+      throw new ReceiptFailure("execution receipt refused (misplaced-diagnostics)");
+    diagnosticOwner = null;
     if (/^\s*$/.test(line)) continue;
     if (/^TAP version \d+\s*$/.test(line)) continue;
     if (/^\s*Bail out!/i.test(line))
@@ -125,6 +137,7 @@ function parseTapTree(tap) {
       const num = Number(assertion[3]);
       if (!Number.isSafeInteger(num) || num < 1)
         throw new ReceiptFailure("execution receipt refused (malformed-plan)");
+      diagnosticOwner = indent;
       top.assertion = {
         ok: assertion[2].toLowerCase() === "ok",
         num,
@@ -139,7 +152,7 @@ function parseTapTree(tap) {
     if (line.startsWith("#")) continue;
     throw new ReceiptFailure("execution receipt refused (malformed-report)");
   }
-  if (inYaml || stack.length > 0)
+  if (yamlIndent !== null || stack.length > 0)
     throw new ReceiptFailure("execution receipt refused (malformed-tap-structure)");
   return { roots, topPlan };
 }
@@ -149,8 +162,14 @@ function checkBlock(node, nodes) {
     throw new ReceiptFailure("execution receipt refused (blank-case-identity)");
   if (node.assertion?.directive)
     throw new ReceiptFailure("execution receipt refused (skipped-or-todo-directive)");
+  if (node.assertion?.ok !== true)
+    throw new ReceiptFailure("execution receipt refused (failed-tap-assertion)");
   nodes.push(node);
-  if (node.children.length === 0) return;
+  if (node.children.length === 0) {
+    if (node.plan !== null)
+      throw new ReceiptFailure("execution receipt refused (contradictory-plan)");
+    return;
+  }
   if (node.plan === null)
     throw new ReceiptFailure("execution receipt refused (missing-child-plan)");
   const childIndent = node.children[0].indent;

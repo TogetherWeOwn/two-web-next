@@ -248,7 +248,11 @@ distinct passed cases, so counters-only summaries, unrelated-suite
 substitution, skipped/todo/cancelled cases and malformed or duplicate
 identities all fail the step. Add `--format json` for a versioned machine
 receipt (`version`, `suite_id`, `cases[].case_id`, `counts`, `verdict`,
-`error_code`, `next_action`); human output stays one line.
+`error_code`, `next_action`); human output stays one line. Failure evidence
+anywhere in the report (including suite teardown failures and unrelated cases)
+refuses admission. JSON stdout is capped at 16 KiB including its newline; an
+oversized receipt fails before any success output or CI-summary append rather
+than dropping case identities. Human output can still verify larger suites.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
