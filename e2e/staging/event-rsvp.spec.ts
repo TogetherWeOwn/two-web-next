@@ -1,5 +1,6 @@
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { assertFreshPendingRsvp, assertNoRsvpSyncNotes } from "../rsvp-pending";
 import {
   emptyStorageState,
   expect,
@@ -141,9 +142,7 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
         const rss = await anonymous.get("/events.rss");
         expect(rss.status()).toBe(200);
         expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
-        // Staging edge appends `no-transform` (challenge-platform injection
-        // suppression); origin still sends `max-age=300, public`.
-        expect(rss.headers()["cache-control"]).toBe("max-age=300, public, no-transform");
+        expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
         expect(rss.headers()["set-cookie"] ?? null).toBeNull();
         const rssBody = await rss.text();
         // Match the owned item's identity, never an arbitrary ambient feed key.
@@ -154,8 +153,7 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
         const ics = await anonymous.get(`/events/${eventKey}.ics`);
         expect(ics.status()).toBe(200);
         expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
-        // Same staging edge transform as the collection feeds above.
-        expect(ics.headers()["cache-control"]).toBe("max-age=300, private, no-transform");
+        expect(ics.headers()["cache-control"]).toBe("max-age=300, private");
         expect(ics.headers()["content-disposition"]).toBe(`attachment; filename="${eventKey}.ics"`);
         expect(ics.headers()["set-cookie"] ?? null).toBeNull();
         const body = await ics.text();
@@ -180,7 +178,9 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
         response.request().method() === "PUT",
     );
     await page.getByTestId("rsvp-going").click();
-    expect((await going).status()).toBe(201);
+    const goingResponse = await going;
+    expect(goingResponse.status()).toBe(201);
+    await assertFreshPendingRsvp(page, goingResponse);
     await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
     await page.reload();
     await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
@@ -192,6 +192,7 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
     await page.getByTestId("rsvp-withdraw").click();
     expect((await withdrawn).status()).toBe(204);
     await expect(page.getByTestId("rsvp-going")).toBeVisible();
+    await assertNoRsvpSyncNotes(page);
     await page.reload();
     await expect(page.getByTestId("rsvp-going")).toBeVisible();
     await expect(page.getByTestId("rsvp-confirmed")).toHaveCount(0);
