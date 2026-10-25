@@ -6,14 +6,14 @@ of that feature. No feature source, test, baseline, lockfile, checker or CI
 wiring changes here. The integrated feature still needs exact-head CI and
 independent review.
 
-**Current decision after the twenty-fourth base-conflict reconciliation:** no additional
-client ceiling increase. Every numeric ceiling equals merged base `853f954bd`;
+**Current decision after the twenty-fifth base-conflict reconciliation:** no additional
+client ceiling increase. Every numeric ceiling equals merged base `847bf4647`;
 main's independently merged allocations are not authored here. Earlier
 proposals below are historical, not active allowances. The last repeated
 frozen-feature measurements remain pinned to `d6a65b4fa`, which includes the
 profile-client reduction from [#1673](https://github.com/TogetherWeOwn/two-web-next/pull/1673):
 that client fits, but that union breaches server gzip and file count. The
-[latest reconciliation](#twenty-fourth-base-conflict-reconciliation-history-only-limits-equal-base)
+[latest reconciliation](#twenty-fifth-base-conflict-reconciliation-history-only-limits-equal-base)
 verifies the actual prerequisite tree only, not a new feature union. Neither
 this client decision nor the prerequisite-tree build releases the source
 feature's server HOLD or proves it is ready to merge.
@@ -1331,3 +1331,53 @@ and staging were not rerun. No user-facing page differs from main.
 Exact-head CI and independent hosted review remain required. Source feature
 ref is untouched; its server HOLD persists. UNDO: revert our history and
 evidence only, never main's independent allocations or security repairs.
+
+## Twenty-fifth base-conflict reconciliation: history only, limits equal base
+
+GitHub confirmed a base conflict on `04d4081e1`. Merged pinned main
+`847bf4647def72aebcb84d1defa9ec8726afa207`, including
+[#1758](https://github.com/TogetherWeOwn/two-web-next/pull/1758) and
+[#1518](https://github.com/TogetherWeOwn/two-web-next/pull/1518). The only
+conflict was the budget comment. Common history (583620 characters) + main's
+unique suffix (14776) + branch-only suffix (10900) = 609296 characters.
+Each suffix is absent from the opposite input and retained once. All
+non-comment values equal main and were equal on both sides before merging.
+No new allowance; main's ASCII-escaped JSON representation is preserved.
+
+Two fresh external locked root/web dependency installations, Node
+`v24.22.1`, and two `npm --prefix web run build` runs followed by unchanged
+`node ci/check-kit-perf.mjs` give **exit 0 twice**:
+
+| Group | Build 1 raw/gzip | Build 2 raw/gzip | Main ceiling raw/gzip |
+| --- | --- | --- | --- |
+| Client JS (54/55 files) | 253949/102273 B | 253949/102273 B | 254464/102912 B |
+| Server JS (115/126 files) | 1176054/333152 B | 1176054/333150 B | 1203200/333568 B |
+| Worker entry | 2551/1219 B | 2551/1219 B | 3584/1536 B |
+| Client CSS (2/4 files) | 2833/1006 B | 2833/1006 B | 3072/1024 B |
+
+All 54 client JS path/hash pairs match; no literal `drizzle-orm` client
+reference. Margins: client 515 raw / 639 gzip B, server 416–418 gzip B,
+CSS 18 gzip B. Server gzip varies by 2 B. Startup 60000 ms is configuration,
+not a latency measurement. These measurements cover this prerequisite,
+not a fresh feature union. Historical TSV rows are unchanged.
+
+Fresh verification: unchanged checker/parity/config/citation suites
+**100/100**; Kit checker selftest **12/12**, Hono bundle selftest **34/34**,
+performance gate **6/6**, parity selftest **13/13**. Lint **2059 files**,
+root/CI and E2E types, asset drift, Hono budgets, floor guard, inventory
+**1249/1249** plus Playwright **54/54**, docs links **160** Markdown files,
+and internal-reference ratchet **27/27** plus scan pass. Incoming event/profile fixture
+suites: **90 pass / 114 browser-gated skips / 0 fail**; browser wiring
+**18/18**. Database variables were unset. Dependency audit **exit 0**,
+zero blocked findings in both locks. No acceptance test files were edited;
+all incoming source/test/workflow/lockfile paths equal pinned main.
+
+`context-pack --base origin/main` failed with `RuntimeError: MCP server
+exited`; no pack produced. No functions/callers differ from main. Memory
+recall and optional routed arithmetic both failed response-schema validation;
+no usable result or verdict. Arithmetic is directly verified. Full
+`npm run check`, fresh feature union/acceptance, browser/visual/quality gates,
+Hono worker dry-run, startup latency and staging were not rerun. No page
+differs from main. Exact-head CI and independent hosted review still gate
+merge; the source feature/server HOLD remains. UNDO: this PR's history and
+evidence only, not main's independently approved allocations or repairs.
