@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import { featuredStatus } from "../src/featured-status";
 import { parseRecordId } from "../src/admin/record-id";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit";
-import { CHECKED_AT, savedFeatured } from "./helpers/featured-saved-content-cases";
+import { APP_URL, CHECKED_AT, savedFeatured } from "./helpers/featured-saved-content-cases";
 import { renderSavedKit } from "./helpers/featured-saved-content-render";
 
 const source = readFileSync(
@@ -61,7 +61,6 @@ describe("Kit featured-edit page contract", () => {
   it("keeps the Hono edit controls, hints, actions and delete affordance the E2E suite drives", () => {
     expect(source).toContain('data-testid="save-featured"');
     expect(source).toContain('data-testid="delete-featured"');
-    expect(source).toContain('href="/admin/featured"');
     expect(source).toContain("cdn.discordapp.com");
     expect(source).toContain("screen-reader");
     expect(source).toContain('type="checkbox"');
@@ -70,6 +69,30 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("Show until (UTC");
     expect(source).toContain("Save");
     expect(source).toContain("Delete this slot");
+  });
+
+  it("renders Cancel as the bare same-origin inventory when no browse context was carried", async () => {
+    // Executed destination, not source spelling: a direct bookmark (the saved
+    // render supplies no inventory context) keeps the bare catalogue fallback
+    // and grows no contextual Back link. The contextual destination itself is
+    // pinned end-to-end by the inventory-return acceptance suites.
+    const html = await renderSavedKit(savedFeatured());
+    const anchors = [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)].map(
+      ([, href, label]) => ({
+        href: href!.replaceAll("&amp;", "&"),
+        label: label!
+          .replace(/<[^>]*>/g, "")
+          .trim()
+          .replace(/\s+/g, " "),
+      }),
+    );
+    const cancel = anchors.filter((a) => a.label === "Cancel");
+    expect(cancel).toHaveLength(1);
+    const destination = new URL(cancel[0]!.href, APP_URL);
+    expect(destination.origin).toBe(new URL(APP_URL).origin);
+    expect(destination.pathname).toBe("/admin/featured");
+    expect(destination.search).toBe("");
+    expect(anchors.some((a) => /^Back to /i.test(a.label))).toBe(false);
   });
 
   it("keeps a saved card separately from the unpublished homepage eligibility verdict", async () => {
