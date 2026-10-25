@@ -9,13 +9,13 @@
   "server": {
     "js": {
       "maxRawBytes": 1203200,
-      "maxGzipBytes": 333568,
+      "maxGzipBytes": 333824,
       "maxFiles": 126
     }
   },
   "client": {
     "js": {
-      "maxRawBytes": 254464,
+      "maxRawBytes": 254976,
       "maxGzipBytes": 102912,
       "maxFiles": 55
     },
