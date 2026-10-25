@@ -42,16 +42,29 @@ export function matchGame(raw: string | null | undefined): string | null {
  * list. Trim + case-insensitive exact, like the schedule facet — but an
  * unknown (or beyond-cap) game is retained as a zero-match filter, never
  * degraded to unfiltered: suggestions are not the matching authority.
- * The canonical stored form wins so `?game=chess` selects "Chess".
+ * The live bounded suggestion read supplies its database-resolved alias.
+ * Without that result, only ASCII aliases use the suggested spelling; retain
+ * Unicode input rather than guessing at the database's case mapping.
  */
 export function resolveArchiveGameFilter(
   games: readonly string[],
   raw: string | null | undefined,
+  selectedGame?: string | null,
 ): string | null {
   const want = matchGame(raw);
   if (want === null) return null;
+  if (selectedGame !== undefined) return selectedGame ?? want;
+  const ascii = /^[\u0000-\u007f]+$/.test(want);
   const folded = want.toLowerCase();
-  return games.find((game) => game.toLowerCase() === folded) ?? want;
+  for (const candidate of games) {
+    const game = matchGame(candidate);
+    if (
+      game === want ||
+      (ascii && game !== null && /^[\u0000-\u007f]+$/.test(game) && game.toLowerCase() === folded)
+    )
+      return game;
+  }
+  return want;
 }
 
 /** Analytics form: collapse whitespace runs, lowercase, cap at 255 chars. null = blank. */

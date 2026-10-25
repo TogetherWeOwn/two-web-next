@@ -45,9 +45,7 @@
   }
 
   function pageEventKey() {
-    var mount =
-      document.querySelector('[data-island="rsvp-button"]') ||
-      document.querySelector('[data-island="going-count"]');
+    var mount = find('[data-island="rsvp-button"]') || find('[data-island="going-count"]');
     var key = mount && mount.getAttribute("data-event-key");
     if (key) return key;
     try {
@@ -84,14 +82,19 @@
       decodeURIComponent(search);
       var pages = params.getAll("archivePage");
       var queries = params.getAll("archiveQuery");
+      var games = params.getAll("archiveGame");
       if (
         pages.length === 1 &&
         queries.length <= 1 &&
+        games.length <= 1 &&
         pages[0].length <= 16 &&
-        Array.from(queries[0] || "").length <= 255
+        Array.from(queries[0] || "").length <= 255 &&
+        Array.from(games[0] || "").length <= 255 &&
+        (games[0] || "").indexOf("\0") < 0
       ) {
         result.set("archivePage", pages[0]);
         if (queries.length) result.set("archiveQuery", queries[0]);
+        if (games.length) result.set("archiveGame", games[0]);
       }
     } catch (_searchUnreadable) {
       // Keep the independently parsed attendee page; absent archive context
@@ -101,16 +104,16 @@
     return query ? "?" + query : "";
   }
 
-  function findSection(doc) {
+  function find(selector, doc) {
     var scope = doc || (typeof document !== "undefined" ? document : null);
     if (!scope || typeof scope.querySelector !== "function") return null;
-    return scope.querySelector(SECTION);
+    return scope.querySelector(selector);
   }
 
   function clearStale() {
     var stale = null;
     try {
-      stale = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
+      stale = find('[data-testid="' + STALE_TESTID + '"]');
     } catch (_staleLookupIgnored) {
       // Fall through with stale null: no signal to clear, the refresh still
       // completes and the next failure re-renders the signal.
@@ -124,7 +127,7 @@
       if (refocus) {
         // Empty-to-empty recovery has no roster heading to receive focus.
         // <main> is already focusable; never steal focus that moved away.
-        var fallback = document.querySelector("main");
+        var fallback = find("main");
         if (fallback && typeof fallback.focus === "function") fallback.focus();
       }
     } catch (_staleRemoveIgnored) {
@@ -135,7 +138,7 @@
 
   function showStale(key) {
     try {
-      if (document.querySelector('[data-testid="' + STALE_TESTID + '"]')) return;
+      if (find('[data-testid="' + STALE_TESTID + '"]')) return;
     } catch (_guardLookupIgnored) {
       // Fall through and render: a duplicate signal is harmless, a missing
       // one would be the silent contradiction this island must not leave.
@@ -169,7 +172,7 @@
       });
       note.appendChild(retry);
     }
-    var host = findSection();
+    var host = find(SECTION);
     try {
       if (host) host.appendChild(note);
       else mountWhereRosterLives(note);
@@ -186,7 +189,7 @@
   function mountWhereRosterLives(node) {
     var anchor = null;
     try {
-      anchor = document.querySelector(".event-discovery");
+      anchor = find(".event-discovery");
     } catch (_anchorLookupIgnored) {
       // Fall through with anchor null: the main/body fallbacks below apply.
       anchor = null;
@@ -201,7 +204,7 @@
     }
     var main = null;
     try {
-      main = document.querySelector("main");
+      main = find("main");
     } catch (_mainLookupIgnored) {
       main = null;
     }
@@ -232,7 +235,7 @@
   function restoreFocusAfterSwap(section) {
     var heading = null;
     try {
-      heading = section.querySelector("#event-attendees-heading");
+      heading = find("#event-attendees-heading", section);
     } catch (_headingLookupIgnored) {
       heading = null;
     }
@@ -316,8 +319,8 @@
       admitted = false;
     }
     if (!admitted) return false;
-    var fresh = findSection(parsed);
-    var old = findSection();
+    var fresh = find(SECTION, parsed);
+    var old = find(SECTION);
     if (fresh && old) {
       // Replace the node so attributes (counts in the heading, list order)
       // match the server exactly; the insert adopts across documents.
@@ -337,7 +340,7 @@
     if (fresh && !old) {
       var staleForFocus = null;
       try {
-        staleForFocus = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
+        staleForFocus = find('[data-testid="' + STALE_TESTID + '"]');
       } catch (_staleFocusLookupIgnored) {
         staleForFocus = null;
       }
@@ -362,7 +365,7 @@
           // <main id="main" tabindex="-1"> in EventDetailShell is already
           // focusable, so no tabindex hint is needed here.
           try {
-            var fallback = document.querySelector("main");
+            var fallback = find("main");
             if (fallback && typeof fallback.focus === "function") fallback.focus();
           } catch (_fallbackFocusIgnored) {
             // Fall through: the roster still matches the server truth; only

@@ -40,6 +40,7 @@ import {
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 import { normalizePastPage } from "./past-page";
+import { matchGame } from "./search-log";
 export { normalizePastPage } from "./past-page";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
@@ -121,12 +122,16 @@ export function searchCondition(q: string | null): SQL | undefined {
   return or(ilike(events.title, term), ilike(events.description, term));
 }
 
-/** Game-facet match: trim + case-insensitive exact, like the leaderboard
- * `?activity=` facet. The game arrives already resolved against the distinct
- * published list (canonical stored form); blank/unknown never reaches a read. */
+/** Mirror HTML/request newline preprocessing without collapsing internal whitespace. */
+function normalizedGameValue(value: SQL): SQL<string> {
+  return sql<string>`replace(replace(trim(${value}), chr(13) || chr(10), chr(10)), chr(13), chr(10))`;
+}
+
+/** One database case-mapping authority for stored and requested game names.
+ * JavaScript lowercasing differs for accepted Unicode names such as İ and ΟΣ. */
 export function gameCondition(game: string | null | undefined): SQL | undefined {
   if (!game) return undefined;
-  return sql`lower(trim(${events.game})) = ${game.toLowerCase()}`;
+  return sql`lower(${normalizedGameValue(sql`${events.game}`)}) = lower(${normalizedGameValue(sql`${game}`)})`;
 }
 
 /**
@@ -178,31 +183,39 @@ export async function listPublishedGames(db: Db): Promise<string[]> {
 /** Distinct archive-visible games for the archive facet: explicit `past` rows
  * (even with a recorded future end) plus ended `published` rows; drafts,
  * cancelled and future-only rows never suggest. One LIMIT-bound read per
- * render. Case folds in SQL (`DISTINCT ON lower(trim(game))`), so the
- * suggestion dedup is the same trim + case-insensitive equivalence the game
- * predicate matches — including the omission sentinel: a full 101-row window
+ * render. SQL dedup uses the same normalized value and database case fold as
+ * the predicate — including the omission sentinel: a full 101-row window
  * means a 101st distinct game exists. */
 export async function listArchiveGames(
   db: Db,
   now = new Date(),
-): Promise<{ games: string[]; omitted: boolean }> {
-  const fold = sql`lower(trim(${events.game}))`;
+  requestedGame?: string | null,
+): Promise<{ games: string[]; omitted: boolean; selectedGame?: string | null }> {
+  const game = normalizedGameValue(sql`${events.game}`);
+  const fold = sql`lower(${game})`;
+  // Resolve suggestion aliases in this same bounded read: JavaScript cannot
+  // reproduce the database's Unicode/collation case-mapping authority.
+  const requested = matchGame(requestedGame);
+  const selected = requested
+    ? sql<boolean>`${fold} = lower(${normalizedGameValue(sql`${requested}`)})`
+    : sql<boolean>`false`;
   const rows = await db
-    .selectDistinctOn([fold], { game: sql<string>`trim(${events.game})` })
+    .selectDistinctOn([fold], { game, selected })
     .from(events)
     .where(
       and(
         or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))),
         sql`${events.game} is not null`,
-        sql`trim(${events.game}) <> ''`,
+        sql`${game} <> ''`,
       ),
     )
-    .orderBy(fold, sql`trim(${events.game})`)
+    .orderBy(fold, game)
     .limit(EVENTS_DISTINCT_GAMES_LIMIT + 1);
   const games = rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
   return {
     games: games.slice(0, EVENTS_DISTINCT_GAMES_LIMIT),
     omitted: games.length > EVENTS_DISTINCT_GAMES_LIMIT,
+    ...(requested ? { selectedGame: rows.find((row) => row.selected)?.game ?? null } : {}),
   };
 }
 

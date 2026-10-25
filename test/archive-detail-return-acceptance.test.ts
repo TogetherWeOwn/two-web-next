@@ -275,6 +275,52 @@ describe.each(archiveTwins)("%s archive → detail → same results", (twin) => 
     }
   });
 
+  function gameReturn(html: string) {
+    const link = linksIn(html).find(
+      (candidate) =>
+        candidate.url.pathname === "/events/past" &&
+        candidate.url.searchParams.get("page") === "2" &&
+        candidate.url.searchParams.get("q") === QUERY &&
+        candidate.url.searchParams.get("game") === "Go" &&
+        /back|return|results|search|past|archive/i.test(candidate.label),
+    );
+    expect(link, "detail must return to the exact game-filtered archive result").toBeDefined();
+    expect(
+      [...link!.url.searchParams.keys()].every((key) => ["page", "q", "game"].includes(key)),
+    ).toBe(true);
+    return link!.url;
+  }
+
+  it("returns to the game-filtered archive and keeps the game through attendee refresh at page two", async () => {
+    const { url } = await card(twin);
+    url.searchParams.set("archiveGame", "Go");
+    url.searchParams.set("attendees", "2");
+    const response = await detail(twin, url, "member");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    gameReturn(html);
+    const refresh = linksIn(html).find((link) => /Refresh attendees/.test(link.label))!.url;
+    expect(refresh.searchParams.get("attendees")).toBe("2");
+    expect(refresh.searchParams.getAll("archiveGame")).toEqual(["Go"]);
+    expect(refresh.searchParams.get("archivePage")).toBe("2");
+    expect(refresh.searchParams.get("archiveQuery")).toBe(QUERY);
+    gameReturn(await (await detail(twin, refresh, "member")).text());
+  });
+
+  it.each(["duplicate-same", "duplicate-different", "overlong", "nul"] as const)(
+    "rejects the entire archive context for an invalid structured archive game (%s)",
+    async (invalid) => {
+      const { url } = await card(twin);
+      url.searchParams.set("archiveGame", "Go");
+      gameReturn(await (await detail(twin, url)).text());
+      if (invalid === "duplicate-same") url.searchParams.append("archiveGame", "Go");
+      if (invalid === "duplicate-different") url.searchParams.append("archiveGame", "Chess");
+      if (invalid === "overlong") url.searchParams.set("archiveGame", "x".repeat(256));
+      if (invalid === "nul") url.searchParams.set("archiveGame", "Go\0");
+      fallback(await (await detail(twin, url)).text());
+    },
+  );
+
   it.each(["🌌".repeat(255), "https://evil.example/path?x=1", 'a%_\\ "quoted"  query'])(
     "preserves admitted literal query %s rather than treating it as a return URL",
     async (query) => {

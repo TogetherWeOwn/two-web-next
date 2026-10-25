@@ -296,8 +296,12 @@ export function registerCalendarRoutes(
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
     const now = new Date();
-    const { games, omitted: gamesOmitted } = await listArchiveGames(db, now);
-    const gameFilter = resolveArchiveGameFilter(games, input.game);
+    const {
+      games,
+      omitted: gamesOmitted,
+      selectedGame,
+    } = await listArchiveGames(db, now, input.game);
+    const gameFilter = resolveArchiveGameFilter(games, input.game, selectedGame);
     const { rows, hasMore, totalPages } = await listPast(db, page, now, q, gameFilter);
     c.header(
       "cache-control",

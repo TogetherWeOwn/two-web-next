@@ -61,8 +61,8 @@ export const load: PageServerLoad = async ({ url, request, setHeaders }) => {
     // for anonymous clients even with csr=false, so the authorship
     // snowflake and other unrendered row fields never ride the rows (the
     // join precedent: toPublicWidgetSnapshot). The card only reads the
-    // projected fields, so the view is unchanged.
-    return { ...data, rows: data.rows.map(toPublicPastArchiveRow) };
+    // projected fields (plus, while searching, the bounded passage), so the view is unchanged.
+    return { ...data, rows: data.rows.map((row) => toPublicPastArchiveRow(row, data.q)) };
   } catch {
     error(503, "Events temporarily unavailable");
   }
