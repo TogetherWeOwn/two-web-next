@@ -116,6 +116,114 @@ test("attribute admission counts quoted, unquoted and valueless names exactly at
   assert.deepEqual(hrefs(`<!-- <div ${attrs(2_000)}> -->`), ["/about"]);
 });
 
+test("attribute admission follows browser comment endings and raw-text contexts", () => {
+  const oversized = `<div ${attrs(1_001)}></div><a href="/about">ok</a>`;
+  const prefixes = [
+    "<!-->",
+    "<!--->",
+    "<!-- x --!>",
+    "<!-- outer <!-- nested --!>",
+    "<script><!--</script>",
+    "<script><!--<script></script>--></script>",
+    ...["style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"].map(
+      (tag) => `<${tag}><!--</${tag}>`,
+    ),
+  ];
+  for (const prefix of prefixes) {
+    assert.throws(
+      () => standards.internalLinks(prefix + oversized),
+      {
+        code: "HTML_TOO_COMPLEX",
+      },
+      prefix,
+    );
+  }
+  // These are text, not attribute tokens. Neither comment openers nor fake
+  // tags inside them should hide or inflate the next real tag's attribute count.
+  for (const tag of [
+    "script",
+    "style",
+    "textarea",
+    "title",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+  ]) {
+    assert.deepEqual(
+      standards.internalLinks(`<${tag}><!--<div ${attrs(2_000)}></${tag}><a href="/about">ok</a>`),
+      ["/about"],
+      tag,
+    );
+  }
+  assert.deepEqual(standards.internalLinks(`<!-- <div ${attrs(2_000)}> -->`), []);
+  assert.deepEqual(standards.internalLinks(`<plaintext><div ${attrs(2_000)}>`), []);
+});
+
+test("attribute tokens count duplicates, reset per tag and respect foreign CDATA", () => {
+  const link = '<a href="/about">ok</a>';
+  assert.deepEqual(standards.internalLinks(`<div ${"x ".repeat(1_000)}></div>${link}`), ["/about"]);
+  assert.throws(() => standards.internalLinks(`<div ${"x ".repeat(1_001)}></div>${link}`), {
+    code: "HTML_TOO_COMPLEX",
+  });
+  assert.deepEqual(
+    standards.internalLinks(`<div ${attrs(1_000)}></div><div ${attrs(1_000)}></div>${link}`),
+    ["/about"],
+  );
+  assert.throws(
+    () => standards.internalLinks(`<div ${attrs(1_000)}></div><div ${attrs(1_001)}></div>${link}`),
+    { code: "HTML_TOO_COMPLEX" },
+  );
+  for (const tag of ["svg", "math"]) {
+    assert.deepEqual(
+      standards.internalLinks(`<${tag}><![CDATA[<div ${attrs(2_000)}>]]></${tag}>${link}`),
+      ["/about"],
+    );
+    assert.throws(() => standards.internalLinks(`<${tag} ${attrs(1_001)}></${tag}>${link}`), {
+      code: "HTML_TOO_COMPLEX",
+    });
+  }
+});
+
+test("quoted values neither hide real attributes nor count their contents as attributes", () => {
+  for (const quote of ['"', "'"]) {
+    assert.deepEqual(
+      standards.internalLinks(
+        `<div title=${quote}${attrs(2_000)}${quote}></div><a href="/about">ok</a>`,
+      ),
+      ["/about"],
+    );
+    assert.throws(
+      () =>
+        standards.internalLinks(
+          `<div title=${quote}>${quote} ${attrs(1_000)}></div><a href="/about">ok</a>`,
+        ),
+      { code: "HTML_TOO_COMPLEX" },
+    );
+    assert.deepEqual(
+      standards.internalLinks(
+        `<div title=${quote}>${quote} ${attrs(999)}></div><a href="/about">ok</a>`,
+      ),
+      ["/about"],
+    );
+  }
+});
+
+test("attribute rejection after comment and raw-text prefixes preserves later-route reporting", () => {
+  for (const prefix of [
+    "<!-->",
+    "<!--->",
+    "<!-- x --!>",
+    "<script><!--</script>",
+    "<textarea><!--</textarea>",
+  ]) {
+    boundedCollector(
+      `${JSON.stringify(prefix + "UNTRUSTED_BODY_CANARY")} + '<div ' + Array.from({length: 1_001}, (_, i) => 'a' + i).join(' ') + '>'`,
+      "HTML_TOO_COMPLEX",
+    );
+  }
+});
+
 test("body admission counts streamed UTF-8 bytes and cancels without waiting for cleanup", async () => {
   let cancelled = false;
   const body = new ReadableStream({

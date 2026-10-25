@@ -18,7 +18,7 @@ import {
 import { createRequire } from "node:module";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { defaultTreeAdapter, parse } from "parse5";
+import { defaultTreeAdapter, Parser, Tokenizer } from "parse5";
 
 const origin = "http://127.0.0.1:8787";
 const fixtureKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -61,54 +61,27 @@ function checkAnalysisDeadline(deadlineAt) {
   if (performance.now() >= deadlineAt) throw analysisError("LINKS_TIMEOUT");
 }
 
-const isTagSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r";
-const isAsciiLetter = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+// Use the parser's own tokenizer, not a second HTML scanner: comments, raw
+// text, foreign content and quoted values must share exactly the same grammar.
+// parse5 is pinned at 8.0.1. Its internal _createAttr hook runs before attribute
+// name deduplication (_leaveAttrName); counting at tag emission would be too late.
+class BoundedAttributeTokenizer extends Tokenizer {
+  constructor(options, handler, deadlineAt) {
+    super(options, handler);
+    this.deadlineAt = deadlineAt;
+    this.attributeToken = null;
+    this.attributeCount = 0;
+  }
 
-// Linear, allocation-free pass that mirrors the tokenizer's tag grammar just
-// closely enough to count attribute names per tag before parse5 sees them. It
-// over-counts only for tag-shaped text inside raw-text elements, which fails
-// closed above a limit no real tag approaches.
-function admitTagAttributes(html) {
-  const n = html.length;
-  let i = 0;
-  while (i < n) {
-    const lt = html.indexOf("<", i);
-    if (lt === -1) return;
-    i = lt + 1;
-    if (html.startsWith("!--", i)) {
-      const end = html.indexOf("-->", i + 3);
-      if (end === -1) return;
-      i = end + 3;
-      continue;
+  _createAttr(firstChar) {
+    checkAnalysisDeadline(this.deadlineAt);
+    if (this.currentToken !== this.attributeToken) {
+      this.attributeToken = this.currentToken;
+      this.attributeCount = 0;
     }
-    if (html[i] === "/") i += 1;
-    if (!isAsciiLetter(html[i] ?? "")) continue;
-    while (i < n && !isTagSpace(html[i]) && html[i] !== "/" && html[i] !== ">") i += 1;
-    let attributes = 0;
-    while (i < n) {
-      while (i < n && (isTagSpace(html[i]) || html[i] === "/")) i += 1;
-      if (i >= n) return;
-      if (html[i] === ">") {
-        i += 1;
-        break;
-      }
-      attributes += 1;
-      if (attributes > MAX_HTML_ATTRIBUTES_PER_TAG) throw analysisError("HTML_TOO_COMPLEX");
-      i += 1;
-      while (i < n && !isTagSpace(html[i]) && !"/>=".includes(html[i])) i += 1;
-      while (i < n && isTagSpace(html[i])) i += 1;
-      if (html[i] !== "=") continue;
-      i += 1;
-      while (i < n && isTagSpace(html[i])) i += 1;
-      const quote = html[i];
-      if (quote === '"' || quote === "'") {
-        const close = html.indexOf(quote, i + 1);
-        if (close === -1) return;
-        i = close + 1;
-      } else {
-        while (i < n && !isTagSpace(html[i]) && html[i] !== ">") i += 1;
-      }
-    }
+    this.attributeCount += 1;
+    if (this.attributeCount > MAX_HTML_ATTRIBUTES_PER_TAG) throw analysisError("HTML_TOO_COMPLEX");
+    super._createAttr(firstChar);
   }
 }
 
@@ -116,8 +89,6 @@ function admitHtml(html, deadlineAt) {
   checkAnalysisDeadline(deadlineAt);
   if (Buffer.byteLength(html, "utf8") > MAX_HTML_BODY_BYTES)
     throw analysisError("ROUTE_BODY_TOO_LARGE");
-  admitTagAttributes(html);
-  checkAnalysisDeadline(deadlineAt);
 }
 
 // parse5's supported adapter hooks run during tree construction, not after it.
@@ -210,7 +181,10 @@ export function classifyHref(href, documentUrl) {
 function rawHrefs(html, deadlineAt = performance.now() + ROUTE_READ_TIMEOUT_MS) {
   const text = typeof html === "string" ? html : "";
   admitHtml(text, deadlineAt);
-  const document = parse(text, { treeAdapter: boundedTreeAdapter(deadlineAt) });
+  const parser = new Parser({ treeAdapter: boundedTreeAdapter(deadlineAt) });
+  parser.tokenizer = new BoundedAttributeTokenizer(parser.options, parser, deadlineAt);
+  parser.tokenizer.write(text, true);
+  const document = parser.document;
   checkAnalysisDeadline(deadlineAt);
   const pending = [document];
   const out = [];
