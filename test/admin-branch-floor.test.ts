@@ -1097,7 +1097,9 @@ describe("admin error and empty page states (pure render, no DB)", () => {
         appUrl: "https://next.example.test",
       }),
     );
-    expect(hidden).toContain('data-testid="featured-preview-hidden"');
+    expect(hidden).not.toContain('data-testid="featured-preview-hidden"');
+    expect(hidden).toContain('data-testid="featured-item"');
+    expect(hidden).toContain('data-status="unpublished"');
     expect(hidden).toContain('data-testid="delete-featured"');
     const live = String(
       jsx(FeaturedFormPage, {
