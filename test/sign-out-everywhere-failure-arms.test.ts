@@ -88,6 +88,96 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("POST /logout/everywhere: no usable bearer needs no session storage", () => {
+  const kinds = [
+    "no cookies",
+    "missing",
+    "bad signature",
+    "short",
+    "long",
+    "non-base64url",
+    "missing prefix",
+    "legacy hex",
+    "bare prefix",
+  ];
+  const cases = kinds.flatMap((kind) =>
+    [undefined, "text/html", "application/json", "*/*"].map((accept) => ({ kind, accept })),
+  );
+
+  it.each(cases)(
+    "$kind bearer clears cookies without resolving storage (Accept $accept)",
+    async ({ kind, accept }) => {
+      const store = createMemorySessionStore();
+      const current = await mint(store, new Date(Date.now() + 3_600_000));
+      const sibling = await mint(store, new Date(Date.now() + 3_600_000));
+      const currentRow = await store.get(current.hash);
+      const siblingRow = await store.get(sibling.hash);
+      const malformed: Record<string, string> = {
+        short: current.token.slice(0, -1),
+        long: `${current.token}A`,
+        "non-base64url": `${current.token.slice(0, -1)}!`,
+        "missing prefix": current.token.slice(4),
+        "legacy hex": "a".repeat(64),
+        "bare prefix": "two_",
+      };
+      const bearer =
+        kind === "no cookies" || kind === "missing"
+          ? ""
+          : kind === "bad signature"
+            ? (
+                await serializeSigned(
+                  SESSION_COOKIE,
+                  current.token,
+                  "wrong-signing-secret",
+                  cookieOpts,
+                )
+              ).split(";")[0]!
+            : await signed(SESSION_COOKIE, malformed[kind]!);
+      const cookies =
+        kind === "no cookies"
+          ? []
+          : [
+              bearer,
+              await signed(STATUS_COOKIE, current.hash),
+              await signed("__Host-two_expired_write", "pending|/profile"),
+            ].filter(Boolean);
+      const unavailable = vi.fn(() => {
+        throw new Error("store down");
+      });
+      const bindings = envFor(store);
+      Object.defineProperty(bindings, "SESSION_STORE", { get: unavailable });
+
+      const res = await app.request(
+        "/logout/everywhere",
+        {
+          method: "POST",
+          headers: {
+            origin: APP_URL,
+            ...(cookies.length ? { cookie: cookies.join("; ") } : {}),
+            ...(accept ? { accept } : {}),
+          },
+        },
+        bindings,
+      );
+
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe("/");
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.getSetCookie().sort()).toEqual(
+        [
+          "__Host-two_expired_write=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+          `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`,
+          `${STATUS_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`,
+        ].sort(),
+      );
+      expect(unavailable, "even resolving the session store is forbidden").not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
+      expect(await store.get(current.hash)).toEqual(currentRow);
+      expect(await store.get(sibling.hash)).toEqual(siblingRow);
+    },
+  );
+});
+
 describe("POST /logout/everywhere: a failing member resolution is authoritative", () => {
   const ACCEPTS: Array<[string, string | undefined, string]> = [
     ["html", "text/html", "text/html"],
