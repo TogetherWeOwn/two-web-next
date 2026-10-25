@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
-import type { Env } from "./env";
+import type { Env, HeaderSession } from "./env";
 import {
   ANON_EVENTS_TTL_MS,
   anonCacheGeneration,
@@ -37,8 +37,9 @@ export async function kitEventsGuard(request: Request, env: Env): Promise<Respon
   return response.status === 204 ? null : response;
 }
 
-/** Viewer bits the Kit list load needs: member chrome plus draft visibility. */
+/** Viewer bits the Kit list load needs: the header name, member chrome, draft visibility. */
 export interface KitEventsSession {
+  username: string;
   member: boolean;
   moderator: boolean;
 }
@@ -251,6 +252,8 @@ export interface KitEventsLoadData extends CalendarPageModel {
   now: Date;
   member: boolean;
   moderator: boolean;
+  /** Signed-in viewer for the header account area; the shell gates members. */
+  session: HeaderSession | null;
   inviteUrl: string;
   appUrl: string;
   canonical: string;
@@ -374,6 +377,7 @@ export async function loadEventsPage(
     now,
     member: session?.member ?? false,
     moderator: session?.moderator ?? false,
+    session: session ? { username: session.username, member: session.member } : null,
     inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
     appUrl: env.APP_URL,
     canonical: canonicalUrl(env.APP_URL, "/events"),
