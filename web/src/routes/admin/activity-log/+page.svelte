@@ -3,6 +3,7 @@ import AdminShell from "#lib/AdminShell.svelte";
 import {
   formatActivityCauser,
   activityLogEmptyText,
+  activityLogRecovery,
   activityLogUrl,
   type ActivityLogQuery,
 } from "../../../../../src/admin/table-list";
@@ -18,6 +19,7 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const { rows, query, hasNext } = $derived(data);
 const emptyText = $derived(activityLogEmptyText(query as ActivityLogQuery));
+const recovery = $derived(activityLogRecovery(query as ActivityLogQuery, rows.length));
 const subjectOf = (row: {
   subjectType: string | null;
   subjectId: string | null;
@@ -88,6 +90,12 @@ const subjectOf = (row: {
         </tbody>
       </table>
     </div>
+    {#if recovery.firstUrl || recovery.clearUrl}
+      <p class="actions">
+        {#if recovery.firstUrl}<a href={recovery.firstUrl}>First page of these results</a>{/if}
+        {#if recovery.clearUrl}<a href={recovery.clearUrl}>Clear filters</a>{/if}
+      </p>
+    {/if}
     <nav aria-label="Activity pages" class="actions">
       {#if query.page > 1}
         <a rel="prev" href={activityLogUrl(query as ActivityLogQuery, query.page - 1)}>Previous</a>

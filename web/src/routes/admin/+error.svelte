@@ -51,7 +51,7 @@ const title = $derived(
   </p>
   {#if eventMissing}
     <h1 id="admin-error-heading">Event not found</h1>
-    <p class="hint">There is no event with that key. It may have been deleted.</p>
+    <p class="hint">There is no event with that key.</p>
   {:else if featuredMissing}
     <h1 id="admin-error-heading">Featured content not found</h1>
     <p class="hint">There is no featured item with that id. It may have been deleted.</p>

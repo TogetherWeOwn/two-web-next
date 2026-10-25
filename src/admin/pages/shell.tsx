@@ -62,12 +62,21 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
   </>
 );
 
-export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (
+export const ErrorPage: FC<{
+  heading: string;
+  detail?: string;
+  recovery?: Array<{ href: string; label: string }>;
+}> = ({ heading, detail, recovery = [] }) => (
   <Shell title={heading}>
     <section>
       <h1>{heading}</h1>
       {detail ? <p data-testid="error-detail">{detail}</p> : null}
       <p>
+        {recovery.map((link) => (
+          <span key={link.href}>
+            <a href={link.href}>{link.label}</a> ·{" "}
+          </span>
+        ))}
         <a href="/admin">Back to the dashboard</a>
       </p>
     </section>
