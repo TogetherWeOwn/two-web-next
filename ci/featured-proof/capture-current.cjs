@@ -129,8 +129,8 @@ async function captureView(browser, html, fixture, viewport, output, report) {
       await scroll.evaluate(el => { el.scrollLeft = 0; });
     } else {
       check('scheduled label', await page.locator('[data-status="scheduled"]').isVisible());
-      check('hidden notice', await page.locator('[data-testid="featured-preview-hidden"]').isVisible());
-      check('no scheduled public card', await page.locator('[data-testid="featured-item"]').count() === 0);
+      check('saved scheduled card', await page.locator('[data-testid="featured-item"]').isVisible());
+      check('saved-content disclosure', (await page.locator('[data-testid="featured-preview"]').innerText()).includes('Save changes to refresh this preview'));
     }
     if (fixture.name === 'long-content.html') {
       const card = page.locator('[data-testid="featured-item"]');

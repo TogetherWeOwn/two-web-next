@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import type { Env } from "./env";
+import { jsonRefusal } from "./json-refusal";
 import { forbidden, prefersHtmlError, varyAccept } from "./errors";
 
 export const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
@@ -52,7 +53,7 @@ export const sameOrigin = createMiddleware<{ Bindings: Env }>(async (c, next) =>
     c.header("cache-control", "no-store, private");
     varyAccept(c);
     if (prefersHtmlError(c)) return forbidden(c);
-    return c.json({ error: "cross_origin" }, 403);
+    return jsonRefusal(c, "cross_origin", 403);
   }
   return next();
 });

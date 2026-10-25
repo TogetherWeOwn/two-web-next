@@ -57,7 +57,9 @@ Narrow the data at the load, never scrub at render. Precedents:
 - `toPublicPastArchiveRow` (`src/kit-past-events.ts`), applied in the
   `/events/past` binding — rendered card fields plus the occupancy
   aggregate and the public-by-design Discord event id; the authorship
-  snowflake stays server-side.
+  snowflake stays server-side. During a search it also carries the
+  pre-segmented title spans and bounded description passage, derived
+  from the already-public title and description.
 - `HomeEvent` (`src/events/reads.ts`) — the home teaser pick.
 
 Public-by-design ids (`discordEventId`, transient `discordId`, widget guild

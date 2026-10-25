@@ -170,7 +170,7 @@ describe("expiredWriteBounce", () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("location")).toBeNull();
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fevents",
     });
   });
@@ -186,7 +186,7 @@ describe("expiredWriteBounce", () => {
     );
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fevents",
     });
   });
@@ -204,7 +204,7 @@ describe("expiredWriteBounce", () => {
     );
     expect(res.status, `${header}: ${value}`).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fevents",
     });
   });
@@ -242,7 +242,7 @@ describe("expiredWriteBounce", () => {
     );
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fevents",
     });
   });
