@@ -183,7 +183,7 @@ describe("expired admin writes recover instead of 403ing", () => {
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fadmin%2Fevents%2Fabc",
     });
   });
