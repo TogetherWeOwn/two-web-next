@@ -227,7 +227,7 @@ describe("tier-0 admin guard matrix", () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("location")).toBeNull();
     const body = (await res.json()) as { error: string; recovery: string };
-    expect(body.error).toBe("Unauthorized");
+    expect(body.error).toBe("unauthenticated");
     expect(typeof body.recovery).toBe("string");
   });
 

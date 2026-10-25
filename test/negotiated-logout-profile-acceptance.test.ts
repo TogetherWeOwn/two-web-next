@@ -228,15 +228,23 @@ describe("profile write refusals negotiate without changing statuses or successf
     },
   );
 
-  it.each([
-    ["unsupported media", 415, "Unsupported Media Type"],
-    ["save error", 500, "Could not save your profile."],
-  ] as const)("%s retains the machine caller's existing %i bytes", async (name, status, body) => {
-    const failure = refusals.find((row) => row.name === name)!;
+  it("unsupported media answers the machine caller the unified JSON envelope", async () => {
+    const failure = refusals.find((row) => row.name === "unsupported media")!;
     const { response } = await profileRequest(failure, "application/json");
-    expect(response.status).toBe(status);
+    expect(response.status).toBe(415);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({
+      error: "unsupported_media_type",
+      request_id: expect.any(String),
+    });
+  });
+
+  it("save error retains the machine caller's existing 500 bytes", async () => {
+    const failure = refusals.find((row) => row.name === "save error")!;
+    const { response } = await profileRequest(failure, "application/json");
+    expect(response.status).toBe(500);
     expect(response.headers.get("content-type")).toContain("text/plain");
-    expect(await response.text()).toBe(body);
+    expect(await response.text()).toBe("Could not save your profile.");
   });
 
   it("valid JSON still saves once and returns the exact success envelope", async () => {
