@@ -2,7 +2,7 @@
 // one date badge. Screen modules import from here; ./pages re-exports the screens.
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
-import type { Session } from "../env";
+import type { HeaderSession, Session } from "../env";
 
 // Exported for the SvelteKit spike page (web/, TOG-12247): one formatter, one markup contract.
 export const fmt = (d: Date, tz: string): string => {
@@ -24,6 +24,10 @@ const ScheduleShell: FC<
     description?: string;
     robots?: string;
     member?: boolean;
+    /** Signed-in viewer for the account area. Members keep the Discord
+        shortcut below (and gain no board link); only non-member sessions
+        reach the header, so guest renders stay byte-identical. */
+    session?: Session | HeaderSession | null;
     loginReturnTo?: string | null;
     markdownAlternate?: string;
   }>
@@ -33,6 +37,7 @@ const ScheduleShell: FC<
   description,
   robots,
   member,
+  session,
   loginReturnTo,
   markdownAlternate,
   children,
@@ -45,7 +50,11 @@ const ScheduleShell: FC<
     theme="schedule"
     markdownAlternate={markdownAlternate}
   >
-    <SiteHeader active="events" loginReturnTo={loginReturnTo}>
+    <SiteHeader
+      active="events"
+      loginReturnTo={loginReturnTo}
+      session={member ? undefined : session}
+    >
       {member ? (
         <a class="btn" href="/discord">
           Open Discord

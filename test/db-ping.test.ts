@@ -162,7 +162,7 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
           const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
           const body = await unknown.text();
           expect(unknown.status).toBe(403);
-          expect(JSON.parse(body)).toEqual({ error: "cross_origin" });
+          expect(JSON.parse(body)).toEqual({ error: "cross_origin", request_id: RAY });
           for (const path of removed) {
             const response = await app.request(`${host}${path}`, { method, headers }, bindings);
             expect(response.status, `${method} ${path}`).toBe(403);
@@ -190,7 +190,10 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
             bindings,
           );
           expect(response.status, path).toBe(403);
-          expect(await response.json(), path).toEqual({ error: "cross_origin" });
+          expect(await response.json(), path).toEqual({
+            error: "cross_origin",
+            request_id: expect.any(String),
+          });
           expect(response.headers.get("cache-control"), path).toBe("no-store, private");
         }
       }
