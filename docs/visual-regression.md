@@ -79,8 +79,13 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    <artifact-root>`. Validate flags and the entire bounded plan before creating
    any directory or writing any destination. Input roots must be real
    directories; reject symlinks at the root, in its ancestry and among
-   discovered descendants, including cycles. Reject linked destination files,
-   the destination root and linked ancestors. Keep resolved sources and
+   discovered descendants, including cycles. The walk permits regular files and
+   directories only; pipes, sockets and devices refuse with `IO_ERROR` before
+   any read. Existing baseline targets must be regular files too. Reject linked
+   destination files, the destination root and linked ancestors. The artifact
+   budget is 64 directory levels (root is level 1) and 4096 visited entries
+   (files and directories, including ignored entries); exceeding either refuses
+   with `ARTIFACT_LIMIT`. Keep resolved sources and
    destinations inside their intended roots, and apply the source bytes cached
    during preflight. Any boundary refusal leaves existing destinations and
    outside files unchanged. All source bytes and local targets are preflighted
@@ -94,9 +99,14 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    [Kit acceptance guide](kit-parity-gates.md#visual-gates) for those images.
 
    Both accept scripts take `[--dry-run] [--format json] <artifact-dir>`.
-   `--dry-run` prints the full plan (destinations and sources, skipped sources
-   with a reason, the collision verdict), writes nothing, and exits as the real
-   run would. `--format json` prints one versioned verdict
+   `--dry-run` prints a bounded preview of the plan (destinations and sources,
+   skipped sources with a reason, the collision verdict), writes nothing, and
+   exits as the real run would. Human and JSON reports stay within 16 KiB of
+   UTF-8, replace filename controls with `_`, and bound each displayed path to
+   256 characters. JSON retains complete items and counts omissions in
+   `truncated` (including omissions for the byte budget). Display names are
+   diagnostics, not authoritative filesystem paths; output truncation never
+   changes the validated plan or its writes. `--format json` prints one versioned verdict
    (`version`, `tool`, `mode`, `ok`, `code`, `next_action`, `destinations`,
    `sources`, plus the dry-run `plan` when previewing). Any other flag, a
    missing or extra positional, or a missing directory exits 2 before the

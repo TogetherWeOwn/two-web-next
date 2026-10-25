@@ -53,8 +53,12 @@ import { runCli } from "./visual-accept-cli.mjs";
 import {
   BoundaryError,
   CODE_DESTINATION_SYMLINK,
+  MAX_DIAGNOSTIC_BYTES,
+  assertRegularFile,
   collectCandidatesBounded,
+  safeDestName,
   safeRelativePath,
+  truncateUtf8,
   validateDestinationRoot,
 } from "./visual-accept-policy.mjs";
 
@@ -70,7 +74,7 @@ export const STALE_COPY_CODE = "STALE_COPY_CONFLICT";
 // Artifact-relative display path with forward slashes: diagnostics never carry
 // the absolute extraction directory.
 export function displayPath(root, path) {
-  return relative(root, path).split(sep).join("/");
+  return safeRelativePath(resolve(root), resolve(path));
 }
 
 // Maps one artifact file to its baseline destination filename, or null when
@@ -185,7 +189,7 @@ export function resolveDestinations(candidates) {
 // dumping an unbounded artifact listing. With `root`, sources print relative to
 // the artifact root instead of as absolute paths.
 export function formatCollisionDiagnostic(duplicates, root) {
-  const show = (source) => (root === undefined ? source : displayPath(root, source));
+  const show = (source) => (root === undefined ? safeDestName(source) : displayPath(root, source));
   const total = duplicates.reduce((sum, { sources }) => sum + sources.length, 0);
   const lines = [
     `Refusing visual baseline acceptance: ${duplicates.length} destination(s) ` +
@@ -195,12 +199,13 @@ export function formatCollisionDiagnostic(duplicates, root) {
     const shown = sources.slice(0, MAX_SOURCES_SHOWN).map(show).join(", ");
     const more =
       sources.length > MAX_SOURCES_SHOWN ? ` (+${sources.length - MAX_SOURCES_SHOWN} more)` : "";
-    lines.push(`  ${dest} <- ${shown}${more}`);
+    lines.push(`  ${safeDestName(dest)} <- ${shown}${more}`);
   }
   if (duplicates.length > MAX_DESTINATIONS_SHOWN) {
     lines.push(`  ... and ${duplicates.length - MAX_DESTINATIONS_SHOWN} more destination(s)`);
   }
-  return lines.join("\n");
+  // Every filename is sanitized above; preserve only formatter-owned newlines.
+  return truncateUtf8(lines.join("\n"), MAX_DIAGNOSTIC_BYTES);
 }
 
 // Check every local target before applying either suite's plan. Only an
@@ -249,6 +254,7 @@ export function preflightPlan(resolved, destDir) {
     }
     let current = null;
     if (targetStat !== null) {
+      assertRegularFile(targetStat);
       current = readFileSync(target);
     }
     if (current !== null) {
@@ -258,7 +264,7 @@ export function preflightPlan(resolved, destDir) {
       }
       if (!candidate.actual) {
         const error = new Error(
-          `Refusing stale artifact copy conflict for ${candidate.dest}: checkout baseline differs; no baselines written. Review a matching actual or use a current artifact.`,
+          `Refusing stale artifact copy conflict for ${safeDestName(candidate.dest)}: checkout baseline differs; no baselines written. Review a matching actual or use a current artifact.`,
         );
         error.visualAcceptCode = STALE_COPY_CODE;
         error.dest = candidate.dest;
@@ -367,7 +373,7 @@ export function applyPlan(plan, destDir, write = (target, bytes) => writeFileSyn
 export function acceptBaselines(artifactDir, destDir) {
   const plan = planBaselines(artifactDir, destDir);
   if (plan.verdict === "collision") {
-    throw new Error(formatCollisionDiagnostic(plan.duplicates));
+    throw new Error(formatCollisionDiagnostic(plan.duplicates, artifactDir));
   }
   if (plan.verdict === "stale_copy_conflict") throw plan.conflict;
   if (plan.verdict === "boundary") {

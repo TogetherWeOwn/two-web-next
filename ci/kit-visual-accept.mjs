@@ -33,7 +33,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyPlan, planBaselines } from "./visual-accept.mjs";
 import { runCli } from "./visual-accept-cli.mjs";
-import { collectCandidatesBounded } from "./visual-accept-policy.mjs";
+import { collectCandidatesBounded, safeDestName } from "./visual-accept-policy.mjs";
 
 export const KIT_SCREENSHOT_DIR = "e2e/visual/__screenshots-kit__";
 export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
@@ -72,7 +72,7 @@ export function acceptBaselines(
   if (plan.verdict === "collision") {
     return {
       ok: false,
-      message: `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`,
+      message: `kit-visual-accept: refusing: different sources map to ${safeDestName(plan.duplicates[0].dest)}; no baselines written`,
     };
   }
   if (plan.verdict === "stale_copy_conflict") {
@@ -108,13 +108,13 @@ export const KIT_ADAPTER = {
   apply: (plan) => applyPlan(plan, join(process.cwd(), KIT_SCREENSHOT_DIR)),
   refusalMessage: (plan) => {
     if (plan.verdict === "collision")
-      return `kit-visual-accept: refusing: different sources map to ${plan.duplicates[0].dest}; no baselines written`;
+      return `kit-visual-accept: refusing: different sources map to ${safeDestName(plan.duplicates[0].dest)}; no baselines written`;
     if (plan.verdict === "boundary")
       return `kit-visual-accept: refusing: ${plan.boundary.code} at ${plan.boundary.path}; no baselines written`;
     return `kit-visual-accept: ${plan.conflict.message}`;
   },
   successLines: (plan) => {
-    const names = plan.writes.map(({ dest }) => dest);
+    const names = plan.writes.map(({ dest }) => safeDestName(dest));
     const shown = names.slice(0, MAX_NAMES_SHOWN).join(", ");
     const more = names.length > MAX_NAMES_SHOWN ? ` (+${names.length - MAX_NAMES_SHOWN} more)` : "";
     return [

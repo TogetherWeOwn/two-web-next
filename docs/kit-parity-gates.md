@@ -287,8 +287,15 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   delete the newer checkout baseline to force acceptance. Dry-run is read-only
   and validates the same authority as apply. Reject source symlinks (including
   root/ancestor links, descendants and cycles) and linked destination
-  files/ancestors before directory creation or writes. Confine the resolved
-  plan to the intended artifact and Kit destination roots. Preflight the entire
+  files/ancestors before directory creation or writes. The walk permits only
+  regular files and directories, and existing baseline targets must be regular
+  files: pipes, sockets and devices refuse with `IO_ERROR` before any read.
+  Count the artifact root as directory level 1; exceeding 64 directory levels
+  or 4096 visited entries (including ignored files and directories) refuses
+  with `ARTIFACT_LIMIT`. Human and JSON reports sanitize filenames and stay
+  within 16 KiB of UTF-8, with JSON `truncated` counts covering omitted entries.
+  Display names are bounded diagnostics, not authoritative filesystem paths.
+  Confine the resolved plan to the intended artifact and Kit destination roots. Preflight the entire
   plan and cache source bytes, preserving actual-over-stale-copy precedence,
   collision/stale-copy refusal, additions and identical no-ops. Refusal must
   not change destination or outside bytes. Do not delete newer baselines to

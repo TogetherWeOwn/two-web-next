@@ -89,12 +89,12 @@ export function safeRelativePath(rootAbs, targetAbs) {
 
 // Safe diagnostic for a destination filename (single basename, no directories).
 export function safeDestName(dest) {
-  const base = sanitizeVisible(basename(String(dest)));
+  const base = sanitizeVisible(basename(String(dest))).replace(/[\\/]/g, "_");
   if (base === "" || base === "." || base === "..") return "_";
   return base.length > MAX_PATH_LEN ? base.slice(0, MAX_PATH_LEN) : base;
 }
 
-function truncateUtf8(value, maxBytes) {
+export function truncateUtf8(value, maxBytes) {
   const str = String(value);
   if (Buffer.byteLength(str, "utf8") <= maxBytes) return str;
   let out = str.slice(0, maxBytes);
@@ -104,6 +104,14 @@ function truncateUtf8(value, maxBytes) {
 
 export function boundedDiagnostic(value) {
   return truncateUtf8(sanitizeVisible(value), MAX_DIAGNOSTIC_BYTES);
+}
+
+export function assertRegularFile(stat) {
+  if (!stat.isFile()) {
+    const error = new Error("Expected a regular file.");
+    error.code = "EINVAL";
+    throw error;
+  }
 }
 
 // lstat every ancestor prefix of an absolute path, refusing symlinks. Returns
@@ -210,6 +218,8 @@ export function collectCandidatesBounded(rootAbs, destinationName) {
       if (st.isDirectory()) {
         walk(full, depth + 1);
       } else {
+        // Never open pipes, sockets or devices, even when outside this suite.
+        assertRegularFile(st);
         const relativePath = relative(rootAbs, full);
         const dest = destinationName(entry, relativePath);
         if (dest !== null && dest !== undefined) {

@@ -19,7 +19,12 @@
 // Adapters (see HONO_ADAPTER and KIT_ADAPTER) supply the suite's plan/apply
 // and its compatible human wording; this module never imports either suite.
 import { statSync } from "node:fs";
-import { relative, sep } from "node:path";
+import {
+  MAX_DIAGNOSTIC_BYTES,
+  safeDestName,
+  safeRelativePath,
+  truncateUtf8,
+} from "./visual-accept-policy.mjs";
 
 export const JSON_VERSION = 1;
 const MAX_LISTED = 20;
@@ -123,7 +128,7 @@ function errnoToken(error) {
 // Sources are absolute or cwd-relative under the artifact root; print them
 // artifact-relative with forward slashes.
 function relativeSource(root, path) {
-  return relative(root, path).split(sep).join("/");
+  return safeRelativePath(root, path);
 }
 
 function jsonBase(adapter, flags, outcome) {
@@ -139,12 +144,58 @@ function jsonBase(adapter, flags, outcome) {
   };
 }
 
+// Trim complete list entries, never serialized JSON. Counts include entries
+// omitted for either the listing limit or the final UTF-8 byte budget.
+function boundedJson(payload) {
+  const lists = payload.plan
+    ? ["destinations", "sources", "skipped", "collisions"].map((key) => ({
+        items: payload.plan[key],
+        omit: () => {
+          payload.plan.truncated[key] += 1;
+        },
+      }))
+    : ["accepted", "collisions"]
+        .filter((key) => Array.isArray(payload[key]))
+        .map((key) => ({
+          items: payload[key],
+          omit: () => {
+            payload.truncated += 1;
+          },
+        }));
+  let output = `${JSON.stringify(payload)}\n`;
+  while (Buffer.byteLength(output) > MAX_DIAGNOSTIC_BYTES) {
+    const largest = lists
+      .filter(({ items }) => items.length > 0)
+      .sort(
+        (a, b) =>
+          Buffer.byteLength(JSON.stringify(b.items)) - Buffer.byteLength(JSON.stringify(a.items)),
+      )[0];
+    if (!largest) throw new Error("Fixed visual report exceeds its byte budget.");
+    largest.items.pop();
+    largest.omit();
+    output = `${JSON.stringify(payload)}\n`;
+  }
+  return output;
+}
+
+function boundedHuman(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  // Keep the machine-readable refusal and next action after a truncated list.
+  const codeAt = value.lastIndexOf("\ncode=");
+  const suffix = codeAt === -1 ? "" : value.slice(codeAt + 1);
+  const body = codeAt === -1 ? value : value.slice(0, codeAt);
+  const marker = "\n... report truncated\n";
+  return `${truncateUtf8(body, maxBytes - Buffer.byteLength(marker + suffix))}${marker}${suffix}`;
+}
+
 function finish(adapter, flags, outcome, human) {
   if (flags.json) {
     const payload = { ...jsonBase(adapter, flags, outcome), ...(outcome.extra ?? {}) };
-    return { status: outcome.status, stdout: `${JSON.stringify(payload)}\n`, stderr: "" };
+    return { status: outcome.status, stdout: boundedJson(payload), stderr: "" };
   }
-  return { status: outcome.status, stdout: human.stdout ?? "", stderr: human.stderr ?? "" };
+  const stderr = boundedHuman(human.stderr ?? "", MAX_DIAGNOSTIC_BYTES);
+  const stdout = boundedHuman(human.stdout ?? "", MAX_DIAGNOSTIC_BYTES - Buffer.byteLength(stderr));
+  return { status: outcome.status, stdout, stderr };
 }
 
 function codeLines(outcome) {
@@ -186,19 +237,19 @@ function nextActionFor(outcome, dryRun) {
 
 function dryRunPlan(plan, outcome, root) {
   const sources = plan.writes.map(({ dest, src }) => ({
-    destination: dest,
+    destination: safeDestName(dest),
     source: relativeSource(root, src),
   }));
   const skipped = plan.skipped.map(({ src, reason }) => ({
     item: relativeSource(root, src),
     reason,
   }));
-  const destinations = listed(plan.writes.map(({ dest }) => dest));
+  const destinations = listed(plan.writes.map(({ dest }) => safeDestName(dest)));
   const sourceList = listed(sources);
   const skippedList = listed(skipped);
   const collisions = listed(
     plan.duplicates.map(({ dest, sources: files }) => ({
-      destination: dest,
+      destination: safeDestName(dest),
       source_count: files.length,
     })),
   );
@@ -245,7 +296,8 @@ function dryRunHuman(adapter, plan, outcome, root) {
   }
   const writes = listed(plan.writes);
   lines.push(writes.shown.length > 0 ? `destinations (${count}):` : "destinations: none");
-  for (const { dest, src } of writes.shown) lines.push(`  ${dest} <- ${relativeSource(root, src)}`);
+  for (const { dest, src } of writes.shown)
+    lines.push(`  ${safeDestName(dest)} <- ${relativeSource(root, src)}`);
   if (writes.truncated > 0) lines.push(`  ... and ${writes.truncated} more destination(s)`);
   const skipped = listed(plan.skipped);
   lines.push(skipped.shown.length > 0 ? `skipped (${plan.skipped.length}):` : "skipped: none");
@@ -301,18 +353,18 @@ export function runCli(adapter, argv) {
     }
   }
   if (flags.json) {
-    const names = listed(plan.writes.map(({ dest }) => dest));
+    const names = listed(plan.writes.map(({ dest }) => safeDestName(dest)));
     outcome.extra = { accepted: names.shown, truncated: names.truncated };
     if (plan.verdict === "collision") {
       const collisions = listed(
         plan.duplicates.map(({ dest, sources }) => ({
-          destination: dest,
+          destination: safeDestName(dest),
           source_count: sources.length,
         })),
       );
       outcome.extra = { collisions: collisions.shown, truncated: collisions.truncated };
     } else if (plan.verdict === "stale_copy_conflict") {
-      outcome.extra = { conflicts: [plan.conflict.dest] };
+      outcome.extra = { conflicts: [safeDestName(plan.conflict.dest)] };
     } else if (plan.verdict === "boundary") {
       outcome.extra = { boundary: { ...plan.boundary } };
     }
