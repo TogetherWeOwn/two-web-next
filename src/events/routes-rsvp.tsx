@@ -6,7 +6,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import type { Session } from "../env";
-import { rateLimitExceeded } from "../errors";
+import { rateLimitExceeded, varyAccept } from "../errors";
+import { jsonRefusal } from "../json-refusal";
+import { acceptsJson } from "../media-type";
 import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
 import { SESSION_COOKIE } from "../session-cookie";
@@ -41,9 +43,9 @@ async function member(c: Ctx, readFragmentSession: SessionReader): Promise<Sessi
     // the bare refusal. JSON-only even for header-less callers: no false 200.
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
-    return c.json({ error: "unauthenticated" }, 401);
+    return jsonRefusal(c, "unauthenticated", 401);
   }
-  if (!session.member) return c.json({ error: "forbidden" }, 403);
+  if (!session.member) return jsonRefusal(c, "forbidden", 403);
   return session;
 }
 
@@ -76,13 +78,13 @@ const putRsvp = async (
   const who = await member(c, readFragmentSession);
   if (who instanceof Response) return who;
   if (!isRsvpStatus(input.status))
-    return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
+    return jsonRefusal(c, "invalid", 422, { fields: { status: ["status is invalid"] } });
   // Accepted, then refused: answering for the caller instead would look like it worked.
   if (input.user_id !== undefined && String(input.user_id) !== who.id)
-    return c.json({ error: "forbidden" }, 403);
+    return jsonRefusal(c, "forbidden", 403);
   // Generic Ctx (no route path type) yields string|undefined: fail closed.
   const key = c.req.param("key") ?? "";
-  if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+  if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
   // POST /e/:key/rsvp aliases normalize here (PUT/DELETE already 308 above):
   // ULIDs are stored uppercase, so an alias in another letter case reaches
   // the same row. Invalid keys return null and keep their refusal path.
@@ -96,7 +98,7 @@ const putRsvp = async (
   const r = await writeRsvp(db, lookupKey, who.id, input.status);
   if (!r.ok) {
     if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
-    if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
+    if (r.reason === "not_found") return jsonRefusal(c, "not_found", 404);
     return closed(c, r.why);
   }
   await dispatchRsvpSync(c.env, r.eventKey, r.mirrored, c.get("requestId"));
@@ -130,7 +132,7 @@ const deleteRsvp = async (
   // Honest withdrawal: no caller row (never answered, only another member
   // answered, unknown or forged key) is the same not-found the PUT answers,
   // never a 204 that implies a withdrawal happened.
-  if (!r.deleted) return c.json({ error: "not_found" }, 404);
+  if (!r.deleted) return jsonRefusal(c, "not_found", 404);
   await dispatchRsvpSync(c.env, lookupKey, r.status, c.get("requestId"));
   return c.body(null, 204);
 };
@@ -222,5 +224,10 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     );
   });
 
-  app.all("/events/:key/rsvp", (c) => c.body(null, 405, { Allow: "PUT, DELETE" }));
+  app.all("/events/:key/rsvp", (c) => {
+    c.header("Allow", "PUT, DELETE");
+    varyAccept(c);
+    if (acceptsJson(c.req.header("accept"))) return jsonRefusal(c, "method_not_allowed", 405);
+    return c.body(null, 405);
+  });
 }

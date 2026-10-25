@@ -3,6 +3,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
+import { jsonRefusal } from "./json-refusal";
 import { AUTH_THROTTLE_PER_MINUTE, throttleGuard } from "./throttle";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
@@ -77,7 +78,7 @@ export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Resp
     acceptsJson(c.req.header("accept")) ||
     isJsonMediaType(c.req.header("content-type"))
   ) {
-    return c.json({ error: "Unauthorized", recovery: recoveryUrl(next) }, 401);
+    return jsonRefusal(c, "unauthenticated", 401, { recovery: recoveryUrl(next) });
   }
   // A genuine expired write arms its own pending notice before the 303, so
   // the landing below never mints one on a mere visit (an attacker link
