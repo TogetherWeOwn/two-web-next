@@ -4,11 +4,13 @@ Measured 2026-10-25. This separate budget decision supports the native navigatio
 in [#1805](https://github.com/TogetherWeOwn/two-web-next/pull/1805); it does not
 ship or approve that feature. The initial proposal changed only
 `server.js.maxGzipBytes` in [`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json):
-**333568 → 333824 B**. Main subsequently allocated the same ceiling in
-[#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799). After conflict
-reconciliation, **no numeric ceiling changes relative to main**. Both unique
-decision histories are retained; the remeasurement below confirms the featured
-return tree fits the inherited ceiling without an additional allowance.
+**333568 → 333824 B**. Main subsequently allocated that ceiling in
+[#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799), then independently
+raised server gzip to 334080 B and client raw to 254976 B through
+[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800). After conflict
+reconciliation, **no numeric ceiling changes relative to main**. All incoming
+history and both earlier featured-return decisions are retained; the latest
+remeasurement below confirms the feature fits without an additional allowance.
 
 ## Locked inputs and method
 
@@ -143,6 +145,46 @@ ACT: reconcile the conflict and record a no-additional-allowance decision.
 WHY: the complete frozen featured-return tree fits the now-inherited cap.
 UNDO: remove only this feature's appended history and this note; leave main's
 independently reviewed 333824 B ceiling and its decision intact.
+
+## Second reconciliation: retain current main's independent allocations
+
+Main `2f9e60791` incorporates #1785 and #1800. Since `826b40e85`, only the budget
+and two error-correlation measurement documents changed. Runtime sources,
+lockfiles and checkers remain byte-identical. Take every incoming numeric limit
+verbatim: server gzip **334080 B**, client raw **254976 B**, all other limits
+unchanged. Keep main's complete history as an exact prefix, then this branch's
+original decision and first reconciliation exactly once. No additional capacity
+or reserved headroom is allocated by this PR.
+
+On 2026-10-25, two fresh builds per unchanged application tree, with the resolved
+budget and the same external dependency installations, produced:
+
+| Group | Pristine main raw / gzip B | Frozen featured-return raw / gzip B | Files / cap |
+| --- | ---: | ---: | ---: |
+| Worker entry | 2551 / 1219 | 2551 / 1219 | one entry |
+| Server JS | 1176054–1176056 / 333150 | 1178091 / 333743–333745 | 115 / 126 |
+| Client JS | 253949 / 102273 | 254365 / 102446 | 54 / 55 |
+| Client CSS | 2833 / 1006 | 2833 / 1006 | 2 / 4 |
+
+All four builds and checker runs pass. Since the base move has no application
+changes, the archived pristine and frozen-feature sources are byte-identical to
+the current-main and frozen-feature application compositions respectively; only
+the resolved budget is overlaid. This does not compose any other unmerged
+feature measured by #1799, #1785 or #1800.
+
+On the second feature artifact, inherited limits pass with **335 B server gzip**
+and **611 B client raw** margin. The original 333568 B server gzip cap rejects by
+177 B; exact measured server raw/gzip/file limits pass; actual-minus-one gzip,
+raw and file-count limits each reject. The unchanged checker selftests pass
+12/12 and its two suites pass 64/64 without skips. Lint, docs links, floor guard,
+strict test inventory (1249/1249 files and 54/54 browser specs), root/CI types and
+E2E types pass. No full local check is claimed for this second reconciliation;
+the earlier interrupted full-check limitation remains disclosed in the PR.
+
+ACT: resolve the new history conflict without changing any incoming ceiling.
+WHY: complete frozen featured-return output already fits main's independent
+allocations. UNDO: remove only this branch's history and note, not main's limits.
+The 18 B CSS gzip margin remains thin; future application unions must remeasure.
 
 ## Undo and scope
 
