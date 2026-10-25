@@ -167,6 +167,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       <form method="post" action="/logout" data-testid="profile-signout">
         <button type="submit" class="link">Sign out</button>
       </form>
+      <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+        <button type="submit" class="link">Sign out everywhere</button>
+      </form>
     </div>
   </header>
   <main id="main" tabindex="-1">
