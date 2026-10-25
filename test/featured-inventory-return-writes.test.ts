@@ -156,37 +156,12 @@ for (const renderer of ["Hono", "Kit"] as Renderer[])
       );
     });
 
-    it("a stale save is refused with the editable draft and original inventory, never an overwrite", async () => {
-      const form = await formFrom(renderer);
-      await db
-        .update(featuredContents)
-        .set({
-          title: "Other moderator saved this",
-          body: "Newer saved body",
-          updatedAt: new Date("2099-11-01T18:01:00Z"),
-        })
-        .where(eq(featuredContents.id, 7));
-      form.fields.set("title", "My stale draft");
-      form.fields.set("body", "Do not discard my edits");
-      sql.length = 0;
-      const response = await post(form.action, form.fields);
-      expect(
-        response.status,
-        "stale refusal belongs to the existing featured stale-write contract",
-      ).toBe(409);
-      privateResponse(response);
-      const html = await response.text();
-      const refused = editorForm(html);
-      expect(refused.fields.get("title")).toBe("My stale draft");
-      expect(refused.fields.get("body")).toBe("Do not discard my edits");
-      expect(attr(refused.node, "data-event-draft")).toBeDefined();
-      sameResults(html);
-      expect((await db.select().from(featuredContents))[0]!).toMatchObject({
-        title: "Other moderator saved this",
-        body: "Newer saved body",
-      });
-      expect(await db.select().from(activityLog)).toHaveLength(0);
-    });
+    // The stale-save refusal round trip (409 redisplay retaining the draft
+    // and this inventory) lives in
+    // test/featured-inventory-return-stale.test.ts on the companion
+    // acceptance history. It requires the separately owned stale-save
+    // refusal contract, which is not part of this inventory-return
+    // change; the two histories combine once that contract lands.
 
     it("the native Delete form returns to the normalized originating page and leaves one reconstruction audit", async () => {
       const form = await formFrom(renderer, true);
