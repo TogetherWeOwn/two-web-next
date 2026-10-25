@@ -135,12 +135,22 @@ function applyNote(budget, name, note) {
       if (!fields.includes(field) || !(field in target)) {
         fail(`${path}.${field} is not a ceiling the base budget declares`);
       }
+      if (!Number.isSafeInteger(target[field])) {
+        fail(`${path}.${field} base ceiling must be an integer`);
+      }
       if (!Number.isSafeInteger(value)) fail(`${path}.${field} must be an integer delta`);
-      target[field] += value;
+      const summed = target[field] + value;
+      if (!Number.isSafeInteger(summed)) {
+        fail(`${path}.${field} ceiling sum must be a safe integer`);
+      }
+      target[field] = summed;
     }
   };
-  for (const [entry, delta] of Object.entries(note.worker ?? {})) {
-    apply(budget.worker[entry], delta, `worker.${entry}`, ["maxRawBytes", "maxGzipBytes"]);
+  if (note.worker !== undefined) {
+    if (!isObject(note.worker)) fail("worker must be an object");
+    for (const [entry, delta] of Object.entries(note.worker)) {
+      apply(budget.worker[entry], delta, `worker.${entry}`, ["maxRawBytes", "maxGzipBytes"]);
+    }
   }
   if (note.server !== undefined) {
     if (!isObject(note.server)) fail("server must be an object");

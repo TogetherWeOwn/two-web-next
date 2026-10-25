@@ -404,6 +404,7 @@ for (const [label, name, note, re] of [
     { note: NOTE_REASON, worker: { "x.js": { maxRawBytes: 1 } } },
     /5\.json/,
   ],
+  ["a null worker section", "5.json", { note: NOTE_REASON, worker: null }, /5\.json.*worker/i],
 ]) {
   test(`notes: ${label} cannot enforce (exit 2)`, (t) => {
     const fx = makeFixture({ notes: { [name]: note } });
@@ -411,6 +412,27 @@ for (const [label, name, note, re] of [
     assertCannotEnforce(fx.runCaptured(), re, label);
   });
 }
+
+test("notes: a null base ceiling cannot be coerced by a delta", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: { clientJs: { maxRawBytes: null } },
+    notes: { "5.json": { note: NOTE_REASON, client: { js: { maxRawBytes: 1 } } } },
+  });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /5\.json.*client\.js.*maxRawBytes/i, "null base ceiling");
+});
+
+test("notes: an unsafe intermediate sum cannot be rounded into a safe ceiling", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: { clientJs: { maxRawBytes: 2 } },
+    notes: {
+      "5.json": { note: NOTE_REASON, client: { js: { maxRawBytes: Number.MAX_SAFE_INTEGER } } },
+      "6.json": { note: NOTE_REASON, client: { js: { maxRawBytes: -1 } } },
+    },
+  });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /5\.json.*client\.js.*maxRawBytes/i, "unsafe sum");
+});
 
 test("notes: an unparsable note cannot enforce", (t) => {
   const fx = makeFixture();
