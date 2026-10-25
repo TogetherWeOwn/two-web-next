@@ -255,17 +255,17 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const ev = await seed();
     const noRow = await call("DELETE", ev.key, "u1");
     expect(noRow.status).toBe(404);
-    expect(await noRow.json()).toEqual({ error: "not_found" });
+    expect(await noRow.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
     const unknown = await call("DELETE", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1");
     expect(unknown.status).toBe(404);
-    expect(await unknown.json()).toEqual({ error: "not_found" });
+    expect(await unknown.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
     const forged = await call("DELETE", "not-a-key", "u1");
     expect(forged.status).toBe(404);
-    expect(await forged.json()).toEqual({ error: "not_found" });
+    expect(await forged.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
     await put(ev.key, "victim", "going");
     const other = await call("DELETE", ev.key, "attacker");
     expect(other.status).toBe(404);
-    expect(await other.json()).toEqual({ error: "not_found" });
+    expect(await other.json()).toEqual({ error: "not_found", request_id: expect.any(String) });
     expect((await rows(ev.id)).map((r) => r.userId)).toEqual(["victim"]);
   });
 
@@ -292,7 +292,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await put("01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(404);
     const cancelledWithdraw = await call("DELETE", cases.cancelled.key, "u1");
     expect(cancelledWithdraw.status).toBe(404);
-    expect(await cancelledWithdraw.json()).toEqual({ error: "not_found" });
+    expect(await cancelledWithdraw.json()).toEqual({
+      error: "not_found",
+      request_id: expect.any(String),
+    });
     // Refused writes did not spend the budget.
     const [{ n }] =
       (await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:u1'`) as unknown as [

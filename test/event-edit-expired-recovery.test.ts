@@ -127,7 +127,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await patch(dead, { title: "Unsaved edit" });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
+        request_id: expect.any(String),
         recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
       });
       expect(res.headers.getSetCookie()).toEqual([]);
@@ -138,17 +139,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("a request with no cookie keeps the bare unauthenticated refusal", async () => {
       const res = await patch(undefined, { title: "Unsaved edit" });
       expect(res.status).toBe(401);
-      expect(await res.json()).toEqual({ error: "unauthenticated" });
+      expect(await res.json()).toEqual({
+        error: "unauthenticated",
+        request_id: expect.any(String),
+      });
     });
 
     // JSON-only routes never negotiate: a header-less fetch must not follow a
     // 303 to a 200 page and read a dropped write as success.
     const keyedRecoveryBody = {
-      error: "Unauthorized",
+      error: "unauthenticated",
+      request_id: expect.any(String),
       recovery: `/auth/recover?next=${encodeURIComponent(`/e/${EVENT_KEY}`)}`,
     };
     const unkeyedRecoveryBody = {
-      error: "Unauthorized",
+      error: "unauthenticated",
+      request_id: expect.any(String),
       recovery: "/auth/recover?next=%2Fevents",
     };
     const expectJsonRecovery = async (res: Response, expected = keyedRecoveryBody) => {
