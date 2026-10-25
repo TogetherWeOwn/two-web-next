@@ -75,6 +75,28 @@ describe("calendar subscription affordance SSR", () => {
       });
     }
 
+    it(`uses the resolved game filter for the archive link at ${appUrl}`, () => {
+      const html = EventsCalendarPage({
+        state: { view: "list", month: "2026-10", q: "", game: " chess ", past: false, page: 1 },
+        upcoming: [event],
+        past: [],
+        zone: "UTC",
+        now: new Date("2026-10-01T12:00:00Z"),
+        totalPages: 1,
+        emptyState: null,
+        discordFailed: false,
+        games: ["Chess"],
+        gameFilter: "Chess",
+        member: false,
+        inviteUrl: "https://discord.gg/example",
+        appUrl,
+      })!.toString();
+
+      expect(html).toContain(
+        '<a href="/events/past?game=Chess" data-testid="events-past-archive-link">Past events</a>',
+      );
+    });
+
     it(`preserves the per-event ICS and Google Calendar links at ${appUrl}`, async () => {
       const html = await EventPage({
         e: event,

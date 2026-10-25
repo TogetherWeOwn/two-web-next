@@ -237,13 +237,13 @@ export async function loadPastArchivePage<Row>({
     const now = new Date();
     const { games, omitted: gamesOmitted } = await listArchiveGamesFn(db, now);
     const gameFilter = resolveArchiveGameFilter(games, input.game);
-    // Narrowest arity first: unfiltered renders keep the two-arg read so the
-    // row query carries no filter bindings at all.
+    // Suggestions and rows share one cutoff. `now` is always bound by the
+    // past predicate; omitting it would create a second cutoff inside listPast.
     const { rows, hasMore, totalPages } = gameFilter
       ? await listPastFn(db, page, now, q, gameFilter)
       : q
         ? await listPastFn(db, page, now, q)
-        : await listPastFn(db, page);
+        : await listPastFn(db, page, now);
     const unfiltered = !input.searching && !filtering;
     setHeaders({
       "cache-control": unfiltered ? "public, max-age=300" : "private, no-store",

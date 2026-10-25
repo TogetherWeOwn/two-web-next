@@ -250,6 +250,30 @@ describe("past archive load helper", () => {
     expect(headers["x-two-past-cacheable"]).toBe("true");
   });
 
+  it("uses the suggestions cutoff for unfiltered archive rows", async () => {
+    const { setHeaders } = headersOf();
+    let suggestionsNow: Date | undefined;
+    let rowsNow: Date | undefined;
+
+    await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listArchiveGamesFn: async (_db, now) => {
+        suggestionsNow = now;
+        return { games: [], omitted: false };
+      },
+      listPastFn: async (_db, _page, now) => {
+        rowsNow = now;
+        return { rows: [row], hasMore: false, totalPages: 1 };
+      },
+    });
+
+    expect(suggestionsNow).toBeInstanceOf(Date);
+    expect(rowsNow).toBe(suggestionsNow);
+  });
+
   it("marks empty pages uncacheable so time-arriving events still render", async () => {
     const { headers, setHeaders } = headersOf();
     const data = await loadPastArchivePage({

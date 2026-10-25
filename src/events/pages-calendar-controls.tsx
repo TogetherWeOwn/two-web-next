@@ -105,7 +105,7 @@ export const CalendarHead: FC<{
       </div>
       <p>
         <a
-          href={pastEventsUrl(1, state.q, state.game ?? "")}
+          href={pastEventsUrl(1, state.q, gameFilter ?? "")}
           data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}
         >
           {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
