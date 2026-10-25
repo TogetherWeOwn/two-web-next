@@ -63,7 +63,7 @@ describe("profile games JSON/form round-trip", () => {
     const { store, save, json } = await setup();
     const res = await json({ bio: "Updated", timezone: "UTC" });
     expect(res.status).toBe(422);
-    expect(((await res.json()) as { errors: Record<string, string> }).errors.games).toBeTruthy();
+    expect(((await res.json()) as { fields: Record<string, string> }).fields.games).toBeTruthy();
     expect(save).not.toHaveBeenCalled();
     expect(store.rows.get(id)?.games).toEqual(["Chess"]);
   });
@@ -243,7 +243,8 @@ describe("profile save Accept media-range selection", () => {
   const invalid = { bio: "a", timezone: "Mars/Base", games: ["<b>x</b>"] };
   const jsonAck = { saved: true, message: "Profile saved." };
   const jsonError = {
-    errors: { timezone: "Choose a valid IANA timezone, e.g. Europe/London." },
+    error: "invalid",
+    fields: { timezone: "Choose a valid IANA timezone, e.g. Europe/London." },
   };
 
   const jsonAccepts = [

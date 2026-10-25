@@ -23,7 +23,7 @@ async function destination(path: string, method: string, referer?: string) {
   expect(res.status).toBe(401);
   expect(res.headers.get("location")).toBeNull();
   const body = (await res.json()) as { error: string; recovery: string };
-  expect(body.error).toBe("Unauthorized");
+  expect(body.error).toBe("unauthenticated");
   const recovery = new URL(body.recovery, APP_URL);
   expect(recovery.origin).toBe(APP_URL);
   expect(recovery.pathname).toBe("/auth/recover");
