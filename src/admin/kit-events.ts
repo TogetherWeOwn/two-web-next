@@ -12,6 +12,7 @@
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
 import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
+import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -33,6 +34,11 @@ export type KitEventListView = {
   rows: KitEventListRow[];
   hasNext: boolean;
   emptyText: string;
+  /** Pre-rendered pause-review HTML keyed by event key, for published rows
+   * with open RSVPs; the page injects it via {@html} so the client bundle
+   * carries no review strings or disclosure markup (client gzip ceiling).
+   * The page still gates by end date; ended rows render no review. */
+  pauseReviews: Record<string, string>;
 };
 
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
@@ -54,10 +60,17 @@ export function buildEventListView(
   query: EventListQuery,
   fetched: EventListRow[],
 ): KitEventListView {
+  const pauseReviews: Record<string, string> = {};
+  for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
+    if (row.status === "published" && row.rsvpOpen) {
+      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
+    }
+  }
   return {
     query,
     rows: fetched.slice(0, EVENT_PAGE_SIZE).map(serializeEventListRow),
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
+    pauseReviews,
   };
 }

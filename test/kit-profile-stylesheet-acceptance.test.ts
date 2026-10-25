@@ -348,7 +348,11 @@ describe.each(cases)(
 
     it("keeps the same bounded local reads and private cache policy", async () => {
       const result = await render();
-      expect(result.reads).toEqual(["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`]);
+      expect(result.reads).toEqual(
+        owner
+          ? ["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`]
+          : ["storeFor", `find:${MEMBER_ID}`, `stats:${MEMBER_ID}`, `find:${VIEWER_ID}`],
+      );
       expect(result.headers).toEqual({ "cache-control": "private, no-store" });
       expect(fetch).not.toHaveBeenCalled();
     });
