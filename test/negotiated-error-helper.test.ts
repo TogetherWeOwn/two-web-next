@@ -230,7 +230,7 @@ describe("supplemental route-level refusal pins", () => {
     expect(response.headers.get("vary")).toContain("Accept");
   });
 
-  it("PATCH unsupported media keeps legacy bytes with Vary for machine callers", async () => {
+  it("PATCH unsupported media answers the unified JSON envelope with Vary for machine callers", async () => {
     const { response } = await profileRequest({
       contentType: "text/plain",
       body: PRIVATE,
@@ -238,8 +238,11 @@ describe("supplemental route-level refusal pins", () => {
       saveThrows: false,
     });
     expect(response.status).toBe(415);
-    expect(response.headers.get("content-type")).toContain("text/plain");
-    expect(await response.text()).toBe("Unsupported Media Type");
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({
+      error: "unsupported_media_type",
+      request_id: expect.any(String),
+    });
     expect(response.headers.get("vary")).toContain("Accept");
   });
 

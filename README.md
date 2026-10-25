@@ -21,7 +21,7 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
 - Discord sign-in requests `identify` + `guilds.join`; the join journey includes an invite fallback and join-attempt audit. The OAuth access token is used for the join request and not stored. OAuth state and return-journey cookies are signed; persisted session tokens are hashed, rotated on authenticated reads, and revoked on logout ([`src/index.tsx`](src/index.tsx), [`src/join/route.ts`](src/join/route.ts), [`src/sessions.ts`](src/sessions.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/sessions.test.ts`](test/sessions.test.ts)).
 - Moderator status is recomputed at login by matching Discord snowflake role IDs, not names; a blank allowlist or failed lookup denies moderator status. QA sign-in requires its configured token and exact staging `APP_URL`; this is not a request-host allowlist ([`src/index.tsx`](src/index.tsx), [`src/roles.ts`](src/roles.ts), [`src/qa.ts`](src/qa.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/qa-identity-admission.test.ts`](test/qa-identity-admission.test.ts)).
-- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes-gate.ts`](src/profiles/routes-gate.ts), [`src/profiles/routes-admission.ts`](src/profiles/routes-admission.ts), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
+- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails. Another member's page marks each listed game the viewer also plays; own pages stay unmarked ([`src/profiles/routes-gate.ts`](src/profiles/routes-gate.ts), [`src/profiles/routes-admission.ts`](src/profiles/routes-admission.ts), [`src/member-reads.ts`](src/member-reads.ts), [`src/profiles/shared-games.ts`](src/profiles/shared-games.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts), [`test/profile-shared-games-acceptance.test.ts`](test/profile-shared-games-acceptance.test.ts)).
 - Event listing, calendar and past-event islands, event detail/search, iCalendar and Google Calendar links, event feeds, RSVP/leave endpoints, and going counts are implemented. The event detail page mounts the RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md) and atomic refresh admission in Postgres; they are display-only, not canonical events ([`src/events/pages.tsx`](src/events/pages.tsx), [`src/events/routes.tsx`](src/events/routes.tsx), [`src/events/reads.ts`](src/events/reads.ts), [`test/events.test.ts`](test/events.test.ts), [`test/event-page.test.ts`](test/event-page.test.ts), [`test/islands-rsvp-button.test.ts`](test/islands-rsvp-button.test.ts), [`test/event-feeds.test.ts`](test/event-feeds.test.ts), [`test/discord-snapshot-postgres.test.ts`](test/discord-snapshot-postgres.test.ts)).
 - Moderator admin screens include event and featured-event CRUD, a read-only RSVP roster, join-attempt audit, and a funnel summary ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`test/admin.test.ts`](test/admin.test.ts), [`test/admin-reads.test.ts`](test/admin-reads.test.ts)). They also include a read-only activity-log viewer showing who changed what, with subject and causer filters ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`src/admin/pages.tsx`](src/admin/pages.tsx), [`test/admin-activity-log.test.ts`](test/admin-activity-log.test.ts)).
 - Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
@@ -35,7 +35,11 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive and calendar feeds are not game-filtered.
+the separate past-event archive is not game-filtered. The calendar collection
+`/events.ics` accepts the same `?game=` scope: on a filtered schedule the
+Subscribe link, the `.ics` download and the copyable feed URL all carry the
+committed game, and the calendar label names it. Blank means every game; a valid
+unknown game yields an empty scoped calendar, never all games.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
@@ -244,12 +248,23 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth and native event share suites, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
 named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
 write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
+Both verifiers admit evidence through one shared authority
+(`ci/execution-receipt-authority.mjs`): the named suite must appear with
+distinct passed cases, so counters-only summaries, unrelated-suite
+substitution, skipped/todo/cancelled cases and malformed or duplicate
+identities all fail the step. Add `--format json` for a versioned machine
+receipt (`version`, `suite_id`, `cases[].case_id`, `counts`, `verdict`,
+`error_code`, `next_action`); human output stays one line. Failure evidence
+anywhere in the report (including suite teardown failures and unrelated cases)
+refuses admission. JSON stdout is capped at 16 KiB including its newline; an
+oversized receipt fails before any success output or CI-summary append rather
+than dropping case identities. Human output can still verify larger suites.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
@@ -258,6 +273,7 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
@@ -271,6 +287,7 @@ to execute the same Chromium proof.
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures

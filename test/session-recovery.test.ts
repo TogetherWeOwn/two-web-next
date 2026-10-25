@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { AUTH_STATUS_COOKIE, authStatusScript } from "../src/auth-status";
+import { SESSION_COOKIE } from "../src/session-cookie";
+import { hashToken } from "../src/sessions";
 import {
   EXPIRED_WRITE_COOKIE,
   expiredWriteBanner,
@@ -20,6 +22,11 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 const only = (cookies: string, name: string) =>
   cookies.split("; ").find((c) => c.startsWith(name + "="))!;
+/** The bearer inside a `name=signed` cookie pair (unsigned half). */
+const bearerOf = (pair: string): string => {
+  const signedValue = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(";")[0]!);
+  return signedValue.slice(0, signedValue.lastIndexOf("."));
+};
 const signed = async (name: string, value: string) =>
   (await serializeSigned(name, value, SECRET, { path: "/", secure: true })).split(";")[0]!;
 
@@ -66,7 +73,7 @@ describe("read-only bool-only auth status", () => {
     expect(await f.sessions.get(login.tokenHash)).not.toBeNull();
   });
 
-  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; old login grace then dead", async () => {
+  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; predecessors then dead", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(Date.parse("2030-01-01T12:00:00Z"));
@@ -76,8 +83,12 @@ describe("read-only bool-only auth status", () => {
       const oldJar = mergeCookies(login.cookie, profile);
       const rotating = await f.request("/", { headers: { cookie: oldJar } });
       // Deliberately do not deliver rotating.headers to this cookie jar yet.
-      // Inside 10s the predecessor keeps grace with its successor live.
-      expect(await f.sessions.get(login.tokenHash)).toMatchObject({ userId: MEMBER });
+      // The profile view already rotated once, so the login bearer is a
+      // pruned grandparent; the profile bearer keeps grace with its
+      // successor live.
+      expect(await f.sessions.get(login.tokenHash)).toBeNull();
+      const profileHash = await hashToken(bearerOf(only(oldJar, SESSION_COOKIE)));
+      expect(await f.sessions.get(profileHash)).toMatchObject({ userId: MEMBER });
       const probe = await f.request("/auth/status", { headers: { cookie: oldJar } });
       expect(await probe.json()).toEqual({ authenticated: true });
       expect(probe.headers.getSetCookie()).toEqual([]);
@@ -127,7 +138,9 @@ describe("read-only bool-only auth status", () => {
     const outage = await f.request("/auth/status", { headers: { cookie: jar } });
     expect(outage.status).toBe(503);
     expect(await outage.json()).toEqual({ authenticated: false });
-    await f.sessions.revoke(live.tokenHash);
+    // Revoke the jar's live bearer (the profile view already rotated the
+    // login bearer): the lineage dies and the probe answers false.
+    await f.sessions.revoke(await hashToken(bearerOf(only(jar, SESSION_COOKIE))));
     expect(await (await f.request("/auth/status", { headers: { cookie: jar } })).json()).toEqual({
       authenticated: false,
     });
@@ -147,9 +160,13 @@ describe("read-only bool-only auth status", () => {
     expect(
       response.headers.getSetCookie().some((c) => c.startsWith(AUTH_STATUS_COOKIE + "=")),
     ).toBe(true);
-    const head = await f.request("/profile", { method: "HEAD", headers: { cookie: login.cookie } });
+    // Later requests follow the fresh jar: the profile view rotated the
+    // login bearer, so the login cookie alone now reads grace without
+    // re-stamping.
+    const jar = mergeCookies(login.cookie, response);
+    const head = await f.request("/profile", { method: "HEAD", headers: { cookie: jar } });
     expect(await head.text()).not.toContain("auth-tab-sync");
-    const home = await f.request("/", { headers: { cookie: login.cookie } });
+    const home = await f.request("/", { headers: { cookie: jar } });
     expect(home.headers.get("content-security-policy")).toContain("default-src 'self'");
     expect(
       home.headers.getSetCookie().filter((c) => c.startsWith("__Host-two_session=")),
@@ -188,7 +205,7 @@ describe("explicit expired-write recovery, never replay", () => {
       expect(response.headers.getSetCookie()).toEqual([]);
       expect(response.headers.get("location")).toBeNull();
       expect(await response.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: "/auth/recover?next=%2Fprofile",
       });
     }
@@ -212,7 +229,7 @@ describe("explicit expired-write recovery, never replay", () => {
     expect(patch.headers.get("cache-control")).toBe("no-store, private");
     expect(patch.headers.get("vary")).toBe("Cookie");
     expect(await patch.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
     });
     expect(patch.headers.getSetCookie()).toEqual([]);

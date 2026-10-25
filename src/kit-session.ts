@@ -32,6 +32,7 @@ import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
+import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
   JOIN_RESULT_COOKIE,
@@ -213,10 +214,9 @@ export async function readReturnJourney(
  * the list load needs: an outage resolves to null (guest render with no
  * drafts), never to a false logout, and nothing here rotates or revokes.
  */
-export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
-  member: boolean;
-  moderator: boolean;
-} | null> {
+export function kitEventsSessionFor(
+  env: Env,
+): (request: Request) => Promise<KitEventsSession | null> {
   return async (request) => {
     try {
       const decision = await resolveRequestSession(request, {
@@ -224,7 +224,11 @@ export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
         store: await storeForEnv(env),
       });
       return decision.status === "authenticated" && decision.session
-        ? { member: decision.session.member, moderator: decision.session.moderator }
+        ? {
+            username: decision.session.username,
+            member: decision.session.member,
+            moderator: decision.session.moderator,
+          }
         : null;
     } catch (err) {
       // The store never materialized, so no read ran: one class-only warn.
@@ -330,21 +334,21 @@ export function kitEventDetailRotationFor(
 
 /**
  * Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
- * admin-guard slide (src/admin/guard.ts: a current bearer renews the
+ * admin-guard re-stamp (src/admin/guard.ts: a current bearer re-stamps the
  * 120-minute window, grace reads never refresh cookies). The hook core calls
  * this only after the member-read boundary releases a successful GET document,
  * so a refused, failed, bounced or redirected read never touches the presented
  * bearer.
  *
- * Slide, not rotate. Hono admin reads deliberately never rotate — rotation is
- * the site's concern, and an admin read must not invalidate the cookie the
- * moderator's other tab holds. The renewal cookie re-signs the PRESENTED
- * bearer with a fresh Max-Age, and the store call is renew(), never rotate().
- * Only a current bearer (statusHash present) renews; grace/predecessor reads
- * return null without a store write. A lost race (renew resolves false)
- * returns null like any other expected non-renewal; only a store failure
- * propagates, and the hook core renders the released page without renewal
- * then. Non-moderators and anonymous callers get null with zero store writes.
+ * Slide, not rotate. Hono admin reads rotate since the profile/admin re-stamp;
+ * this Kit twin still slides until its own rotation lands, so the renewal
+ * cookie re-signs the PRESENTED bearer with a fresh Max-Age, and the store
+ * call is renew(), never rotate(). Only a current bearer (statusHash present)
+ * renews; grace/predecessor reads return null without a store write. A lost
+ * race (renew resolves false) returns null like any other expected
+ * non-renewal; only a store failure propagates, and the hook core renders the
+ * released page without renewal then. Non-moderators and anonymous callers get
+ * null with zero store writes.
  */
 export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<string | null> {
   return async (event) => {

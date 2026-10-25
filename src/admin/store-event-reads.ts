@@ -15,6 +15,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -49,7 +50,13 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   return db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
     const conds: (SQL | undefined)[] = [];
-    if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
+    if (opts.q) {
+      // One literal case-insensitive match against title OR the stored game,
+      // composed inside the same ANDed predicates as before. Null games never
+      // match the game arm, so title-only rows behave exactly as they did.
+      const pattern = `%${escapeLikeTerm(opts.q)}%`;
+      conds.push(or(ilike(events.title, pattern), ilike(events.game, pattern)));
+    }
     if (opts.status) conds.push(eq(events.status, opts.status));
     // Half-open UTC start window [from, before), applied before paging.
     const bounds = eventStartsBounds(opts.startsWindow);

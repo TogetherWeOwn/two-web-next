@@ -17,6 +17,7 @@ import {
   eventStartsWindowSummary,
   type EventListQuery,
 } from "./event-list";
+import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -24,6 +25,7 @@ import type { EventListRow } from "./store-event-reads";
 export type KitEventListRow = {
   eventKey: string;
   title: string;
+  game: string | null;
   status: string;
   startsAt: string;
   endsAt: string;
@@ -40,12 +42,18 @@ export type KitEventListView = {
   /** Active UTC window sentence, built on the server so the client bundle
    * ships neither the formatter nor its copy. */
   windowSummary: string | null;
+  /** Pre-rendered pause-review HTML keyed by event key, for published rows
+   * with open RSVPs; the page injects it via {@html} so the client bundle
+   * carries no review strings or disclosure markup (client gzip ceiling).
+   * The page still gates by end date; ended rows render no review. */
+  pauseReviews: Record<string, string>;
 };
 
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
   return {
     eventKey: row.eventKey,
     title: row.title,
+    game: row.game,
     status: row.status,
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
@@ -60,11 +68,18 @@ export function buildEventListView(
   query: EventListQuery,
   fetched: EventListRow[],
 ): KitEventListView {
+  const pauseReviews: Record<string, string> = {};
+  for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
+    if (row.status === "published" && row.rsvpOpen) {
+      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
+    }
+  }
   return {
     query,
     rows: fetched.slice(0, EVENT_PAGE_SIZE).map(serializeEventListRow),
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
     windowSummary: eventStartsWindowSummary(query.startsWindow),
+    pauseReviews,
   };
 }
