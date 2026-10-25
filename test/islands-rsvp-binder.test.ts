@@ -898,7 +898,7 @@ describe("RsvpButton shipped binder", () => {
   ])("falls back to the SSR join link for hostile recovery value %s", async (recovery) => {
     const b = browser();
     b.get("rsvp-going")!.click();
-    b.finish(0, 401, { error: "Unauthorized", recovery });
+    b.finish(0, 401, { error: "unauthenticated", recovery });
     await b.settle();
     const notice = b.get("rsvp-session-expired")!;
     expect(notice.getAttribute("role")).toBe("alert");
@@ -1280,7 +1280,7 @@ describe("RsvpButton shipped binder", () => {
       expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
       resolveBody(
         status === 401
-          ? { error: "Unauthorized", recovery: "/auth/recover?next=%2Fe%2Fraid%2Fone" }
+          ? { error: "unauthenticated", recovery: "/auth/recover?next=%2Fe%2Fraid%2Fone" }
           : status === 403
             ? { error: "rsvp_closed" }
             : { capacity: 9 },
