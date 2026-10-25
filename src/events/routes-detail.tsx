@@ -14,8 +14,8 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
   ATTENDEE_PAGE_SIZE,
-  attendeePageHref,
   getEventNeighbors,
+  getEventSeriesContext,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
@@ -24,8 +24,11 @@ import {
   parseAttendeePageParam,
   type EventLink,
   type EventNeighbors,
+  type EventSeriesContext,
   type PublicEvent,
 } from "./reads";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
@@ -190,6 +193,7 @@ export function registerDetailRoutes(
           // Both go through the keyed read, so every retrieved identity —
           // lookahead included — is audited before any private bytes release.
           const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
+          const archive = archiveContext(new URL(c.req.url).search);
           // Decorative reads fail open: a flaky neighbors/related lookup
           // settles to its empty shape instead of 503ing the whole page.
           // The page already renders both shapes (a lone event has null
@@ -205,9 +209,14 @@ export function registerDetailRoutes(
             (related) => related,
             (): EventLink[] => [],
           );
-          const [neighbors, related, attendees, position, answer] = await Promise.all([
+          const seriesSettled = getEventSeriesContext(db, e).then(
+            (series) => series,
+            (): EventSeriesContext | null => null,
+          );
+          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
             neighborsSettled,
             relatedSettled,
+            seriesSettled,
             session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
@@ -227,10 +236,16 @@ export function registerDetailRoutes(
             page: attendeePage,
             prevHref:
               attendeePage > 1
-                ? attendeePageHref(e.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+                ? archiveEventHref(
+                    e.eventKey,
+                    archive,
+                    attendees.length === 0 ? 1 : attendeePage - 1,
+                  )
                 : null,
             nextHref:
-              attendeeLookahead.length > 0 ? attendeePageHref(e.eventKey, attendeePage + 1) : null,
+              attendeeLookahead.length > 0
+                ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
+                : null,
           };
           const returnTo = c.req.path + new URL(c.req.url).search;
           return bufferedMemberHtml(
@@ -239,8 +254,10 @@ export function registerDetailRoutes(
               e={e}
               neighbors={neighbors}
               related={related}
+              series={series}
               attendees={attendees}
               attendeesPaging={attendeesPaging}
+              archive={archive}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
               siteJsonLd={siteIdentities(c.env.APP_URL)}

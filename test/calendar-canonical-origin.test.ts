@@ -61,10 +61,10 @@ const event: PublicEvent = {
 // Render the real page shells directly: no DB, Discord, timers or network.
 describe("event-list canonical origins", () => {
   const states: CalendarState[] = [
-    { view: "list", month: "2030-01", q: "", past: false, page: 1 },
-    { view: "list", month: "2030-01", q: "Chess & friends", past: true, page: 1 },
-    { view: "calendar", month: "2030-01", q: "", past: false, page: 1 },
-    { view: "calendar", month: "2030-02", q: "Chess & friends", past: true, page: 1 },
+    { view: "list", month: "2030-01", q: "", game: "", past: false, page: 1 },
+    { view: "list", month: "2030-01", q: "Chess & friends", game: "", past: true, page: 1 },
+    { view: "calendar", month: "2030-01", q: "", game: "", past: false, page: 1 },
+    { view: "calendar", month: "2030-02", q: "Chess & friends", game: "", past: true, page: 1 },
   ];
 
   it.each(states)("keeps $view/$month/q=$q/past=$past canonical at /events", async (state) => {
@@ -79,6 +79,8 @@ describe("event-list canonical origins", () => {
           totalPages: 0,
           emptyState: "never",
           discordFailed: false,
+          games: [],
+          gameFilter: null,
           member: false,
           inviteUrl: "https://discord.gg/fixture",
           appUrl,

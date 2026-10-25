@@ -49,7 +49,7 @@ import type { MemberStats } from "../../../src/profiles/stats";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
-import { canonicalUrl } from "../../../src/seo";
+import { canonicalUrl, shareImageUrl } from "../../../src/seo";
 
 // Markup contract of ProfilePage (src/profiles/pages.tsx): the header bar,
 // test ids and copy are shared, so the existing profile tests and islands
@@ -66,6 +66,7 @@ let {
   joinResult = null,
   errors = null,
   values = null,
+  sharedGames = undefined,
 }: {
   member: MemberView;
   stats?: MemberStats | null;
@@ -78,6 +79,10 @@ let {
   // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
   // so no Kit route can set it. Re-add with wiring and a render test if Kit
   // write parity ever needs it.
+  /** Member's displayed game strings the viewer also plays; entries exactly
+   * equal to a value render the shared marker. Absent (or empty) renders the
+   * plain list: own profile and zero-shared never mark. */
+  sharedGames?: string[];
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -110,6 +115,10 @@ const saved: ProfileFormValues = $derived({
   leaderboard_opt_out: member.leaderboardOptOut ?? false,
 });
 const gamesError = $derived(errors?.games ?? errors?.games_text);
+// Exact-match set over the load's computed shared names: the match itself
+// (trim + case-insensitive) lives in findSharedGames, shared with the Hono
+// twin, so the view never re-derives it.
+const sharedGameSet = $derived(new Set(sharedGames ?? []));
 // Persistent composition feedback, seeded from the rendered values like the
 // Hono ProfilePage twin. The island binder refreshes these same nodes.
 const bioCount = $derived(bioCountText(codePoints(form.bio)));
@@ -129,10 +138,15 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
   <meta property="og:url" content={canonical} />
   <meta property="og:title" content={title} />
   <meta property="og:description" content={PROFILE_SHARE_DESCRIPTION} />
+  <meta property="og:image" content={shareImageUrl(canonical)} />
+  <meta property="og:image:alt" content="Together We Own community logo" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content={title} />
   <meta name="twitter:description" content={PROFILE_SHARE_DESCRIPTION} />
   <link rel="alternate" type="application/rss+xml" title="Together We Own Events" href="/events.rss" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/theme.css" />
+  <link rel="stylesheet" href="/profile-theme.css" />
 </svelte:head>
 <!-- Open Lobby chrome: colours resolve through web/src/app.css semantic
   tokens; the profile theme class matches the Hono Layout theme. -->
@@ -152,6 +166,9 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
       </nav>
       <form method="post" action="/logout" data-testid="profile-signout">
         <button type="submit" class="link">Sign out</button>
+      </form>
+      <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+        <button type="submit" class="link">Sign out everywhere</button>
       </form>
     </div>
   </header>
@@ -211,7 +228,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           <div data-testid="profile-games">
             {#if member.games.length > 0}
               <ul>
-                {#each member.games as g}<li>{g}</li>{/each}
+                {#each member.games as g}{#if sharedGameSet.has(g)}<li data-shared-game="true">{g}<span data-testid="profile-shared-marker">Shared</span></li>{:else}<li>{g}</li>{/if}{/each}
               </ul>
             {:else}
               <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>

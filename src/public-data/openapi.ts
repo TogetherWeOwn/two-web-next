@@ -140,6 +140,18 @@ const PAGING_PARAMETERS = [
       "malformed values fall back to the default 20; out-of-range values are " +
       "clamped and coerced to 1..20. Ignored when per_page is present.",
   },
+  {
+    name: "game",
+    in: "query",
+    required: false,
+    schema: { type: "string" },
+    description:
+      "Optional stored game name, trimmed and matched case-insensitively as an " +
+      "exact literal against the stored game (no substring, regex or multi-value " +
+      "search). Absent reads the unfiltered collection; present-but-blank, " +
+      "oversized or unknown degrades to the empty page, never a 422 and never " +
+      "the unfiltered list.",
+  },
 ];
 
 function jsonRef(name: string, description: string) {

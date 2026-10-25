@@ -13,12 +13,16 @@ import type { PageProps } from "./$types";
 // Hono eventValues shape (retained input, per-field messages, empty on a
 // fresh GET). No island and no event handlers of its own: the edit, status
 // and status-change forms post to the Hono-owned POST /admin/events/:key,
-// .../publish, .../cancel, .../rsvp-pause and .../rsvp-reopen endpoints, so
+// .../publish, .../cancel, .../duplicate, .../rsvp-pause and .../rsvp-reopen
+// endpoints, so
 // the page works with JavaScript disabled, exactly like the Hono panel. The
 // text-limit and editor islands enhance it when JavaScript runs. There is
 // deliberately no removal affordance anywhere on this resource, and this
 // port adds none: the guarded /admin/events/:key/edit legacy redirect stays
-// Hono-owned too.
+// Hono-owned too. The pause review arrives as pre-rendered server HTML via
+// load data (the same src/admin/rsvp-review.ts renderer Hono mirrors),
+// injected via {@html}: inlined literals or a shared component would breach
+// the client gzip and file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
 const view = $derived(data.view);
 const values = $derived(view.values ?? {});
@@ -200,9 +204,10 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <a href="/admin/events">Cancel</a>
     </div>
   </form>
+  {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
-    <div class="actions">
+    <div class="actions rsvp-actions">
       {#if view.showPublish}
         <form method="post" action={`/admin/events/${view.key}/publish`}>
           <button
@@ -223,17 +228,16 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
           >
         </form>
       {/if}
-      {#if view.rsvpAction}
-        {@const label = view.rsvpAction === "rsvp-pause" ? "Pause RSVPs" : "Reopen RSVPs"}
-        <form method="post" action={`/admin/events/${view.key}/${view.rsvpAction}`}>
-          <button
-            type="submit"
-            class="link"
-            data-testid={view.rsvpAction}
-            aria-label="{label} for {view.title}"
-          >
-            {label}
-          </button>
+      {#if view.status === "draft" || view.status === "published" || view.status === "cancelled"}
+        <form method="post" action={`/admin/events/${view.key}/duplicate`}>
+          <button type="submit" class="link" data-testid="duplicate-event">Duplicate as draft</button>
+        </form>
+      {/if}
+      {#if view.rsvpAction === "rsvp-pause"}
+        {@html view.pauseReviewHtml ?? ""}
+      {:else if view.rsvpAction === "rsvp-reopen"}
+        <form method="post" action={`/admin/events/${view.key}/rsvp-reopen`}>
+          <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${view.title}`}>Reopen RSVPs</button>
         </form>
       {/if}
     </div>
@@ -242,11 +246,19 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
     <p data-testid="roster-range">
-      Showing {roster.rangeStart}-{roster.rangeEnd} of {roster.total}
+      {roster.rangeText}
     </p>
     <form method="get" action={roster.searchAction} class="filters">
       <input type="hidden" name="roster_sort" value={roster.query.sort} />
       <input type="hidden" name="roster_order" value={roster.query.order} />
+      <div class="field">
+        <label for="roster-status">Answer status</label>
+        <select id="roster-status" name="roster_status">
+          {#each roster.statusOptions as o (o.value)}
+            <option value={o.value} selected={o.selected}>{o.label}</option>
+          {/each}
+        </select>
+      </div>
       <div class="field">
         <label for="roster-q">Search members</label>
         <input id="roster-q" name="roster_q" type="search" value={roster.query.q} />
@@ -298,6 +310,12 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         </tbody>
       </table>
     </div>
+    {#if roster.firstUrl || roster.clearUrl}
+      <p class="actions">
+        {#if roster.firstUrl}<a href={roster.firstUrl}>First page of these responses</a>{/if}
+        {#if roster.clearUrl}<a href={roster.clearUrl}>Clear roster filters</a>{/if}
+      </p>
+    {/if}
     <nav aria-label="RSVP roster pages" class="actions">
       {#if roster.hasPrev}
         <a rel="prev" href={roster.prevUrl}>Previous</a>

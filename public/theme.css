@@ -1,7 +1,4 @@
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
-/* Latin-only, Arial-metric fallback; arrows (U+2192) keep prior rendering.
-   Overrides = Display's 93%/34.6% ascent/descent at 77% + margin: fallback
-   hero paints >= swapped-in text (no larger repaint). */
 @font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('Liberation Sans'), local('Arimo'), local('Arial'); size-adjust: 77%; ascent-override: 123%; descent-override: 46%; line-gap-override: 0%; unicode-range: U+0000-00FF; }
 .base-theme { min-height: 100vh; background: var(--color-page); color: var(--color-text); font: 17px/1.65 system-ui, sans-serif; }
 .base-theme a { color: var(--brand); text-underline-offset: .25em; }
@@ -97,6 +94,8 @@
 .content-page [data-testid='about-facts'] { gap: 0; }
 .content-page [data-testid='rules-list'] { display: block; list-style: decimal; padding-left: 2rem; }
 .content-page [data-testid='rules-list'] li::marker { color: var(--brand); font-weight: 700; font-size: 1.5rem; }
+.jump{list-style:none;padding:0}
+.rules>li.card:has(>h2:target){background:var(--surface)}
 .base-theme [data-testid='faq-list'] section { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 2rem; }
 /* LCP: render offscreen faq sections only when scrolled near. */
 [data-testid='faq-list']>section{content-visibility:auto;contain-intrinsic-size:auto 20rem}

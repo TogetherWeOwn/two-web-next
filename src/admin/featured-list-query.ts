@@ -53,9 +53,19 @@ export function featuredListUrl(
   return `/admin/featured?${params}`;
 }
 
-/** Zero-row copy: filtered empties name the filters, genuine empties invite creation. */
+/** Query is normalized by parseFeaturedListQuery before reaching the page. */
+export function featuredListHasFilters(query: FeaturedListQuery): boolean {
+  return Boolean(query.q || query.published);
+}
+
+export function featuredListClearUrl(query: FeaturedListQuery): string {
+  return featuredListUrl(query, { q: "", published: "", page: 1 });
+}
+
+/** A successful empty later page says nothing about the inventory as a whole. */
 export function featuredEmptyText(query: FeaturedListQuery): string {
-  return query.q || query.published
+  if (query.page > 1) return "No results on this page.";
+  return featuredListHasFilters(query)
     ? "No featured content matches these filters."
     : "No featured content yet.";
 }

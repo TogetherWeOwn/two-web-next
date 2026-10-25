@@ -56,6 +56,10 @@ export interface EventGoneModel {
   title: string;
   game: string | null;
   eventKey: string;
+  /** Retained answer count, rendered as history (existingResponsesText) with
+   * no capacity: the cancelled schedule card's line. Carried from the
+   * already-loaded event row; never a new read. */
+  existingResponses: number;
   /** Per-event calendar download; the feed serves cancelled rows. */
   icsUrl: string;
   markdownAlternate: string;
@@ -177,6 +181,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
             title: event.title,
             game: event.game,
             eventKey: event.eventKey,
+            existingResponses: event.goingCount,
             icsUrl: `/events/${event.eventKey}.ics`,
             markdownAlternate: `/e/${event.eventKey}.md`,
             upcomingUrl: "/events",

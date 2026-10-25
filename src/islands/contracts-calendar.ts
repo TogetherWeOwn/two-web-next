@@ -66,6 +66,37 @@ export const EVENTS_SEARCH_LABEL = "Search events";
 export const eventsSearchHitCopy = (query: string): string => `Results for “${query}”`;
 export const eventsSearchMissCopy = (query: string): string => `Nothing matches “${query}”.`;
 
+/* Game facet. A bounded select over the distinct published games, matching
+ * trim + case-insensitive exact like the leaderboard `?activity=` facet. The
+ * raw input rides in `state.game` (like `q`) so a filtered URL stays
+ * shareable; blank or unknown degrades to unfiltered, never a 400. */
+export const EVENTS_GAME_FILTER_TESTID = "events-game-filter";
+export const EVENTS_GAME_FILTER_LABEL = "Filter by game";
+export const EVENTS_GAME_ALL_COPY = "All games";
+export const EVENTS_GAME_PARAM = "game";
+/** Distinct-games list cap: one LIMIT-bound read per schedule render. */
+export const EVENTS_DISTINCT_GAMES_LIMIT = 100;
+export const eventsGameFilterCopy = (game: string): string => `Showing events for “${game}”.`;
+export const eventsSearchGameHitCopy = (query: string, game: string): string =>
+  `Results for “${query}” in “${game}”.`;
+export const eventsSearchGameMissCopy = (query: string, game: string): string =>
+  `Nothing matches “${query}” in “${game}”.`;
+
+/**
+ * Resolve the raw `game` input against the distinct published list. Trim +
+ * case-insensitive exact; the canonical stored form wins so `?game=chess`
+ * selects and announces "Chess". Blank or unknown degrades to null
+ * (unfiltered), never an error.
+ */
+export function resolveGameFilter(
+  games: readonly string[],
+  raw: string | null | undefined,
+): string | null {
+  const want = (raw ?? "").trim().toLowerCase();
+  if (want === "") return null;
+  return games.find((game) => game.trim().toLowerCase() === want) ?? null;
+}
+
 /** Logger normalization (legacy EventSearchLogger::normalize): collapse
  * whitespace, lowercase, cap at the column width, blank means "not a search". */
 export function normalizeEventSearch(raw: string | null | undefined): string | null {
@@ -159,6 +190,18 @@ export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try
  * the owned fetch, restores the last good zones and releases loading. */
 export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
+/* Failed-read recovery: a failed search/month/view read keeps the last good
+ * zones and names the missed destination beside them, with an explicit retry
+ * of the last failed GET intent and a safe return. The host renders hidden
+ * and inert outside the swapped zones; the binder shows it only on failure. */
+export const EVENTS_READ_RETRY_TESTID = "events-read-retry";
+export const EVENTS_READ_CLEAR_TESTID = "events-read-clear";
+export const EVENTS_READ_STATUS_TESTID = "events-read-status";
+export const EVENTS_READ_RETRY_COPY = "Try again";
+export const EVENTS_READ_CLEAR_COPY = "Dismiss";
+/** A 429 Retry-After is honored up to 60 seconds; anything larger caps here. */
+export const EVENTS_READ_RETRY_AFTER_CAP_MS = 60_000;
+
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
  * "no events". */
@@ -238,6 +281,10 @@ export const CALENDAR_MONTH_EMPTY_TESTID = "calendar-month-empty";
 export const CALENDAR_MONTH_EMPTY_RECOVERY_COPY = "Upcoming events";
 
 export const EVENT_CARD_TESTID = "event-card";
+/** Compact host line inside a card's `.schedule-info`: `Hosted by {name}` for
+ * a non-blank organizer, no node at all when blank/missing. Plain text, never
+ * a link — the same public name the detail page shows as `event-organizer`. */
+export const EVENT_CARD_HOST_TESTID = "event-card-host";
 export const EVENT_DRAFT_TESTID = "event-draft";
 export const EVENT_CANCELLED_TESTID = "event-cancelled";
 export const EVENT_DISCORD_RSVP_TESTID = "event-discord-rsvp";
@@ -434,6 +481,8 @@ export function dedupeTransients(
 }
 
 /* Resolved island state. `q` is the raw input; searching = trimmed non-blank.
+ * `game` is the raw facet input (the effective game resolves against the
+ * distinct list at read time); blank/unknown degrades to unfiltered.
  * `month` is always resolved (the grid is one render away via the toggle).
  * `page` is the upcoming-list page; the month grid is month-scoped, so it
  * always reads as page 1. */
@@ -441,6 +490,7 @@ export interface CalendarState {
   view: CalendarView;
   month: string;
   q: string;
+  game?: string;
   past: boolean;
   page: number;
 }
@@ -454,12 +504,16 @@ export const calendarShowingPast = (s: CalendarState): boolean => s.past || cale
 /**
  * The island's shareable URL. `view`/`month` are emitted only for the calendar
  * view (the list is the default and a search forces it); `q` only when
- * non-blank; `past` only when open; `page` only past the first list page (the
- * month grid is month-scoped, so it never carries a page).
+ * non-blank; `game` only when non-blank (trimmed — padding never survives
+ * into a shared link, and matching trims anyway); `past` only when open;
+ * `page` only past the first list page (the month grid is month-scoped, so it
+ * never carries a page).
  */
 export function calendarUrl(s: CalendarState): string {
   const params = new URLSearchParams();
   if (s.q.trim() !== "") params.set("q", s.q);
+  const game = (s.game ?? "").trim();
+  if (game !== "") params.set(EVENTS_GAME_PARAM, game);
   if (s.past) params.set("past", "1");
   if (s.view === "calendar") {
     params.set("view", "calendar");
@@ -472,12 +526,16 @@ export function calendarUrl(s: CalendarState): string {
 }
 
 /** Grid day-jump into the list: names the card so the route renders the list
- * page holding it, plus the card anchor. `past` rides along; a search never
+ * page holding it, plus the card anchor. `past` rides along, and the game
+ * facet too (the rank is computed inside the filtered order); a search never
  * co-occurs with the grid (it forces the list view). */
-export function calendarJumpUrl(past: boolean, key: string): string {
+export function calendarJumpUrl(past: boolean, key: string, game?: string | null): string {
   const params = new URLSearchParams();
   params.set("event", key);
   if (past) params.set("past", "1");
+  if (game !== undefined && game !== null && game.trim() !== "") {
+    params.set(EVENTS_GAME_PARAM, game.trim());
+  }
   return `/events?${params.toString()}#event-${key}`;
 }
 

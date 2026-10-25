@@ -19,10 +19,11 @@
 // store is the session (same contract as src/index.tsx: tests inject a
 // SessionStore on the env as SESSION_STORE, runtime builds a postgres store
 // from DATABASE_URL or DB.connectionString, no binding fails closed to 503). The guard reads
-// and renews the row on GET — it never rotates: rotation is the site's concern, and
-// an admin read must not invalidate the cookie the moderator's other tab
-// holds. Never trust a role bit from the cookie: the moderator decision is
-// the server-side row bit only.
+// and rotates the row on GET, mirroring the site's readSession: every
+// authenticated page view mints a fresh bearer, and the predecessor stays
+// grace-valid for 10s so the moderator's other tab keeps working. Never
+// trust a role bit from the cookie: the moderator decision is the
+// server-side row bit only.
 
 import { generateSignedCookie, getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
@@ -37,7 +38,9 @@ import {
   createPostgresSessionStore,
   hashToken,
   isValidSessionToken,
+  newSessionToken,
   SESSION_TTL_SECONDS,
+  type DbSessionRow,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -114,13 +117,16 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     const dbOverride = isStore(overrides) ? undefined : overrides?.db;
 
     let actor: Actor | null = null;
+    // The authenticated row behind the actor: rotation preserves its exact
+    // identity bits, never re-derives them from the cookie or the actor.
+    let actorRow: DbSessionRow | null = null;
     // A bearer with no live row (expired/revoked/rotated) is an expired
     // guest, not a forbidden member: writes recover, reads re-authenticate.
     let expiredGuest = false;
     // Moderator pages run the tab-sync probe, so an expiry mid-edit raises
     // two:session-expired and the form island can keep the draft reachable.
     let attachStatus: (() => void) | null = null;
-    let renewedSession: {
+    let rotatedSession: {
       store: SessionStore;
       tokenHash: string;
       sessionCookie: string;
@@ -131,29 +137,46 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       const tokenHash = await hashToken(token);
       const row = await resolved.get(tokenHash);
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
-      if (row?.moderator) actor = { id: row.userId, username: row.username };
-      else if (!row) expiredGuest = true;
-      if (actor && c.req.method === "GET") {
+      if (row?.moderator) {
+        actor = { id: row.userId, username: row.username };
+        actorRow = row;
+      } else if (!row) expiredGuest = true;
+      if (actor && actorRow && c.req.method === "GET") {
         // get() also admits short predecessor grace; only a current bearer
-        // has a status key and can renew. Grace reads never refresh cookies.
+        // has a status key and can rotate. Grace reads never mint or refresh.
         const statusKey = await resolved.statusHash(tokenHash);
         if (statusKey) {
-          // Slide while the row is live, before rendering/audit can cross its expiry.
-          if (!(await resolved.renew(tokenHash, expiresAt))) {
-            // Rotation may have won between statusHash and renew: re-read
-            // once, mirroring readSession's lost-race fallback. A grace-valid
-            // moderator serves without renewal or cookies (a thrown re-read
-            // fails closed below); revoked/expired still bounces.
+          // Re-stamp while the row is live, before rendering/audit can cross
+          // its expiry. Every authenticated page view mints a fresh bearer,
+          // mirroring the site's readSession.
+          const replacement = newSessionToken();
+          const replacementHash = await hashToken(replacement);
+          const rotated = await resolved.rotate(tokenHash, {
+            tokenHash: replacementHash,
+            userId: actorRow.userId,
+            username: actorRow.username,
+            avatar: actorRow.avatar,
+            member: actorRow.member,
+            moderator: actorRow.moderator,
+            expiresAt,
+          });
+          if (!rotated) {
+            // Rotation lost a race (revoked/rotated/expired between the
+            // reads): re-read once, mirroring readSession's lost-race
+            // fallback. A grace-valid moderator serves without rotation or
+            // cookies (a thrown re-read fails closed below); revoked/expired
+            // still bounces.
             const graceRow = await resolved.get(tokenHash);
             if (!graceRow) return bounceToLogin(c);
+            actorRow = graceRow;
             if (graceRow.moderator) actor = { id: graceRow.userId, username: graceRow.username };
             else actor = null;
           } else {
-            attachStatus = await prepareAuthStatus(c, resolved, tokenHash, statusKey);
+            attachStatus = await prepareAuthStatus(c, resolved, replacementHash, statusKey);
             // Sign before the dashboard deadline; the post-handler read gates attachment.
             const sessionCookie = await generateSignedCookie(
               SESSION_COOKIE,
-              token,
+              replacement,
               c.env.SESSION_SECRET,
               {
                 path: "/",
@@ -163,7 +186,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
                 maxAge: SESSION_TTL_SECONDS,
               },
             );
-            renewedSession = { store: resolved, tokenHash, sessionCookie };
+            rotatedSession = { store: resolved, tokenHash: replacementHash, sessionCookie };
           }
         }
       }
@@ -201,21 +224,18 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         },
         databaseUnavailable,
       );
-      // The authorized GET already renewed the row. Redirects and refusals
-      // still omit the cookie; other results, including 404s, attach it only
-      // if the bearer survived rendering without rotation or revocation.
-      if (
-        renewedSession &&
-        !(c.res.status >= 300 && c.res.status < 400) &&
-        c.res.status !== 403 &&
-        c.res.status !== 503
-      ) {
+      // The authorized GET already rotated the row, so the browser's bearer is
+      // grace-only: deliver the replacement on every outcome whose jar the
+      // browser keeps (including redirects, refusals and 404s) whenever the
+      // fresh bearer survived rendering without rotation or revocation.
+      // Withholding it would strand the moderator on a dying predecessor.
+      if (rotatedSession) {
         try {
           if (
-            (await renewedSession.store.get(renewedSession.tokenHash)) &&
-            (await renewedSession.store.statusHash(renewedSession.tokenHash))
+            (await rotatedSession.store.get(rotatedSession.tokenHash)) &&
+            (await rotatedSession.store.statusHash(rotatedSession.tokenHash))
           ) {
-            c.header("set-cookie", renewedSession.sessionCookie, { append: true });
+            c.header("set-cookie", rotatedSession.sessionCookie, { append: true });
             // The probe must not overwrite another tab's cookie either.
             if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
               attachStatus?.();
