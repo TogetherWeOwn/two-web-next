@@ -2,6 +2,7 @@
 // Admin activity-log viewer (R11): moderator-only, paginated, access-logged,
 // never renders raw properties JSON.
 import { sql } from "drizzle-orm";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { ACTIVITY_LOG_PAGE_SIZE, parseActivityLogQuery } from "../src/admin/table-list";
@@ -9,8 +10,50 @@ import { activityLog, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { activityRecovery, activityRow } from "./helpers/admin-safe-recovery-acceptance";
+
+function renderedAnchorNames(html: string): string[] {
+  type Node = DefaultTreeAdapterMap["node"];
+  const text = (node: Node): string =>
+    node.nodeName === "#text" && "value" in node
+      ? node.value
+      : "childNodes" in node
+        ? node.childNodes.map(text).join("")
+        : "";
+  const names: string[] = [];
+  const visit = (node: Node) => {
+    if ("tagName" in node && node.tagName === "a") {
+      names.push(
+        (node.attrs.find((attr) => attr.name === "aria-label")?.value ?? text(node)).trim(),
+      );
+    }
+    if ("childNodes" in node) node.childNodes.forEach(visit);
+  };
+  visit(parse(html));
+  return names;
+}
 
 describe("activity-log guard pins (local fixtures)", () => {
+  it.each(["Hono", "Kit"] as const)(
+    "%s populated filtered page 2 omits both empty-state recovery anchors",
+    async (renderer) => {
+      const rows = Array.from({ length: 51 }, (_, index) => ({ ...activityRow, id: index + 1 }));
+      const result = await activityRecovery(
+        renderer,
+        "?page=2&subject=Event&causer=100000000000000111",
+        rows,
+      );
+      expect(result.status).toBe(200);
+      expect(result.probe.reads).toHaveLength(1);
+      expect(result.html).toContain("Recorded fixture change &lt;not markup");
+      expect(result.html).not.toContain('data-testid="activity-log-empty"');
+      const anchors = renderedAnchorNames(result.html);
+      expect(anchors).toEqual(expect.arrayContaining(["Previous", "Next"]));
+      expect.soft(anchors).not.toContain("Clear filters");
+      expect.soft(anchors).not.toContain("First page of these results");
+    },
+  );
+
   it("redirects guests and forbids members before any activity read", async () => {
     const sessions = createMemorySessionStore();
     const app = adminApp(sessions);
