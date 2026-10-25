@@ -57,7 +57,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   step or invoked package script that runs Playwright must run at the repo
   root: any other `working-directory:` or a preceding `cd`, `pushd` or `popd`
   fails closed (including compound shell commands, Bash `time [-p] [--]`
-  prefixes and nested npm runs).
+  prefixes, quoted/empty assignment values, repeated `command`/`builtin`
+  wrappers and nested npm runs). The cwd scan consumes whole shell words;
+  whitespace or separators inside quotes cannot hide a following cwd change.
   `--json` prints the Playwright
   summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
   `next_action`). The step runs `npm run test:inventory -- --strict` with

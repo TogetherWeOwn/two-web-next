@@ -790,12 +790,61 @@ function stepScriptSlices(lines, start, end, content) {
   return slices;
 }
 
-// Directory commands in simple or compound command position: separators,
-// groups, case arms, control keywords and Bash's `time [-p] [--]` can precede
-// a cwd change in the same shell. Reject them conservatively even if a branch
-// might not execute. `$(cd ...)` and backticks do not move the caller.
-const STEP_CD_RE =
-  /(?:^|[;&|{})]|(?<!\$)\()\s*(?:(?:if|then|elif|else|do|while|until|!|time(?:\s+-p)?(?:\s+--)?)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+|builtin\s+)?(?:cd|pushd|popd)(?:\s|$|[;&)])/;
+// Read whole shell words, including empty/concatenated quoted assignment
+// values and escaped spaces. Quoted separators are data, not command starts.
+const CWD_SHELL_WORD_RE = /(?:[^\s;&|()'"`\\]+|'[^']*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`|\\.)+/y;
+
+// Only recognize cwd commands and their prefixes, not arbitrary shell code.
+// Repeated command/builtin wrappers still run in the same shell. Reject cwd
+// changes conservatively even if a branch might not execute.
+function shellChangesCwd(line) {
+  let commandStart = true;
+  let options = null;
+  for (let i = 0; i < line.length; ) {
+    const c = line[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (";&|(){}".includes(c)) {
+      commandStart = c !== "(" || line[i - 1] !== "$";
+      options = null;
+      i++;
+      continue;
+    }
+    CWD_SHELL_WORD_RE.lastIndex = i;
+    const match = CWD_SHELL_WORD_RE.exec(line);
+    if (!match) {
+      i++;
+      continue;
+    }
+    i = CWD_SHELL_WORD_RE.lastIndex;
+    if (!commandStart) continue;
+    const raw = match[0];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw)) continue;
+    const word = raw.replace(
+      /\\(.)|'([^']*)'|"((?:\\.|[^"\\])*)"/g,
+      (_match, escaped, single, double) =>
+        escaped ?? single ?? double.replace(/\\([$`"\\])/g, "$1"),
+    );
+    if (/^(?:if|then|elif|else|do|while|until|!|time)$/.test(word)) {
+      options = word === "time" ? "time" : null;
+      continue;
+    }
+    if (word === "command" || word === "builtin") {
+      options = word;
+      continue;
+    }
+    if (options && (word === "--" || (options !== "builtin" && /^-p+$/.test(word)))) {
+      if (word === "--") options = null;
+      continue;
+    }
+    if (word === "cd" || word === "pushd" || word === "popd") return true;
+    commandStart = false;
+    options = null;
+  }
+  return false;
+}
 const ROOT_CWD_REMEDIATION =
   "this gate cannot resolve playwright runs outside the repo root; run the step or script at the root or teach ci/test-inventory.mjs the new form";
 
@@ -830,7 +879,7 @@ function assertRootShellCwd(prefix, where) {
       continue;
     }
     assert.ok(
-      !STEP_CD_RE.test(line),
+      !shellChangesCwd(line),
       `${where} runs after a shell directory change: ${ROOT_CWD_REMEDIATION}`,
     );
     heredoc = heredocMarker(line);
@@ -3741,6 +3790,35 @@ function selftest() {
         "time -p popd;",
         "time \\\ncd e2e/sub;",
         "time -p X=y command cd e2e/sub;",
+        'time LABEL="two words" cd e2e/sub;',
+        "time LABEL='two words' cd e2e/sub;",
+        "time LABEL= cd e2e/sub;",
+        'time -p -- LABEL= NEXT="two words" cd e2e/sub;',
+        'time LABEL=two" mixed "words cd e2e/sub;',
+        "time LABEL=two\\ words cd e2e/sub;",
+        'time LABEL="semi; colon" cd e2e/sub;',
+        'time LABEL="a \\"quoted\\" value" cd e2e/sub;',
+        'time LABEL="" cd e2e/sub;',
+        "time LABEL='' cd e2e/sub;",
+        'LABEL="two words" cd e2e/sub;',
+        "LABEL= cd e2e/sub;",
+        "time command builtin cd e2e/sub;",
+        "time builtin command cd e2e/sub;",
+        "time command command cd e2e/sub;",
+        "time builtin builtin cd e2e/sub;",
+        "time command -- builtin -- cd e2e/sub;",
+        "time command -p builtin cd e2e/sub;",
+        'time LABEL="two words" command builtin cd e2e/sub;',
+        "time LABEL= command builtin cd e2e/sub;",
+        'if time LABEL="two words" cd e2e/sub; then :; fi;',
+        'if true; then time LABEL="two words" command builtin cd e2e/sub; fi;',
+        '{ time LABEL="two words" cd e2e/sub; };',
+        'case sub in sub) time LABEL="two words" cd e2e/sub;; esac;',
+        'time LABEL="two words" command builtin pushd e2e/sub;',
+        "time LABEL= command builtin popd;",
+        'time\tLABEL="two words"\tcommand\tbuiltin\tcd e2e/sub;',
+        'time LABEL="two words" "command" builtin c"d" e2e/sub;',
+        'time LABEL="two words" command builtin c\\d e2e/sub;',
       ].flatMap((prefix) => [
         {
           name: `workflow compound: ${prefix}`,
@@ -3820,6 +3898,41 @@ function selftest() {
           name: `script timed control: ${prefix}`,
           run: "npm run b",
           scripts: { b: `${prefix} playwright test` },
+          clean: true,
+        },
+      ]),
+      ...[
+        'time LABEL="two words" echo cd e2e/sub;',
+        "time LABEL= echo cd e2e/sub;",
+        'time LABEL="semi; cd e2e/sub" echo done;',
+        "time command builtin echo cd e2e/sub;",
+        "time command -v cd;",
+        'echo "time LABEL=; cd e2e/sub";',
+        "echo $(time LABEL= cd e2e/sub);",
+        'echo `time LABEL="two words" cd e2e/sub`;',
+        "cat <<'EOF'\ntime LABEL=\"two words\" command builtin cd e2e/sub\nEOF\n",
+      ].flatMap((prefix) => [
+        {
+          name: `workflow shell-word control: ${prefix}`,
+          run: JSON.stringify(`${prefix} npx playwright test`),
+          clean: true,
+        },
+        {
+          name: `workflow npm shell-word control: ${prefix}`,
+          run: JSON.stringify(`${prefix} npm run b`),
+          scripts: { b: "playwright test" },
+          clean: true,
+        },
+        {
+          name: `script shell-word control: ${prefix}`,
+          run: "npm run b",
+          scripts: { b: `${prefix} playwright test` },
+          clean: true,
+        },
+        {
+          name: `nested script shell-word control: ${prefix}`,
+          run: "npm run a",
+          scripts: { a: `${prefix} npm run b`, b: "playwright test" },
           clean: true,
         },
       ]),
