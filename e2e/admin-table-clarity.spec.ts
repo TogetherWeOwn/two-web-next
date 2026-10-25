@@ -46,6 +46,12 @@ for (const renderer of ["Hono", "Kit"] satisfies Renderer[]) {
           const { html } = await renderPanel(renderer, "events");
           await page.setContent(html);
           const row = page.getByRole("row").filter({ hasText: eventTitle });
+          if (action === "Pause RSVPs") {
+            const review = row.getByTestId("rsvp-pause-review");
+            await expect(review).toHaveJSProperty("open", false);
+            await review.locator("summary").click();
+            await expect(review).toHaveJSProperty("open", true);
+          }
           const button = row.getByRole("button", { name: new RegExp(escape(action)) });
           await expect(button).toHaveCount(1);
           await expect(button).toContainText(action);
@@ -63,6 +69,12 @@ for (const renderer of ["Hono", "Kit"] satisfies Renderer[]) {
         test(`edit ${status}/${rsvpOpen}: ${action} names the event`, async ({ page }) => {
           const { html } = await renderPanel(renderer, "roster", {}, { status, rsvpOpen });
           await page.setContent(html);
+          if (action === "Pause RSVPs") {
+            const review = page.getByTestId("rsvp-pause-review");
+            await expect(review).toHaveJSProperty("open", false);
+            await review.locator("summary").click();
+            await expect(review).toHaveJSProperty("open", true);
+          }
           const button = page.getByRole("button", { name: new RegExp(escape(action)) });
           await expect(button).toHaveCount(1);
           await expect(button).toContainText(action);
