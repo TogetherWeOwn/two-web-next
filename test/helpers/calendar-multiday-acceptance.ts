@@ -168,6 +168,7 @@ export async function renderCalendar(
     games: [],
     gameFilter: null,
     member: false,
+    session: null,
     moderator: false,
     inviteUrl: "https://discord.gg/fixture",
     appUrl: "https://calendar.example.test",
