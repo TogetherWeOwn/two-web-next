@@ -344,6 +344,20 @@ jobs:
         run: |
           npx vitest run test/admin-editor-expiry-departure.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/admin-editor-expiry-departure.json
           node ci/a11y-require-executed.mjs artifacts/a11y/admin-editor-expiry-departure.json "admin editor expiry departure in Chromium" 4
+      - name: Build Kit workspace (event print fixtures read the built root-CSS manifest)
+        run: npm run build --prefix web
+      - name: Event print summary (real Chromium print-media acceptance, Hono and Kit)
+        env:
+          EVENT_PRINT_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-print-summary-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-print-summary-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-print-summary-acceptance.json "event print summary browser acceptance" 48
+      - name: Event print narrow wrap (real Chromium, 390px viewport)
+        env:
+          EVENT_PRINT_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-print-narrow-wrap.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-print-narrow-wrap.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-print-narrow-wrap.json "event print narrow wrap browser acceptance" 2
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser

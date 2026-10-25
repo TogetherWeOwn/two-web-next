@@ -1,0 +1,54 @@
+// Paper-only instruction projection rejects recognized credential forms while
+// retaining ordinary guidance unchanged.
+import { describe, expect, it } from "vitest";
+import { isPrintableJoinDestination, printableJoinInstructions } from "../src/events/feeds";
+
+describe("additional credential path forms", () => {
+  it.each([
+    "https://call.example.test/private%5csecret",
+    "https://call.example.test/open-room%3Bjsessionid=fixture-session",
+    "https://call.example.test/session/fixture-session",
+    "https://call.example.test/sessionid=fixture-session",
+    "https://call.example.test/open-room%3Ftoken=fixture-token",
+  ])("keeps the credential-shaped destination off paper: %s", (url) => {
+    expect(isPrintableJoinDestination(url)).toBe(false);
+  });
+});
+
+describe("printableJoinInstructions", () => {
+  it.each([
+    "Use headphones.",
+    "Use headphones.\nBring a board.",
+    "Open https://call.example.test/open-room",
+    "There is a session for beginners.",
+  ])("retains harmless instructions: %s", (instructions) => {
+    expect(printableJoinInstructions(instructions)).toBe(instructions);
+  });
+
+  it.each([
+    "https://call.example.test/private-room?token=fixture-bearer&session=fixture-context",
+    "https://call.example.test/private%2fsecret",
+    "https://call.example.test/open-room;jsessionid=fixture-session",
+    "https://fixture-user:fixture-password@call.example.test/open-room",
+    "//call.example.test/private-room",
+  ])("omits a sensitive URL line without losing harmless lines: %s", (url) => {
+    expect(printableJoinInstructions(`Use headphones.\nOpen ${url}\nBring a board.`)).toBe(
+      "Use headphones.\nBring a board.",
+    );
+  });
+
+  it.each(["Token: fixture-bearer", "Session ID=fixture-session", "Authorization: fixture-bearer"])(
+    "omits a labeled credential without requiring a URL: %s",
+    (instruction) => {
+      expect(printableJoinInstructions(instruction)).toBe("");
+    },
+  );
+
+  it("omits the whole line if any destination is sensitive", () => {
+    expect(
+      printableJoinInstructions(
+        "Open https://call.example.test/open-room or https://call.example.test/private-room",
+      ),
+    ).toBe("");
+  });
+});

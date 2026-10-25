@@ -168,6 +168,12 @@ const lineup = $derived(
     {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
+  <!-- Print-only reference line: the canonical URL as readable paper text.
+    `hidden` keeps it out of the screen render, tab order and accessible
+    tree; the print stylesheet reveals it. Same line in the Hono twin. -->
+  <p class="event-print-only" data-testid="event-print-url" hidden>
+    Event page: {model.canonical}
+  </p>
   {#if model.joinResult}
     <p class="notice" role="status" data-testid="join-result">
       {#if model.joinResult === "added"}

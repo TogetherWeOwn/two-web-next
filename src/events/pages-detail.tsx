@@ -5,7 +5,13 @@ import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
+import {
+  directionsUrl,
+  googleCalendarUrl,
+  isPrintableJoinDestination,
+  isWireInstant,
+  printableJoinInstructions,
+} from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import type {
@@ -92,6 +98,9 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const printInstructions = e.join_instructions
+    ? printableJoinInstructions(e.join_instructions)
+    : "";
   const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -128,6 +137,12 @@ export const EventPage: FC<{
         ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       </section>
+      {/* Print-only reference line: the canonical URL as readable paper text.
+          `hidden` keeps it out of the screen render, tab order and accessible
+          tree; the print stylesheet reveals it. Same line in the Kit twin. */}
+      <p class="event-print-only" data-testid="event-print-url" hidden>
+        Event page: {canonical}
+      </p>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
@@ -275,17 +290,46 @@ export const EventPage: FC<{
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
                 e.status === "published" ? (
-                  <p>
-                    <a href={e.join_url} data-testid="event-public-join-link">
-                      Open the public joining link
-                    </a>
-                  </p>
+                  <>
+                    <p>
+                      <a href={e.join_url} data-testid="event-public-join-link">
+                        Open the public joining link
+                      </a>
+                    </p>
+                    {/* Print reveals the destination itself, but only when it
+                        is a bare public URL: credential-shaped destinations
+                        stay screen-only and their hyperlink hides in print so
+                        no bearer survives as a PDF link annotation. */}
+                    {isPrintableJoinDestination(e.join_url) ? (
+                      <p class="event-print-only" data-testid="event-print-join-url" hidden>
+                        {e.join_url}
+                      </p>
+                    ) : null}
+                  </>
                 ) : (
-                  <p>Public joining link: {e.join_url}</p>
+                  <p
+                    class={isPrintableJoinDestination(e.join_url) ? undefined : "event-screen-only"}
+                  >
+                    Public joining link: {e.join_url}
+                  </p>
                 )
               ) : null}
               {e.join_instructions ? (
-                <p data-testid="event-join-instructions">{e.join_instructions}</p>
+                <>
+                  <p
+                    class={
+                      printInstructions === e.join_instructions ? undefined : "event-screen-only"
+                    }
+                    data-testid="event-join-instructions"
+                  >
+                    {e.join_instructions}
+                  </p>
+                  {printInstructions && printInstructions !== e.join_instructions ? (
+                    <p class="event-print-only" hidden>
+                      {printInstructions}
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </section>
           ) : null}

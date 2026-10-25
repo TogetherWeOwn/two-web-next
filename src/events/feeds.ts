@@ -2,6 +2,7 @@
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
 import { containsControlCharacters } from "../admin/validation-shared";
+import { hasUrlUserinfo } from "../image-policy";
 import { stripTrailingSlash } from "../seo";
 import { rssXml as xml } from "./rss-xml";
 
@@ -345,4 +346,52 @@ export function googleCalendarUrl(e: EventRow): string {
  * this helper so the served hrefs are byte-identical. */
 export function directionsUrl(venue: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${q(venue)}`;
+}
+
+/** Print-safe room URL: refuse userinfo, query/fragment context, malformed
+ * encoding, private segments and recognized credential-bearing path forms.
+ * This is a conservative paper projection, not a change to screen access. */
+export function isPrintableJoinDestination(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (hasUrlUserinfo(raw) || url.username !== "" || url.password !== "") return false;
+  if (url.search !== "" || url.hash !== "") return false;
+  try {
+    const path = decodeURIComponent(url.pathname);
+    // Decode before splitting: an encoded slash is still a private-path boundary.
+    // Matrix parameters can carry sessions even without a query string.
+    if (/[;?#]/.test(path)) return false;
+    return !path
+      .split(/[/\\]/)
+      .some((segment) =>
+        /^(?:private|jsessionid|phpsessid|session(?:id|[_-]id)?|sid|token|access[_-]?token|bearer)(?:[=._-].*)?$/i.test(
+          segment,
+        ),
+      );
+  } catch {
+    return false;
+  }
+}
+
+/** Preserve harmless instruction lines on paper without copying a sensitive
+ * destination (or a labeled credential) from this sibling free-text field. */
+export function printableJoinInstructions(raw: string): string {
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (
+        /\b(?:token|session(?:id|[ _-]id)?|jsessionid|phpsessid|bearer|authorization)\s*[:=]/i.test(
+          line,
+        )
+      )
+        return false;
+      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\s<>"']+/gi) ?? [];
+      return urls.every(isPrintableJoinDestination);
+    })
+    .join("\n");
 }

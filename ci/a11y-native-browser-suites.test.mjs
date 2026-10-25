@@ -81,6 +81,18 @@ const SUITES = [
     min: 30,
   },
   {
+    file: "test/event-print-summary-acceptance.test.ts",
+    env: "EVENT_PRINT_BROWSER_TESTS",
+    title: "event print summary browser acceptance",
+    min: 48,
+  },
+  {
+    file: "test/event-print-narrow-wrap.test.ts",
+    env: "EVENT_PRINT_BROWSER_TESTS",
+    title: "event print narrow wrap browser acceptance",
+    min: 2,
+  },
+  {
     file: "test/profile-local-time-comparison-acceptance.test.ts",
     env: "A11Y_BROWSER_TESTS",
     title: "profile local time comparison in Chromium",

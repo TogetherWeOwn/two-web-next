@@ -198,12 +198,10 @@ describe("event detail theme", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
-    // 6150: the four Display stacks each carry the metric-matched
-    // 'Display Fallback' (+80 bytes over the pre-unification 5992); the
-    // ci/bundle-budget.json ceiling (7168 raw) is unchanged.
-    // 6430: the chosen-timezone input rule (+216 bytes over 6125) themes the
-    // native input with semantic tokens instead of shipping a white box on the
-    // dark event theme; still no @import/url and far under the 7168 ceiling.
-    expect(css.length).toBeLessThan(6430);
+    // 7160: route-scoped print summary (:is-grouped hide list, light-paper
+    // token remap, reference-line reveal) plus the Display fallback stacks,
+    // chosen-timezone input and native-share rules from main; measured 7106.
+    // The ci/bundle-budget.json ceiling (7168 raw) is unchanged.
+    expect(css.length).toBeLessThan(7160);
   });
 });
