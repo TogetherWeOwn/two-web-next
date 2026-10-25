@@ -246,6 +246,27 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           expect(fixture.writes).toEqual([]);
           expect(fixture.errors).toEqual([]);
         });
+        it(`${renderer}/${artifact} losing Intl after activation removes the stale result and hides the action`, async () => {
+          const fixture = await open(renderer, artifact);
+          const { page } = fixture;
+          await compare(page).click();
+          expect(await result(page).innerText()).toContain("Member (Europe/London)");
+          const timezone = await page.getByTestId("profile-timezone").innerText();
+          expect(timezone).toContain("Europe/London");
+          const requests = fixture.requests.slice();
+          const operations = fixture.operations.slice();
+          await page.evaluate("globalThis.Intl = undefined");
+          await compare(page).click();
+          await settle(page);
+          expect(fixture.errors).toEqual([]);
+          expect(await result(page).count()).toBe(0);
+          expect(await page.locator("[data-local-time-compare] button").count()).toBe(1);
+          expect(await page.locator("[data-local-time-compare] button").isHidden()).toBe(true);
+          expect(await page.getByTestId("profile-timezone").innerText()).toBe(timezone);
+          expect(fixture.requests).toEqual(requests);
+          expect(fixture.operations).toEqual(operations);
+          expect(fixture.writes).toEqual([]);
+        });
         it(`${renderer}/${artifact} losing Intl during a save keeps the ordinary text only`, async () => {
           const fixture = await open(renderer, artifact, null, true);
           await save(fixture.page, "Asia/Tokyo");
