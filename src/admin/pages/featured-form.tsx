@@ -3,16 +3,30 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { safeStoredLink } from "../../featured";
-import { currentlyVisible, FeaturedStatusBadge } from "../../featured-status";
+import {
+  FEATURED_OPEN_END_COPY,
+  FEATURED_OPEN_START_COPY,
+  FEATURED_WINDOW_RULES_COPY,
+  featuredBoundDisplay,
+  featuredEligibilityReasonFor,
+  featuredEligibilityStatus,
+  type FeaturedBoundDisplay,
+} from "../../featured-eligibility";
 import { FeaturedContentItem } from "../../pages";
 import { adminSaveStatus } from "../save-status";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
+function savedBoundView(display: FeaturedBoundDisplay | null, openCopy: string) {
+  if (display?.kind === "instant") return <time datetime={display.iso}>{display.iso}</time>;
+  if (display?.kind === "text") return display.text;
+  return openCopy;
+}
+
 export const FeaturedFormPage: FC<{
   mode: "new" | "edit";
-  row?: FeaturedRow;
+  row?: FeaturedRow & { startsAtText?: string | null; endsAtText?: string | null };
   values: Record<string, unknown>;
   errors: Record<string, string>;
   now?: Date;
@@ -22,6 +36,9 @@ export const FeaturedFormPage: FC<{
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
+  const startBound = row ? featuredBoundDisplay(row.startsAt, row.startsAtText) : null;
+  const endBound = row ? featuredBoundDisplay(row.endsAt, row.endsAtText) : null;
+  const status = row ? featuredEligibilityStatus(row, now) : null;
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section class="featured-form">
@@ -38,20 +55,33 @@ export const FeaturedFormPage: FC<{
               <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to
               refresh this preview.
             </p>
-            <p>
-              Status: <FeaturedStatusBadge row={row} now={now} />
-            </p>
-            {currentlyVisible(row, now) ? (
-              <FeaturedContentItem
-                row={safeStoredLink(row)}
-                appUrl={appUrl}
-                imageHosts={imageHosts}
-              />
-            ) : (
-              <p data-testid="featured-preview-hidden">
-                This slot is not currently visible on the homepage.
+            {Object.keys(errors).length > 0 ? (
+              <p>
+                The form below holds your submitted draft — the card and eligibility still show the
+                last saved row.
               </p>
-            )}
+            ) : null}
+            <h3>Saved content preview</h3>
+            <FeaturedContentItem
+              row={safeStoredLink(row)}
+              appUrl={appUrl}
+              imageHosts={imageHosts}
+            />
+            <h3>Homepage eligibility at this check time</h3>
+            <p>
+              Status:{" "}
+              <span class={`featured-status featured-status-${status}`} data-status={status}>
+                {status}
+              </span>
+            </p>
+            <p>{featuredEligibilityReasonFor(status!)}</p>
+            <p>
+              Saved window (UTC): show from {savedBoundView(startBound, FEATURED_OPEN_START_COPY)}
+              {", "}
+              show until {savedBoundView(endBound, FEATURED_OPEN_END_COPY)}
+              {". "}
+              {FEATURED_WINDOW_RULES_COPY}
+            </p>
           </section>
         ) : null}
         <ValidationSummary errors={errors} kind="featured" mode={mode} />
