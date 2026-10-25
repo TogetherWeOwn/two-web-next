@@ -130,7 +130,14 @@ describe("featured publish-window status", () => {
   });
 
   it("keeps the native table in a named keyboard-focusable scroll region with complete UTC bounds", () => {
-    const html = String(jsx(FeaturedPage, { rows: [row], query, now }));
+    const browsed = parseFeaturedListQuery({
+      published: "1",
+      q: "Friday",
+      sort: "updated_at",
+      order: "desc",
+      page: "2",
+    });
+    const html = String(jsx(FeaturedPage, { rows: [row], query: browsed, now }));
     expect(html).toContain(
       'class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex="0"',
     );
@@ -143,7 +150,31 @@ describe("featured publish-window status", () => {
     expect(html).toContain(
       `<span class="featured-window-bound">→ <time datetime="${after.toISOString()}">${after.toISOString()}</time></span>`,
     );
-    expect(html).toContain('href="/admin/featured/1">Friday games</a>');
+    // Executed destination, not source spelling: the row link is the same-origin
+    // keyed edit destination carrying the five browsed inventory fields as
+    // structured values under five distinct names, never an open return URL.
+    const href = html.match(/<a\b[^>]*\bhref="([^"]+)"[^>]*>Friday games<\/a>/)?.[1];
+    expect(href).toBeDefined();
+    const destination = new URL(href!.replaceAll("&amp;", "&"), appUrl);
+    expect(destination.origin).toBe(appUrl);
+    expect(destination.pathname).toBe("/admin/featured/1");
+    const carriedNames = Object.entries({
+      q: "Friday",
+      published: "1",
+      sort: "updated_at",
+      order: "desc",
+      page: "2",
+    }).map(([field, value]) => {
+      const matches = [...destination.searchParams].filter(([, v]) => v === value);
+      expect(matches, `row href must carry structured ${field}`).toHaveLength(1);
+      return matches[0]![0];
+    });
+    expect(new Set(carriedNames).size).toBe(5);
+    expect(
+      [...destination.searchParams.values()].some(
+        (v) => v.includes("/admin/") || /^https?:/.test(v),
+      ),
+    ).toBe(false);
     expect(html.match(/<th\b/g)).toHaveLength(5);
     expect(html.match(/<time\b/g)).toHaveLength(3);
     const open = String(
