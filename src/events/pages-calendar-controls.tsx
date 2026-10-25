@@ -110,8 +110,8 @@ export const CalendarHead: FC<{
         <a href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
           {EVENTS_EMPTY_COPY.subscribe}
         </a>{" "}
-        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>{" "}
-        <a href="/events.rss">RSS feed</a>
+        <a href="/events.rss">RSS feed</a>{" "}
+        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>
       </p>
     </div>
     {subscriptionHelp(appUrl, gameFilter, true)}
