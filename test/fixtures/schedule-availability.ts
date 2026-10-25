@@ -83,6 +83,7 @@ export function model(
     gameFilter: state.game || null,
     member: false,
     moderator: false,
+    session: null,
     inviteUrl: "https://discord.gg/example",
     appUrl: ORIGIN,
     canonical: `${ORIGIN}/events`,
