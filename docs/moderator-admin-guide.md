@@ -556,6 +556,15 @@ while retaining filters and return to page 1. Use **Previous**/**Next** for
 25-row pages, which keep filters and sort; the bar shows the current page
 number. There is no drag-and-drop ordering.
 
+Opening a title retains that inventory's search, publication filter, sort and
+page, even in a new tab. Use **Back to these featured results** or **Cancel** to
+return without saving. **Save** keeps that context on the edit page, including
+when validation needs a correction; **Delete this slot** returns to the same
+results. Changing a title or publication setting can remove the saved slot
+from those results, and deleting can leave a later page empty. Neither means
+the successful change failed. Direct/bookmarked edits without inventory context
+keep the ordinary unfiltered return. Unsaved-change warnings still apply.
+
 ### Field rules
 
 | Field | Rule |

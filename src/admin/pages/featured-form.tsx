@@ -14,6 +14,8 @@ import {
 } from "../../featured-eligibility";
 import { FeaturedContentItem } from "../../pages";
 import { adminSaveStatus } from "../save-status";
+import type { FeaturedListQuery } from "../featured-list-query";
+import { featuredEditUrl, featuredReturnUrl } from "../featured-list-query";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
@@ -32,8 +34,9 @@ export const FeaturedFormPage: FC<{
   now?: Date;
   appUrl: string;
   imageHosts?: string;
-}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
-  const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
+  inventory?: FeaturedListQuery | null;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts, inventory }) => {
+  const action = mode === "new" ? "/admin/featured" : featuredEditUrl(row!.id, inventory);
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
   const startBound = row ? featuredBoundDisplay(row.startsAt, row.startsAtText) : null;
@@ -43,6 +46,17 @@ export const FeaturedFormPage: FC<{
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && inventory ? (
+          <>
+            <p>
+              <a href={featuredReturnUrl(inventory)}>Back to these featured results</a>
+            </p>
+            <p>
+              After saving, this slot may no longer match these results. Your filters and page stay
+              the same.
+            </p>
+          </>
+        ) : null}
         {mode === "edit" && row ? (
           <section
             class="featured-preview"
@@ -167,12 +181,12 @@ export const FeaturedFormPage: FC<{
             <button type="submit" class="btn" data-testid="save-featured">
               {mode === "new" ? "Create" : "Save"}
             </button>
-            <a href="/admin/featured">Cancel</a>
+            <a href={featuredReturnUrl(inventory)}>Cancel</a>
           </div>
         </form>
         {raw(adminSaveStatus)}
         {mode === "edit" ? (
-          <form method="post" action={`/admin/featured/${row!.id}/delete`}>
+          <form method="post" action={featuredEditUrl(row!.id, inventory, true)}>
             <div class="actions">
               <button type="submit" class="link" data-testid="delete-featured">
                 Delete this slot

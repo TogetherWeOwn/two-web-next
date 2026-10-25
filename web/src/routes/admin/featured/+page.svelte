@@ -81,7 +81,7 @@ let { data }: PageProps = $props();
       <tbody>
         {#each data.rows as r (r.id)}
           <tr>
-            <td><a href={`/admin/featured/${r.id}`}>{r.title}</a></td>
+            <td><a href={data.editHrefs?.[r.id] ?? `/admin/featured/${r.id}`}>{r.title}</a></td>
             <td data-testid={`featured-status-${r.id}`}>
               <span class="featured-status featured-status-{r.status}" data-status={r.status}>
                 {r.status}

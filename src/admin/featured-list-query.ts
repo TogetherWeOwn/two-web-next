@@ -65,3 +65,31 @@ export function featuredEmptyText(query: FeaturedListQuery): string {
     ? "No featured content matches these filters."
     : "No featured content yet.";
 }
+
+const fields = ["q", "published", "sort", "order", "page"] as const;
+
+// Navigation only: carry five structured fields, never a caller-supplied URL.
+// Both GET and POST consume the action query with first-value semantics, like
+// the inventory. The shared parser bounds search and page before reflection.
+export function featuredReturnQuery(params: URLSearchParams): FeaturedListQuery | null {
+  if (!fields.some((field) => params.has(`inventory_${field}`))) return null;
+  return parseFeaturedListQuery(
+    Object.fromEntries(fields.map((field) => [field, params.get(`inventory_${field}`) ?? ""])),
+  );
+}
+
+export function featuredEditUrl(
+  id: number,
+  inventory?: FeaturedListQuery | null,
+  deletion = false,
+): string {
+  const path = `/admin/featured/${id}${deletion ? "/delete" : ""}`;
+  if (!inventory) return path;
+  const params = new URLSearchParams();
+  for (const field of fields) params.set(`inventory_${field}`, String(inventory[field]));
+  return `${path}?${params}`;
+}
+
+export function featuredReturnUrl(inventory?: FeaturedListQuery | null): string {
+  return inventory ? featuredListUrl(inventory) : "/admin/featured";
+}

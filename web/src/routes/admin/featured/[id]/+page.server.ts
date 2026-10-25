@@ -3,6 +3,11 @@ import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../../src/admin/db";
 import { resolveKitFeaturedEdit } from "../../../../../../src/admin/kit-featured-edit";
 import { getFeatured } from "../../../../../../src/admin/store-featured";
+import {
+  featuredEditUrl,
+  featuredReturnQuery,
+  featuredReturnUrl,
+} from "../../../../../../src/admin/featured-list-query";
 import type { PageServerLoad } from "./$types";
 
 // Server-rendered only: the Hono edit form ships no JavaScript beyond the
@@ -26,7 +31,7 @@ import type { PageServerLoad } from "./$types";
 // Hono-owned too.
 export const csr = false;
 
-export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
+export const load: PageServerLoad = async ({ parent, params, url, setHeaders }) => {
   // Layout and page loads can run concurrently; authorize before acquiring the database.
   await parent();
   const db = await dbFor({ env });
@@ -39,5 +44,11 @@ export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Featured content not found");
   setHeaders({ "cache-control": "private, no-store" });
-  return { view: outcome.view };
+  const inventory = featuredReturnQuery(url.searchParams);
+  return {
+    view: outcome.view,
+    returnHref: inventory ? featuredReturnUrl(inventory) : null,
+    saveHref: featuredEditUrl(outcome.view.id, inventory),
+    deleteHref: featuredEditUrl(outcome.view.id, inventory, true),
+  };
 };

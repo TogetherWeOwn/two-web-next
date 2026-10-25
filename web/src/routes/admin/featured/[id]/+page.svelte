@@ -31,6 +31,10 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
 <AdminShell title={`Edit ${data.view.title}`}>
 <section class="featured-form">
   <h1>Edit {data.view.title}</h1>
+  {#if data.returnHref}
+    <p><a href={data.returnHref}>Back to these featured results</a></p>
+    <p>After saving, this slot may no longer match these results. Your filters and page stay the same.</p>
+  {/if}
   <section
     class="featured-preview"
     aria-labelledby="featured-preview-heading"
@@ -73,7 +77,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       {data.view.windowRules}
     </p>
   </section>
-  <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="">
+  <form method="post" action={data.saveHref ?? `/admin/featured/${data.view.id}`} data-event-editor="">
     <!-- Native maxlength counts UTF-16 units and truncates supplementary
         characters early; the 255-code-point limits belong to the server
         validator so valid headlines and image descriptions survive. -->
@@ -131,11 +135,11 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </div>
     <div class="actions">
       <button type="submit" class="btn" data-testid="save-featured">Save</button>
-      <a href="/admin/featured">Cancel</a>
+      <a href={data.returnHref ?? "/admin/featured"}>Cancel</a>
     </div>
   </form>
   {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
-  <form method="post" action={`/admin/featured/${data.view.id}/delete`}>
+  <form method="post" action={data.deleteHref ?? `/admin/featured/${data.view.id}/delete`}>
     <div class="actions">
       <button type="submit" class="link" data-testid="delete-featured">
         Delete this slot

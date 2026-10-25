@@ -42,6 +42,7 @@ import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
+import { featuredEditUrl, featuredReturnQuery, featuredReturnUrl } from "./featured-list-query";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   FEATURED_PAGE_SIZE,
@@ -718,6 +719,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         imageHosts={c.env.FEATURED_IMAGE_HOSTS}
         mode="edit"
         row={row}
+        inventory={featuredReturnQuery(new URL(c.req.url).searchParams)}
         values={featuredValues(row)}
         errors={{}}
       />,
@@ -736,6 +738,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return writeUnavailable(c);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
+      const inventory = featuredReturnQuery(new URL(c.req.url).searchParams);
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
       let input;
@@ -753,6 +756,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   imageHosts={c.env.FEATURED_IMAGE_HOSTS}
                   mode="edit"
                   row={existing}
+                  inventory={inventory}
                   values={v}
                   errors={errors}
                 />,
@@ -764,7 +768,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       }
       try {
         const row = await updateFeatured(db, c.get("adminActor"), id, input);
-        return c.redirect(`/admin/featured/${row.id}`, 303);
+        return c.redirect(featuredEditUrl(row.id, inventory), 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
         throw err;
@@ -784,7 +788,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return writeUnavailable(c);
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
-        return c.redirect("/admin/featured", 303);
+        return c.redirect(
+          featuredReturnUrl(featuredReturnQuery(new URL(c.req.url).searchParams)),
+          303,
+        );
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
         throw err;

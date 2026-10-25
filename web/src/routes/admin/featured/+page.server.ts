@@ -8,6 +8,7 @@ import {
   type FeaturedListQuery,
 } from "../../../../../src/admin/featured-list-query";
 import type { PageServerLoad } from "./$types";
+import { featuredEditUrl } from "../../../../../src/admin/featured-list-query";
 
 function sortHeader(query: FeaturedListQuery, sort: FeaturedListQuery["sort"], label: string) {
   const active = query.sort === sort;
@@ -47,6 +48,9 @@ export const load: PageServerLoad = async ({ parent, setHeaders, url }) => {
   setHeaders({ "cache-control": "private, no-store" });
   return {
     rows: outcome.rows,
+    editHrefs: Object.fromEntries(
+      outcome.rows.map((row) => [row.id, featuredEditUrl(row.id, outcome.query)]),
+    ),
     query: outcome.query,
     hasNext: outcome.hasNext,
     emptyText: outcome.emptyText,

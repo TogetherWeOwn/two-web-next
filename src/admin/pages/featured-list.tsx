@@ -3,6 +3,7 @@
 import type { FC } from "hono/jsx";
 import { FeaturedStatusBadge } from "../../featured-status";
 import type { FeaturedRow } from "../store";
+import { featuredEditUrl } from "../featured-list-query";
 import {
   featuredEmptyText,
   featuredListUrl,
@@ -98,7 +99,7 @@ export const FeaturedPage: FC<{
               rows.map((r) => (
                 <tr key={r.id}>
                   <td>
-                    <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+                    <a href={featuredEditUrl(r.id, query)}>{r.title}</a>
                   </td>
                   <td data-testid={`featured-status-${r.id}`}>
                     <FeaturedStatusBadge row={r} now={now} />
