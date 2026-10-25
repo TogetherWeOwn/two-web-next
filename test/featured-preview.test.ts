@@ -65,15 +65,18 @@ const withoutIslands = (html: string) =>
 
 // Local rows only: these tests never open a database or public/staging endpoint.
 describe("featured publish-window status", () => {
-  it.each(states)("%s badge agrees with preview visibility", (status, window) => {
-    const saved = { ...row, ...window };
-    expect(featuredStatus(saved, now)).toBe(status);
-    expect(currentlyVisible(saved, now)).toBe(status === "live");
-    const table = String(jsx(FeaturedPage, { rows: [saved], query, now }));
-    expect(table).toContain(`data-status="${status}">${status}</span>`);
-    expect(edit(saved)).toContain(`data-status="${status}">${status}</span>`);
-    expect(edit(saved).includes('data-testid="featured-item"')).toBe(status === "live");
-  });
+  it.each(states)(
+    "%s badge reports eligibility independently of the saved preview",
+    (status, window) => {
+      const saved = { ...row, ...window };
+      expect(featuredStatus(saved, now)).toBe(status);
+      expect(currentlyVisible(saved, now)).toBe(status === "live");
+      const table = String(jsx(FeaturedPage, { rows: [saved], query, now }));
+      expect(table).toContain(`data-status="${status}">${status}</span>`);
+      expect(edit(saved)).toContain(`data-status="${status}">${status}</span>`);
+      expect(edit(saved)).toContain('data-testid="featured-item"');
+    },
+  );
 
   it.each([
     { startsAt: null, endsAt: null },
@@ -90,8 +93,8 @@ describe("featured publish-window status", () => {
       const saved = { ...row, startsAt, endsAt: now };
       expect(featuredStatus(saved, now)).toBe("expired");
       expect(currentlyVisible(saved, now)).toBe(false);
-      expect(edit(saved)).toContain('data-testid="featured-preview-hidden"');
-      expect(edit(saved)).not.toContain("<article");
+      expect(edit(saved)).not.toContain('data-testid="featured-preview-hidden"');
+      expect(articles(edit(saved))).toEqual([item(saved)]);
     },
   );
 
@@ -182,11 +185,15 @@ describe("featured SSR preview", () => {
     expect(withoutIslands(html)).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
   });
 
-  it.each(states.filter(([status]) => status !== "live"))("hides %s items", (_status, window) => {
-    const saved = { ...row, ...window };
-    expect(edit(saved)).toContain('data-testid="featured-preview-hidden"');
-    expect(edit(saved)).not.toContain("<article");
-  });
+  // Intentional contract change: a saved preview is not guest homepage eligibility.
+  it.each(states.filter(([status]) => status !== "live"))(
+    "previews saved %s items",
+    (_status, window) => {
+      const saved = { ...row, ...window };
+      expect(edit(saved)).not.toContain('data-testid="featured-preview-hidden"');
+      expect(articles(edit(saved))).toEqual([item(saved)]);
+    },
+  );
 
   it("labels the last-saved preview, including after an invalid submitted edit", () => {
     const html = edit(
