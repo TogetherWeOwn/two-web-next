@@ -12,6 +12,7 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../../src/events/kit-detail";
+import { JOIN_RESULT_COOKIE, type JoinResult } from "../../src/return-journey";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
 import app from "../app";
 
@@ -79,6 +80,7 @@ export async function renderPrintFixture(
   twin: Twin,
   row: Row,
   viewer: Viewer = "guest",
+  joinResult: JoinResult | null = null,
 ): Promise<Fixture> {
   const reads: string[] = [];
   const search = "?next=%2Fmembers%2Fprivate-fixture&session=fixture-context&token=fixture-bearer";
@@ -153,6 +155,17 @@ export async function renderPrintFixture(
         })
       ).split(";")[0]!;
     }
+    if (joinResult) {
+      const flash = (
+        await serializeSigned(JOIN_RESULT_COOKIE, joinResult, SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
+      cookie = [cookie, flash].filter(Boolean).join("; ");
+    }
     const env = {
       APP_URL: ORIGIN,
       SESSION_SECRET: SECRET,
@@ -214,7 +227,7 @@ export async function renderPrintFixture(
               moderator: viewer === "moderator",
             },
           },
-    joinResult: null,
+    joinResult,
     setHeaders: () => {},
     store,
   });
@@ -322,6 +335,7 @@ export async function openPrintFixture(
   fixture: Fixture,
   width = 1280,
   javaScriptEnabled = false,
+  failGoingCountRefresh = false,
 ) {
   const context = await browser.newContext({
     viewport: { width, height: width === 1280 ? 800 : 844 },
@@ -336,9 +350,19 @@ export async function openPrintFixture(
   const page = await context.newPage();
   const unexpected: string[] = [];
   const requests: string[] = [];
+  const aggregateRefreshes: string[] = [];
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     requests.push(`${route.request().method()} ${url.pathname}`);
+    if (failGoingCountRefresh && url.origin === ORIGIN && url.pathname === "/events.json") {
+      aggregateRefreshes.push(`${route.request().method()} ${url.pathname}${url.search}`);
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "fixture aggregate unavailable" }),
+      });
+      return;
+    }
     if (url.origin === ORIGIN && url.pathname === EVENT_PATH) {
       await route.fulfill({
         status: fixture.status,
@@ -370,7 +394,7 @@ export async function openPrintFixture(
   });
   await page.goto(CANONICAL);
   await page.evaluate("document.fonts.ready");
-  return { page, context, requests, unexpected };
+  return { page, context, requests, unexpected, aggregateRefreshes };
 }
 
 export async function printText(page: Page): Promise<string> {

@@ -84,7 +84,7 @@ const SUITES = [
     file: "test/event-print-summary-acceptance.test.ts",
     env: "EVENT_PRINT_BROWSER_TESTS",
     title: "event print summary browser acceptance",
-    min: 36,
+    min: 48,
   },
   {
     file: "test/event-print-narrow-wrap.test.ts",

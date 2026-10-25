@@ -333,7 +333,7 @@ jobs:
           EVENT_PRINT_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/event-print-summary-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-print-summary-acceptance.json
-          node ci/a11y-require-executed.mjs artifacts/a11y/event-print-summary-acceptance.json "event print summary browser acceptance" 36
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-print-summary-acceptance.json "event print summary browser acceptance" 48
       - name: Event print narrow wrap (real Chromium, 390px viewport)
         env:
           EVENT_PRINT_BROWSER_TESTS: "true"
