@@ -193,6 +193,15 @@ function cleared(res: Response, name: string): boolean {
     .some((line) => line.startsWith(`${name}=`) && /Max-Age=0/i.test(line));
 }
 
+async function expectCrossOriginEnvelope(res: Response): Promise<void> {
+  const { request_id, ...body } = (await res.json()) as Record<string, unknown>;
+  expect(body).toEqual({ error: "cross_origin" });
+  if (request_id !== undefined) {
+    expect(request_id).toMatch(/^(?:[a-fA-F0-9]{16}(?:-[A-Z]{3})?|[0-7][0-9A-HJKMNP-TV-Z]{25})$/);
+    expect(request_id).toBe(res.headers.get("x-request-id"));
+  }
+}
+
 function leaked(text: string, secrets: string[]): string[] {
   return secrets.filter((secret) => secret && text.includes(secret));
 }
@@ -426,7 +435,7 @@ describe("sign out everywhere admission matches POST /logout", () => {
       envFor(store),
     );
     expect(refused.status).toBe(403);
-    expect(await refused.json()).toEqual({ error: "cross_origin" });
+    await expectCrossOriginEnvelope(refused);
     expect(refused.headers.getSetCookie()).toEqual([]);
     expect(sweep).not.toHaveBeenCalled();
     expect(revoke).not.toHaveBeenCalled();
@@ -461,7 +470,7 @@ describe("sign out everywhere admission matches POST /logout", () => {
       envFor(store),
     );
     expect(refused.status).toBe(403);
-    expect(await refused.json()).toEqual({ error: "cross_origin" });
+    await expectCrossOriginEnvelope(refused);
     expect(refused.headers.getSetCookie()).toEqual([]);
     expect(sweep).not.toHaveBeenCalled();
     expect(await store.get(current.hash)).not.toBeNull();
