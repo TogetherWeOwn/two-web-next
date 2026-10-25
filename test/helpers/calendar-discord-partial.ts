@@ -78,6 +78,7 @@ export async function partialHtml(
         ...model,
         now: new Date("2099-05-01T12:00:00Z"),
         member: false,
+        session: null,
         moderator: false,
         inviteUrl: PARTIAL_INVITE,
         appUrl: origin,
