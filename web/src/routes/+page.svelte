@@ -83,7 +83,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
     </p>
   {:else if noticeText}
     <p class="notice" role="status" data-testid="notice">{noticeText}</p>
-    {#if notice === "signin_failed" || notice === "signin_unavailable"}
+    {#if notice === "signin_failed" || notice === "signin_denied" || notice === "signin_unavailable"}
       <p>
         <a href="/auth/discord" data-testid="notice-retry">Try signing in again</a>
       </p>
