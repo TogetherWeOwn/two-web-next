@@ -73,12 +73,24 @@ export function registerAdminSafeRecoveryBrowserAcceptance(
             try {
               await page.route("**/*", async (route) => {
                 const request = route.request();
-                if (request.resourceType() === "stylesheet") {
+                if (["stylesheet", "image", "font"].includes(request.resourceType())) {
                   const path = new URL(request.url()).pathname;
-                  if (["/styles.css", "/admin-rsvp-review.css"].includes(path)) {
+                  if (
+                    [
+                      "/styles.css",
+                      "/admin-rsvp-review.css",
+                      "/logo.svg",
+                      "/fonts/display-latin-500.woff2",
+                      "/fonts/display-latin-700.woff2",
+                    ].includes(path)
+                  ) {
                     return route.fulfill({
-                      contentType: "text/css",
-                      body: await readFile(resolve("public", path.slice(1)), "utf8"),
+                      contentType: path.endsWith(".css")
+                        ? "text/css"
+                        : path.endsWith(".svg")
+                          ? "image/svg+xml"
+                          : "font/woff2",
+                      body: await readFile(resolve("public", path.slice(1))),
                     });
                   }
                 }
@@ -157,12 +169,24 @@ export function registerAdminSafeRecoveryBrowserAcceptance(
         try {
           await page.route("**/*", async (route) => {
             const request = route.request();
-            if (request.resourceType() === "stylesheet") {
+            if (["stylesheet", "image", "font"].includes(request.resourceType())) {
               const path = new URL(request.url()).pathname;
-              if (["/styles.css", "/admin-rsvp-review.css"].includes(path))
+              if (
+                [
+                  "/styles.css",
+                  "/admin-rsvp-review.css",
+                  "/logo.svg",
+                  "/fonts/display-latin-500.woff2",
+                  "/fonts/display-latin-700.woff2",
+                ].includes(path)
+              )
                 return route.fulfill({
-                  contentType: "text/css",
-                  body: await readFile(resolve("public", path.slice(1)), "utf8"),
+                  contentType: path.endsWith(".css")
+                    ? "text/css"
+                    : path.endsWith(".svg")
+                      ? "image/svg+xml"
+                      : "font/woff2",
+                  body: await readFile(resolve("public", path.slice(1))),
                 });
             }
             if (!request.isNavigationRequest()) return route.abort();
