@@ -46,6 +46,10 @@ const argErrorLength = 500;
 export const MAX_HTML_BODY_BYTES = 1_048_576;
 export const MAX_HTML_ELEMENTS = 10_000;
 export const MAX_HTML_DEPTH = 256;
+// parse5 compares every new attribute name on a tag with the earlier ones
+// before any tree hook runs, so one tag with many names is quadratic and cannot
+// be interrupted by a deadline check. Real tags carry a few dozen at most.
+export const MAX_HTML_ATTRIBUTES_PER_TAG = 1_000;
 
 function analysisError(code) {
   const err = new Error("HTML analysis exceeded its admission limit");
@@ -57,10 +61,63 @@ function checkAnalysisDeadline(deadlineAt) {
   if (performance.now() >= deadlineAt) throw analysisError("LINKS_TIMEOUT");
 }
 
+const isTagSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r";
+const isAsciiLetter = (c) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+
+// Linear, allocation-free pass that mirrors the tokenizer's tag grammar just
+// closely enough to count attribute names per tag before parse5 sees them. It
+// over-counts only for tag-shaped text inside raw-text elements, which fails
+// closed above a limit no real tag approaches.
+function admitTagAttributes(html) {
+  const n = html.length;
+  let i = 0;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) return;
+    i = lt + 1;
+    if (html.startsWith("!--", i)) {
+      const end = html.indexOf("-->", i + 3);
+      if (end === -1) return;
+      i = end + 3;
+      continue;
+    }
+    if (html[i] === "/") i += 1;
+    if (!isAsciiLetter(html[i] ?? "")) continue;
+    while (i < n && !isTagSpace(html[i]) && html[i] !== "/" && html[i] !== ">") i += 1;
+    let attributes = 0;
+    while (i < n) {
+      while (i < n && (isTagSpace(html[i]) || html[i] === "/")) i += 1;
+      if (i >= n) return;
+      if (html[i] === ">") {
+        i += 1;
+        break;
+      }
+      attributes += 1;
+      if (attributes > MAX_HTML_ATTRIBUTES_PER_TAG) throw analysisError("HTML_TOO_COMPLEX");
+      i += 1;
+      while (i < n && !isTagSpace(html[i]) && !"/>=".includes(html[i])) i += 1;
+      while (i < n && isTagSpace(html[i])) i += 1;
+      if (html[i] !== "=") continue;
+      i += 1;
+      while (i < n && isTagSpace(html[i])) i += 1;
+      const quote = html[i];
+      if (quote === '"' || quote === "'") {
+        const close = html.indexOf(quote, i + 1);
+        if (close === -1) return;
+        i = close + 1;
+      } else {
+        while (i < n && !isTagSpace(html[i]) && html[i] !== ">") i += 1;
+      }
+    }
+  }
+}
+
 function admitHtml(html, deadlineAt) {
   checkAnalysisDeadline(deadlineAt);
   if (Buffer.byteLength(html, "utf8") > MAX_HTML_BODY_BYTES)
     throw analysisError("ROUTE_BODY_TOO_LARGE");
+  admitTagAttributes(html);
+  checkAnalysisDeadline(deadlineAt);
 }
 
 // parse5's supported adapter hooks run during tree construction, not after it.
@@ -547,7 +604,7 @@ export async function collectStandards(options = {}) {
           path,
           "html",
           "HTML_TOO_COMPLEX",
-          `${path}: document exceeds ${MAX_HTML_ELEMENTS} elements or depth ${MAX_HTML_DEPTH}; not analyzed`,
+          `${path}: document exceeds ${MAX_HTML_ELEMENTS} elements, depth ${MAX_HTML_DEPTH} or ${MAX_HTML_ATTRIBUTES_PER_TAG} attributes on one tag; not analyzed`,
         );
       else
         pushRouteFinding(path, "links", "LINKS_ANALYSIS_FAILED", `${path}: link analysis failed`);
@@ -600,7 +657,7 @@ const NEXT_ACTION_BY_CODE = {
   HTML_TOO_LARGE:
     "Serve a smaller document for this route (under the body cap), then re-run the web-standards gate.",
   HTML_TOO_COMPLEX:
-    "Reduce the element count or nesting depth of the document, then re-run the web-standards gate.",
+    "Reduce the element count, nesting depth or per-tag attribute count of the document, then re-run the web-standards gate.",
   LINKS_TIMEOUT:
     "Reduce the document size or complexity so links are analyzed within the route budget, then re-run the web-standards gate.",
   LINKS_ANALYSIS_FAILED:

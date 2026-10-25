@@ -64,6 +64,7 @@ test("HTML analysis bounds are fixed, without increasing the route deadline", ()
   assert.equal(standards.MAX_HTML_BODY_BYTES, 1_048_576);
   assert.equal(standards.MAX_HTML_ELEMENTS, 10_000);
   assert.equal(standards.MAX_HTML_DEPTH, 256);
+  assert.equal(standards.MAX_HTML_ATTRIBUTES_PER_TAG, 1_000);
   assert.equal(standards.ROUTE_READ_TIMEOUT_MS, 15_000);
 });
 
@@ -83,6 +84,36 @@ test("a deeply nested response below the byte cap still fails promptly", () => {
 
 test("a flat element flood is bounded too", () => {
   boundedCollector(`'UNTRUSTED_BODY_CANARY' + '<b></b>'.repeat(15_000)`, "HTML_TOO_COMPLEX");
+});
+
+const attrs = (count) => Array.from({ length: count }, (_, i) => `a${i}`).join(" ");
+
+test("a 180k-unique-attribute tag under the byte cap is rejected before the parser's quadratic scan", () => {
+  boundedCollector(
+    `'UNTRUSTED_BODY_CANARY<div ' + Array.from({length: 180_000}, (_, i) => 'a' + i.toString(36)).join(' ') + '>'`,
+    "HTML_TOO_COMPLEX",
+  );
+});
+
+test("attribute admission counts quoted, unquoted and valueless names exactly at the cap", () => {
+  const html = (tag) => `<!doctype html><body>${tag}<a href="/about">x</a>`;
+  const hrefs = (tag) => standards.internalLinks(html(tag));
+  assert.deepEqual(hrefs(`<div ${attrs(1_000)}>`), ["/about"]);
+  assert.throws(() => hrefs(`<div ${attrs(1_001)}>`), { code: "HTML_TOO_COMPLEX" });
+  assert.throws(
+    () => hrefs(`<div ${Array.from({ length: 1_001 }, (_, i) => `a${i}="v"`).join(" ")}>`),
+    { code: "HTML_TOO_COMPLEX" },
+  );
+  assert.throws(
+    () => hrefs(`<div ${Array.from({ length: 1_001 }, (_, i) => `a${i}=v${i}`).join(" ")}>`),
+    { code: "HTML_TOO_COMPLEX" },
+  );
+  assert.throws(() => hrefs(`</div ${attrs(1_001)}>`), { code: "HTML_TOO_COMPLEX" });
+  // Many tags with few attributes, '>' and '<' inside quoted values and comments
+  // never count toward one tag's limit.
+  assert.deepEqual(hrefs(`<i a b c></i>`.repeat(5_000)), ["/about"]);
+  assert.deepEqual(hrefs(`<div title="a > b < c ${attrs(2_000)}">`), ["/about"]);
+  assert.deepEqual(hrefs(`<!-- <div ${attrs(2_000)}> -->`), ["/about"]);
 });
 
 test("body admission counts streamed UTF-8 bytes and cancels without waiting for cleanup", async () => {
