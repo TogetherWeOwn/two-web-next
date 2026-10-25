@@ -1,12 +1,14 @@
 // Shared command line for ci/visual-accept.mjs and ci/kit-visual-accept.mjs:
 //   node ci/<script> [--dry-run] [--format json] <artifact-dir>
-// Flags may sit before or after the positional. Anything else starting with
-// "-" is refused (exit 2) before the artifact is read or a baseline written.
+// Flags may sit before or after the positional, each at most once. Anything
+// else starting with "-" is refused (exit 2) before the artifact is read or a
+// baseline written.
 //
 // Order of checks: flags (UNKNOWN_FLAG), then the positional count
 // (MISSING_ARG, EXTRA_ARGS), then the artifact directory (ARTIFACT_NOT_FOUND),
-// then planning (NO_CANDIDATES, COLLISION, STALE_COPY_CONFLICT, IO_ERROR), then
-// the only writes. Usage errors exit 2, refusals and no-ops exit 1, success 0.
+// then planning (NO_CANDIDATES, COLLISION, STALE_COPY_CONFLICT, boundary
+// codes, IO_ERROR), then the only writes. Usage errors exit 2, refusals and
+// no-ops exit 1, success 0.
 //
 // --dry-run prints the plan and writes nothing. --format json replaces the
 // human output with one versioned verdict line on stdout (stderr stays empty),
@@ -17,7 +19,12 @@
 // Adapters (see HONO_ADAPTER and KIT_ADAPTER) supply the suite's plan/apply
 // and its compatible human wording; this module never imports either suite.
 import { statSync } from "node:fs";
-import { relative, sep } from "node:path";
+import {
+  MAX_DIAGNOSTIC_BYTES,
+  safeDestName,
+  safeRelativePath,
+  truncateUtf8,
+} from "./visual-accept-policy.mjs";
 
 export const JSON_VERSION = 1;
 const MAX_LISTED = 20;
@@ -33,6 +40,9 @@ export const CODES = Object.freeze({
   NO_CANDIDATES: "NO_CANDIDATES",
   NO_CHANGES: "NO_CHANGES",
   IO_ERROR: "IO_ERROR",
+  SOURCE_SYMLINK: "SOURCE_SYMLINK",
+  DESTINATION_SYMLINK: "DESTINATION_SYMLINK",
+  ARTIFACT_LIMIT: "ARTIFACT_LIMIT",
 });
 
 const NEXT_ACTION = {
@@ -51,21 +61,32 @@ const NEXT_ACTION = {
   NO_CHANGES:
     "Every candidate already matches the checkout; check you unzipped the failed run's artifact.",
   IO_ERROR: "Check read and write permission on the artifact and baseline directories, then rerun.",
+  SOURCE_SYMLINK:
+    "Remove the symlink from the artifact tree and pass a real directory, then rerun.",
+  DESTINATION_SYMLINK: "Remove the linked destination file or directory and rerun.",
+  ARTIFACT_LIMIT: "Narrow the artifact to the failed run's screenshots and rerun.",
 };
 
 // Parses argv (without node and script) into flags and positionals. Never
 // touches the filesystem. `error` is the first failing check in documented
-// order, or null.
+// order, or null. Each flag is accepted at most once: a repeat is most likely
+// a pasted typo, so it fails like any other unknown flag.
 export function parseInvocation(argv) {
   let dryRun = false;
   let json = false;
   let badFlag = false;
+  let seenDryRun = false;
+  let seenFormat = false;
   const positionals = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--dry-run") {
+      if (seenDryRun) badFlag = true;
+      seenDryRun = true;
       dryRun = true;
     } else if (token === "--format") {
+      if (seenFormat) badFlag = true;
+      seenFormat = true;
       if (argv[index + 1] === "json") {
         json = true;
         index += 1;
@@ -107,7 +128,7 @@ function errnoToken(error) {
 // Sources are absolute or cwd-relative under the artifact root; print them
 // artifact-relative with forward slashes.
 function relativeSource(root, path) {
-  return relative(root, path).split(sep).join("/");
+  return safeRelativePath(root, path);
 }
 
 function jsonBase(adapter, flags, outcome) {
@@ -123,12 +144,58 @@ function jsonBase(adapter, flags, outcome) {
   };
 }
 
+// Trim complete list entries, never serialized JSON. Counts include entries
+// omitted for either the listing limit or the final UTF-8 byte budget.
+function boundedJson(payload) {
+  const lists = payload.plan
+    ? ["destinations", "sources", "skipped", "collisions"].map((key) => ({
+        items: payload.plan[key],
+        omit: () => {
+          payload.plan.truncated[key] += 1;
+        },
+      }))
+    : ["accepted", "collisions"]
+        .filter((key) => Array.isArray(payload[key]))
+        .map((key) => ({
+          items: payload[key],
+          omit: () => {
+            payload.truncated += 1;
+          },
+        }));
+  let output = `${JSON.stringify(payload)}\n`;
+  while (Buffer.byteLength(output) > MAX_DIAGNOSTIC_BYTES) {
+    const largest = lists
+      .filter(({ items }) => items.length > 0)
+      .sort(
+        (a, b) =>
+          Buffer.byteLength(JSON.stringify(b.items)) - Buffer.byteLength(JSON.stringify(a.items)),
+      )[0];
+    if (!largest) throw new Error("Fixed visual report exceeds its byte budget.");
+    largest.items.pop();
+    largest.omit();
+    output = `${JSON.stringify(payload)}\n`;
+  }
+  return output;
+}
+
+function boundedHuman(value, maxBytes) {
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  // Keep the machine-readable refusal and next action after a truncated list.
+  const codeAt = value.lastIndexOf("\ncode=");
+  const suffix = codeAt === -1 ? "" : value.slice(codeAt + 1);
+  const body = codeAt === -1 ? value : value.slice(0, codeAt);
+  const marker = "\n... report truncated\n";
+  return `${truncateUtf8(body, maxBytes - Buffer.byteLength(marker + suffix))}${marker}${suffix}`;
+}
+
 function finish(adapter, flags, outcome, human) {
   if (flags.json) {
     const payload = { ...jsonBase(adapter, flags, outcome), ...(outcome.extra ?? {}) };
-    return { status: outcome.status, stdout: `${JSON.stringify(payload)}\n`, stderr: "" };
+    return { status: outcome.status, stdout: boundedJson(payload), stderr: "" };
   }
-  return { status: outcome.status, stdout: human.stdout ?? "", stderr: human.stderr ?? "" };
+  const stderr = boundedHuman(human.stderr ?? "", MAX_DIAGNOSTIC_BYTES);
+  const stdout = boundedHuman(human.stdout ?? "", MAX_DIAGNOSTIC_BYTES - Buffer.byteLength(stderr));
+  return { status: outcome.status, stdout, stderr };
 }
 
 function codeLines(outcome) {
@@ -154,6 +221,9 @@ function planOutcome(adapter, flags, plan) {
   if (plan.verdict === "stale_copy_conflict") {
     return { ...base, status: 1, ok: false, code: CODES.STALE_COPY_CONFLICT, verdict: "refuse" };
   }
+  if (plan.verdict === "boundary") {
+    return { ...base, status: 1, ok: false, code: plan.boundary.code, verdict: "refuse" };
+  }
   if (plan.writes.length === 0 && adapter.nothingWrittenFails) {
     return { ...base, status: 1, ok: false, code: CODES.NO_CHANGES, verdict: "no-op" };
   }
@@ -167,19 +237,19 @@ function nextActionFor(outcome, dryRun) {
 
 function dryRunPlan(plan, outcome, root) {
   const sources = plan.writes.map(({ dest, src }) => ({
-    destination: dest,
+    destination: safeDestName(dest),
     source: relativeSource(root, src),
   }));
   const skipped = plan.skipped.map(({ src, reason }) => ({
     item: relativeSource(root, src),
     reason,
   }));
-  const destinations = listed(plan.writes.map(({ dest }) => dest));
+  const destinations = listed(plan.writes.map(({ dest }) => safeDestName(dest)));
   const sourceList = listed(sources);
   const skippedList = listed(skipped);
   const collisions = listed(
     plan.duplicates.map(({ dest, sources: files }) => ({
-      destination: dest,
+      destination: safeDestName(dest),
       source_count: files.length,
     })),
   );
@@ -189,6 +259,7 @@ function dryRunPlan(plan, outcome, root) {
     skipped: skippedList.shown,
     collisions: collisions.shown,
     collision: plan.verdict === "collision" ? "refused" : "none",
+    boundary: plan.verdict === "boundary" ? { ...plan.boundary } : null,
     verdict: outcome.verdict,
     truncated: {
       destinations: destinations.truncated,
@@ -208,18 +279,25 @@ function dryRunHuman(adapter, plan, outcome, root) {
     lines.push("verdict: refuse (collision; would write no baselines)");
   } else if (plan.verdict === "stale_copy_conflict") {
     lines.push("verdict: refuse (stale copy conflict; would write no baselines)");
+  } else if (plan.verdict === "boundary") {
+    lines.push("verdict: refuse (boundary; would write no baselines)");
   } else if (plan.verdict === "no_candidates") {
     lines.push("verdict: no-op (no baseline candidates in artifact; would write nothing)");
   } else {
     lines.push("verdict: no-op (every candidate matches the checkout; would write nothing)");
   }
   lines.push(`collision: ${plan.verdict === "collision" ? "refused" : "none"}`);
-  if (plan.verdict === "collision" || plan.verdict === "stale_copy_conflict") {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
     lines.push(adapter.refusalMessage(plan, root));
   }
   const writes = listed(plan.writes);
   lines.push(writes.shown.length > 0 ? `destinations (${count}):` : "destinations: none");
-  for (const { dest, src } of writes.shown) lines.push(`  ${dest} <- ${relativeSource(root, src)}`);
+  for (const { dest, src } of writes.shown)
+    lines.push(`  ${safeDestName(dest)} <- ${relativeSource(root, src)}`);
   if (writes.truncated > 0) lines.push(`  ... and ${writes.truncated} more destination(s)`);
   const skipped = listed(plan.skipped);
   lines.push(skipped.shown.length > 0 ? `skipped (${plan.skipped.length}):` : "skipped: none");
@@ -275,23 +353,29 @@ export function runCli(adapter, argv) {
     }
   }
   if (flags.json) {
-    const names = listed(plan.writes.map(({ dest }) => dest));
+    const names = listed(plan.writes.map(({ dest }) => safeDestName(dest)));
     outcome.extra = { accepted: names.shown, truncated: names.truncated };
     if (plan.verdict === "collision") {
       const collisions = listed(
         plan.duplicates.map(({ dest, sources }) => ({
-          destination: dest,
+          destination: safeDestName(dest),
           source_count: sources.length,
         })),
       );
       outcome.extra = { collisions: collisions.shown, truncated: collisions.truncated };
     } else if (plan.verdict === "stale_copy_conflict") {
-      outcome.extra = { conflicts: [plan.conflict.dest] };
+      outcome.extra = { conflicts: [safeDestName(plan.conflict.dest)] };
+    } else if (plan.verdict === "boundary") {
+      outcome.extra = { boundary: { ...plan.boundary } };
     }
     return finish(adapter, flags, outcome, {});
   }
 
-  if (plan.verdict === "collision" || plan.verdict === "stale_copy_conflict") {
+  if (
+    plan.verdict === "collision" ||
+    plan.verdict === "stale_copy_conflict" ||
+    plan.verdict === "boundary"
+  ) {
     return finish(adapter, flags, outcome, {
       stderr: `${adapter.refusalMessage(plan, root)}\n${codeLines(outcome)}`,
     });

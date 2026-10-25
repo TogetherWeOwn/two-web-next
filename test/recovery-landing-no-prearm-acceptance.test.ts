@@ -335,7 +335,7 @@ describe("recovery landing never pre-arms the pending notice", () => {
     expect(patch.status).toBe(401);
     expect(patch.headers.get("location")).toBeNull();
     expect(await patch.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: `/auth/recover?next=${DEST_ENC}`,
     });
     expect(patch.headers.getSetCookie()).toEqual([]);

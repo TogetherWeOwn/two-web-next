@@ -284,6 +284,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |
 | `src/featured-policy.ts` | content |
 | `src/featured-status.tsx` | content |
@@ -298,6 +299,7 @@ exactly once.
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
+| `src/json-refusal.ts` | http-guard |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |

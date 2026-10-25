@@ -28,7 +28,9 @@ test("staging feeds and SEO endpoints answer public GETs", async ({ request }) =
   const rss = await request.get("/events.rss");
   expect(rss.status()).toBe(200);
   expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
-  expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
+  // Staging edge appends `no-transform` (challenge-platform injection
+  // suppression); origin still sends `max-age=300, public`.
+  expect(rss.headers()["cache-control"]).toBe("max-age=300, public, no-transform");
   expect(rss.headers()["set-cookie"] ?? null).toBeNull();
   const rssBody = await rss.text();
   expect(rssBody).toContain('<?xml version="1.0" encoding="UTF-8"?>');
@@ -39,7 +41,7 @@ test("staging feeds and SEO endpoints answer public GETs", async ({ request }) =
   const ics = await request.get("/events.ics");
   expect(ics.status()).toBe(200);
   expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
-  expect(ics.headers()["cache-control"]).toBe("max-age=300, public");
+  expect(ics.headers()["cache-control"]).toBe("max-age=300, public, no-transform");
   expect(ics.headers()["set-cookie"] ?? null).toBeNull();
   const icsBody = await ics.text();
   expect(icsBody).toContain("BEGIN:VCALENDAR");

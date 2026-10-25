@@ -72,6 +72,9 @@
   // Back changes the address before its fetch commits. Replacing that request
   // must not lose the obligation to reconcile the address with the rendered page.
   var renderedAddress = pageAddress(new URL(window.location.href));
+  // The SSR select is the effective scope, not the raw (possibly unknown) URL.
+  // Keep it separate from unsent edits to the persistent form.
+  var renderedGame = gameField ? gameField.value : "";
 
   function pageAddress(url) {
     return url.pathname + url.search;
@@ -110,7 +113,19 @@
   // would have shown, never the generic failure copy. The past drawer and the
   // upcoming-list page are part of the destination: without them a failed
   // pager turn or past toggle would read as "Couldn't load X. Showing X."
-  function describeDestination(address) {
+  // Mirrors resolveGameFilter: only a known option can name a game scope.
+  function effectiveGame(raw) {
+    var want = (raw || "").trim().toLowerCase();
+    var option =
+      gameField &&
+      gameField.options &&
+      Array.from(gameField.options).find(function (item) {
+        return item.value.trim().toLowerCase() === want;
+      });
+    return option ? option.value : "";
+  }
+
+  function describeDestination(address, game) {
     var params = new URL(address, window.location.origin).searchParams;
     var q = params.get("q") || "";
     var view = params.get("view") || "list";
@@ -124,6 +139,7 @@
         : view === "calendar"
           ? "results for “" + q + "” in " + place
           : "results for “" + q + "”";
+    if (gameField) base += game ? " for “" + game + "”" : " across all games";
     if (params.get("past") === "1") base += " with past events";
     // Page 1 is the bare address (calendarUrl omits it), so only later list
     // pages need naming; the grid is month-scoped and never carries a page.
@@ -168,17 +184,16 @@
     }, ms);
   }
 
-  function showRecovery(url, cooldownMs) {
-    if (!hasRecovery) return;
-    // Keep the full intent including any card hash: a failed grid day-jump
-    // retries onto the picked card instead of only its list page. The fetch
-    // still sends path+query only; history and jump focus reuse the hash.
-    failedIntent = pageAddress(url) + (url.hash || "");
+  function showRecovery(url, cooldownMs, queryRevision, facetRevision) {
+    if (!hasRecovery || inputRevision !== queryRevision || gameRevision !== facetRevision) return;
+    // Retain the full URL, including a grid day-jump's card hash. Nothing
+    // mutates this intent; fetch still sends only its path and query.
+    failedIntent = url;
     var copy =
       "Couldn't load " +
-      describeDestination(pageAddress(url)) +
+      describeDestination(pageAddress(url), effectiveGame(url.searchParams.get("game"))) +
       ". Showing " +
-      describeDestination(renderedAddress) +
+      describeDestination(renderedAddress, renderedGame) +
       ".";
     if (cooldownMs) {
       var seconds = Math.round(cooldownMs / 1000);
@@ -296,6 +311,18 @@
     // 429 backoff belongs to this read only: a missing or hostile
     // Retry-After leaves the explicit retry immediate.
     var retryAfterMs = null;
+    // HTTP, transport, fragment and deadline failures share the same retained
+    // page/revision boundary. Back/forward still reconciles through SSR.
+    function failRead(cooldownMs) {
+      feedback.textContent = root.dataset.loadError;
+      setLoading(false);
+      if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
+        window.location.assign(window.location.href);
+      } else {
+        showRecovery(url, cooldownMs, inputRevisionAtStart, gameRevisionAtStart);
+        restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
+      }
+    }
     if (canTimeout) {
       deadlineTimer = setTimeout(function () {
         if (active !== controller) return;
@@ -311,14 +338,7 @@
         // the Back/forward reconcile the catch path performs: popstate commits
         // the address before the read, so a timed-out Back (or a push that
         // superseded one) reloads for SSR to restore the matching page.
-        feedback.textContent = root.dataset.loadError;
-        setLoading(false);
-        if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
-          window.location.assign(window.location.href);
-        } else {
-          showRecovery(url, null);
-          restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
-        }
+        failRead(null);
       }, READ_DEADLINE_MS);
     }
     try {
@@ -431,6 +451,9 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
+      var sourceGame = page.querySelector('select[name="game"]');
+      // The admitted page owns this scope even when newer drafts keep the select.
+      renderedGame = sourceGame ? sourceGame.value : "";
       if (
         opts.syncInput &&
         input.value === inputAtStart &&
@@ -447,8 +470,7 @@
         gameField.value === gameAtStart &&
         gameRevision === gameRevisionAtStart
       ) {
-        var sourceGame = page.querySelector('select[name="game"]');
-        if (sourceGame) gameField.value = sourceGame.value;
+        if (sourceGame) gameField.value = renderedGame;
       }
       var canonicalLink = document.querySelector('link[rel="canonical"]');
       var ogUrl = document.querySelector('meta[property="og:url"]');
@@ -468,18 +490,7 @@
       }
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
-      feedback.textContent = root.dataset.loadError;
-      // Preserve last-good content for ordinary failed actions. If Back/forward
-      // changed the address (even before a superseding push), SSR restores it.
-      if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
-        window.location.assign(window.location.href);
-      } else {
-        // Ordinary failure: the last-good zones stay, the missed destination
-        // is named beside them, and the failed GET intent gains an explicit
-        // retry plus a safe return.
-        showRecovery(url, retryAfterMs);
-        restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
-      }
+      failRead(retryAfterMs);
     } finally {
       if (trackFocus) document.removeEventListener("focusin", trackFocus);
       if (deadlineTimer !== null) {
@@ -614,6 +625,7 @@
   if (gameField)
     gameField.addEventListener("change", function () {
       gameRevision += 1;
+      hideRecovery();
       cancelSearch();
     });
 
@@ -640,7 +652,7 @@
     retry.addEventListener("click", function () {
       if (!failedIntent || retry.disabled) return;
       parkFocus(retry);
-      var intent = new URL(failedIntent, window.location.origin);
+      var intent = failedIntent;
       load(intent, true, {
         skeleton: true,
         syncInput: true,
@@ -650,6 +662,7 @@
     clearRead.addEventListener("click", function () {
       if (!failedIntent) return;
       input.value = new URL(renderedAddress, window.location.origin).searchParams.get("q") || "";
+      if (gameField) gameField.value = renderedGame;
       // The safe return reaches the same steady state as a successful load:
       // the generic failure line clears instead of prompting a retry of an
       // intent the member just abandoned.
