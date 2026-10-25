@@ -1,0 +1,73 @@
+{
+  "numTotalTestSuites": 2,
+  "numPassedTestSuites": 2,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 3,
+  "numPassedTests": 3,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1792807471382,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["RSVP outcome focus in Chromium"],
+          "fullName": "RSVP outcome focus in Chromium alpha",
+          "status": "passed",
+          "title": "alpha",
+          "duration": 2.5987069999999903,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["RSVP outcome focus in Chromium"],
+          "fullName": "RSVP outcome focus in Chromium beta",
+          "status": "passed",
+          "title": "beta",
+          "duration": 0.1463549999999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        },
+        {
+          "ancestorTitles": ["RSVP outcome focus in Chromium"],
+          "fullName": "RSVP outcome focus in Chromium gamma",
+          "status": "passed",
+          "title": "gamma",
+          "duration": 0.07529099999999289,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1792807471599,
+      "endTime": 1792807471602.0752,
+      "status": "passed",
+      "message": "",
+      "name": "/fixtures/control.test.mjs"
+    }
+  ]
+}
