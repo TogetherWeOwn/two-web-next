@@ -80,6 +80,18 @@ const SUITES = [
     title: "event device timezone ends browser acceptance",
     min: 30,
   },
+  {
+    file: "test/event-print-summary-acceptance.test.ts",
+    env: "EVENT_PRINT_BROWSER_TESTS",
+    title: "event print summary browser acceptance",
+    min: 36,
+  },
+  {
+    file: "test/event-print-narrow-wrap.test.ts",
+    env: "EVENT_PRINT_BROWSER_TESTS",
+    title: "event print narrow wrap browser acceptance",
+    min: 2,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");

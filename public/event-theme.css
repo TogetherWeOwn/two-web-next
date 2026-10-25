@@ -56,3 +56,21 @@
 .event-theme .event-share{padding-top: 0}
 .event-theme .event-pagination a[rel='next']{align-items: start;text-align: left}
 }
+/* Event-only print summary. */
+@media print {
+  html:root, html:root body { background: white; }
+  .base-theme.event-theme {
+    background: white;
+    --color-text: var(--color-page); --color-surface: white;
+    --color-muted: var(--color-border); --color-accent: var(--color-border);
+  }
+  .event-theme .site-header, .event-theme footer, .event-theme [href="#main"],
+  .event-theme .event-back, .event-theme .event-rsvp, .event-theme .event-share,
+  .event-theme [data-testid=event-attendees], .event-theme [data-testid=event-join-pitch],
+  .event-theme .event-discovery, .event-theme .event-device-timezone button,
+  .event-theme .event-join-details a, .event-theme .event-screen-only,
+  .event-theme .event-gone .facts, .event-theme .event-gone a,
+  .event-theme [data-testid=event-going-count-retry], .event-theme [data-testid=join-result] { display: none; }
+  .event-theme .event-hero { background: none; }
+  .event-theme .event-print-only { display: block; overflow-wrap: anywhere; }
+}

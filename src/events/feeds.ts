@@ -2,6 +2,7 @@
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
 import { containsControlCharacters } from "../admin/validation-shared";
+import { hasUrlUserinfo } from "../image-policy";
 import { stripTrailingSlash } from "../seo";
 import { rssXml as xml } from "./rss-xml";
 
@@ -345,4 +346,30 @@ export function googleCalendarUrl(e: EventRow): string {
  * this helper so the served hrefs are byte-identical. */
 export function directionsUrl(venue: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${q(venue)}`;
+}
+
+/** Print-safe join destination: an absolute http(s) URL with no query string,
+ * fragment, userinfo, malformed percent encoding, or decoded private path
+ * segment. Bearer tokens, session ids and return context travel in the query,
+ * so only a bare room URL is readable on paper; anything credential-shaped
+ * stays a screen-only hyperlink (and hides in print, so no credential survives
+ * as a PDF link annotation either). Unparseable or non-http(s) values are
+ * never printable. */
+export function isPrintableJoinDestination(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  if (hasUrlUserinfo(raw) || url.username !== "" || url.password !== "") return false;
+  if (url.search !== "" || url.hash !== "") return false;
+  try {
+    return !url.pathname
+      .split("/")
+      .some((segment) => /^private([-_].*)?$/i.test(decodeURIComponent(segment)));
+  } catch {
+    return false;
+  }
 }
