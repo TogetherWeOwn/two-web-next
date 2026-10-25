@@ -1,51 +1,42 @@
 # Kit server gzip: join freshness prerequisite
 
-## Latest base reconciliation — 2026-10-24
+## Latest base reconciliation — 2026-10-25
 
-Merge main `30b0415fd6cd50b626a42e9995996cbf04f881e9`, including the
-restored-write/profile budget reconciliation and calendar-card scanning.
-Only the budget comment conflicts. Preserve all incoming history byte-for-byte,
-then the existing 3306-character branch-only join-freshness suffix exactly once.
-Every non-comment budget field equals this base. In particular, retain its
+Merge main `8df87c89fa67c14b51c6a49433781f63f8adef7a`. Only the budget
+history string conflicts. This resolution retains the incoming history exactly,
+then appends the 3306-character branch-only join-freshness suffix exactly once.
+Every non-comment budget field equals this base. In particular, retain the
 separately landed client JS raw/gzip ceilings of **253440/102400 bytes** and
 unchanged **333312-byte server gzip ceiling**. This PR adds no allowance.
 
-Two fresh production builds with Node 24.22.1 and committed root/web locks
+Two fresh production builds with Node 24.22.1 and the committed root/web locks
 installed outside the checkout pass the unchanged checker:
 
 | Artifact | Two resolved-tree builds | Inherited limit |
 | --- | ---: | ---: |
 | Server JS files | 115 | 126 |
-| Server JS raw bytes | 1152618–1152620 | 1203200 |
-| Server JS gzip bytes | 327124–327125 | 333312 |
+| Server JS raw bytes | 1160018 | 1203200 |
+| Server JS gzip bytes | 329217–329218 | 333312 |
 | Client JS files | 54 | 55 |
-| Client JS raw/gzip bytes | 251164/101622 | 253440/102400 |
+| Client JS raw/gzip bytes | 253204/102307 | 253440/102400 |
 | Client CSS files | 2 | 4 |
 | Client CSS raw/gzip bytes | 2861/1019 | 3072/1024 |
 | Worker entry raw/gzip bytes | 2551/1219 | 3584/1536 |
 
-Worst server gzip margin: **6187 bytes**. Client gzip has 778 bytes of margin;
+Worst server gzip margin: **4094 bytes**. Client gzip has 93 bytes of margin;
 CSS gzip has 5 bytes. These are prerequisite-tree measurements, not feature
-integration measurements. No runtime, test, checker, dependency or workflow
-file differs from this base.
+integration measurements. Relative to this base, only budget decision prose and
+this document differ.
 
-Fresh verification: checker selftests **6/6**, checker tests **13/13**, and
-Lighthouse navigation admission fixtures **113/113** pass. Five incoming-base
-calendar/performance fixture suites report **214 passed, 25 skipped** with
-database environment bindings unset; the skipped database cases are not
-verified. Lint, typecheck, documentation links and floor guard pass. An initial
-invocation of a nonexistent `ci/lighthouse-admission.test.mjs` ran no tests;
-the tracked `test/lighthouse-navigation-admission-acceptance.test.mjs` passed
-using Vitest. No implementation or test edit was needed.
-
-`context-pack --base origin/main` failed during its MCP initialization
-(`MCP server exited`); it did not produce a caller analysis. The independently
-checked branch diff contains only budget prose and this document, with zero
-runtime symbols or callers to update. No fresh full `npm run check`, feature
-integration, join-freshness suite, browser, staging or deployment run is claimed.
-Historical broad-check failures below remain disclosed. Exact-head CI and
-independent review are still required after this resolution; the feature ref
-remains untouched.
+Fresh verification: `npm run kit-perf:selftest` passes all **12** cases and the
+checker test invocation passes **64/64** tests. Lint, typecheck, documentation
+links and floor guard pass. The two production builds and both checker runs pass
+with the unchanged limits. `context-pack --base origin/main` failed during its
+MCP initialization (`MCP server exited`), so it produced no caller analysis; the
+independently checked branch diff has no runtime symbols or callers to update.
+No feature-integration, join-freshness suite, browser, staging or deployment run
+is claimed. Exact-head CI and independent review are still required after this
+resolution; the feature ref remains untouched.
 
 ## Earlier base reconciliation — 2026-10-24
 
@@ -169,8 +160,9 @@ and hash/version effects net −1 gzip. No new server file is introduced.
 These are new measurements, not a claim that the historical builds below
 changed or were byte-identical to the current build.
 
-The existing six checker selftests, thirteen checker tests and 131 freshness
-fixture tests pass on the current integration. A controlled ceiling one byte
+An earlier integration run recorded six checker selftests, thirteen checker
+tests and 131 freshness fixture tests passing on the current integration; this
+follow-up did not rerun those feature fixtures. A controlled ceiling one byte
 below its measured server gzip still exits **1**; restoring the inherited
 budget exits **0**. The feature still needs its own current-head CI and review.
 
@@ -213,7 +205,7 @@ The checker sums `gzipSync(readFileSync(file)).length` from Node's `node:zlib`
 compress the concatenated bundle. Server sourcemaps are excluded by the unchanged
 checker. Record raw lengths, gzip lengths and SHA-256 hashes per generated file.
 
-| Artifact | Base, two builds | Feature, two builds | Existing limit |
+| Artifact | Base, two builds | Feature, two builds | Pre-change limit |
 | --- | ---: | ---: | ---: |
 | Server JS files | 124 | 124 | 124 |
 | Server JS raw bytes | 1113667 | 1114290–1114292 | 1203200 |

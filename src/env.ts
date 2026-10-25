@@ -131,6 +131,11 @@ export type Session = {
   moderator: boolean;
 };
 
+// What the site header reads from a session: the viewer name plus the member
+// bit (board link). Narrower than Session so crossings that only feed chrome
+// carry nothing else — never ids, avatars or tokens.
+export type HeaderSession = Pick<Session, "username" | "member">;
+
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).
 export type AgentEventsEnv = {
