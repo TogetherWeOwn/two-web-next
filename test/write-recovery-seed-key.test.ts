@@ -19,7 +19,7 @@ async function destination(path: string, method: string) {
   const res = await app.request(new URL(path, STAGING_APP_URL), { method }, env);
   expect(res.status).toBe(401);
   const body = (await res.json()) as { error: string; recovery: string };
-  expect(body.error).toBe("Unauthorized");
+  expect(body.error).toBe("unauthenticated");
   return new URL(body.recovery, STAGING_APP_URL).searchParams.get("next");
 }
 
