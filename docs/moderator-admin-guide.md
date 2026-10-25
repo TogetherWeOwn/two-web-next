@@ -236,7 +236,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
 | POST | `/admin/events/:key/duplicate` | **Duplicate as draft**: copy the event into a new unpublished draft. |
-| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
+| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling, after a native review step. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
@@ -262,7 +262,9 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
-Mutating buttons submit immediately: there is no action-confirmation dialog.
+Pausing RSVPs opens a native review first: open **Review pause**, check the
+named event and consequence, then press the final **Pause RSVPs**. Other
+mutating buttons submit immediately with no action-confirmation dialog.
 Double-check the event/slot and intended action before pressing one. The event
 editor's separate browser warning for unsaved changes is not action approval.
 
@@ -430,7 +432,10 @@ existing-responses count as attendance.
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
-on the list and edit screen. These actions keep the event published; pausing is
+on the list and edit screen. Pausing opens a native review naming the saved
+event and the consequence (signups close, the waitlist line freezes) before
+the final submit; closing the review changes nothing and **Reopen RSVPs**
+stays one-click. These actions keep the event published; pausing is
 not cancellation and does not remove existing answers. Reopening can promote
 waiting members into available seats in first-in-first-out order. Both changed
 settings attempt asynchronous Discord write-back, not immediate delivery.
@@ -646,7 +651,10 @@ Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
-Request ID is normally blank for the current live Discord add-member call.
+Request ID carries the website's correlation ID (the callback's
+`x-request-id`) on `denied` and `error` rows, so those rows join to request
+logs. On `added`, `already_member`, `degraded` and `rate_limited` rows it
+stays blank because the live add-member call returns no request ID.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 
