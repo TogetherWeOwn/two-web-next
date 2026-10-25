@@ -1,0 +1,452 @@
+{
+  "version": 1,
+  "refs": {
+    "main": "2f9e60791d27378d4b07f0cfd615c8af86f04f76",
+    "parent": "26fd963642faef083e77db37c37d458217111a6a",
+    "integratedTree": "3dfd8ba769c3783e6c067e47e0c1962804f04af2"
+  },
+  "runtime": {
+    "node": "24.22.1",
+    "npm": "11.19.1",
+    "gzip": "node:zlib gzipSync defaults"
+  },
+  "decision": {
+    "field": "client.js.maxRawBytes",
+    "before": 254976,
+    "after": 256000,
+    "alignment": 512
+  },
+  "measurements": [
+    {
+      "tree": "main",
+      "build": 1,
+      "report": {
+        "version": 1,
+        "check": "kit-perf",
+        "ok": true,
+        "exitCode": 0,
+        "groups": [
+          {
+            "id": "kit.worker",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.worker._worker.js",
+                "status": "pass",
+                "rawBytes": 2551,
+                "gzipBytes": 1219,
+                "maxRawBytes": 3584,
+                "maxGzipBytes": 1536
+              }
+            ]
+          },
+          {
+            "id": "kit.server.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.server.js",
+                "status": "pass",
+                "rawBytes": 1176056,
+                "gzipBytes": 333148,
+                "files": 115,
+                "maxRawBytes": 1203200,
+                "maxGzipBytes": 334080,
+                "maxFiles": 126
+              }
+            ]
+          },
+          {
+            "id": "kit.client.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.js",
+                "status": "pass",
+                "rawBytes": 253949,
+                "gzipBytes": 102273,
+                "files": 54,
+                "maxRawBytes": 254976,
+                "maxGzipBytes": 102912,
+                "maxFiles": 55
+              }
+            ]
+          },
+          {
+            "id": "kit.client.css",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.css",
+                "status": "pass",
+                "rawBytes": 2833,
+                "gzipBytes": 1006,
+                "files": 2,
+                "maxRawBytes": 3072,
+                "maxGzipBytes": 1024,
+                "maxFiles": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "tree": "main",
+      "build": 2,
+      "report": {
+        "version": 1,
+        "check": "kit-perf",
+        "ok": true,
+        "exitCode": 0,
+        "groups": [
+          {
+            "id": "kit.worker",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.worker._worker.js",
+                "status": "pass",
+                "rawBytes": 2551,
+                "gzipBytes": 1219,
+                "maxRawBytes": 3584,
+                "maxGzipBytes": 1536
+              }
+            ]
+          },
+          {
+            "id": "kit.server.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.server.js",
+                "status": "pass",
+                "rawBytes": 1176056,
+                "gzipBytes": 333149,
+                "files": 115,
+                "maxRawBytes": 1203200,
+                "maxGzipBytes": 334080,
+                "maxFiles": 126
+              }
+            ]
+          },
+          {
+            "id": "kit.client.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.js",
+                "status": "pass",
+                "rawBytes": 253949,
+                "gzipBytes": 102273,
+                "files": 54,
+                "maxRawBytes": 254976,
+                "maxGzipBytes": 102912,
+                "maxFiles": 55
+              }
+            ]
+          },
+          {
+            "id": "kit.client.css",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.css",
+                "status": "pass",
+                "rawBytes": 2833,
+                "gzipBytes": 1006,
+                "files": 2,
+                "maxRawBytes": 3072,
+                "maxGzipBytes": 1024,
+                "maxFiles": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "tree": "integrated",
+      "build": 1,
+      "report": {
+        "version": 1,
+        "check": "kit-perf",
+        "ok": false,
+        "exitCode": 1,
+        "groups": [
+          {
+            "id": "kit.worker",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.worker._worker.js",
+                "status": "pass",
+                "rawBytes": 2551,
+                "gzipBytes": 1219,
+                "maxRawBytes": 3584,
+                "maxGzipBytes": 1536
+              }
+            ]
+          },
+          {
+            "id": "kit.server.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.server.js",
+                "status": "pass",
+                "rawBytes": 1179090,
+                "gzipBytes": 333721,
+                "files": 115,
+                "maxRawBytes": 1203200,
+                "maxGzipBytes": 334080,
+                "maxFiles": 126
+              }
+            ]
+          },
+          {
+            "id": "kit.client.js",
+            "status": "fail",
+            "checks": [
+              {
+                "id": "kit.client.js",
+                "status": "fail",
+                "rawBytes": 255600,
+                "gzipBytes": 102655,
+                "files": 54,
+                "maxRawBytes": 254976,
+                "maxGzipBytes": 102912,
+                "maxFiles": 55
+              }
+            ]
+          },
+          {
+            "id": "kit.client.css",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.css",
+                "status": "pass",
+                "rawBytes": 2833,
+                "gzipBytes": 1006,
+                "files": 2,
+                "maxRawBytes": 3072,
+                "maxGzipBytes": 1024,
+                "maxFiles": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "tree": "integrated",
+      "build": 2,
+      "report": {
+        "version": 1,
+        "check": "kit-perf",
+        "ok": false,
+        "exitCode": 1,
+        "groups": [
+          {
+            "id": "kit.worker",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.worker._worker.js",
+                "status": "pass",
+                "rawBytes": 2551,
+                "gzipBytes": 1219,
+                "maxRawBytes": 3584,
+                "maxGzipBytes": 1536
+              }
+            ]
+          },
+          {
+            "id": "kit.server.js",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.server.js",
+                "status": "pass",
+                "rawBytes": 1179088,
+                "gzipBytes": 333720,
+                "files": 115,
+                "maxRawBytes": 1203200,
+                "maxGzipBytes": 334080,
+                "maxFiles": 126
+              }
+            ]
+          },
+          {
+            "id": "kit.client.js",
+            "status": "fail",
+            "checks": [
+              {
+                "id": "kit.client.js",
+                "status": "fail",
+                "rawBytes": 255600,
+                "gzipBytes": 102655,
+                "files": 54,
+                "maxRawBytes": 254976,
+                "maxGzipBytes": 102912,
+                "maxFiles": 55
+              }
+            ]
+          },
+          {
+            "id": "kit.client.css",
+            "status": "pass",
+            "checks": [
+              {
+                "id": "kit.client.css",
+                "status": "pass",
+                "rawBytes": 2833,
+                "gzipBytes": 1006,
+                "files": 2,
+                "maxRawBytes": 3072,
+                "maxGzipBytes": 1024,
+                "maxFiles": 4
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "attribution": {
+    "mainChanged": [
+      {
+        "group": "client.js",
+        "path": "web/.svelte-kit/output/client/_app/immutable/entry/app.uBP-wqkk.js",
+        "raw": 5606,
+        "gzip": 1527,
+        "sha256": "505580d839f9448948a0f1d78b20819d6731732784759cfc5c91c122b2a0da47"
+      },
+      {
+        "group": "client.js",
+        "path": "web/.svelte-kit/output/client/_app/immutable/nodes/22.BudPSttV.js",
+        "raw": 17086,
+        "gzip": 5706,
+        "sha256": "fcdbd25d25eeadfc5cb83186f0619aefeb9697a487ddf997e8667df361e570f0"
+      }
+    ],
+    "integratedChanged": [
+      {
+        "group": "client.js",
+        "path": "web/.svelte-kit/output/client/_app/immutable/entry/app.C3S3P2FT.js",
+        "raw": 5606,
+        "gzip": 1529,
+        "sha256": "2da51b46ca9e3251daeea81d1d08529d95041f6728732c703dde4509db7edf03"
+      },
+      {
+        "group": "client.js",
+        "path": "web/.svelte-kit/output/client/_app/immutable/nodes/22.Dox33S9J.js",
+        "raw": 18737,
+        "gzip": 6086,
+        "sha256": "55ac34b7b42b06e6324ccfe7e3628cbf15cbf7c8849b4ff559dc0875d67ffe53"
+      }
+    ]
+  },
+  "controls": [
+    {
+      "case": "incoming",
+      "clientJs": {
+        "maxRawBytes": 254976,
+        "maxGzipBytes": 102912,
+        "maxFiles": 55
+      },
+      "expectedExit": 1,
+      "actualExit": 1,
+      "failedGroups": ["kit.client.js"]
+    },
+    {
+      "case": "proposal",
+      "clientJs": {
+        "maxRawBytes": 256000,
+        "maxGzipBytes": 102912,
+        "maxFiles": 55
+      },
+      "expectedExit": 0,
+      "actualExit": 0,
+      "failedGroups": []
+    },
+    {
+      "case": "one-step-less",
+      "clientJs": {
+        "maxRawBytes": 255488,
+        "maxGzipBytes": 102912,
+        "maxFiles": 55
+      },
+      "expectedExit": 1,
+      "actualExit": 1,
+      "failedGroups": ["kit.client.js"]
+    },
+    {
+      "case": "exact-raw",
+      "clientJs": {
+        "maxRawBytes": 255600,
+        "maxGzipBytes": 102912,
+        "maxFiles": 55
+      },
+      "expectedExit": 0,
+      "actualExit": 0,
+      "failedGroups": []
+    },
+    {
+      "case": "raw-minus-one",
+      "clientJs": {
+        "maxRawBytes": 255599,
+        "maxGzipBytes": 102912,
+        "maxFiles": 55
+      },
+      "expectedExit": 1,
+      "actualExit": 1,
+      "failedGroups": ["kit.client.js"]
+    },
+    {
+      "case": "exact-gzip",
+      "clientJs": {
+        "maxRawBytes": 256000,
+        "maxGzipBytes": 102655,
+        "maxFiles": 55
+      },
+      "expectedExit": 0,
+      "actualExit": 0,
+      "failedGroups": []
+    },
+    {
+      "case": "gzip-minus-one",
+      "clientJs": {
+        "maxRawBytes": 256000,
+        "maxGzipBytes": 102654,
+        "maxFiles": 55
+      },
+      "expectedExit": 1,
+      "actualExit": 1,
+      "failedGroups": ["kit.client.js"]
+    },
+    {
+      "case": "exact-files",
+      "clientJs": {
+        "maxRawBytes": 256000,
+        "maxGzipBytes": 102912,
+        "maxFiles": 54
+      },
+      "expectedExit": 0,
+      "actualExit": 0,
+      "failedGroups": []
+    },
+    {
+      "case": "files-minus-one",
+      "clientJs": {
+        "maxRawBytes": 256000,
+        "maxGzipBytes": 102912,
+        "maxFiles": 53
+      },
+      "expectedExit": 1,
+      "actualExit": 1,
+      "failedGroups": ["kit.client.js"]
+    }
+  ]
+}
