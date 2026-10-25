@@ -19,6 +19,7 @@ import type { EventListRow } from "./store-event-reads";
 export type KitEventListRow = {
   eventKey: string;
   title: string;
+  game: string | null;
   status: string;
   startsAt: string;
   endsAt: string;
@@ -38,6 +39,7 @@ export function serializeEventListRow(row: EventListRow): KitEventListRow {
   return {
     eventKey: row.eventKey,
     title: row.title,
+    game: row.game,
     status: row.status,
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),

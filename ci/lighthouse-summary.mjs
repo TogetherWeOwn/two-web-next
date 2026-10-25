@@ -154,9 +154,13 @@ export function buildSummary({
   return { text: parts.join("\n"), exitCode, error };
 }
 
-function selftest() {
+async function selftest() {
+  const { navigationMetadata } = await import("../test/lighthouse-navigation-fixtures.mjs");
   const lhr = (url, a11y) => ({
+    ...navigationMetadata("desktop"),
     requestedUrl: url,
+    finalUrl: url,
+    finalDisplayedUrl: url,
     categories: {
       performance: { score: 0.95, auditRefs: [] },
       accessibility: { score: a11y, auditRefs: [{ id: "color-contrast", weight: 7 }] },
@@ -236,8 +240,14 @@ function selftest() {
   console.log("lighthouse-summary selftest: ok");
 }
 
-if (process.argv.includes("--selftest")) selftest();
-else {
+if (process.argv.includes("--selftest")) {
+  try {
+    await selftest();
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+} else {
   const lhrs = loadLhrs(".lighthouseci/quality");
   const standardsText = existsSync(".lighthouseci/standards-summary.md")
     ? readFileSync(".lighthouseci/standards-summary.md", "utf8")

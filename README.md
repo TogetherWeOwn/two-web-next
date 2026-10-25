@@ -35,7 +35,11 @@ title/description search when needed. Share the resulting `?game=` URL. Matching
 ignores case and surrounding whitespace. Blank or unknown games show **All games**.
 Options come from one published-only distinct read, capped at 100 games per request.
 The facet stays on schedule paging, view changes, month jumps and the past drawer;
-the separate past-event archive and calendar feeds are not game-filtered.
+the separate past-event archive is not game-filtered. The calendar collection
+`/events.ics` accepts the same `?game=` scope: on a filtered schedule the
+Subscribe link, the `.ics` download and the copyable feed URL all carry the
+committed game, and the calendar label names it. Blank means every game; a valid
+unknown game yields an empty scoped calendar, never all games.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
@@ -244,7 +248,7 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional Kit member-auth suite, these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional Kit member-auth and native event share suites, these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -258,6 +262,7 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
@@ -273,6 +278,7 @@ to execute the same Chromium proof.
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures

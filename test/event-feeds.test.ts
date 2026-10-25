@@ -265,6 +265,40 @@ describe("feed builders (byte fixtures)", () => {
   });
 });
 
+describe("feed host CN normalization (RFC 5545 quoted-string)", () => {
+  const organizerLine = (organizerName: string): string => {
+    const unfolded = eventIcs(row({ organizer_name: organizerName }), APP_URL).replace(
+      /\r\n[ \t]/g,
+      "",
+    );
+    return unfolded.split("\r\n").find((l) => l.startsWith("ORGANIZER"))!;
+  };
+  const cnInner = (line: string): string => {
+    const inner = line.slice('ORGANIZER;CN="'.length, line.lastIndexOf(`":mailto:`));
+    // QSAFE-CHAR excludes DQUOTE and controls; the grammar defines no
+    // backslash escape for parameter values, so neither may appear.
+    expect(inner).not.toMatch(/["\u0000-\u001F\u007F]/);
+    return inner;
+  };
+
+  it.each([
+    ["dquote to apostrophe", 'Ada "Host" Lovelace', "Ada 'Host' Lovelace"],
+    ["newline run to space", "Line1\nLine2", "Line1 Line2"],
+    ["crlf run to space", "Line1\r\nLine2", "Line1 Line2"],
+    ["tab run to space", "A\tB", "A B"],
+    ["backslash stays single", "A\\B", "A\\B"],
+    ["colon stays literal", "A:B", "A:B"],
+    ["semicolon stays literal", "Raid; Night", "Raid; Night"],
+    ["comma stays literal", "Doe, Jane", "Doe, Jane"],
+    ["caret stays literal", "A^nB", "A^nB"],
+  ])("%s", (_label, name, expected) => {
+    const line = organizerLine(name);
+    expect(line.startsWith('ORGANIZER;CN="')).toBe(true);
+    expect(line.endsWith('":mailto:noreply@example.invalid')).toBe(true);
+    expect(cnInner(line)).toBe(expected);
+  });
+});
+
 describe("latestWireUpdatedAt", () => {
   it.each([
     ["empty", [], "1970-01-01T00:00:00Z"],
@@ -365,7 +399,11 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     expect(rss.headers.get("set-cookie")).toBeNull();
     const rssBody = await rss.text();
     expect(rssBody).toContain("PXB1");
-    for (const k of ["DRF1", "CAN1", "0KD1"]) expect(rssBody).not.toContain(k);
+    // Cancelled rows ship marked, like the ICS collection's STATUS:CANCELLED.
+    expect(rssBody).toContain("CAN1");
+    expect(rssBody).toContain("<title>Cancelled: t-01J0000000000000000000CAN1</title>");
+    expect(rssBody).toContain("<description>This event has been cancelled.</description>");
+    for (const k of ["DRF1", "0KD1"]) expect(rssBody).not.toContain(k);
     const etag = rss.headers.get("etag")!;
     const nm = await req("/events.rss", { headers: { "if-none-match": etag } });
     expect(nm.status).toBe(304);

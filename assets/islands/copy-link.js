@@ -1,7 +1,8 @@
 // SSR leaves a usable canonical link. Enhance only when both link and status exist.
 (() => {
-  const link = document.querySelector("[data-copy-link]");
-  const toast = document.querySelector("[data-copy-toast]");
+  const q = (s) => document.querySelector(s);
+  let link = q("[data-copy-link]");
+  let toast = q("[data-copy-toast]");
   if (!link || !toast) return;
   const feed = link.getAttribute("data-copy-feed") != null;
   if (feed) link.hidden = false;
@@ -96,7 +97,7 @@
 
   // Event controls stay links: plain activation copies, modified clicks and
   // keys keep native navigation. Feed controls use native button activation.
-  link.addEventListener("click", (event) => {
+  function onClick(event) {
     if (
       event.defaultPrevented ||
       event.button !== 0 ||
@@ -108,21 +109,39 @@
       return;
     event.preventDefault();
     void copy();
-  });
+  }
+  function onKey(event) {
+    if (
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey ||
+      (event.key !== " " && event.key !== "Enter")
+    )
+      return;
+    event.preventDefault();
+    if (event.repeat) return;
+    void copy();
+  }
+  link.addEventListener("click", onClick);
   // Native buttons already synthesize one click for Enter/Space.
-  if (!feed)
-    link.addEventListener("keydown", (event) => {
-      if (
-        event.defaultPrevented ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        event.altKey ||
-        (event.key !== " " && event.key !== "Enter")
-      )
-        return;
-      event.preventDefault();
-      if (event.repeat) return;
-      void copy();
-    });
+  if (!feed) link.addEventListener("keydown", onKey);
+  // Calendar fragment swaps replace the feed button node: rebind the newest
+  // node when it changes so the copy action follows the committed scope.
+  // Pages without swaps (event, past archive) and hosts without observers
+  // keep the single binding above. Only the calendar feed button swaps, so
+  // only click rebinds: putting the event link in a swapped zone must also
+  // rebind keydown (Space) there.
+  if (window.MutationObserver) {
+    new MutationObserver(() => {
+      const now = q("[data-copy-link]");
+      if (now && now !== link) {
+        link = now;
+        toast = q("[data-copy-toast]");
+        if (feed) now.hidden = false;
+        now.addEventListener("click", onClick);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  }
 })();

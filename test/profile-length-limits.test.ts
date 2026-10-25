@@ -131,7 +131,7 @@ describe("profile length limits at the route (in-memory fixtures only)", () => {
     const { store, save, jsonPatch } = await setup();
     const res = await jsonPatch({ timezone: "UTC", ...body });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ errors });
+    expect(await res.json()).toEqual({ error: "invalid", fields: errors });
     expect(save).not.toHaveBeenCalled();
     expect(store.rows.get(ALICE)).toEqual(seeded);
   });
@@ -167,7 +167,8 @@ describe("profile length limits at the route (in-memory fixtures only)", () => {
     );
     expect(asJson.status).toBe(422);
     expect(await asJson.json()).toEqual({
-      errors: { bio: BIO_ERROR, games: GAME_NAME_ERROR },
+      error: "invalid",
+      fields: { bio: BIO_ERROR, games: GAME_NAME_ERROR },
     });
 
     const asHtml = await formPost({
@@ -214,7 +215,7 @@ describe("profile length limits at the route (in-memory fixtures only)", () => {
       form.set("timezone", "UTC");
       const res = await send(ALICE, aliceCookie, method, form, null, "application/json");
       expect(res.status).toBe(422);
-      expect(await res.json()).toEqual({ errors: { bio: BIO_ERROR } });
+      expect(await res.json()).toEqual({ error: "invalid", fields: { bio: BIO_ERROR } });
       expect(save).not.toHaveBeenCalled();
       expect(store.rows.get(ALICE)).toEqual(seeded);
     },

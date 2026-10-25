@@ -48,6 +48,7 @@ describe("Kit events-list view model", () => {
     expect(serializeEventListRow(row("EVT1"))).toEqual({
       eventKey: "EVT1",
       title: "Game night EVT1",
+      game: null,
       status: "published",
       startsAt: "2026-11-01T18:00:00.000Z",
       endsAt: "2026-11-01T21:00:00.000Z",
