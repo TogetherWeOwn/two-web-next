@@ -292,8 +292,19 @@ test("empty kit fragment dir cannot enforce (2)", (t) => {
 });
 
 test("bundle fragment with an unsupported top-level key cannot enforce (2)", (t) => {
-  const { root } = bundleFixture(t, {});
-  writeFile(root, "ci/budgets/bundle/extra.json", JSON.stringify({ nope: {} }));
+  const { root, exact } = bundleFixture(t, {});
+  // An otherwise-valid fragment carrying one real budgets entry: only the
+  // unsupported-key guard can reject it (a bare { nope: {} } fragment is
+  // rejected anyway for having no budgets object, which would leave the
+  // guard itself unprotected by this test).
+  writeFile(
+    root,
+    "ci/budgets/bundle/example.json",
+    JSON.stringify({
+      budgets: { "public/islands/example.js": { ...exact } },
+      nope: {},
+    }),
+  );
   assert.equal(runBundle(root, sink), 2);
 });
 
@@ -304,17 +315,20 @@ test("empty kit fragment beside valid fragments cannot enforce (2)", (t) => {
 });
 
 test("multi-unit kit fragment cannot enforce (2)", (t) => {
-  const root = kitFixture(t, {});
-  writeFile(
-    root,
-    "ci/budgets/kit/client-js.json",
-    JSON.stringify({
+  // The valid client.js and client.css units together in one fragment,
+  // with no separate css fragment: the aggregate is exactly the canonical
+  // plan, so only the one-unit-per-fragment guard can reject this tree (an
+  // invented extra unit is rejected by the plan validator anyway, which
+  // would leave the guard itself unprotected by this test).
+  const root = kitFixture(t, {
+    "client-js.json": {
       client: {
         js: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 },
-        extra: { maxRawBytes: 1, maxGzipBytes: 1, maxFiles: 1 },
+        css: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 },
       },
-    }),
-  );
+    },
+    "client-css.json": null,
+  });
   assert.equal(runKit(root, sink), 2);
 });
 
@@ -348,4 +362,47 @@ test("kit fragment magic keys cannot pollute Object.prototype (2)", (t) => {
   );
   assert.equal(runKit(root, sink), 2);
   assert.equal({}.polluted, undefined);
+});
+
+test("kit fragment with an unsupported empty section cannot enforce (2)", (t) => {
+  // An empty unknown section contributes no unit, so it must not be able
+  // to ride beside a valid unit and silently disappear before validation:
+  // the aggregate would otherwise look exactly canonical and fit.
+  const root = kitFixture(t, {
+    "startup.json": { startup: { maxMs: 30000 }, typo: {} },
+  });
+  assert.equal(runKit(root, sink), 2);
+});
+
+test("kit fragment with an unsupported section is rejected by the loader", (t) => {
+  const root = kitFixture(t, {
+    "typo.json": { typo: { x: { maxRawBytes: 1, maxGzipBytes: 1, maxFiles: 1 } } },
+  });
+  assert.throws(() => loadKitBudget(root), /unsupported budget section: typo/);
+});
+
+test("kit fragment with an inherited section name cannot enforce (2)", (t) => {
+  // "toString" is not a magic key, but (budget[section] ??= {}) would find
+  // the inherited function instead of creating an own section, hiding the
+  // unit from the validator and mutating Object.prototype.toString.
+  const root = kitFixture(t, {});
+  writeFile(
+    root,
+    "ci/budgets/kit/inherited.json",
+    '{"toString":{"probeMarker":{"maxRawBytes":1,"maxGzipBytes":1}}}',
+  );
+  assert.equal(runKit(root, sink), 2);
+  assert.equal(Object.prototype.toString.probeMarker, undefined);
+});
+
+test("kit fragment with an empty section beside a valid unit cannot enforce (2)", (t) => {
+  // A known section with no entries defines nothing; accepting it would
+  // let committed input claim a section it never actually budgets.
+  const root = kitFixture(t, {
+    "client-js.json": {
+      client: { js: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 } },
+      server: {},
+    },
+  });
+  assert.equal(runKit(root, sink), 2);
 });

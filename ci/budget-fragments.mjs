@@ -23,6 +23,7 @@
 // failure behaviour is unchanged. The real tree has only fragments.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { KIT_BUDGET_SECTIONS } from "./bundle-inventory.mjs";
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -103,6 +104,13 @@ export function loadKitBudget(root) {
     for (const [section, value] of Object.entries(fragment)) {
       if (section.startsWith("$")) continue;
       assertSafeKey(relativeDir, name, section);
+      // Reject unknown sections here, not after aggregation: an empty
+      // unknown section contributes no unit, and an inherited name like
+      // "toString" would not become an own property of the aggregate, so
+      // either would vanish before validateKitPlan ever sees the plan.
+      if (!KIT_BUDGET_SECTIONS.includes(section)) {
+        throw new Error(`${relativeDir}/${name}: unsupported budget section: ${section}`);
+      }
       if (section === "startup") {
         fragmentUnits += 1;
         define("startup", name, () => {
@@ -113,11 +121,18 @@ export function loadKitBudget(root) {
       if (!isObject(value)) {
         throw new Error(`${relativeDir}/${name}: budget section ${section} must be an object`);
       }
-      for (const [unitKey, unitValue] of Object.entries(value)) {
+      const units = Object.entries(value);
+      if (units.length === 0) {
+        throw new Error(
+          `${relativeDir}/${name}: budget section ${section} must define a budget unit`,
+        );
+      }
+      for (const [unitKey, unitValue] of units) {
         assertSafeKey(relativeDir, name, unitKey);
         fragmentUnits += 1;
         define(`${section}.${unitKey}`, name, () => {
-          (budget[section] ??= {})[unitKey] = unitValue;
+          if (!Object.hasOwn(budget, section)) budget[section] = {};
+          budget[section][unitKey] = unitValue;
         });
       }
     }
