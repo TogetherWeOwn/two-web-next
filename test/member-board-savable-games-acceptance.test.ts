@@ -327,6 +327,15 @@ describe("savable games: Hono member board (hermetic)", () => {
   });
 });
 
+// Admitted Kit loads also read the published-game catalog. Record that real
+// query and answer empty without replacing the production catalog reader.
+function emptyCatalogDb(statements: Array<{ sql: string; params: unknown[] }> = []) {
+  return drizzle(async (sql, params) => {
+    statements.push({ sql, params: [...params] });
+    return { rows: [] };
+  });
+}
+
 describe("savable games: Kit member-board load (seam)", () => {
   const ranked = [
     { userId: "u-a", username: "Ana", count: 5 },
@@ -341,7 +350,7 @@ describe("savable games: Kit member-board load (seam)", () => {
     scopeParam: null,
     activityParam: null,
     setHeaders: vi.fn((_headers: Record<string, string>) => {}),
-    dbForFn: async () => ({}) as never,
+    dbForFn: async () => emptyCatalogDb() as never,
     loadRankingFn: async () => ranked,
     queueBoardViewFn: () => {},
     ...overrides,
@@ -503,7 +512,9 @@ describe("savable games: Hono and Kit enforce identically through the shared par
       expect(res.status, `${label} Hono`).toBe(admitted ? 200 : 400);
       // Kit agrees: admitted resolves with the normalized game, refused
       // rejects 400 before any read.
-      const dbForFn = vi.fn(async () => ({}) as never);
+      const statements: Array<{ sql: string; params: unknown[] }> = [];
+      const db = emptyCatalogDb(statements);
+      const dbForFn = vi.fn(async () => db as never);
       const loadRankingFn = vi.fn(async () => []);
       const outcome = await loadMembersBoardData({
         env: { APP_URL: "https://example.test" } as never,
@@ -528,6 +539,7 @@ describe("savable games: Hono and Kit enforce identically through the shared par
           expect(outcome.error, `${label} Kit status`).toMatchObject({ status: 400 });
         expect(dbForFn, `${label} Kit reads nothing`).not.toHaveBeenCalled();
         expect(loadRankingFn, `${label} Kit reads nothing`).not.toHaveBeenCalled();
+        expect(statements, `${label} Kit executes no SQL`).toEqual([]);
       }
     }
   });
