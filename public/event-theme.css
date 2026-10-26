@@ -13,7 +13,7 @@
 .event-theme .event-meta dd p{color: inherit;margin: 0}
 .event-theme .event-device-timezone button{min-height: 44px;margin-top: .5rem;padding: 0;border: 0;background: transparent;color: var(--brand);font: inherit;text-decoration: underline;cursor: pointer}
 .event-theme .event-device-timezone p:not(:empty){margin-top: .5rem;font-size: .9rem}
-.event-theme [data-event-chosen-timezone] input{width: 100%;min-height: 44px;margin-top: .5rem;padding: .5rem .75rem;border: 1px solid var(--line);background: var(--paper);color: var(--ink);font: inherit}
+.event-theme [data-event-chosen-timezone] input,.event-theme .event-share-manual input{width: 100%;min-height: 44px;margin-top: .5rem;padding: .5rem .75rem;border: 1px solid var(--line);background: var(--paper);color: var(--ink);font: inherit}
 .event-theme .event-rsvp{display: flex;justify-content: center;margin: 0 0 2rem}
 .event-theme .event-rsvp > section{display: flex;flex-direction: column;align-items: center;gap: .75rem;border: 0;padding: 0;text-align: center}
 .event-theme .event-rsvp form{display: flex;flex-direction: column;align-items: center;gap: .75rem;margin: 0}
@@ -28,7 +28,8 @@
 .event-theme .event-pitch{padding-top: 0}
 .event-theme .event-pitch p{max-width: 60ch}
 .event-theme .event-share h2{font-size: 1.6rem}
-.event-theme .event-share a{display: inline-flex;min-height: 44px;align-items: center}
+.event-theme .event-share-manual label{display: block;font-weight: 700}
+.event-theme .event-share a:not([hidden]){display: inline-flex;min-height: 44px;align-items: center}
 .event-theme .event-share button:not([hidden]){display: inline-flex;min-height: 44px;align-items: center;padding: 0;border: 0;background: transparent;color: var(--brand);font: inherit;text-decoration: underline;cursor: pointer}
 .event-theme [data-copy-toast]{min-height: 1.65em;margin-bottom: 0}
 .event-theme [data-native-share-status]{margin: 0}
