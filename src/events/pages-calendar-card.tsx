@@ -7,6 +7,7 @@ import {
   EVENT_CARD_TESTID,
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
+  SCHEDULE_AVAILABILITY_TESTID,
   SPOTS_LEFT_TESTID,
   cardDayLabel,
   cardTimeLabel,
@@ -21,6 +22,7 @@ import { ScheduleDate } from "./pages-shared";
 import {
   type CalRow,
   isTransient,
+  rowAvailability,
   rowKey,
   rowLocation,
   rowTitle,
@@ -37,19 +39,28 @@ const DESCRIPTION_LIMIT = 240;
  * local answers to count). `isPast` suppresses the action area entirely.
  * Cancelled rows keep their title, schedule and badge, but never invite
  * participation: no sign-in link, and the retained answers read as existing
- * responses, never attendance or places.
+ * responses, never attendance or places. The availability line
+ * (`rowAvailability`: "N seats left", "RSVPs paused", "Ended", "No seat
+ * limit", "Discord-managed") is a server-rendered snapshot from existing row
+ * data — never a reservation — so members need not open a night to learn it
+ * is paused or full. Screens pass their model instant as `now`; standalone
+ * callers may omit it and use the render instant, never an unbounded verdict.
  */
 export const CalCard: FC<{
   e: CalRow;
   zone: string;
+  now?: Date;
   isPast: boolean;
   member: boolean;
   inviteUrl: string;
   loginReturnTo: string | null;
-}> = ({ e, zone, isPast, member, inviteUrl, loginReturnTo }) => {
+}> = ({ e, zone, now = new Date(), isPast, member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
+  // The drawer context wins over row dates: a card shown under past events
+  // reads Ended even if a fixture disagrees about the instant.
+  const availability = rowAvailability(e, now, isPast);
   // Compact host line: the trimmed public organizer, already on the row (no
   // new read). Transients carry no organizer and blank/missing renders no
   // node, so the badge and attendance never shift for unhosted cards.
@@ -80,15 +91,25 @@ export const CalCard: FC<{
           </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}
           {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
+          {/* The badges sit between block paragraphs; the explicit spaces keep
+              their words separated in textContent ("Galactic Cancelled Fri",
+              never "GalacticCancelledFri"). Line-edge whitespace collapses, so
+              the rendered layout is unchanged. */}
           {!transient && e.status === "draft" ? (
-            <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>
-              Draft
-            </span>
+            <>
+              {" "}
+              <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>
+                Draft
+              </span>{" "}
+            </>
           ) : null}
           {!transient && e.status === "cancelled" ? (
-            <span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>
-              Cancelled
-            </span>
+            <>
+              {" "}
+              <span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>
+                Cancelled
+              </span>{" "}
+            </>
           ) : null}
           <p>
             <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
@@ -127,28 +148,52 @@ export const CalCard: FC<{
         </div>
         <div class="schedule-actions">
           {!transient ? (
-            <span class="schedule-attendance" data-testid="event-going-count">
-              {cancelled
-                ? existingResponsesText(e.goingCount)
-                : goingCountText(e.goingCount, e.capacity)}
-              {/* Full marker, same node and copy as the detail lineup: one
+            <span class="schedule-attendance">
+              <span data-testid="event-going-count">
+                {cancelled
+                  ? existingResponsesText(e.goingCount)
+                  : goingCountText(e.goingCount, e.capacity)}
+                {/* Full marker, same node and copy as the detail lineup: one
                   inline run, because the actions column is a grid and a
                   sibling would stack onto its own row. The verdict reads seat
                   occupancy, never the attributable count alone, so the card
                   never offers a seat the write path cannot grant. Past cards
                   stay unmarked, and cancelled cards stay unmarked too:
-                  capacity is meaningless after cancellation, so only the
-                  existing-responses line shows. */}
-              {!cancelled && !isPast && e.capacity !== null && e.goingOccupancy >= e.capacity ? (
+                  capacity is meaningless after the end, so only the
+                  existing-responses line shows. Ended covers the drawer flag
+                  and the row dates alike (see `availability` above), so an
+                  upcoming row whose interval already elapsed reads Ended,
+                  never Full. A paused row keeps its supplemental Full marker
+                  beside the paused line: paused wins the verdict, the marker
+                  stays as capacity fact. */}
+                {!cancelled &&
+                !isPast &&
+                availability?.state !== "past" &&
+                e.capacity !== null &&
+                e.goingOccupancy >= e.capacity ? (
+                  <>
+                    {" · "}
+                    <span data-testid={SPOTS_LEFT_TESTID}>
+                      {spotsLeftText(e.goingOccupancy, e.capacity)}
+                    </span>
+                  </>
+                ) : null}
+              </span>
+              {/* Availability snapshot: paused/remaining/ended/uncapped. The
+                  full state keeps the marker above, so it renders no second
+                  node; cancelled and draft rows render none at all. */}
+              {!cancelled && availability && availability.state !== "full" ? (
                 <>
                   {" · "}
-                  <span data-testid={SPOTS_LEFT_TESTID}>
-                    {spotsLeftText(e.goingOccupancy, e.capacity)}
-                  </span>
+                  <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>{availability.text}</span>
                 </>
               ) : null}
             </span>
-          ) : null}
+          ) : availability ? (
+            <span class="schedule-attendance" data-testid={SCHEDULE_AVAILABILITY_TESTID}>
+              {availability.text}
+            </span>
+          ) : null}{" "}
           {isPast ? null : transient ? (
             <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>
               {EVENTS_EMPTY_COPY.discordRsvp}
