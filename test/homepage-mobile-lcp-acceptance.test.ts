@@ -47,7 +47,9 @@ const lighthouserc = require("../ci/lighthouserc.cjs").ci;
 // The brand unfurl tags (og:image + og:image:alt) add exactly 154 raw bytes
 // to every canonical page including the homepage (measured 24,588 -> 24,742),
 // so the HTML budget below carries that delta with the same <100 B slack.
-const MAX_HOMEPAGE_HTML_RAW_BYTES = 24800;
+// The teaser game paragraph + availability span add 94 B (24,793 -> 24,887),
+// carried by a 100 B HTML budget delta with 13 B slack; the CSS cap is unchanged.
+const MAX_HOMEPAGE_HTML_RAW_BYTES = 24900;
 const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18850;
 
 const context = {
