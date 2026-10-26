@@ -181,10 +181,9 @@ for (const view of ZONE_VIEWS) {
               window.__zoneFormats = 0;
             });
             await fixture.page.getByTestId("event-chosen-timezone-button").click();
-            assert.equal(
-              await fixture.page.evaluate(() => window.__zoneFormats),
-              singleComparisonCalls,
-              "rebind must not duplicate comparison work",
+            assert.ok(
+              (await fixture.page.evaluate(() => window.__zoneFormats)) <= singleComparisonCalls,
+              "rebind must not increase comparison work; cached formatters remain allowed",
             );
             assert.match(await compareResult(fixture.page), /15:00/);
             assert.match(await compareResult(fixture.page), /17:00/);
@@ -398,6 +397,7 @@ for (const view of ZONE_VIEWS) {
             1,
             "binding suggestions must not retry a refused write",
           );
+          await noSuggestionEffects(fixture, 1);
           await fixture.input.fill("US/Eastern");
           await fixture.page.getByTestId("profile-save").click();
           await fixture.page.getByTestId("profile-saved").waitFor();

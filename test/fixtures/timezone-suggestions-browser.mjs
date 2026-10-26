@@ -224,7 +224,7 @@ export async function dirty(page) {
 export async function compareResult(page) {
   return page.getByTestId("event-chosen-timezone-status").textContent();
 }
-export async function noSuggestionEffects(fixture) {
+export async function noSuggestionEffects(fixture, expectedWrites = 0) {
   assert.deepEqual(await fixture.page.evaluate(() => window.__zoneEffects), {
     fetch: 0,
     xhr: 0,
@@ -233,6 +233,6 @@ export async function noSuggestionEffects(fixture) {
     storage: 0,
   });
   assert.deepEqual(fixture.errors, []);
-  assert.equal(fixture.writes.length, 0);
+  assert.equal(fixture.writes.length, expectedWrites);
   assert.ok(fixture.requests.every((request) => new URL(request.url).origin === ZONE_ORIGIN));
 }
