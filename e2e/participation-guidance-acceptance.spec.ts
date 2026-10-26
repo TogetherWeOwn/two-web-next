@@ -31,9 +31,12 @@ async function mount(
   await context.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    // Count every attempted mutation, including accidental form submissions or
+    // off-resource writes; aborting a bad request must not hide it from proof.
+    if (!["GET", "HEAD"].includes(request.method()))
+      writes.push({ method: request.method(), body: request.postData() });
     if (url.origin !== ORIGIN) return route.abort();
     if (url.pathname === writePath && ["PUT", "DELETE"].includes(request.method())) {
-      writes.push({ method: request.method(), body: request.postData() });
       if (!result || result.abort) return route.abort("failed");
       return route.fulfill({
         status: result.status,
