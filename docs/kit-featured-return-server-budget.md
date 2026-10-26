@@ -3,7 +3,8 @@
 Measured 2026-10-25, remeasured 2026-10-26. This separate budget decision supports the native navigation
 in [#1805](https://github.com/TogetherWeOwn/two-web-next/pull/1805); it does not
 ship or approve that feature. The initial proposal changed only
-`server.js.maxGzipBytes` in [`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json):
+`server.js.maxGzipBytes` in the former `ci/kit-perf-budget.json` monolith (now
+[`ci/budgets/kit/server-js.json`](../ci/budgets/kit/server-js.json)):
 **333568 → 333824 B**. Main subsequently allocated that ceiling in
 [#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799), then independently
 raised server gzip to 334080 B and client raw to 254976 B through
@@ -389,12 +390,36 @@ capacity. UNDO: remove only this branch's appended history and document, never
 main's allocations or tests. This proof is not approval of #1805 and does not
 cover other unmerged feature combinations.
 
+## Fragment-split reconciliation: monolith deleted, measurements stand
+
+Main `0f8fdd17f` adds #1841 (calendar browser-clock test fix), #1798 (client
+raw ceiling 254976 → 256000 B) and #1858 (budget-fragment split, deleting both
+`ci/*-budget.json` monoliths). Since `716154c6b`, main moved only through
+`.github/workflows/ci.yml`, `ci/`, `docs/` and the Kit parity Playwright
+config: no product source, lockfile, or checker semantic changed, and feature
+#1805 remains at `432820f89`. The round-six pristine (334039–334040 B) and
+true-union (334652–334653 B) server gzip measurements therefore stand without
+a rebuild; the union's client raw 254365 B also fits the new 256000 B ceiling
+with wider margin.
+
+Following the #1798-port precedent in #1858, this merge accepts the monolith
+deletion and ports this branch's appended `$comment` history verbatim into
+`ci/budgets/decisions/kit-perf/2026-10-26-featured-return-server-gzip.md`.
+No fragment, checker, test, or numeric value differs from main.
+
+ACT: resolve the modify/delete conflict by accepting the deletion and porting
+the branch history to a decision file. WHY: the monolith is gone on main and
+the measurements still fit every inherited ceiling. UNDO: remove only the
+ported decision file and this document, never main's fragments or tests.
+
 ## Undo and scope
 
 The original and intermediate numeric proposals are superseded by main's
 independent allocations. The final diff contains only this document and the
-appended budget history: **zero numeric change and zero test change versus
-main**. Undo removes only those additions, never any main ceiling. No
+ported decision file
+`ci/budgets/decisions/kit-perf/2026-10-26-featured-return-server-gzip.md`:
+**zero numeric change, zero fragment change, and zero test change versus
+main**. Undo removes only those two additions, never any main ceiling. No
 application, schema, dependency, workflow, checker, mask, skip or exemption
 change is included. No deployment or production/staging database test is part
 of this work.
