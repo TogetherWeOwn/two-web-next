@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import { loadKitBudget } from "./budget-fragments.mjs";
 import { discoverKitAssets, run, runJson } from "./check-kit-perf.mjs";
 
 const scriptPath = fileURLToPath(new URL("./check-kit-perf.mjs", import.meta.url));
@@ -304,10 +305,86 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
   assert.ok(result.errors.some((line) => /client js/i.test(line)));
 });
 
+// The shipping plan is the aggregation of ci/budgets/kit/*.json (one unit
+// per fragment); serialize it here so fixtures can copy it into a scratch
+// root as a legacy single file, exactly as SHIPPING_BUDGET_BYTES below.
+const shippingBudgetText = JSON.stringify(
+  loadKitBudget(fileURLToPath(new URL("../", import.meta.url))),
+);
+const shippingClientBudget = JSON.parse(shippingBudgetText).client.js;
+
+function makeClientShippingFixture(body) {
+  const fx = makeFixture({ clientJs: [{ name: "immutable/client.js", body }] });
+  // Exercise the real shipping allocation, not a budget derived from the input.
+  writeFixtureFile(fx.root, "ci/kit-perf-budget.json", shippingBudgetText);
+  return fx;
+}
+
+test("shipping budget: measured 255253-byte client raw fits", (t) => {
+  const fx = makeClientShippingFixture(Buffer.alloc(255253, "a"));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
+test("shipping budget: refreshed 255872-byte client raw fits", (t) => {
+  const fx = makeClientShippingFixture(Buffer.alloc(255872, "a"));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
+test("shipping budget: exact client raw boundary fits and one byte above fails", (t) => {
+  const fx = makeClientShippingFixture(Buffer.alloc(shippingClientBudget.maxRawBytes, "a"));
+  t.after(fx.cleanup);
+  const exact = fx.runCaptured();
+  assert.equal(exact.code, 0, exact.errors.join("\n"));
+  assert.deepEqual(exact.errors, []);
+
+  writeFixtureFile(
+    fx.root,
+    join(CLIENT_DIR, "immutable/client.js"),
+    Buffer.alloc(shippingClientBudget.maxRawBytes + 1, "a"),
+  );
+  const over = fx.runCaptured();
+  assert.equal(over.code, 1);
+  assert.deepEqual(over.errors, [
+    `kit perf budget: client js: raw ${shippingClientBudget.maxRawBytes + 1}B over ${shippingClientBudget.maxRawBytes}B`,
+  ]);
+});
+
+test("shipping budget: client gzip still fails independently of raw", (t) => {
+  const body = Buffer.alloc(shippingClientBudget.maxGzipBytes + 1024);
+  let seed = 123456789;
+  for (let i = 0; i < body.length; i += 1) {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    body[i] = seed & 255;
+  }
+  const gzipBytes = gzipSync(body).length;
+  assert.ok(body.length <= shippingClientBudget.maxRawBytes);
+  assert.ok(gzipBytes > shippingClientBudget.maxGzipBytes);
+  const fx = makeClientShippingFixture(body);
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.errors, [
+    `kit perf budget: client js: gzip ${gzipBytes}B over ${shippingClientBudget.maxGzipBytes}B`,
+  ]);
+});
+
 // Shipping allocations must admit fixed evidence, not fixtures whose budgets
 // grow with their bodies. Reverting any allocation must reject its interval;
 // raising any allocation must incorrectly admit its fixed one-byte-over case.
-const SHIPPING_BUDGET_BYTES = readFileSync(new URL("./kit-perf-budget.json", import.meta.url));
+// The shipping plan is the aggregation of ci/budgets/kit/*.json (one unit
+// per fragment); serialize it once so fixtures can copy it into a scratch
+// root as a legacy single file, byte-for-byte inside the fixture.
+const SHIPPING_BUDGET_BYTES = Buffer.from(
+  JSON.stringify(loadKitBudget(fileURLToPath(new URL("../", import.meta.url)))),
+);
 // Three explicit server-gzip allocations are supported: current 334080, the
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), and the independently justified 335360
@@ -336,9 +413,13 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
       `expected one of 334080, 335104, 335360`,
   );
 });
-// Two explicit client-raw allocations are supported: current 254976
-// (measured interval 254769) and the independently justified 255488 ceiling
-// (combined worst 255126, margin 362; lower 254976 rejects by 150). The same
+// Three explicit client-raw allocations are supported: legacy 254976
+// (measured interval 254769), the independently justified 255488 ceiling
+// (combined worst 255126, margin 362; lower 254976 rejects by 150;
+// superseded on main by 256000 before landing, retained as an approved
+// allocation like the server map's non-live entries), and live 256000
+// (main #1798, combined worst 255872; interval/exact/over literals
+// inherited byte-for-byte from main's enforced pins). The same
 // fixed-literal rule as the server-gzip mapping above applies: any other
 // loaded ceiling fails the allocation control and the three client-raw
 // cases, so an arbitrary widening cannot go green.
@@ -352,13 +433,14 @@ try {
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
   254976: { intervalBytes: 254769, exactBytes: 254976, overBytes: 254977 },
   255488: { intervalBytes: 255126, exactBytes: 255488, overBytes: 255489 },
+  256000: { intervalBytes: 254769, exactBytes: 256000, overBytes: 256001 },
 };
 
 test("shipping budget: client raw allocation is explicitly approved", () => {
   assert.ok(
     Object.hasOwn(SHIPPING_CLIENT_RAW_ALLOCATIONS, String(SHIPPING_CLIENT_RAW_CAP)),
     `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-      `expected one of 254976, 255488`,
+      `expected one of 254976, 255488, 256000`,
   );
 });
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
@@ -413,8 +495,9 @@ function makeShippingFixture(t, group, axis, bytes) {
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-perf-shipping-"),
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  // Copy the committed plan byte-for-byte, including every unrelated group.
-  // Never pass it through makeFixture(), groupBudget() or budgetOverrides.
+  // Copy the aggregated shipping plan byte-for-byte, including every
+  // unrelated group. Never pass it through makeFixture(), groupBudget() or
+  // budgetOverrides.
   writeFixtureFile(root, "ci/kit-perf-budget.json", SHIPPING_BUDGET_BYTES);
   const bodies = Object.fromEntries(
     Object.entries(SHIPPING_BASES).map(([id, body]) => [id, [body]]),
@@ -475,6 +558,25 @@ function shippingClientRawCases() {
         axis: "raw",
         bytes: 255489,
         ceiling: 255488,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_RAW_CAP === 256000) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 254769,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 256001,
+        ceiling: 256000,
         breach: true,
       },
     ];
@@ -646,7 +748,7 @@ for (const {
     if (name.startsWith("client raw") && axisUnsupported) {
       assert.fail(
         `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-          `expected one of 254976, 255488`,
+          `expected one of 254976, 255488, 256000`,
       );
     }
     const fx = makeShippingFixture(t, group, axis, bytes);
