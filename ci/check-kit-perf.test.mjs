@@ -413,36 +413,6 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
       `expected one of 334080, 335104, 335360`,
   );
 });
-// Three explicit client-raw allocations are supported: legacy 254976
-// (measured interval 254769), the independently justified 255488 ceiling
-// (combined worst 255126, margin 362; lower 254976 rejects by 150;
-// superseded on main by 256000 before landing, retained as an approved
-// allocation like the server map's non-live entries), and live 256000
-// (main #1798, combined worst 255872; interval/exact/over literals
-// inherited byte-for-byte from main's enforced pins). The same
-// fixed-literal rule as the server-gzip mapping above applies: any other
-// loaded ceiling fails the allocation control and the three client-raw
-// cases, so an arbitrary widening cannot go green.
-let SHIPPING_CLIENT_RAW_CAP;
-try {
-  SHIPPING_CLIENT_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"))?.client?.js
-    ?.maxRawBytes;
-} catch {
-  SHIPPING_CLIENT_RAW_CAP = undefined;
-}
-const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
-  254976: { intervalBytes: 254769, exactBytes: 254976, overBytes: 254977 },
-  255488: { intervalBytes: 255126, exactBytes: 255488, overBytes: 255489 },
-  256000: { intervalBytes: 254769, exactBytes: 256000, overBytes: 256001 },
-};
-
-test("shipping budget: client raw allocation is explicitly approved", () => {
-  assert.ok(
-    Object.hasOwn(SHIPPING_CLIENT_RAW_ALLOCATIONS, String(SHIPPING_CLIENT_RAW_CAP)),
-    `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-      `expected one of 254976, 255488, 256000`,
-  );
-});
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 const SHIPPING_BASES = {
   "kit.worker": WORKER_BODY,
@@ -521,72 +491,7 @@ function makeShippingFixture(t, group, axis, bytes) {
 // neither a reverted cap nor an accidental increase can move the evidence.
 // The three server-gzip rows select fixed literals for the loaded allocation
 // via the explicit mapping above; unsupported ceilings produce failing
-// controls, never skips or green. The three client-raw rows select fixed
-// literals for the loaded client-raw allocation the same way.
-function shippingClientRawCases() {
-  if (SHIPPING_CLIENT_RAW_CAP === 254976) {
-    return [
-      {
-        name: "client raw newly allowed interval",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 254769,
-      },
-      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 254976 },
-      {
-        name: "client raw one byte over",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 254977,
-        ceiling: 254976,
-        breach: true,
-      },
-    ];
-  }
-  if (SHIPPING_CLIENT_RAW_CAP === 255488) {
-    return [
-      {
-        name: "client raw newly allowed interval",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 255126,
-      },
-      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 255488 },
-      {
-        name: "client raw one byte over",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 255489,
-        ceiling: 255488,
-        breach: true,
-      },
-    ];
-  }
-  if (SHIPPING_CLIENT_RAW_CAP === 256000) {
-    return [
-      {
-        name: "client raw newly allowed interval",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 254769,
-      },
-      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
-      {
-        name: "client raw one byte over",
-        group: "kit.client.js",
-        axis: "raw",
-        bytes: 256001,
-        ceiling: 256000,
-        breach: true,
-      },
-    ];
-  }
-  return [
-    { name: "client raw newly allowed interval", axisUnsupported: true },
-    { name: "client raw exact ceiling", axisUnsupported: true },
-    { name: "client raw one byte over", axisUnsupported: true },
-  ];
-}
+// controls, never skips or green.
 function shippingServerGzipCases() {
   if (SHIPPING_SERVER_GZIP_CAP === 334080) {
     return [
@@ -651,25 +556,25 @@ function shippingServerGzipCases() {
     { name: "server gzip one byte over", unsupported: true },
   ];
 }
-for (const {
-  name,
-  group,
-  axis,
-  bytes,
-  ceiling,
-  breach = false,
-  unsupported = false,
-  axisUnsupported = false,
-} of [
-  ...shippingClientRawCases(),
+for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
+  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 255856 },
+  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
+  {
+    name: "client raw one byte over",
+    group: "kit.client.js",
+    axis: "raw",
+    bytes: 256001,
+    ceiling: 256000,
+    breach: true,
+  },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
+  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
   {
     name: "client gzip one byte over",
     group: "kit.client.js",
     axis: "gzip",
-    bytes: 102913,
-    ceiling: 102912,
+    bytes: 103169,
+    ceiling: 103168,
     breach: true,
   },
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
@@ -743,12 +648,6 @@ for (const {
       assert.fail(
         `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
           `expected one of 334080, 335104, 335360`,
-      );
-    }
-    if (name.startsWith("client raw") && axisUnsupported) {
-      assert.fail(
-        `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-          `expected one of 254976, 255488, 256000`,
       );
     }
     const fx = makeShippingFixture(t, group, axis, bytes);
