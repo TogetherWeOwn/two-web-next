@@ -182,6 +182,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const app = profilesApp({
             sessionStore: sessions,
             stats: async () => null,
+            publishedGames: async () => [],
             store: createDbProfileStore(connection),
             accessLog: (entry) => recordAccess(connection, entry),
           });
