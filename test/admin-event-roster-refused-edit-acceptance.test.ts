@@ -11,6 +11,7 @@
 // warning; roster rows leaked into the 422 body; notice shown on create.
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
+import { type DefaultTreeAdapterMap, parseFragment } from "parse5";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
@@ -38,14 +39,14 @@ const FORM = {
 const ROSTER_NAMES = ["RosterAdaFixture", "RosterBenFixture"] as const;
 const ROSTER_ANSWERED = ["2026-10-01T01:00:00.000Z", "2026-10-02T01:00:00.000Z"] as const;
 
-const stripTags = (html: string) =>
-  html
-    .replace(/<script[\s\S]*?<\/script>/g, " ")
-    .replace(/<style[\s\S]*?<\/style>/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replaceAll("&amp;", "&")
-    .replace(/\s+/g, " ")
-    .trim();
+function stripTags(html: string): string {
+  const text = (node: DefaultTreeAdapterMap["node"]): string => {
+    if ("tagName" in node && (node.tagName === "script" || node.tagName === "style")) return " ";
+    if ("value" in node) return node.value;
+    return "childNodes" in node ? node.childNodes.map(text).join(" ") : " ";
+  };
+  return text(parseFragment(html)).replace(/\s+/g, " ").trim();
+}
 
 // The notice's four jobs, as loose semantic pins (exact copy is the
 // builder's, the meaning is not):
@@ -106,6 +107,40 @@ function expectRefusedEditNotice(html: string) {
   expect(html).toContain('data-testid="form-errors"');
   return notice!;
 }
+
+describe("roster notice text extraction", () => {
+  it.each([
+    ["uppercase script", "Before<SCRIPT>hidden</SCRIPT>After", "Before After"],
+    ["mixed-case style", "Before<StYlE>hidden</sTyLe>After", "Before After"],
+    ["script closing slash", "Before<script>hidden</script/>After", "Before After"],
+    ["style closing attribute", "Before<style>hidden</style extra>After", "Before After"],
+    ["unclosed script", "Before<script>hidden", "Before"],
+    ["unclosed style", "Before<style>hidden", "Before"],
+  ])("excludes %s text", (_name, html, expected) => {
+    expect(stripTags(html)).toBe(expected);
+  });
+
+  it("preserves notice text and decoded entities without markup, comments or attributes", () => {
+    expect(
+      stripTags(
+        '<p title="not > visible">Roster <strong>hidden</strong>.\nRSVPs unchanged &amp; safe.</p><!-- hidden -->' +
+          "<p>Reload&#32;shows the roster. Reload discards unsaved&nbsp;edits.</p>" +
+          "<p>&lt;script&gt;literal&lt;/script&gt;</p>",
+      ),
+    ).toBe(
+      "Roster hidden . RSVPs unchanged & safe. Reload shows the roster. Reload discards unsaved edits. <script>literal</script>",
+    );
+  });
+
+  it.each(["SCRIPT", "StYlE"])("does not accept a notice supplied only by %s text", (tag) => {
+    expect(
+      findRosterHiddenNotice(
+        `<${tag}>Roster hidden. RSVPs unchanged. Reload shows the roster. Reload discards unsaved edits.</${tag}>` +
+          `<a href="${EDIT_PATH}">Reload</a>`,
+      ),
+    ).toBeNull();
+  });
+});
 
 describe.skipIf(!process.env.DATABASE_URL)(
   "refused event edit explains the missing roster (isolated test DB)",
