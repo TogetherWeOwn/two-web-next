@@ -55,9 +55,10 @@ its own exact-head CI and independent review.
   sizes exactly as the unchanged checker does. Verify tracked source blobs
   against the selected Git tree after all controls.
 
-No feature branch, application, test, acceptance file, checker, canonical
-inventory, dependency, constraint, CI gate or deploy configuration is changed by
-this PR. The scratch composition is an experiment only.
+No feature branch, application, acceptance contract, checker, canonical inventory,
+dependency, constraint, CI gate or deploy configuration is changed by this PR.
+The shipping tests receive only the three owner-supplied server-gzip literal
+corrections described below. The scratch composition is an experiment only.
 
 ## Two fresh builds per tree
 
@@ -122,17 +123,44 @@ rehashed, with the same 54-file inventory. Net client gzip grows by 735 bytes
 because the app's hash-link change saves one gzip byte. CSS grows by 28 raw /
 13 gzip bytes. These are whole canonical-group measurements, not selected chunks.
 
+## Current-main reconciliation and shipping coverage
+
+Main advanced to `91b66a68d2d37bd2c717f3a75299300d3617b811`. Its clean composition
+with the same frozen feature is tree
+`b90d7cb447a0d646f541da4a04586f2bd055c3b0` (merge-tree exit 0).
+Compared with the measured composition, only `ci/check-kit-perf.test.mjs`,
+`ci/kit-perf-budget.json` (history only), and four documentation files changed.
+Application sources, assets, build configuration, both manifests and locks,
+checker and canonical inventory are byte-identical. These are input-identity
+checks, not new builds. The recorded measurements therefore reaffirm 334592 on
+this base; any later product-input movement requires fresh measurement.
+
+Current main added fixed shipping-boundary tests at the old 334080 ceiling.
+With only the proposed numeric cap, the old shipping suite reports 29 passes and
+one failure: `shipping budget: server gzip one byte over` admits its old
+334081-byte fixture. The test owner supplied commit
+`69b4655e3645820234be8d8383aad09d5bf437bb`; its file is incorporated unchanged
+(SHA-256 `6ae27eeb3bd3414806ccf4aeb2181aaa26f7100208615d36f8738b301ed7d22d`).
+Relative to current main, exactly three literals change: exact fit 334592,
+overflow 334593, and diagnostic ceiling 334592. The earlier 333639 interval
+case and every unrelated fixture remain unchanged. The corrected shipping
+suite passes 30/30, and the checker selftest passes 12/12. These test results
+are not a new feature build, full-suite pass or deployment claim.
+
 ## History, scope and rollback
 
-Main's entire `$comment` is preserved exactly, with SHA-256
+Current main's entire `$comment` is preserved exactly, with SHA-256
+`da07d2fd7cdb07d116e1c7f70f27c6eab99a10562f6956bd3ca469546f34fff0`.
+The original measured base's history hash was
 `d1f03911b163c65b2692bb4547db2b8dd862467dc2f6754f45e8e2becda6dbe9`.
-Every other JSON field is identical to pinned main. Evidence lives in this separate
-note rather than rewriting or duplicating the existing allocation history.
+Every JSON field except server gzip is identical to current main. Evidence lives
+in this separate note rather than rewriting or duplicating allocation history.
 
 ACT: allocate 512 additional server-gzip bytes only. WHY: repeated clean
 composition builds and lower-boundary controls demonstrate the minimum fitting
-256-byte-aligned cap. UNDO: after measuring intervening growth, revert this scalar
-and note through a reviewed PR; never rewrite main history or discard another
+256-byte-aligned cap. UNDO: after measuring intervening growth, revert this scalar,
+its three shipping-test literals and this note together through a reviewed PR;
+never rewrite main history or discard another
 feature's capacity. No staging/production probe, migration or deployment was run
 for this measurement. Startup, browser behavior and feature acceptance remain
 outside this budget experiment; exact-head CI and independent review still gate
