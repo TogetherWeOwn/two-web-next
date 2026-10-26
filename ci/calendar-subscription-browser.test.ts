@@ -189,7 +189,9 @@ async function assertSelectable(page: Page) {
 
 async function copyButton(page: Page) {
   await revealHelp(page);
-  const button = page.getByRole("button", { name: /copy/i });
+  // The schedule also offers a separate "Copy this schedule view" action for
+  // the committed filtered view; this suite's contract is the feed control.
+  const button = page.getByRole("button", { name: /copy feed/i });
   expect(await button.count(), "an accessible explicit copy action must exist").toBe(1);
   return button;
 }
