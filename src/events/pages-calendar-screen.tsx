@@ -298,6 +298,7 @@ export const EventsCalendarPage: FC<{
               upcoming={upcoming}
               past={past}
               zone={zone}
+              now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
               showPast={showPast}

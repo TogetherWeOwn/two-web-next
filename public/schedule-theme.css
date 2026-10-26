@@ -1,4 +1,3 @@
-/* Schedule/board layout. */
 .events-page .schedule-heading{border-left:4px solid var(--brand);padding-left:1.5rem;margin-bottom:2.5rem}
 .events-page h1{font-size:clamp(3rem,7vw,5rem);margin:.5rem 0 1rem}
 .events-page .strap{color:var(--brand);margin:0}
@@ -25,6 +24,7 @@
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
 .events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
 .events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
+.events-page [data-cal-jump]{flex-wrap:wrap;overflow-wrap:anywhere;}
 .events-page [data-cal-jump][data-cancelled] { flex-direction: column; align-items: flex-start; }
 .events-page [data-cal-jump] .schedule-badge { margin: .25rem 0 0; }
 .events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *){background:var(--surface);border-left:4px solid var(--brand);padding:1.5rem;}
@@ -41,11 +41,11 @@
 .events-page [data-testid=events-calendar-scroll] td[aria-current=date]{box-shadow:inset 0 0 0 2px var(--brand);}
 .events-page [data-testid=events-calendar-scroll] td[data-outside]{background:var(--paper);}
 .events-page [data-testid=events-calendar-scroll] td ul{list-style:none;padding:0;margin:.25rem 0 0;font-size:.85rem;}
-.events-page .member-board-table { min-width: 0; }
-.events-page .member-board-table :is(th, td) { border: 1px solid var(--line); padding: .65rem; vertical-align: top; }
-.events-page .member-board-table th { color: var(--muted); }
-.events-page .member-board-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px var(--line); }
-.events-page .member-board-table tbody tr[aria-current="true"] { background: var(--paper); outline: 2px solid var(--brand); outline-offset: -2px; }
+.events-page .member-board-table{min-width:0}
+.events-page .member-board-table :is(th, td){border:1px solid var(--line);padding:.65rem;vertical-align:top}
+.events-page .member-board-table th{color:var(--muted)}
+.events-page .member-board-table thead th{position:sticky;top:0;z-index:1;background:var(--surface);box-shadow:inset 0 -1px var(--line)}
+.events-page .member-board-table tbody tr[aria-current="true"]{background:var(--paper);outline:2px solid var(--brand);outline-offset:-2px}
 @media (forced-colors: active) {
   .events-page .member-board-table tbody tr[aria-current="true"] { outline-color: Highlight; }
 }
