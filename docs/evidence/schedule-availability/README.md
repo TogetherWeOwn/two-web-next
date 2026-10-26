@@ -52,13 +52,41 @@ Hono/Kit list and calendar renderers, with published positive controls. Deleting
 the draft guard fails all 12 cases. The separate past-draft-at-capacity pin was
 observed failing before the one-line guard repair.
 
-The renewed binary conflict with base `a4cd5d2e3` retains the four newer base
-images (including the reordered subscription links), not the older accepted
-availability images. No local screenshot is substituted as a baseline. The
-combined layout still needs a current pinned-runner failure artifact and review;
-the historical acceptance below is not proof for this merged tree. CSS was
-compacted without changing its minified declarations to fit the unchanged
-6144-byte raw budget after integrating the base's search-highlight rule.
+The renewed binary conflict with base `a4cd5d2e3` initially retained the four newer
+base images (including the reordered subscription links), not the older accepted
+availability images. The subsequent reviewed acceptance below incorporates that
+layout. No local screenshot is substituted as a baseline. CSS was compacted
+without changing its minified declarations to fit the unchanged 6144-byte raw
+budget after integrating the base's search-highlight rule.
+
+## Guest fixture correction and host-line integration
+
+Consumed independent correction `e77207da254e411588903bfbd6442539497ef158`,
+which adds only the now-required `session: null` to the guest fixture. No
+acceptance assertions changed. A subsequent base conflict retains both the
+availability verdict and the public organizer line from the base. Blank hosts
+and Discord transients still render no host node. The combined renderer/read,
+draft, cancellation, fullness, card-scanning and host suites pass 370 cases;
+the Hono/Kit keyboard, no-JavaScript and island browser suites pass 32 cases.
+
+[CI run 40187182703](https://github.com/TogetherWeOwn/two-web-next/actions/runs/40187182703)
+produced the current reviewed images (artifact `12596686229`, source head
+`ac27dfe758ee37a1a563c921437cf42f4624af33`). Opened all four expected, actual and
+diff images. The changes add the availability line and its mobile wrapping while
+retaining the reordered subscription links. Hono and Kit actuals are identical
+at each width. The seed has no organizer, so the later host-line integration
+adds no node to these fixture pages.
+
+Accepted only those four actuals through the Hono and Kit acceptance tools:
+
+- Desktop: `ebd4be8aae7a349c8c0c51323c8bdfec1849022403e7b70ffc8b0d1ae509d639`
+- Mobile: `be42bb572114cad261432789223a56e24b30b0d4045d42136df8f8ddda480c6c`
+
+The complete artifact's Hono acceptance was refused because it also contains
+stale copies of unrelated detail baselines. Preserved that artifact and accepted
+a separate byte-verified selection of only the four reviewed actuals, with exact
+suite-relative paths. The newer detail baselines remain unchanged. No threshold,
+mask, fixture or audit was relaxed. Combined-head CI must still verify the result.
 
 ## Historical baseline conflict disposition
 

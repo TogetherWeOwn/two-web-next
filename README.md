@@ -254,6 +254,17 @@ into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
 named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
 write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
+Both verifiers admit evidence through one shared authority
+(`ci/execution-receipt-authority.mjs`): the named suite must appear with
+distinct passed cases, so counters-only summaries, unrelated-suite
+substitution, skipped/todo/cancelled cases and malformed or duplicate
+identities all fail the step. Add `--format json` for a versioned machine
+receipt (`version`, `suite_id`, `cases[].case_id`, `counts`, `verdict`,
+`error_code`, `next_action`); human output stays one line. Failure evidence
+anywhere in the report (including suite teardown failures and unrelated cases)
+refuses admission. JSON stdout is capped at 16 KiB including its newline; an
+oversized receipt fails before any success output or CI-summary append rather
+than dropping case identities. Human output can still verify larger suites.
 The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
 to execute the same Chromium proof.
 
@@ -265,7 +276,10 @@ to execute the same Chromium proof.
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-save.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-save.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
 | `test/profile-composition-browser.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-composition-browser.test.ts` |
