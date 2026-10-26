@@ -77,35 +77,52 @@ artifact changed; each scratch budget was restored byte-for-byte afterward.
 | One byte below measured gzip | 334891: exit 1 | 334890: exit 1 | 334892: exit 1 |
 | Restore old 334080 | Exit 1 | Exit 1 | Exit 1 |
 
-## Independent shipping-test correction
+## Shipping gate: merged dual-allocation support
 
-The original shipping suite deliberately uses fixed literals. Changing the
-ceiling alone produces **29 pass / 1 fail**: its old 334081 one-byte-over fixture
-is admitted. It is not legitimate to skip or derive that fixture from the cap.
+The shipping suite uses fixed literals selected by an explicit allocation
+mapping; fixtures are never derived from the loaded cap. The base for this PR
+(`4d9ebeee5b311dd5bedb606a57ea91183625c3c7`) merged the dual-allocation
+support from
+[PR #1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814), and this
+PR carries no test changes: `ci/check-kit-perf.test.mjs` is byte-identical to
+that base (`git diff` of the file against the base is empty). Its SHA-256 at
+this head is
+`9baec3e7a51a99ba04293970590376c04a3168b482a6d7226a5e5d2a6631a981`.
 
-Consume the independently authored, already delivered literal-only correction
-from commit `d8bc0a9a06ea59c8d58787d90f96488d60300dee` associated with
-[the same 335104 allocation in #1797](https://github.com/TogetherWeOwn/two-web-next/pull/1797).
-Only `ci/check-kit-perf.test.mjs` is consumed from that commit, not its budget
-or parent history. Its exact SHA-256 is
-`ed7d91f5940a4b89663e69b363c18e57f75d5f0c5601862d6a0485699d59b0f7`.
-The file is byte-identical to that deliverable: interval 334849, exact 335104,
-over 335105 with diagnostic ceiling 335104. No helper, assertion or unrelated
-boundary changes.
+The mapping at `ci/check-kit-perf.test.mjs:325-326` approves exactly two
+server-gzip allocations:
 
-Fresh isolated executions of those unchanged bytes:
+| Loaded cap | Interval witness | Exact ceiling | One byte over |
+| ---: | ---: | ---: | ---: |
+| 334080 (legacy) | 333639 | 334080 | 334081 |
+| 335104 (this decision) | 334994 | 335104 | 335105 |
+
+The `shipping budget: server gzip allocation is explicitly approved` control
+rejects any other loaded ceiling, and the three server-gzip cases then fail
+with it, so an arbitrary widening or narrowing cannot go green. The 335104
+interval witness 334994 is the combined-worst case (margin 110 under the
+ceiling); the lower aligned step 334848 is unapproved by design.
+
+An earlier revision of this PR paired the scalar with the independently
+authored literal-only correction from commit
+`d8bc0a9a06ea59c8d58787d90f96488d60300dee`
+([#1797](https://github.com/TogetherWeOwn/two-web-next/pull/1797), SHA-256
+starting `ed7d91f5`). That file was superseded when the base merged #1814:
+the merge adopted main's dual-allocation file verbatim, and no literal-only
+bytes remain in this PR. The composition measurements in this record are
+unaffected; #1814 changed tests only.
+
+Fresh isolated executions of the merged gate file on this tree (scratch
+budgets restored byte-for-byte afterward; the full file is 31 tests, of which
+18 are the shipping subset: the allocation control plus 17 boundary cases):
 
 | Budget | Result |
 | --- | --- |
-| Old 334080 | 27 pass / 3 fail, all three server-gzip controls |
-| Proposed 335104 | 30/30 pass |
-| Unapproved 335105 | 29 pass / 1 fail, fixed one-byte-over control |
-| Unapproved next step 335360 | 29 pass / 1 fail, fixed one-byte-over control |
-
-[PR #1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814) offers a
-separate dual-allocation correction. This PR does not edit, depend on, or
-silently substitute that open proposal. The consumed literal-only correction
-keeps the original fixed-evidence discipline and is delivered independently.
+| Approved legacy 334080 | 31/31 pass (shipping 18/18) |
+| Proposed 335104 | 31/31 pass (shipping 18/18) |
+| Unapproved 335105 | 27/31; exactly the allocation control plus the 3 server-gzip cases fail |
+| Unapproved lower step 334848 | 27/31; exactly the allocation control plus the 3 server-gzip cases fail |
+| Unapproved next step 335360 | 27/31; exactly the allocation control plus the 3 server-gzip cases fail |
 [PR #1811](https://github.com/TogetherWeOwn/two-web-next/pull/1811)'s 334592
 proposal cannot admit the measured exact-series tree. Other feature allocations
 such as [#1796](https://github.com/TogetherWeOwn/two-web-next/pull/1796) and
@@ -114,15 +131,15 @@ fit for this tree; no existing merged cap covers it at the source pin above.
 
 ## Verification and limits
 
-Fresh local evidence after pairing the scalar and independent test correction:
+Fresh local evidence after pairing the scalar with the merged dual-allocation gate:
 
 - Checker `--selftest`: 12/12 pass.
 - `node --test ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/floor-guard.test.mjs`:
-  140/140 pass, no skips.
+  141/141 pass, no skips.
 - Collected Kit parity-gates/origin/checker/perf/inventory/visual-accept/CI-wiring/
-  section-normalization suites: 160/160 pass, no skips. These are fixture tests,
+  section-normalization suites: 161/161 pass, no skips. These are fixture tests,
   not browser journeys.
-- `npm run lint`, `npm run typecheck`, and
+- `npm run lint`, `npm run typecheck`, `npm run docs:links`, and
   `node ci/floor-guard.mjs --base origin/main`: exit 0.
 - Full `npm run check`, coverage, browser journeys, UI gates, startup readiness,
   feature acceptance, staging and deployment are not claimed by this budget
@@ -136,10 +153,11 @@ workflow, dependency, lockfile, constraint, route flag or other ceiling changes.
 
 ## Rollback
 
-Use a reviewed revert of the single scalar, its paired shipping-test correction,
-and this decision's appended record/evidence note together. Preserve incoming
-history and all unrelated enforcement. Remeasure first if intervening features
-have consumed the allowance; reverting only the scalar can intentionally make
-those later compositions red. No deploy or live mutation is part of this work.
+Use a reviewed revert of the single scalar and this decision's appended
+record/evidence note together. The shipping gate tests live on main (merged
+#1814) and are untouched by this PR, so no test revert is paired with this
+change. Preserve incoming history and all unrelated enforcement. Remeasure
+first if intervening features have consumed the allowance; reverting only the
+scalar can intentionally make those later compositions red. No deploy or live mutation is part of this work.
 The feature owner must remeasure the actual integrated head after the prerequisite
 lands; this evidence is not permission to bypass their separate acceptance gate.
