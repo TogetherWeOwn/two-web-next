@@ -297,6 +297,48 @@ test("bundle fragment with an unsupported top-level key cannot enforce (2)", (t)
   assert.equal(runBundle(root, sink), 2);
 });
 
+test("empty kit fragment beside valid fragments cannot enforce (2)", (t) => {
+  const root = kitFixture(t, {});
+  writeFile(root, "ci/budgets/kit/empty.json", "{}");
+  assert.equal(runKit(root, sink), 2);
+});
+
+test("multi-unit kit fragment cannot enforce (2)", (t) => {
+  const root = kitFixture(t, {});
+  writeFile(
+    root,
+    "ci/budgets/kit/client-js.json",
+    JSON.stringify({
+      client: {
+        js: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 },
+        extra: { maxRawBytes: 1, maxGzipBytes: 1, maxFiles: 1 },
+      },
+    }),
+  );
+  assert.equal(runKit(root, sink), 2);
+});
+
+test("empty bundle fragment beside valid fragments cannot enforce (2)", (t) => {
+  const { root } = bundleFixture(t, {});
+  writeFile(root, "ci/budgets/bundle/empty.json", JSON.stringify({ budgets: {} }));
+  assert.equal(runBundle(root, sink), 2);
+});
+
+test("multi-entry bundle fragment cannot enforce (2)", (t) => {
+  const { root, exact } = bundleFixture(t, {});
+  writeFile(
+    root,
+    "ci/budgets/bundle/example.json",
+    JSON.stringify({
+      budgets: {
+        "public/islands/example.js": { ...exact },
+        "public/islands/extra.js": { ...exact },
+      },
+    }),
+  );
+  assert.equal(runBundle(root, sink), 2);
+});
+
 test("kit fragment magic keys cannot pollute Object.prototype (2)", (t) => {
   const root = kitFixture(t, {});
   writeFile(

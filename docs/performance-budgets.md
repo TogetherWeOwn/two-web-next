@@ -504,7 +504,8 @@ top-level `lhr-*.json` files are read; nested attempt archives never fill
 quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
-2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
+2026-09-30 sizes documented in the `ci/budgets/bundle/` fragments (then
+`ci/bundle-budget.json`), with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced

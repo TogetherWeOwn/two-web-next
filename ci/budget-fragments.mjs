@@ -96,10 +96,15 @@ export function loadKitBudget(root) {
   for (const name of names) {
     const fragment = readFragment(root, relativeDir, name);
     if (!isObject(fragment)) throw new Error(`${relativeDir}/${name}: fragment must be an object`);
+    // One budget unit per fragment is the anti-conflict grain: an empty or
+    // multi-unit fragment violates the fragment contract even when its
+    // siblings are valid, so reject it here, not just in the repo test.
+    let fragmentUnits = 0;
     for (const [section, value] of Object.entries(fragment)) {
       if (section.startsWith("$")) continue;
       assertSafeKey(relativeDir, name, section);
       if (section === "startup") {
+        fragmentUnits += 1;
         define("startup", name, () => {
           budget.startup = value;
         });
@@ -110,10 +115,16 @@ export function loadKitBudget(root) {
       }
       for (const [unitKey, unitValue] of Object.entries(value)) {
         assertSafeKey(relativeDir, name, unitKey);
+        fragmentUnits += 1;
         define(`${section}.${unitKey}`, name, () => {
           (budget[section] ??= {})[unitKey] = unitValue;
         });
       }
+    }
+    if (fragmentUnits !== 1) {
+      throw new Error(
+        `${relativeDir}/${name}: fragment must define exactly one budget unit, got ${fragmentUnits}`,
+      );
     }
   }
   return budget;
@@ -150,6 +161,12 @@ export function loadBundleBudgets(root) {
     }
     if (!isObject(fragment.budgets)) {
       throw new Error(`${relativeDir}/${name}: fragment must define a budgets object`);
+    }
+    if (Object.keys(fragment.budgets).length !== 1) {
+      throw new Error(
+        `${relativeDir}/${name}: fragment must define exactly one budgets entry, ` +
+          `got ${Object.keys(fragment.budgets).length}`,
+      );
     }
     for (const [entry, ceiling] of Object.entries(fragment.budgets)) {
       assertSafeKey(relativeDir, name, entry);
