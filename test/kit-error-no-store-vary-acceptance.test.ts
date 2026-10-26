@@ -720,6 +720,9 @@ describe("Kit member-board headers", () => {
 
   it("GREEN: served board keeps private, no-store", async () => {
     const seen: Record<string, string>[] = [];
+    // Minimal real catalog fixture: empty pg-proxy answers the published-games
+    // read with no games, preserving the served-board header contract.
+    const emptyCatalogDb = drizzle(async () => ({ rows: [] }));
     const board = await loadMembersBoardData({
       env,
       session: memberBoardSession(true),
@@ -727,7 +730,7 @@ describe("Kit member-board headers", () => {
       scopeParam: null,
       activityParam: null,
       setHeaders: (headers) => seen.push(headers),
-      dbForFn: async () => ({}) as Db,
+      dbForFn: async () => emptyCatalogDb as unknown as Db,
       loadRankingFn: async () => [],
       queueBoardViewFn: () => {},
     });

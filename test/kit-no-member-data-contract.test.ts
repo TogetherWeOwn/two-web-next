@@ -1086,6 +1086,10 @@ describe("member-gated negative controls", () => {
       { userId: PROBE_SNOWFLAKE_2, username: PROBE_EMAIL, count: 3 },
       { userId: PROBE_SNOWFLAKE_3, username: PROBE_USERNAME_2, count: 1 },
     ];
+    // Minimal real catalog fixture: the board reads published games once per
+    // render; empty pg-proxy answers with no games, preserving the audited
+    // ranking read and detector positive control.
+    const emptyCatalogDb = drizzle(async () => ({ rows: [] }));
     const data = await loadMembersBoardData({
       env: { APP_URL: "https://example.test" } as never,
       session: { status: "authenticated", userId: PROBE_SNOWFLAKE_2, member: true } as never,
@@ -1093,7 +1097,7 @@ describe("member-gated negative controls", () => {
       scopeParam: null,
       activityParam: null,
       setHeaders: () => {},
-      dbForFn: async () => ({}) as never,
+      dbForFn: async () => emptyCatalogDb as never,
       loadRankingFn: async () => ranked,
       queueBoardViewFn: () => {},
     });

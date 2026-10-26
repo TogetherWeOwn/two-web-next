@@ -41,9 +41,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isKitErrorStatus, kitErrorCopy } from "../src/kit-errors";
 import { loadMembersBoardData } from "../src/kit-members";
+
+// Minimal real catalog fixture: empty pg-proxy answers the published-games
+// read with no games; ranking stays stubbed, gates still fire before any read.
+const emptyCatalogDb = () => drizzle(async () => ({ rows: [] }));
 import { MemberBoardFilterErrorPage } from "../src/leaderboards/pages";
 import { parseActivityParam, parseScopeParam } from "../src/leaderboards/members";
 import { parseSeasonParam } from "../src/hotzones/season";
@@ -102,7 +107,7 @@ const kitArgs = (overrides: Record<string, unknown> = {}) => ({
   scopeParam: null,
   activityParam: null,
   setHeaders: vi.fn((_headers: Record<string, string>) => {}),
-  dbForFn: async () => ({}) as never,
+  dbForFn: async () => emptyCatalogDb() as never,
   loadRankingFn: async () => [],
   queueBoardViewFn: () => {},
   ...overrides,
@@ -501,7 +506,7 @@ describe("Kit board gating and grammar unchanged", () => {
       { userId: "100000000000000233", username: "zxq-kit-board-a", count: 5 },
       { userId: MEMBER.userId, username: MEMBER_NAME, count: 3 },
     ];
-    const db = {} as never;
+    const db = emptyCatalogDb() as never;
     const queueBoardViewFn = vi.fn(() => {});
     const setHeaders = vi.fn((_headers: Record<string, string>) => {});
     const data = await loadMembersBoardData(

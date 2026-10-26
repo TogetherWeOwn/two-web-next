@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import {
   loadMembersBoardData,
   queueMembersBoardView,
@@ -7,6 +8,12 @@ import {
   type RecordBoardView,
 } from "../src/kit-members";
 import { memberReadResponse } from "../src/member-reads";
+
+// Minimal real catalog fixture: the board now reads published games once per
+// render via the exact published-games statement. An empty pg-proxy DB answers
+// that read with no games without faking success or swallowing programming
+// errors; ranking stays stubbed per-test.
+const emptyCatalogDb = () => drizzle(async () => ({ rows: [] }));
 
 const env = { APP_URL: "https://example.test" } as never;
 const headers = () => vi.fn((_headers: Record<string, string>) => {});
@@ -25,7 +32,7 @@ function args(overrides: Record<string, unknown> = {}) {
     scopeParam: null,
     activityParam: null,
     setHeaders: headers(),
-    dbForFn: async () => ({}) as never,
+    dbForFn: async () => emptyCatalogDb() as never,
     loadRankingFn: async () => ranked,
     queueBoardViewFn: () => {},
     ...overrides,
@@ -34,7 +41,7 @@ function args(overrides: Record<string, unknown> = {}) {
 
 describe("Kit member-board load parity", () => {
   it("serves the overall board, queues the anonymous board view and answers private, no-store", async () => {
-    const db = {} as never;
+    const db = emptyCatalogDb() as never;
     const queueBoardViewFn = vi.fn(() => {});
     const setHeaders = headers();
     const data = await loadMembersBoardData(
