@@ -8,17 +8,66 @@ allowance:
 
 | Budget field | Current main | Proposal | Increase from main | Minimum measured margin |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 334080 | 335104 | 1024 | 164 |
+| `server.js.maxGzipBytes` | 334080 | 335104 | 1024 | 162 |
 
-`ceil(334940 / 256) * 256 = 335104`. Every other numeric field, checker,
-inventory, manifest, lock, constraint and test stays identical to main except
-the three coevolved shipping boundary literals (exact ceiling and one-byte-over
-fixture plus its diagnostic ceiling); the fixed 333639 shipping evidence stays
-unchanged. No feature/runtime change is authored here. This prerequisite does
-not reserve capacity or approve the feature: the parent must remeasure its
-actual integrated head and pass exact-head CI and independent review.
+`ceil(334942 / 256) * 256 = 335104` after reconciliation. Every other numeric
+field, checker, inventory, manifest, lock, constraint and test stays identical
+to incoming main. Main's independently authored fixed-allocation tests now
+support this ceiling, so the original three literal edits are superseded;
+the test file is taken byte-for-byte from main. No feature/runtime change is
+authored here. This prerequisite does not reserve capacity or approve the
+feature: the parent must remeasure its actual integrated head and pass
+exact-head CI and independent review.
 
-## Pinned inputs
+## Conflict reconciliation and fresh measurements
+
+Merge incoming main head `4d9ebeee5b311dd5bedb606a57ea91183625c3c7` into this
+PR after GitHub reports conflicts. The two conflicts are decision history and
+the now-superseded test literals. Preserve incoming main's complete history as
+an exact prefix, append the branch-only decision once, and retain every main
+bound except the measured server gzip allowance. Keep
+`ci/check-kit-perf.test.mjs` identical to main, including its explicit
+334080/335104 allocation controls from [#1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814).
+No acceptance test is authored or edited by this reconciliation. The inherited
+335104-allocation interval probe is fixed at 334994, above this composition's
+334942 maximum; it is #1814's conservative evidence, not this slice's measured
+size. Its 333639 probe remains in the original 334080-allocation branch.
+
+The intervening main changes from `91b66a68d` touch only
+`ci/kit-perf-budget.json` and `ci/check-kit-perf.test.mjs`. Runtime source,
+assets, build configuration and both locks are byte-identical. Nevertheless,
+rebuild both trees with the same external locked installs (Node 24.22.1,
+npm 11.19.1, `NODE_ENV=production`, database/token/secret variables scrubbed):
+
+- Pristine main: `npm run build --prefix <archive>/web`, then its canonical
+  checker with `--format json`: exit 0, server 1178764 raw / 333873 gzip,
+  115 files; client 253949 raw / 102273 gzip, 54 files.
+- Compose main with the same frozen feature `9968879` using conflict-free
+  `git merge-tree --write-tree`; tree `f1287813c892cd0983a0146a683efda551c6a2cb`.
+  Two builds: server 1182450/1182448 raw, 334942/334941 gzip, 115 files;
+  client 254010 raw / 102287 gzip, 54 files. Both checker runs exit 1,
+  failing server gzip only at main's 334080 ceiling.
+- On both archived outputs, unchanged `runJson` proves all **10/10** controls:
+  335104 passes all groups; 334848, exact-minus-one and restored 334080
+  fail only server gzip; exact fit passes. The 335104 proposal remains the
+  minimum aligned allowance, now with 162 bytes of observed margin.
+- The resolved budget-only worktree build passes every group: server
+  1178764 raw / 333875 gzip, 115 files; client 253949 / 102273, 54 files;
+  Worker 2551 / 1219; CSS 2833 / 1006, 2 files. Startup is not timed.
+- The full CI Kit node-test batch passes **161/161**, selftest **12/12**,
+  and lint passes. Unmodified incoming shipping tests pass **31/31** at
+  334080 and at 335104; unsupported 335103 and 335105 each fail as expected.
+  An initial batch without installed dependencies failed the Playwright
+  wiring test with `MODULE_NOT_FOUND`; the locked install resolves that
+  environment failure. Full `npm run check` and browser/DB/live checks are
+  not run. The prior pre-review score applies to its original head,
+  not the reconciled head; new exact-head CI and review remain required.
+
+The original pinned measurements below remain historical evidence, not claims
+about the reconciled tree. Rebuild variation does not alter the minimum
+aligned ceiling; it is not permission to ignore a breach.
+
+## Original pinned inputs
 
 - Main: `91b66a68d2d37bd2c717f3a75299300d3617b811`.
 - Frozen feature: `9968879992bbb023f57776b26c3feb2069f9e9c6`
@@ -39,7 +88,7 @@ actual integrated head and pass exact-head CI and independent review.
   extra variables are demonstrated inert, not assumed so. Local artifacts only;
   no database, live probe, staging, migration or deploy.
 
-## Repeated production builds
+## Original repeated production builds
 
 Per tree: `npm run build --prefix web`, then
 `node ci/check-kit-perf.mjs --format json`. All five builds exit 0. The
@@ -60,7 +109,7 @@ The maximum observed combined server gzip, 334940, selects the proposal. The
 identity below), not permission to ignore a breach or claim an unmeasured
 churn bound.
 
-## Actual-output negative controls
+## Original actual-output negative controls
 
 Apply each ceiling to both archived combined outputs (builds 2 and 3) and run
 the unchanged checker via its real `runJson` entry point. Every other ceiling
@@ -106,8 +155,9 @@ island budget already fits unchanged on the feature branch.
 
 ## History, scope and limitations
 
-The `$comment` history stays byte-for-byte up to this decision's appended
-record; no earlier record is edited or removed. The standalone decision tree
+Incoming main's `$comment` history stays byte-for-byte as the prefix, followed
+by this decision's unique record and reconciliation; no earlier record is
+edited or removed. The standalone decision tree
 (main plus this budget and note, without the feature) builds and passes the
 canonical checker (see the PR verification section for its exact numbers).
 
@@ -124,7 +174,8 @@ live pages, startup latency and full `npm run check` are not established by
 this experiment.
 
 ACT: raise only the server gzip ceiling to the minimum aligned measured
-allowance, coevolve its shipping boundary literals and record the evidence.
+allowance, consume main's independent fixed-allocation tests unchanged and
+record the evidence.
 WHY: three combined builds reproducibly breach only that axis while pristine
 main fits, and one step less fails on both archived outputs. UNDO: revert
 these scalar changes and notes if the composition is abandoned, after
