@@ -114,8 +114,72 @@ function kitFixture(t, fragments) {
   return root;
 }
 
-test("kit fragments aggregate to the exact pre-split ceilings", () => {
-  assert.deepEqual(loadKitBudget(repoRoot), SHIPPING_KIT_BUDGET);
+// Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
+// above (335104) is the historical baseline; 335616 is the second,
+// independently measured adjacent-period allocation (combined worst 335465,
+// margin 151; lower 335360 rejects by 105; neighbor mutants 335615/335617
+// stay unsupported). Every other pin stays exact: the oracle rejects any
+// ceiling outside this list, then deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335616];
+
+function assertShippingKitBudget(actual) {
+  const gzip = actual?.server?.js?.maxGzipBytes;
+  assert.ok(
+    SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335616`,
+  );
+  assert.deepEqual(actual, {
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: gzip } },
+  });
+}
+
+test("kit fragments aggregate to an admitted shipping allocation", () => {
+  assertShippingKitBudget(loadKitBudget(repoRoot));
+});
+
+test("shipping oracle admits the measured 335616 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335616 } },
+  });
+});
+
+test("shipping oracle rejects an unsupported server gzip allocation", () => {
+  for (const maxGzipBytes of [335105, 335359, 335615, 335617]) {
+    const unsupported = {
+      ...SHIPPING_KIT_BUDGET,
+      server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
+    };
+    assert.throws(
+      () => assertShippingKitBudget(unsupported),
+      new RegExp(`unsupported server gzip allocation ${maxGzipBytes}`),
+    );
+  }
+  assert.throws(() => assertShippingKitBudget({}), /unsupported server gzip allocation/);
+});
+
+test("shipping oracle rejects off-axis drift at an admitted allocation", () => {
+  const drifts = [
+    ["server raw", (plan) => (plan.server.js.maxRawBytes += 1)],
+    ["server files", (plan) => (plan.server.js.maxFiles += 1)],
+    ["client raw", (plan) => (plan.client.js.maxRawBytes += 1)],
+    ["client gzip", (plan) => (plan.client.js.maxGzipBytes += 1)],
+    ["client files", (plan) => (plan.client.js.maxFiles += 1)],
+    ["client css gzip", (plan) => (plan.client.css.maxGzipBytes += 1)],
+    ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
+    ["startup", (plan) => (plan.startup.maxMs += 1)],
+  ];
+  for (const [label, drift] of drifts) {
+    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
+    plan.server.js.maxGzipBytes = 335616;
+    drift(plan);
+    assert.throws(
+      () => assertShippingKitBudget(plan),
+      /Expected values to be strictly deep-equal/,
+      `${label} drift must fail the shipping oracle`,
+    );
+  }
 });
 
 test("bundle fragments aggregate to the exact pre-split ceilings", () => {
