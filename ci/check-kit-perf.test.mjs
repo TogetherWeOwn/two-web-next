@@ -336,6 +336,22 @@ test("shipping budget: refreshed 255872-byte client raw fits", (t) => {
   assert.deepEqual(result.errors, []);
 });
 
+test("shipping budget: event-detail 256580-byte client raw fits", (t) => {
+  const fx = makeClientShippingFixture(Buffer.alloc(256580, "a"));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
+test("shipping budget: event-detail 103073-byte client gzip fits", (t) => {
+  const fx = makeClientShippingFixture(bodyWithGzipBytes(103073));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
 test("shipping budget: exact client raw boundary fits and one byte above fails", (t) => {
   const fx = makeClientShippingFixture(Buffer.alloc(shippingClientBudget.maxRawBytes, "a"));
   t.after(fx.cleanup);
@@ -558,23 +574,23 @@ function shippingServerGzipCases() {
 }
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
   { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 254769 },
-  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
+  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 257024 },
   {
     name: "client raw one byte over",
     group: "kit.client.js",
     axis: "raw",
-    bytes: 256001,
-    ceiling: 256000,
+    bytes: 257025,
+    ceiling: 257024,
     breach: true,
   },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
+  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
   {
     name: "client gzip one byte over",
     group: "kit.client.js",
     axis: "gzip",
-    bytes: 102913,
-    ceiling: 102912,
+    bytes: 103169,
+    ceiling: 103168,
     breach: true,
   },
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
