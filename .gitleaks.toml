@@ -165,3 +165,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/kit-no-member-data-contract\.test\.ts$''']
 regexes = ['''^111222333444555667$''', '''^222333444555666778$''']
+
+[[allowlists]]
+description = "Synthetic unknown-event ULID in the MCP/REST parity acceptance fixture, used only for an in-memory 404 lookup, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/mcp-rest-parity-acceptance\.test\.ts$''']
+regexes = ['''^01BRZ3NDEKTSV4RRFFQ69G5FAV$''']
