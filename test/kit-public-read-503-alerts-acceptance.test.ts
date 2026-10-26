@@ -94,7 +94,15 @@ const eventsEnv = {
 } as unknown as Env;
 
 const baseModel = () => ({
-  state: { view: "list", month: "2026-10", q: "", game: "", past: false, page: 1 },
+  state: {
+    view: "list",
+    month: "2026-10",
+    q: "",
+    game: "",
+    past: false,
+    page: 1,
+    weekStart: "monday",
+  },
   upcoming: [],
   past: [],
   zone: "Europe/London",

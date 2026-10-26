@@ -1,9 +1,9 @@
 // EventsCalendar: member-driven fragment re-renders (view toggle, month steps,
-// month jump, settled search, past drawer, retry, grid day jumps). One fetch
-// in flight — a newer action aborts the older. Skeleton + content swap on
-// member-started actions only; typing in the search box is deliberately
-// untargeted so the input never loses focus. Every control is a real anchor
-// or a GET form, so the whole surface works without this file.
+// month jump, week-start choice, settled search, past drawer, retry, grid day
+// jumps). One fetch in flight — a newer action aborts the older. Skeleton +
+// content swap on member-started actions only; typing in the search box is
+// deliberately untargeted so the input never loses focus. Every control is a
+// real anchor or a GET form, so the whole surface works without this file.
 (function () {
   "use strict";
   var root = document.querySelector('[data-island="events-calendar"]');
@@ -440,10 +440,11 @@
       authSwaps.forEach(function (swap) {
         if (swap.target) swap.target.setAttribute("href", swap.href);
       });
-      // A swap replaces the month-jump form with a fresh node: rewire it so
-      // the next submit re-enters the fragment flow. A no-op when the zones
-      // carry no form (e.g. the list view) or the node is already wired.
-      wireJumpForm();
+      // A swap replaces the month-jump and week-start forms with fresh nodes:
+      // rewire them so the next submit re-enters the fragment flow. A no-op
+      // when the zones carry no form (e.g. the list view) or the node is
+      // already wired.
+      wireScopeForms();
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
       root.dataset.past = next.dataset.past;
@@ -508,15 +509,21 @@
   // The URL for a settled search: the raw input value (blank means no search),
   // the drawer stays as it was, the game facet rides along, and the search
   // forces the list view — so view/month params are dropped, matching the
-  // server's calendarUrl(). The facet reads the live select (like the input
-  // reads its live value), falling back to the address bar where the form
-  // has no select yet.
+  // server's calendarUrl(). The committed week layout rides along (it is a
+  // list-harmless presentation choice, and the calendar toggle returns to
+  // it); anything but exactly one allowlisted value stays dropped. The facet
+  // reads the live select (like the input reads its live value), falling
+  // back to the address bar where the form has no select yet.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
     var current = new URL(window.location.href).searchParams;
     if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
+    }
+    var weeks = current.getAll("weekStart");
+    if (weeks.length === 1 && (weeks[0] === "monday" || weeks[0] === "sunday")) {
+      url.searchParams.set("weekStart", weeks[0]);
     }
     var game = gameField ? gameField.value : current.get("game");
     if (game !== null && game !== undefined && String(game).trim() !== "") {
@@ -672,39 +679,53 @@
     });
   }
 
-  // The month-jump form is a native GET form (view + game + past ride as hidden
-  // fields), so a jump works without this file. With it, submit reuses the
-  // fragment flow: the chosen month commits exactly like a month step, focus
-  // landing in the new form — or back on the origin submitter on failure.
-  // Typing in the month box schedules nothing: only submit navigates.
+  // The month-jump form is a native GET form (view + game + week layout +
+  // past ride as hidden fields), so a jump works without this file. With it,
+  // submit reuses the fragment flow: the chosen month commits exactly like a
+  // month step, focus landing in the new form — or back on the origin
+  // submitter on failure. Typing in the month box schedules nothing: only
+  // submit navigates.
   var JUMP_FORM_SELECTOR = '[data-testid="calendar-month-jump"]';
   var JUMP_SUBMIT_SELECTOR = '[data-testid="calendar-month-jump-submit"]';
-  var wiredJumpForm = null;
+
+  // The week-start form is the same shape (view + month + game + past ride
+  // as hidden fields around the layout select), so one URL builder and one
+  // wiring pass serve both native forms: the chosen layout commits exactly
+  // like a month step.
+  var WEEK_FORM_SELECTOR = '[data-testid="calendar-week-start"]';
+  var WEEK_SUBMIT_SELECTOR = '[data-testid="calendar-week-start-submit"]';
+  var SCOPE_FORMS = [
+    [JUMP_FORM_SELECTOR, JUMP_SUBMIT_SELECTOR],
+    [WEEK_FORM_SELECTOR, WEEK_SUBMIT_SELECTOR],
+  ];
+  var wiredScopeForms = [];
 
   function jumpUrl(formEl) {
     var url = new URL("/events", window.location.origin);
     url.searchParams.set("view", "calendar");
-    ["month", "game", "past"].forEach(function (name) {
+    ["month", "game", "past", "weekStart"].forEach(function (name) {
       var field = formEl.querySelector('[name="' + name + '"]');
       if (field && field.value) url.searchParams.set(name, field.value);
     });
     return url;
   }
 
-  function wireJumpForm() {
-    var formEl = root.querySelector(JUMP_FORM_SELECTOR);
-    if (!formEl || formEl === wiredJumpForm) return;
-    wiredJumpForm = formEl;
-    formEl.addEventListener("submit", function (event) {
-      event.preventDefault();
-      cancelDebounce();
-      var submitter = (event && event.submitter) || formEl.querySelector(JUMP_SUBMIT_SELECTOR);
-      var control = submitter && formEl.contains(document.activeElement) ? submitter : null;
-      load(jumpUrl(formEl), true, {
-        skeleton: true,
-        syncInput: true,
-        control: control,
-        focus: JUMP_SUBMIT_SELECTOR,
+  function wireScopeForms() {
+    SCOPE_FORMS.forEach(function (entry) {
+      var formEl = root.querySelector(entry[0]);
+      if (!formEl || wiredScopeForms.indexOf(formEl) !== -1) return;
+      wiredScopeForms.push(formEl);
+      formEl.addEventListener("submit", function (event) {
+        event.preventDefault();
+        cancelDebounce();
+        var submitter = (event && event.submitter) || formEl.querySelector(entry[1]);
+        var control = submitter && formEl.contains(document.activeElement) ? submitter : null;
+        load(jumpUrl(formEl), true, {
+          skeleton: true,
+          syncInput: true,
+          control: control,
+          focus: entry[1],
+        });
       });
     });
   }
@@ -720,5 +741,5 @@
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });
 
-  wireJumpForm();
+  wireScopeForms();
 })();

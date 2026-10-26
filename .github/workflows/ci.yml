@@ -320,6 +320,12 @@ jobs:
               node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
             done
           done
+      - name: Calendar week start (Hono and Kit, source and shipped bytes)
+        run: |
+          npx vitest run --config ci/calendar-week-start-browser.vitest.ts ci/calendar-week-start-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-week-start.json
+          for surface in Hono Kit; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-week-start.json "$surface week-start browser controls" 14 --format json
+          done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
           PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"

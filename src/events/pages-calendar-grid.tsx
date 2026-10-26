@@ -14,12 +14,19 @@ import {
   CALENDAR_PREV_LABEL,
   CALENDAR_THIS_MONTH_COPY,
   CALENDAR_THIS_MONTH_TESTID,
+  CALENDAR_WEEK_START_INPUT_ID,
+  CALENDAR_WEEK_START_LABEL,
+  CALENDAR_WEEK_START_MONDAY_COPY,
+  CALENDAR_WEEK_START_PARAM,
+  CALENDAR_WEEK_START_SUBMIT_COPY,
+  CALENDAR_WEEK_START_SUBMIT_TESTID,
+  CALENDAR_WEEK_START_SUNDAY_COPY,
+  CALENDAR_WEEK_START_TESTID,
   EVENTS_CALENDAR_GRID_TESTID,
   EVENTS_CALENDAR_SCROLL_LABEL,
   EVENTS_CALENDAR_SCROLL_TESTID,
   GRID_CANCELLED_COPY,
   SCHEDULE_AVAILABILITY_TESTID,
-  WEEKDAY_HEADINGS,
   addCalendarMonth,
   calendarJumpUrl,
   calendarMonthLabel,
@@ -30,6 +37,7 @@ import {
   wallDateIso,
   wallMonth,
   wallTimeHm,
+  weekdayHeadings,
   type CalendarDay,
   type CalendarState,
 } from "../islands/contracts";
@@ -73,9 +81,10 @@ export const MonthGrid: FC<{
         {CALENDAR_THIS_MONTH_COPY}
       </a>
     </p>
-    {/* Native GET jump: view, game and the committed past state ride as hidden
-        fields, so the no-JS submit lands on the same URL the binder fetches.
-        A jump is month-scoped — the search query never rides along. */}
+    {/* Native GET jump: view, game, the committed week layout and the
+        committed past state ride as hidden fields, so the no-JS submit lands
+        on the same URL the binder fetches. A jump is month-scoped — the
+        search query never rides along. */}
     <form data-testid={CALENDAR_MONTH_JUMP_TESTID} method="get" action="/events">
       <label for={CALENDAR_MONTH_JUMP_INPUT_ID}>{CALENDAR_MONTH_JUMP_LABEL}</label>{" "}
       <input
@@ -88,9 +97,32 @@ export const MonthGrid: FC<{
       />{" "}
       <input type="hidden" name="view" value="calendar" />
       {state.game?.trim() ? <input type="hidden" name="game" value={state.game.trim()} /> : null}
+      <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
       {state.past ? <input type="hidden" name="past" value="1" /> : null}{" "}
       <button class="btn" type="submit" data-testid={CALENDAR_MONTH_JUMP_SUBMIT_TESTID}>
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
+      </button>
+    </form>
+    {/* Native GET week-start choice: the committed month scope rides as
+        hidden fields, so the no-JS submit lands on the same URL the binder
+        fetches. Only the two allowlisted layouts are offered; anything else
+        normalizes to Monday on the server. */}
+    <form data-testid={CALENDAR_WEEK_START_TESTID} method="get" action="/events">
+      <label for={CALENDAR_WEEK_START_INPUT_ID}>{CALENDAR_WEEK_START_LABEL}</label>{" "}
+      <select id={CALENDAR_WEEK_START_INPUT_ID} name={CALENDAR_WEEK_START_PARAM}>
+        <option value="monday" selected={state.weekStart === "monday"}>
+          {CALENDAR_WEEK_START_MONDAY_COPY}
+        </option>
+        <option value="sunday" selected={state.weekStart === "sunday"}>
+          {CALENDAR_WEEK_START_SUNDAY_COPY}
+        </option>
+      </select>{" "}
+      <input type="hidden" name="view" value="calendar" />
+      <input type="hidden" name="month" value={state.month} />
+      {state.game?.trim() ? <input type="hidden" name="game" value={state.game.trim()} /> : null}
+      {state.past ? <input type="hidden" name="past" value="1" /> : null}{" "}
+      <button class="btn" type="submit" data-testid={CALENDAR_WEEK_START_SUBMIT_TESTID}>
+        {CALENDAR_WEEK_START_SUBMIT_COPY}
       </button>
     </form>
     <div
@@ -103,7 +135,7 @@ export const MonthGrid: FC<{
         <caption class="sr-only">{calendarMonthLabel(state.month)}</caption>
         <thead>
           <tr>
-            {WEEKDAY_HEADINGS.map((d) => (
+            {weekdayHeadings(state.weekStart).map((d) => (
               <th scope="col">{d}</th>
             ))}
           </tr>
@@ -141,7 +173,12 @@ export const MonthGrid: FC<{
                       return (
                         <li>
                           <a
-                            href={calendarJumpUrl(state.past, rowKey(e), state.game)}
+                            href={calendarJumpUrl(
+                              state.past,
+                              rowKey(e),
+                              state.game,
+                              state.weekStart,
+                            )}
                             data-cal-jump
                             data-cancelled={cancelled ? "true" : undefined}
                             aria-label={

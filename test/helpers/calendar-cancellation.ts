@@ -8,6 +8,7 @@ export const cancellationState: CalendarState = {
   q: "",
   past: true,
   page: 1,
+  weekStart: "monday",
 };
 export const cancellationPath = "/events?view=calendar&month=2099-01&past=1";
 

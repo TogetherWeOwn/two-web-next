@@ -35,9 +35,9 @@ const APP_URL = "https://example.test";
 const NOW = new Date("2026-10-13T12:00:00Z");
 
 const STATES: CalendarState[] = [
-  { view: "list", month: "2026-10", q: "", past: false, page: 1 },
-  { view: "list", month: "2026-10", q: "raid", past: false, page: 1 },
-  { view: "calendar", month: "2026-10", q: "", past: false, page: 1 },
+  { view: "list", month: "2026-10", q: "", past: false, page: 1, weekStart: "monday" },
+  { view: "list", month: "2026-10", q: "raid", past: false, page: 1, weekStart: "monday" },
+  { view: "calendar", month: "2026-10", q: "", past: false, page: 1, weekStart: "monday" },
 ];
 
 const row = () => ({

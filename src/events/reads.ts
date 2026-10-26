@@ -27,6 +27,7 @@ import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import { safeRequestId } from "../request-log";
 import {
+  CALENDAR_DEFAULT_WEEK_START,
   calendarGridRange,
   dedupeTransients,
   EVENTS_DISTINCT_GAMES_LIMIT,
@@ -35,6 +36,7 @@ import {
   EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
+  type CalendarWeekStart,
   type DiscordTransient,
 } from "../islands/contracts";
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
@@ -271,21 +273,23 @@ export async function rankUpcoming(
 }
 
 /** Month-grid scope: the visible upcoming rows plotted on the grid for `month`
- * ("YYYY-MM", caller-validated). The grid renders whole Monday-first weeks,
- * so the covered range reaches into the adjacent months and the read keeps
- * exactly the rows whose finite scheduled interval overlaps a covered wall
- * day in their own zone — including starts before the leading week. SQL reads
- * the covered UTC days widened for the widest zone offset; the grid cap is a
- * pathological guard only: a real month never holds that many events. */
+ * ("YYYY-MM", caller-validated) in the committed week-start layout. The grid
+ * renders whole weeks, so the covered range reaches into the adjacent months
+ * and the read keeps exactly the rows whose finite scheduled interval
+ * overlaps a covered wall day in their own zone — including starts before
+ * the leading week. SQL reads the covered UTC days widened for the widest
+ * zone offset; the grid cap is a pathological guard only: a real month never
+ * holds that many events. */
 export async function listUpcomingForMonth(
   db: Db,
   month: string,
   now = new Date(),
   opts: CalendarReadOpts = {},
+  weekStart: CalendarWeekStart = CALENDAR_DEFAULT_WEEK_START,
 ): Promise<PublicEvent[]> {
   // A bad month is an empty grid, never a 500: the route only passes
   // validated months, this keeps the read total.
-  const range = calendarGridRange(month);
+  const range = calendarGridRange(month, weekStart);
   if (!range) return [];
   const from = new Date(wallDayStart(range.first) - 86400000);
   const to = new Date(wallDayStart(range.last) + 2 * 86400000);

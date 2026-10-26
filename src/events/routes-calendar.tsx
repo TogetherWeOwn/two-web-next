@@ -5,6 +5,7 @@ import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable } from "../errors";
 import { inviteDestination } from "../invite";
 import { takeJoinResult, readJoinResult } from "../return-journey";
+import { CALENDAR_WEEK_START_PARAM } from "../islands/contracts";
 import { loadCalendarPageModel, resolveCalendarInput } from "./page-models.server";
 import {
   ANON_EVENTS_TTL_MS,
@@ -37,6 +38,8 @@ export function registerCalendarRoutes(
       page: c.req.query("page"),
       event: c.req.query("event"),
       month: c.req.query("month"),
+      // All values in URL order: a duplicated choice normalizes to Monday.
+      weekStart: c.req.queries(CALENDAR_WEEK_START_PARAM),
     });
     if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");

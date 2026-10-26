@@ -154,6 +154,7 @@ export async function renderCalendar(
     game: "",
     past: options.showPast ?? false,
     page: 1,
+    weekStart: "monday",
   };
   const data = {
     state,

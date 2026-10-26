@@ -10,7 +10,9 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   resolveGameFilter,
+  resolveWeekStart,
   type CalendarState,
+  type CalendarWeekStart,
   type DiscordTransient,
 } from "../islands/contracts";
 import {
@@ -46,6 +48,8 @@ export interface CalendarPageInput {
   /** NUL-stripped `?event=` was present, even when overlong and unusable for lookup. */
   jumpRequested: boolean;
   month: string | null;
+  /** Committed grid layout, already normalized (duplicates are Monday). */
+  weekStart: CalendarWeekStart;
   queryTooLong: boolean;
 }
 
@@ -58,6 +62,8 @@ export function resolveCalendarInput(input: {
   page?: string | null;
   event?: string | null;
   month?: string | null;
+  /** Raw `weekStart` values in URL order; duplicates normalize to Monday. */
+  weekStart?: readonly string[] | null;
 }): CalendarPageInput {
   const q = input.q ?? "";
   const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
@@ -76,6 +82,7 @@ export function resolveCalendarInput(input: {
     jumpKey: rawJumpKey !== "" && rawJumpKey.length <= 64 ? rawJumpKey : "",
     jumpRequested: rawJumpKey !== "",
     month: input.month ?? null,
+    weekStart: resolveWeekStart(input.weekStart),
     queryTooLong,
   };
 }
@@ -114,7 +121,17 @@ export async function loadCalendarPageModel(args: {
 }): Promise<CalendarPageModel> {
   const { db, input, includeDrafts, discord, requestId, phases } = args;
   const now = args.now ?? new Date();
-  const { q, game: rawGame, searching, view, past, page, jumpKey, jumpRequested } = input;
+  const {
+    q,
+    game: rawGame,
+    searching,
+    view,
+    past,
+    page,
+    jumpKey,
+    jumpRequested,
+    weekStart,
+  } = input;
   const match = matchQuery(q);
 
   // Only the web DB reads depend on the game list. Keep their whole pipeline
@@ -188,12 +205,12 @@ export async function loadCalendarPageModel(args: {
   let zone = probeZone;
   const month = parseCalendarMonth(input.month) ?? fallbackMonth;
   if (view === "calendar") {
-    const monthRows = await listUpcomingForMonth(db, month, now, opts);
+    const monthRows = await listUpcomingForMonth(db, month, now, opts, weekStart);
     zone = calendarZone([
       ...monthRows.map((event) => event.timezone),
       ...localPast.map((event) => event.timezone),
     ]);
-    const grid = calendarGridRange(month) ?? { first: month, last: month };
+    const grid = calendarGridRange(month, weekStart) ?? { first: month, last: month };
     const gridFirst = wallDayStart(grid.first);
     const gridLast = wallDayStart(grid.last);
     upcoming = mergeCalendarRows(
@@ -205,7 +222,7 @@ export async function loadCalendarPageModel(args: {
     );
   }
 
-  const state = { view, month, q, game: rawGame, past, page: listPage };
+  const state = { view, month, q, game: rawGame, past, page: listPage, weekStart };
   // An overlong `?event=` never resolves, but it is still a jump URL — not an
   // indexable copy of page one — so the robots decision sees the request flag.
   const robots = searching || state.page > 1 || jumpRequested ? "noindex, follow" : undefined;

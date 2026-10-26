@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { CALENDAR_WEEK_START_PARAM, resolveWeekStart } from "../src/islands/contracts";
 import {
   MISSING_DISCORD,
   PARTIAL_INVITE,
@@ -78,6 +79,7 @@ async function fixture(context: BrowserContext) {
           q,
           past: url.searchParams.get("past") === "1",
           page: Number(url.searchParams.get("page") ?? 1),
+          weekStart: resolveWeekStart(url.searchParams.getAll(CALENDAR_WEEK_START_PARAM)),
         },
         upcoming: [partialEvent(state.row)],
         discordFailed: state.failed,

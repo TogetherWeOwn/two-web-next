@@ -42,7 +42,15 @@ describe("calendar subscription affordance SSR", () => {
     for (const view of ["list", "calendar"] as const) {
       it(`renders native subscribe and HTTPS download links for ${view} at ${appUrl}`, async () => {
         const html = await EventsCalendarPage({
-          state: { view, month: "2026-10", q: "", game: "", past: false, page: 1 },
+          state: {
+            view,
+            month: "2026-10",
+            q: "",
+            game: "",
+            past: false,
+            page: 1,
+            weekStart: "monday",
+          },
           upcoming: [event],
           past: [],
           zone: "UTC",

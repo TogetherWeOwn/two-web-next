@@ -588,6 +588,7 @@ describe("EventsCalendar contract drift", () => {
       game: "",
       past: false,
       page: 1,
+      weekStart: "monday",
       ...o,
     });
     expect(calendarUrl(s({}))).toBe("/events");

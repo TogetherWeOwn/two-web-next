@@ -246,8 +246,9 @@ export const EVENTS_PARTIAL_COPY = {
   notice: "Some Discord events may be missing from this schedule right now.",
 } as const;
 
-/* Month grid: whole weeks, Monday-first, leading/trailing neighbours flagged;
- * "today" is evaluated in the hosts' zone, not the server's or the viewer's. */
+/* Month grid: whole weeks, Monday-first by default with an optional
+ * Sunday-first layout, leading/trailing neighbours flagged; "today" is
+ * evaluated in the hosts' zone, not the server's or the viewer's. */
 export const EVENTS_CALENDAR_SCROLL_TESTID = "events-calendar-scroll";
 export const EVENTS_CALENDAR_SCROLL_LABEL = "Events calendar; scroll horizontally to see all days";
 export const EVENTS_CALENDAR_GRID_TESTID = "events-calendar-grid";
@@ -255,6 +256,27 @@ export const CALENDAR_MONTH_TESTID = "calendar-month";
 export const CALENDAR_MONTH_STATUS_TESTID = "calendar-month-status";
 export const CALENDAR_DAY_TESTID = "calendar-day";
 export const WEEKDAY_HEADINGS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+export const WEEKDAY_HEADINGS_SUNDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/* Week start: the grid's first column. Monday is the default; Sunday is the
+ * only alternative. The URL vocabulary is `weekStart=monday|sunday`, parsed
+ * strictly: exactly one allowlisted value wins, anything else — missing,
+ * duplicate or unknown — is Monday. Never inferred from locale, never
+ * persisted: no cookie, no schema, no storage. */
+export const CALENDAR_WEEK_START_PARAM = "weekStart";
+export const CALENDAR_WEEK_STARTS = ["monday", "sunday"] as const;
+export type CalendarWeekStart = (typeof CALENDAR_WEEK_STARTS)[number];
+export const CALENDAR_DEFAULT_WEEK_START: CalendarWeekStart = "monday";
+
+export function resolveWeekStart(values: readonly string[] | null | undefined): CalendarWeekStart {
+  if (values?.length === 1 && (values[0] === "monday" || values[0] === "sunday")) return values[0];
+  return CALENDAR_DEFAULT_WEEK_START;
+}
+
+/** Weekday headings for the committed layout: Monday-first by default. */
+export function weekdayHeadings(start: CalendarWeekStart): readonly string[] {
+  return start === "sunday" ? WEEKDAY_HEADINGS_SUNDAY : WEEKDAY_HEADINGS;
+}
 export const CALENDAR_PREV_LABEL = "Previous month";
 export const CALENDAR_NEXT_LABEL = "Next month";
 export const GRID_TITLE_MAX = 18;
@@ -272,6 +294,19 @@ export const CALENDAR_MONTH_JUMP_LABEL = "Jump to month";
 export const CALENDAR_MONTH_JUMP_SUBMIT_COPY = "Go";
 export const CALENDAR_MONTH_MIN = "0001-01";
 export const CALENDAR_MONTH_MAX = "9999-12";
+
+/* Week-start choice: a labelled native GET select beside the month jump, so
+ * the layout is one step away with or without JavaScript. The form carries
+ * the committed month scope (view/month/game/past) as hidden fields, exactly
+ * like the jump form, so the no-JS submit lands on the same URL the binder
+ * fetches. Option copy names the weekday plainly for native discovery. */
+export const CALENDAR_WEEK_START_TESTID = "calendar-week-start";
+export const CALENDAR_WEEK_START_INPUT_ID = "calendar-week-start-input";
+export const CALENDAR_WEEK_START_LABEL = "Week starts on";
+export const CALENDAR_WEEK_START_SUBMIT_TESTID = "calendar-week-start-submit";
+export const CALENDAR_WEEK_START_SUBMIT_COPY = "Apply";
+export const CALENDAR_WEEK_START_MONDAY_COPY = "Monday";
+export const CALENDAR_WEEK_START_SUNDAY_COPY = "Sunday";
 
 /* Month-local empty guidance: a successfully read selected month with no
  * in-month events keeps its grid and names the month, with a recovery link
@@ -340,19 +375,25 @@ export interface CalendarDay<E = unknown> {
   events: E[];
 }
 
-/** Whole-weeks Monday-first grid for `month`; `byDay` buckets rows by their host-zone date. */
+/** Whole-weeks grid for `month` in the committed week-start layout;
+ * `byDay` buckets rows by their host-zone date. Monday-first by default. */
 export function monthGrid<E>(
   month: string,
   todayIso: string,
   byDay: Map<string, E[]>,
+  weekStart: CalendarWeekStart = CALENDAR_DEFAULT_WEEK_START,
 ): CalendarDay<E>[][] {
   const m = MONTH_RE.exec(month);
   const y = Number(m![1]);
   const mo = Number(m![2]);
   const first = calendarDate(y, mo - 1, 1).getTime();
   const last = calendarDate(y, mo, 0).getTime();
-  const leadDays = (new Date(first).getUTCDay() + 6) % 7; // Monday index of the 1st
-  const trailDays = 6 - ((new Date(last).getUTCDay() + 6) % 7);
+  const firstDow = new Date(first).getUTCDay();
+  const lastDow = new Date(last).getUTCDay();
+  // Column index of the 1st/last day: Sunday is 0 in the Sunday layout,
+  // Monday is 0 in the Monday layout.
+  const leadDays = weekStart === "sunday" ? firstDow : (firstDow + 6) % 7;
+  const trailDays = weekStart === "sunday" ? 6 - lastDow : 6 - ((lastDow + 6) % 7);
   const weeks: CalendarDay<E>[][] = [];
   let week: CalendarDay<E>[] = [];
   for (let t = first - leadDays * 86_400_000; t <= last + trailDays * 86_400_000; t += 86_400_000) {
@@ -373,14 +414,17 @@ export function monthGrid<E>(
   return weeks;
 }
 
-/** The wall-day range the month grid covers: whole Monday-first weeks, so the
- * leading/trailing neighbor days plot the adjacent months' events too. Null
- * for unsupported months. */
-export function calendarGridRange(month: string): { first: string; last: string } | null {
+/** The wall-day range the month grid covers: whole weeks in the committed
+ * layout, so the leading/trailing neighbor days plot the adjacent months'
+ * events too. Monday-first by default. Null for unsupported months. */
+export function calendarGridRange(
+  month: string,
+  weekStart: CalendarWeekStart = CALENDAR_DEFAULT_WEEK_START,
+): { first: string; last: string } | null {
   const parsed = parseCalendarMonth(month);
   if (!parsed) return null;
   // Day 15 exists in every supported month; only the geometry is read here.
-  const days = monthGrid(parsed, `${parsed}-15`, new Map()).flat();
+  const days = monthGrid(parsed, `${parsed}-15`, new Map(), weekStart).flat();
   return { first: days[0]!.iso, last: days.at(-1)!.iso };
 }
 
@@ -496,7 +540,8 @@ export function dedupeTransients(
  * distinct list at read time); blank/unknown degrades to unfiltered.
  * `month` is always resolved (the grid is one render away via the toggle).
  * `page` is the upcoming-list page; the month grid is month-scoped, so it
- * always reads as page 1. */
+ * always reads as page 1. `weekStart` is the committed grid layout, already
+ * normalized (missing/duplicate/unknown input is Monday). */
 export interface CalendarState {
   view: CalendarView;
   month: string;
@@ -504,6 +549,7 @@ export interface CalendarState {
   game?: string;
   past: boolean;
   page: number;
+  weekStart: CalendarWeekStart;
 }
 
 /** Whether this state is a search (blank input is no search). */
@@ -517,8 +563,9 @@ export const calendarShowingPast = (s: CalendarState): boolean => s.past || cale
  * view (the list is the default and a search forces it); `q` only when
  * non-blank; `game` only when non-blank (trimmed — padding never survives
  * into a shared link, and matching trims anyway); `past` only when open;
- * `page` only past the first list page (the month grid is month-scoped, so it
- * never carries a page).
+ * `weekStart` only when Sunday (Monday is the default, so it stays out of
+ * shared links); `page` only past the first list page (the month grid is
+ * month-scoped, so it never carries a page).
  */
 export function calendarUrl(s: CalendarState): string {
   const params = new URLSearchParams();
@@ -526,6 +573,7 @@ export function calendarUrl(s: CalendarState): string {
   const game = (s.game ?? "").trim();
   if (game !== "") params.set(EVENTS_GAME_PARAM, game);
   if (s.past) params.set("past", "1");
+  if (s.weekStart === "sunday") params.set(CALENDAR_WEEK_START_PARAM, s.weekStart);
   if (s.view === "calendar") {
     params.set("view", "calendar");
     params.set("month", s.month);
@@ -538,15 +586,23 @@ export function calendarUrl(s: CalendarState): string {
 
 /** Grid day-jump into the list: names the card so the route renders the list
  * page holding it, plus the card anchor. `past` rides along, and the game
- * facet too (the rank is computed inside the filtered order); a search never
- * co-occurs with the grid (it forces the list view). */
-export function calendarJumpUrl(past: boolean, key: string, game?: string | null): string {
+ * facet too (the rank is computed inside the filtered order); the committed
+ * Sunday layout rides along so the list's calendar toggle returns to it
+ * (Monday is the default and stays out); a search never co-occurs with the
+ * grid (it forces the list view). */
+export function calendarJumpUrl(
+  past: boolean,
+  key: string,
+  game?: string | null,
+  weekStart: CalendarWeekStart = CALENDAR_DEFAULT_WEEK_START,
+): string {
   const params = new URLSearchParams();
   params.set("event", key);
   if (past) params.set("past", "1");
   if (game !== undefined && game !== null && game.trim() !== "") {
     params.set(EVENTS_GAME_PARAM, game.trim());
   }
+  if (weekStart === "sunday") params.set(CALENDAR_WEEK_START_PARAM, weekStart);
   return `/events?${params.toString()}#event-${key}`;
 }
 

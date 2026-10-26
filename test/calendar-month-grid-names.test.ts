@@ -80,6 +80,7 @@ async function renderGrid(upcoming: (PublicEvent | DiscordTransient)[]): Promise
     game: "",
     past: false,
     page: 1,
+    weekStart: "monday",
   };
   return jsx(EventsCalendarPage, {
     state,
@@ -263,6 +264,7 @@ describe("month grid accessible names", () => {
       game: "",
       past: false,
       page: 1,
+      weekStart: "monday",
     };
     const febHtml = await jsx(EventsCalendarPage, {
       state: febState,

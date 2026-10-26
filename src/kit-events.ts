@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env, HeaderSession } from "./env";
+import { CALENDAR_WEEK_START_PARAM } from "./islands/contracts";
 import {
   ANON_EVENTS_TTL_MS,
   anonCacheGeneration,
@@ -64,6 +65,8 @@ function calendarInputOf(url: URL): CalendarPageInput {
     page: url.searchParams.get("page"),
     event: url.searchParams.get("event"),
     month: url.searchParams.get("month"),
+    // All values in URL order: a duplicated choice normalizes to Monday.
+    weekStart: url.searchParams.getAll(CALENDAR_WEEK_START_PARAM),
   });
 }
 

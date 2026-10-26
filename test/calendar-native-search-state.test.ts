@@ -144,18 +144,42 @@ describe("calendar native search state", () => {
       const submission = nativeSearch(html, query);
       expect(attributes(submission.form)).toMatchObject({ method: "get", action: "/events" });
       expect(submission.params.getAll("q")).toEqual([query]);
-      expect([...submission.params.keys()].sort()).toEqual(past ? ["past", "q"] : ["q"]);
+      // The calendar form carries the committed month scope as hidden fields,
+      // so a no-JS game filter stays on the same grid; the list form is bare.
+      expect([...submission.params.keys()].sort()).toEqual(
+        [
+          "q",
+          ...(past ? ["past"] : []),
+          ...(view === "calendar" ? ["month", "view", "weekStart"] : []),
+        ].sort(),
+      );
       expect(submission.params.getAll("past")).toEqual(past ? ["1"] : []);
+      if (view === "calendar") {
+        expect(submission.params.getAll("view")).toEqual(["calendar"]);
+        expect(submission.params.getAll("month")).toEqual([month]);
+        expect(submission.params.getAll("weekStart")).toEqual(["monday"]);
+      }
       expect(
         submission.controls.filter((c) => c.name !== "q").every((c) => c.type === "hidden"),
       ).toBe(true);
-      // Like the shipped binder, search drops view/month even for blank input.
+      // A real search forces the list server-side, but the committed month
+      // still rides along as the resolved grid month; a blank submit from
+      // the grid keeps the whole committed month scope instead of dropping
+      // to the list.
       const nativeState = calendarState(await page(submission.url));
-      expect(nativeState).toEqual({ view: "list", month: "2030-01", past });
+      expect(nativeState).toEqual(
+        view === "calendar"
+          ? { view: query.trim() ? "list" : "calendar", month, past }
+          : { view: "list", month: "2030-01", past },
+      );
+      // The shipped binder still drops view/month even for blank input: only
+      // the native submit keeps the committed scope.
       const enhanced = new URLSearchParams();
       if (query.trim()) enhanced.set("q", query);
       if (past) enhanced.set("past", "1");
-      expect(calendarState(await page(`/events?${enhanced}`))).toEqual(nativeState);
+      expect(calendarState(await page(`/events?${enhanced}`))).toEqual(
+        view === "calendar" ? { view: "list", month: "2030-01", past } : nativeState,
+      );
     }
   });
 
@@ -197,7 +221,7 @@ describe("calendar native search state", () => {
     });
   });
 
-  it("defaults to the current month when searching an empty past-enabled calendar", async () => {
+  it("keeps the committed grid on a blank submit from an empty past-enabled calendar", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
     vi.mocked(listUpcoming).mockResolvedValue({
@@ -208,9 +232,11 @@ describe("calendar native search state", () => {
     });
     vi.mocked(listCalendarPast).mockResolvedValue([]);
     const html = await page("/events?view=calendar&month=2030-02&past=1");
+    // The committed month scope rides as hidden fields, so the blank submit
+    // keeps the grid instead of falling back to the current month's list.
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
-      view: "list",
-      month: "2026-10",
+      view: "calendar",
+      month: "2030-02",
       past: true,
     });
   });

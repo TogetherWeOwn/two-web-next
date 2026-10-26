@@ -61,7 +61,7 @@ const sampleRow = () => ({
 });
 
 const baseData = () => ({
-  state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", past: false, page: 1, weekStart: "monday" },
   upcoming: [sampleRow()],
   past: [],
   zone: "Europe/London",
@@ -201,7 +201,14 @@ describe("Kit calendar island mount parity", () => {
     const rendered = await renderEventsHtml(
       {
         ...baseData(),
-        state: { view: "calendar", month: "2026-10", q: "", past: false, page: 1 },
+        state: {
+          view: "calendar",
+          month: "2026-10",
+          q: "",
+          past: false,
+          page: 1,
+          weekStart: "monday",
+        },
       } as never,
       headers,
     );
@@ -228,7 +235,14 @@ describe("Kit calendar island mount parity", () => {
     const rendered = await renderEventsHtml(
       {
         ...baseData(),
-        state: { view: "list", month: "2026-10", q: "chess", past: false, page: 1 },
+        state: {
+          view: "list",
+          month: "2026-10",
+          q: "chess",
+          past: false,
+          page: 1,
+          weekStart: "monday",
+        },
       } as never,
       { ...headers, "cache-control": "private, no-store" },
     );
@@ -255,7 +269,14 @@ describe("Kit calendar island mount parity", () => {
     const rendered = await renderEventsHtml(
       {
         ...baseData(),
-        state: { view: "list", month: "2026-10", q: "xyzzy", past: false, page: 1 },
+        state: {
+          view: "list",
+          month: "2026-10",
+          q: "xyzzy",
+          past: false,
+          page: 1,
+          weekStart: "monday",
+        },
         upcoming: [],
         totalPages: 0,
       } as never,
@@ -294,13 +315,29 @@ describe("Kit calendar shared URL model", () => {
     expect(input.view).toBe("list");
     expect(input.q).toBe(" chess ");
     expect(
-      calendarUrl({ view: "list", month: "2026-10", q: "chess", game: "", past: false, page: 1 }),
+      calendarUrl({
+        view: "list",
+        month: "2026-10",
+        q: "chess",
+        game: "",
+        past: false,
+        page: 1,
+        weekStart: "monday",
+      }),
     ).toBe("/events?q=chess");
   });
 
   it("addresses month steps and bookmark jumps through the same params", () => {
     expect(
-      calendarUrl({ view: "calendar", month: "2026-10", q: "", game: "", past: false, page: 1 }),
+      calendarUrl({
+        view: "calendar",
+        month: "2026-10",
+        q: "",
+        game: "",
+        past: false,
+        page: 1,
+        weekStart: "monday",
+      }),
     ).toBe("/events?view=calendar&month=2026-10");
     expect(calendarJumpUrl(false, "ev-1")).toBe("/events?event=ev-1#event-ev-1");
     expect(calendarJumpUrl(true, "ev-1")).toBe("/events?event=ev-1&past=1#event-ev-1");
@@ -308,7 +345,15 @@ describe("Kit calendar shared URL model", () => {
 
   it("passes bookmark jumps to the model with the raw return-to intact", async () => {
     const modelForFn = vi.fn(async () => ({
-      state: { view: "list" as const, month: "2026-10", q: "", game: "", past: true, page: 1 },
+      state: {
+        view: "list" as const,
+        month: "2026-10",
+        q: "",
+        game: "",
+        past: true,
+        page: 1,
+        weekStart: "monday" as const,
+      },
       upcoming: [],
       past: [],
       zone: "Europe/London",
@@ -350,7 +395,15 @@ describe("Kit calendar fragment auth lineage", () => {
     const deleteJoinCookie = vi.fn();
     const setHeaders = vi.fn();
     const modelForFn = vi.fn(async () => ({
-      state: { view: "calendar" as const, month: "2026-10", q: "", game: "", past: false, page: 1 },
+      state: {
+        view: "calendar" as const,
+        month: "2026-10",
+        q: "",
+        game: "",
+        past: false,
+        page: 1,
+        weekStart: "monday" as const,
+      },
       upcoming: [],
       past: [],
       zone: "Europe/London",
@@ -397,7 +450,15 @@ describe("Kit calendar fragment auth lineage", () => {
 
   it("forwards month and page turns to the Kit model", async () => {
     const modelForFn = vi.fn(async () => ({
-      state: { view: "calendar" as const, month: "2026-10", q: "", game: "", past: false, page: 2 },
+      state: {
+        view: "calendar" as const,
+        month: "2026-10",
+        q: "",
+        game: "",
+        past: false,
+        page: 2,
+        weekStart: "monday" as const,
+      },
       upcoming: [],
       past: [],
       zone: "Europe/London",

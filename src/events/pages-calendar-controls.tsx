@@ -3,6 +3,7 @@
 import type { FC } from "hono/jsx";
 import {
   CALENDAR_MONTH_STATUS_TESTID,
+  CALENDAR_WEEK_START_PARAM,
   EVENTS_EMPTY_COPY,
   EVENTS_GAME_ALL_COPY,
   EVENTS_GAME_FILTER_LABEL,
@@ -120,7 +121,10 @@ export const CalendarHead: FC<{
 
 /** The form is stable: the binder debounces input and never swaps it. The game
  * facet is a plain select in the same GET form, so keyboard and no-JS
- * filtering work through the submit button like the text search. */
+ * filtering work through the submit button like the text search. On the
+ * calendar view the committed month scope (view/month/week layout) rides as
+ * hidden fields, so a no-JS game filter stays on the same grid instead of
+ * dropping to the list; a real search still forces the list server-side. */
 export const CalendarSearchForm: FC<{
   state: CalendarState;
   searching: boolean;
@@ -128,6 +132,13 @@ export const CalendarSearchForm: FC<{
   gameFilter: string | null;
 }> = ({ state, searching, games, gameFilter }) => (
   <form method="get" action="/events" role="search">
+    {state.view === "calendar" ? (
+      <>
+        <input type="hidden" name="view" value="calendar" />
+        <input type="hidden" name="month" value={state.month} />
+        <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
+      </>
+    ) : null}
     <label class="sr-only" for="events-search-input">
       {EVENTS_SEARCH_LABEL}
     </label>

@@ -134,7 +134,7 @@ export const EventsCalendarPage: FC<{
   // Canonical upcoming rows occupy every host-zone day their finite interval
   // touches, clipped to the grid before iteration; transients and past rows
   // keep start-day-only plotting.
-  const gridRange = calendarGridRange(state.month);
+  const gridRange = calendarGridRange(state.month, state.weekStart);
   for (const e of upcoming) {
     if (!isTransient(e) && gridRange) {
       for (const day of canonicalIntervalDays(
@@ -155,7 +155,7 @@ export const EventsCalendarPage: FC<{
       pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
     }
   }
-  const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
+  const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay, state.weekStart);
   // Month-local emptiness follows occupied in-month cells, including canonical
   // continuations, but never spillover cells. Count past start-days even with
   // the drawer closed: the claim names the month, not just the visible rows.

@@ -83,7 +83,7 @@ function eventRow(): PublicEvent {
 
 async function render(view: "list" | "calendar"): Promise<string> {
   const html = await EventsCalendarPage({
-    state: { view, month: MONTH, q: "", game: "", past: false, page: 1 },
+    state: { view, month: MONTH, q: "", game: "", past: false, page: 1, weekStart: "monday" },
     upcoming: [eventRow()],
     past: [],
     zone: "UTC",

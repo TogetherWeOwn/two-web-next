@@ -95,6 +95,7 @@ const listState: CalendarState = {
   game: "",
   past: true,
   page: 1,
+  weekStart: "monday",
 };
 const pastEvent = () =>
   event({

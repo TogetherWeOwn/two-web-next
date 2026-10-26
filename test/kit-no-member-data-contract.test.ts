@@ -897,7 +897,7 @@ describe("Kit GET /events anonymous payload", () => {
       sessionForFn: async () => null,
       journeyForFn: async () => null,
       modelForFn: async () => ({
-        state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+        state: { view: "list", month: "2026-10", q: "", past: false, page: 1, weekStart: "monday" },
         upcoming,
         past: [],
         zone: "Europe/London",

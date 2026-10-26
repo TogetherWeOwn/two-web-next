@@ -119,8 +119,11 @@ TOG-5624 share tags, TOG-8400 search logging, TOG-7332 announcements, TOG-6958 t
   view; matching past rows show without opening the drawer. Empty states: never /
   gap (with past list) / error (`role="alert"` + Retry re-firing the read) / search-miss.
   Logging: normalized query + visible count only, no identity, fail-open.
-- Month grid: whole weeks Monday-first, host-zone "today" (modal event zone), bad `month`
-  input falls back to this month (never 500), unknown view name keeps current view.
+- Month grid: whole weeks, Monday-first by default with an optional Sunday-first
+  layout (`weekStart=monday|sunday`, strictly allowlisted; missing/duplicate/unknown
+  is Monday; never inferred, never persisted), host-zone "today" (modal event zone),
+  bad `month` input falls back to this month (never 500), unknown view name keeps
+  current view. Geometry, headings, bucketing and the read window move together.
   Supported month carriers are `0001-01` through `9999-12` (year zero falls back);
   years 1–99 are literal, not 1901–1999. Previous/next steps stay on the boundary
   month when they would leave that range. Full-week trailing neighbours after

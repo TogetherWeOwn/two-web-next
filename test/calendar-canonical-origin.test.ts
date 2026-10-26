@@ -61,10 +61,34 @@ const event: PublicEvent = {
 // Render the real page shells directly: no DB, Discord, timers or network.
 describe("event-list canonical origins", () => {
   const states: CalendarState[] = [
-    { view: "list", month: "2030-01", q: "", game: "", past: false, page: 1 },
-    { view: "list", month: "2030-01", q: "Chess & friends", game: "", past: true, page: 1 },
-    { view: "calendar", month: "2030-01", q: "", game: "", past: false, page: 1 },
-    { view: "calendar", month: "2030-02", q: "Chess & friends", game: "", past: true, page: 1 },
+    { view: "list", month: "2030-01", q: "", game: "", past: false, page: 1, weekStart: "monday" },
+    {
+      view: "list",
+      month: "2030-01",
+      q: "Chess & friends",
+      game: "",
+      past: true,
+      page: 1,
+      weekStart: "monday",
+    },
+    {
+      view: "calendar",
+      month: "2030-01",
+      q: "",
+      game: "",
+      past: false,
+      page: 1,
+      weekStart: "monday",
+    },
+    {
+      view: "calendar",
+      month: "2030-02",
+      q: "Chess & friends",
+      game: "",
+      past: true,
+      page: 1,
+      weekStart: "monday",
+    },
   ];
 
   it.each(states)("keeps $view/$month/q=$q/past=$past canonical at /events", async (state) => {

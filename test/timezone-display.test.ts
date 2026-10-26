@@ -110,7 +110,15 @@ async function renderPage(e: PublicEvent): Promise<string> {
 }
 
 async function renderCalendar(e: PublicEvent, month: string): Promise<string> {
-  const state: CalendarState = { view: "calendar", month, q: "", game: "", past: false, page: 1 };
+  const state: CalendarState = {
+    view: "calendar",
+    month,
+    q: "",
+    game: "",
+    past: false,
+    page: 1,
+    weekStart: "monday",
+  };
   const html = await jsx(EventsCalendarPage, {
     state,
     upcoming: [e],

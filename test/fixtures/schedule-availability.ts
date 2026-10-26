@@ -70,7 +70,16 @@ export function model(
 ): KitEventsLoadData {
   return {
     queryTooLong: false,
-    state: { view: "list", month: "2035-10", q: "", game: "", past: false, page: 1, ...state },
+    state: {
+      view: "list",
+      month: "2035-10",
+      q: "",
+      game: "",
+      past: false,
+      page: 1,
+      ...state,
+      weekStart: state.weekStart ?? "monday",
+    },
     upcoming,
     past,
     pastMayBeTruncated: false,
