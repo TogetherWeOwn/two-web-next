@@ -517,8 +517,11 @@ Eight throw legs across four Kit public-read loads emit the leak-free
 `src/events/kit-detail.ts` database handle and event lookup on the wired
 `/e/:key` Kit load). Each leg
 alerts once per distinct `class@route` fingerprint (muted five minutes per
-isolate, like every `error.alert`); the `request_id` carries the validated
-`cf-ray` value when the binding threaded one, and is absent otherwise.
+isolate, like every `error.alert`); the `request_id` carries the dispatch's
+served id (the validated `cf-ray` when one arrived, else the minted ULID) —
+the same value the branded 503 page shows as its Support reference and the
+response carries as `x-request-id` — and is absent only when the binding ran
+without locals, which never happens on the Kit branch.
 These Kit routes never emit the `http.request` line (Hono's request log
 runs only for Hono-dispatched requests), so correlate by the `request_id`
 value plus time window and route — never expect an `http.request` join
@@ -698,12 +701,15 @@ SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now
 SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
 ```
 
-Both write lines carry the serving request's validated `request_id`, so join a
+When a write line carries the serving request's validated `request_id`, join the
 warning to its `http.request` by ID, not by time window. The ID travels only
-when it validates: Hono-served searches and board views always carry one,
-while Kit-served lines omit it — no request ID is plumbed through the Kit
-bindings, so correlate those by time window and route. The content-gap read
-line carries no `request_id` either: correlate it by incident window. Keep raw
+when it validates: Hono-served searches and board views always carry one, and
+Kit-served hotzones and members-board lines carry the validated dispatch id
+their bindings forward. Kit-served event searches omit `request_id` because the
+calendar model call does not forward it to the search logger; correlate those by time window and route.
+Other lines without an ID failed validation or predate the plumbing. The
+content-gap read line carries no `request_id` either: correlate it by incident
+window. Keep raw
 `normalized_query` and `normalized_board_key` values, member identity,
 cookies, tokens, connection strings, and invented request IDs out of
 diagnostic output: the aggregates above are sufficient, and each warning's

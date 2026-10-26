@@ -23,7 +23,7 @@ export const csr = false;
 // the season/signal grammar, the reads, the board-view log and the cache
 // policy; this binding owns the branded status mapping (400 season grammar,
 // 404 unknown signal, 503 outage) and the grid rendering.
-export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
+export const load: PageServerLoad = async ({ params, url, locals, setHeaders }) => {
   // Hono answers the season grammar before the signal vocabulary
   // (src/hotzones/routes.tsx); keep that order here too. The helper
   // re-checks both for its own callers. These pre-checks bypass the helper,
@@ -44,6 +44,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       signalParam: params.signal,
       setHeaders,
       dbForFn: dbFor,
+      requestId: locals.requestId,
     });
     return {
       signal: data.signal,
@@ -68,7 +69,11 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
     // The helper already alerted on unbranded read failures; alert here only
     // for failures the helper could not see (grid rendering).
     if (typeof status !== "number")
-      alertRequestError(err, { method: "GET", route: "/hotzones/:signal" });
+      alertRequestError(err, {
+        method: "GET",
+        route: "/hotzones/:signal",
+        requestId: locals.requestId,
+      });
     error(503, "Hot zones temporarily unavailable");
   }
 };

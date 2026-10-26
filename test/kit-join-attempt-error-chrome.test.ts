@@ -15,6 +15,12 @@
 //   while list-load failures silently return to the public root shell. This
 //   file only recognises a boundary at the join-attempts level or higher —
 //   the placement that covers BOTH routes — so the move mutant fails here.
+// - Reference threading: the boundary renders the dispatch's served request
+//   id from page.data.requestId in the shared support-reference block. The
+//   correlation suite only pins the block's existence, so neutering the
+//   derivation stays green there while moderators lose the reference the
+//   guide promises. This file renders with the id set and unset, so the
+//   neuter mutant fails here.
 //
 // Hermetic: source pins plus an SSR render of the real list-covering boundary
 // with a stubbed $app/state (the acceptance harness shape). No live database,
@@ -90,6 +96,7 @@ describe("builder: the error boundary covers the join-attempts list route", () =
 
 describe("builder: the fallback render keeps moderators in admin chrome", () => {
   const CANARY = "canary-<b>7f3a9e</b>-trace";
+  const SERVED_ID = "01J9X7Q2M4W0B3D6F8H1K3N5P7";
   const ADMIN_CHROME = [
     "TWO admin",
     'aria-label="Administration"',
@@ -97,7 +104,11 @@ describe("builder: the fallback render keeps moderators in admin chrome", () => 
     "moderators only",
   ];
 
-  type RenderBoundary = (status: number, message: string) => { head: string; body: string };
+  type RenderBoundary = (
+    status: number,
+    message: string,
+    data?: { requestId?: string },
+  ) => { head: string; body: string };
   let renderBoundary: RenderBoundary | null = null;
   let boundaryError: unknown = null;
 
@@ -127,10 +138,11 @@ describe("builder: the fallback render keeps moderators in admin chrome", () => 
       `
 import { render } from "svelte/server";
 import Boundary from ${JSON.stringify(join(worktree, path))};
-export function renderBoundary(status, message) {
+export function renderBoundary(status, message, data) {
   globalThis.__kitListErrorPage = {
     status,
     error: { message },
+    data,
     url: new URL("https://next.example.test/admin/join-attempts"),
     params: {},
     route: { id: "/admin/join-attempts" },
@@ -163,6 +175,7 @@ export function renderBoundary(status, message) {
               contents: `export const page = {
                 get status() { return globalThis.__kitListErrorPage.status; },
                 get error() { return globalThis.__kitListErrorPage.error; },
+                get data() { return globalThis.__kitListErrorPage.data; },
                 get url() { return globalThis.__kitListErrorPage.url; },
                 get params() { return globalThis.__kitListErrorPage.params; },
                 get route() { return globalThis.__kitListErrorPage.route; },
@@ -219,5 +232,23 @@ export function renderBoundary(status, message) {
     const fallback = render(500, CANARY);
     expect(fallback.body).not.toBe(render(404, CANARY).body);
     expect(fallback.body).not.toBe(render(503, CANARY).body);
+  });
+
+  it("renders the served support reference from page data", () => {
+    const rendered = requireRender()(503, CANARY, { requestId: SERVED_ID });
+    expectAdminChrome(rendered, "503 with reference");
+    expectNoLeak(rendered, "503 with reference");
+    expect(rendered.body, "503 names the served id").toContain(SERVED_ID);
+    expect(rendered.body, "503 keeps the reference testid").toContain(
+      'data-testid="error-support-reference"',
+    );
+  });
+
+  it("renders no reference block without a request id", () => {
+    const rendered = requireRender()(503, CANARY);
+    expect(rendered.body, "503 without an id renders no block").not.toContain(
+      "error-support-reference",
+    );
+    expect(rendered.body, "503 without an id stays defined").not.toContain("undefined");
   });
 });

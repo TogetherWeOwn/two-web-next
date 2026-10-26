@@ -19,6 +19,10 @@ declare global {
       returnTo?: KitLocals["returnTo"];
       joinResult?: KitLocals["joinResult"];
       expiredWrite?: KitLocals["expiredWrite"];
+      // Validated request id the Kit hook merged before resolve (Hono
+      // requestLog parity): response header, error pages and error.alert
+      // lines carry this same value. Absent off the Kit branch.
+      requestId?: string;
     }
     // Branded detail states: the /e/:key load throws the #838 state model
     // with the served status, and the route-level error page renders it. Every
