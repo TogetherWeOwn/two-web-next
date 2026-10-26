@@ -304,13 +304,13 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
   assert.ok(result.errors.some((line) => /client js/i.test(line)));
 });
 
-const shippingBudgetText = readFileSync(new URL("./kit-perf-budget.json", import.meta.url), "utf8");
+const shippingBudgetText = readFileSync(new URL("./kit-perf-budgets/base.json", import.meta.url), "utf8");
 const shippingClientBudget = JSON.parse(shippingBudgetText).client.js;
 
 function makeClientShippingFixture(body) {
   const fx = makeFixture({ clientJs: [{ name: "immutable/client.js", body }] });
   // Exercise the real shipping allocation, not a budget derived from the input.
-  writeFixtureFile(fx.root, "ci/kit-perf-budget.json", shippingBudgetText);
+  writeFixtureFile(fx.root, "ci/kit-perf-budgets/base.json", shippingBudgetText);
   return fx;
 }
 
