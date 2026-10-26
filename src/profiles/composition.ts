@@ -45,6 +45,89 @@ export const bioCountText = (count: number): string =>
     ? `${count} of 1000 characters`
     : `${count} of 1000 characters (${count - PROFILE_BIO_LIMIT} over the limit)`;
 
+/**
+ * Optional unsaved-change review: presentation only. The copy is mirrored
+ * verbatim by the island binder, which re-renders the same rows live while
+ * the member edits; neither side validates, saves or marks the draft clean.
+ */
+export const PROFILE_REVIEW_COPY = {
+  toggle: "Review changes",
+  help: "Compare your saved profile with these unsaved edits. Reviewing does not save anything — use Save when you are ready.",
+  clean: "No unsaved changes — this form matches your saved profile.",
+  saved: "Saved",
+  unsaved: "Unsaved",
+  emptySaved: "Empty — not set",
+  emptyDraft: "Removed — will be empty",
+  leaderboardShown: "Shown on the leaderboard (opted in)",
+  leaderboardHidden: "Hidden from the leaderboard (opted out)",
+} as const;
+
+export type ProfileReviewField = "bio" | "games_text" | "timezone" | "leaderboard_opt_out";
+
+export type ProfileReviewRow = {
+  field: ProfileReviewField;
+  label: string;
+  saved: string;
+  draft: string;
+};
+
+/** The four editable values both renderers already compute for the form. */
+export type ProfileReviewValues = {
+  bio: string;
+  games_text: string;
+  timezone: string;
+  leaderboard_opt_out: boolean;
+};
+
+// Longest IANA names fit well inside 64 code points; longer input can never
+// validate, so the review shows a bounded prefix instead of the whole draft.
+const PROFILE_REVIEW_TIMEZONE_BOUND = 64;
+
+const reviewText = (value: string, limit: number, draft: boolean): string => {
+  if (value === "") return draft ? PROFILE_REVIEW_COPY.emptyDraft : PROFILE_REVIEW_COPY.emptySaved;
+  const chars = [...value];
+  return chars.length > limit ? `${chars.slice(0, limit).join("")}…` : value;
+};
+
+/**
+ * Rows for fields whose draft differs from the saved baseline. Draft text
+ * is compared and shown raw (bounded near the field limits); only the
+ * field labels and empty/leaderboard wording are added.
+ */
+export const profileReviewRows = (
+  saved: ProfileReviewValues,
+  draft: ProfileReviewValues,
+): ProfileReviewRow[] => {
+  const rows: ProfileReviewRow[] = [];
+  const text: [Exclude<ProfileReviewField, "leaderboard_opt_out">, string, number][] = [
+    ["bio", "Bio", PROFILE_BIO_LIMIT],
+    ["games_text", "Games", PROFILE_GAMES_RAW_LIMIT],
+    ["timezone", "Timezone", PROFILE_REVIEW_TIMEZONE_BOUND],
+  ];
+  for (const [field, label, limit] of text) {
+    if (saved[field] === draft[field]) continue;
+    rows.push({
+      field,
+      label,
+      saved: reviewText(saved[field], limit, false),
+      draft: reviewText(draft[field], limit, true),
+    });
+  }
+  if (saved.leaderboard_opt_out !== draft.leaderboard_opt_out) {
+    rows.push({
+      field: "leaderboard_opt_out",
+      label: "Leaderboard visibility",
+      saved: saved.leaderboard_opt_out
+        ? PROFILE_REVIEW_COPY.leaderboardHidden
+        : PROFILE_REVIEW_COPY.leaderboardShown,
+      draft: draft.leaderboard_opt_out
+        ? PROFILE_REVIEW_COPY.leaderboardHidden
+        : PROFILE_REVIEW_COPY.leaderboardShown,
+    });
+  }
+  return rows;
+};
+
 export const gamesCountText = (facts: GamesComposition): string => {
   const distinct = facts.names.length;
   const games =

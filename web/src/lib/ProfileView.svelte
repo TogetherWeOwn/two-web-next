@@ -16,6 +16,7 @@ import {
   PROFILE_NEW_MEMBER_TESTID,
   PROFILE_OPENED_AT_FIELD,
   PROFILE_RANK_TESTID,
+  PROFILE_REVIEW_TESTID,
   PROFILE_SAVE_TESTID,
   PROFILE_VIEW_TESTID,
   profileAvatarSrcset,
@@ -40,10 +41,12 @@ import {
   PROFILE_GAMES_TEXT_COUNT_ID,
   PROFILE_GAMES_TEXT_HINT_COPY,
   PROFILE_GAMES_TEXT_HINT_ID,
+  PROFILE_REVIEW_COPY,
   bioCountText,
   codePoints,
   gamesCountText,
   parseGamesText,
+  profileReviewRows,
 } from "../../../src/profiles/composition";
 import type { MemberStats } from "../../../src/profiles/stats";
 import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
@@ -123,6 +126,9 @@ const sharedGameSet = $derived(new Set(sharedGames ?? []));
 // Hono ProfilePage twin. The island binder refreshes these same nodes.
 const bioCount = $derived(bioCountText(codePoints(form.bio)));
 const gamesCount = $derived(gamesCountText(parseGamesText(form.games_text)));
+// Optional saved-vs-unsaved review, seeded for the rendered values. The
+// island binder re-renders it live, like the Hono ProfilePage twin.
+const reviewRows = $derived(profileReviewRows(saved, form));
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
 const compareIsland = '<script src="/islands/local-time-compare.js" defer></' + "script>";
@@ -478,6 +484,27 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               {PROFILE_COPY.cancel}
             </button>
           </div>
+          <details class="profile-review-disclosure">
+            <summary>{PROFILE_REVIEW_COPY.toggle}</summary>
+            <div class="profile-review" data-testid={PROFILE_REVIEW_TESTID}>
+              <p class="profile-hint">{PROFILE_REVIEW_COPY.help}</p>
+              {#if reviewRows.length === 0}
+                <p>{PROFILE_REVIEW_COPY.clean}</p>
+              {:else}
+                {#each reviewRows as row}
+                  <div data-review-field={row.field}>
+                    <h3>{row.label}</h3>
+                    <p>
+                      {PROFILE_REVIEW_COPY.saved}: <span data-review-saved>{row.saved}</span>
+                    </p>
+                    <p>
+                      {PROFILE_REVIEW_COPY.unsaved}: <span data-review-draft>{row.draft}</span>
+                    </p>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </details>
         </form>
         {@html editorIsland}
       </section>

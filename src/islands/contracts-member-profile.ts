@@ -28,6 +28,8 @@ export const PROFILE_RANK_TESTID = "profile-rank";
 export const PROFILE_JOINED_TESTID = "profile-joined";
 export const PROFILE_EDIT_TESTID = "profile-edit";
 export const PROFILE_FORM_TESTID = "profile-form";
+/** Optional inline saved-vs-unsaved comparison inside the owner editor. */
+export const PROFILE_REVIEW_TESTID = "profile-review";
 export const PROFILE_SAVE_TESTID = "profile-save";
 export const PROFILE_CANCEL_TESTID = "profile-cancel";
 export const PROFILE_SAVED_TESTID = "profile-saved";
@@ -253,3 +255,4 @@ export function profileJoinedMonth(joinedAt: Date | null): string | null {
     ? joinedAt.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
     : null;
 }
+

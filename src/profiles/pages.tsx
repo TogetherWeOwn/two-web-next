@@ -20,6 +20,7 @@ import {
   PROFILE_NEW_MEMBER_TESTID,
   PROFILE_OPENED_AT_FIELD,
   PROFILE_RANK_TESTID,
+  PROFILE_REVIEW_TESTID,
   PROFILE_SAVE_TESTID,
   PROFILE_VIEW_TESTID,
   profileAvatarSrcset,
@@ -35,10 +36,12 @@ import {
   PROFILE_GAMES_TEXT_COUNT_ID,
   PROFILE_GAMES_TEXT_HINT_COPY,
   PROFILE_GAMES_TEXT_HINT_ID,
+  PROFILE_REVIEW_COPY,
   bioCountText,
   codePoints,
   gamesCountText,
   parseGamesText,
+  profileReviewRows,
 } from "./composition";
 
 // Stable field/error ids for profile validation association.
@@ -269,6 +272,9 @@ export const ProfilePage: FC<{
   // refreshes these same nodes; no-JS readers get the seeded state.
   const bioCount = bioCountText(codePoints(form.bio));
   const gamesCount = gamesCountText(parseGamesText(form.games_text));
+  // Optional saved-vs-unsaved review, seeded for the rendered values (the
+  // rejected draft on a 422). The island binder re-renders it live.
+  const reviewRows = profileReviewRows(saved, form);
   // Exact-match set over the route's computed shared names: the match itself
   // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
   // twin, so the view never re-derives it.
@@ -606,6 +612,27 @@ export const ProfilePage: FC<{
                   {PROFILE_COPY.cancel}
                 </button>
               </div>
+              <details class="profile-review-disclosure">
+                <summary>{PROFILE_REVIEW_COPY.toggle}</summary>
+                <div class="profile-review" data-testid={PROFILE_REVIEW_TESTID}>
+                  <p class="profile-hint">{PROFILE_REVIEW_COPY.help}</p>
+                  {reviewRows.length === 0 ? (
+                    <p>{PROFILE_REVIEW_COPY.clean}</p>
+                  ) : (
+                    reviewRows.map((row) => (
+                      <div data-review-field={row.field}>
+                        <h3>{row.label}</h3>
+                        <p>
+                          {PROFILE_REVIEW_COPY.saved}: <span data-review-saved>{row.saved}</span>
+                        </p>
+                        <p>
+                          {PROFILE_REVIEW_COPY.unsaved}: <span data-review-draft>{row.draft}</span>
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </details>
             </form>
             <script src="/islands/member-profile.js" defer></script>
           </section>

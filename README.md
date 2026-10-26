@@ -291,6 +291,7 @@ to execute the same Chromium proof.
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
+| `ci/profile-review-changes-browser.test.mjs` | None—always runs | `node --import tsx --test ci/profile-review-changes-browser.test.mjs` (104 real Chromium cases; Hono and Kit fixtures at both widths with the minified island; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures

@@ -255,6 +255,8 @@
     clearFieldErrors();
     // Counts follow the normalized live values, not the submitted draft.
     refreshCounts();
+    // The review follows the advanced baseline; newer edits stay compared.
+    renderReview();
     return unchanged;
   }
 
@@ -338,6 +340,101 @@
     var gamesCount = root.querySelector('[id="profile-games-text-count"]');
     if (games && gamesCount) gamesCount.textContent = gamesCountText(parseGamesText(games.value));
   }
+  // Optional unsaved-change review: presentation only. It compares the live
+  // draft with the last accepted baseline (the fields' defaults, plus the
+  // raw acceptedDraft that keeps a focused field clean), reusing exactly
+  // the hasUnsavedChanges test per field. It never validates, normalizes
+  // the live draft, saves, touches the persisted display above or marks
+  // the draft clean. Values render with textContent only, bounded near
+  // the field limits; copy mirrors PROFILE_REVIEW_COPY. Older markup
+  // without the panel is left alone.
+  var reviewPanel = root.querySelector('[data-testid="profile-review"]');
+  var REVIEW_TEXT_FIELDS = [
+    ["bio", "Bio", BIO_LIMIT],
+    ["games_text", "Games", GAMES_RAW_LIMIT],
+    ["timezone", "Timezone", 64],
+  ];
+  var REVIEW_HELP =
+    "Compare your saved profile with these unsaved edits. Reviewing does not save anything — use Save when you are ready.";
+  function reviewText(value, limit, draft) {
+    if (value === "") return draft ? "Removed — will be empty" : "Empty — not set";
+    var chars = Array.from(value);
+    return chars.length > limit ? chars.slice(0, limit).join("") + "…" : value;
+  }
+  function reviewChoice(hidden) {
+    return hidden
+      ? "Hidden from the leaderboard (opted out)"
+      : "Shown on the leaderboard (opted in)";
+  }
+  function reviewRow(key, label, saved, draft) {
+    var row = document.createElement("div");
+    row.setAttribute("data-review-field", key);
+    var heading = document.createElement("h3");
+    heading.textContent = label;
+    row.appendChild(heading);
+    [
+      ["Saved", "data-review-saved", saved],
+      ["Unsaved", "data-review-draft", draft],
+    ].forEach(function (part) {
+      var p = document.createElement("p");
+      p.appendChild(document.createTextNode(part[0] + ": "));
+      var span = document.createElement("span");
+      span.setAttribute(part[1], "");
+      span.textContent = part[2];
+      p.appendChild(span);
+      row.appendChild(p);
+    });
+    return row;
+  }
+  function renderReview() {
+    if (!reviewPanel) return;
+    reviewPanel.textContent = "";
+    var help = document.createElement("p");
+    help.setAttribute("class", "profile-hint");
+    help.textContent = REVIEW_HELP;
+    reviewPanel.appendChild(help);
+    var changed = 0;
+    REVIEW_TEXT_FIELDS.forEach(function (spec) {
+      var field = form.elements[spec[0]];
+      if (!field || field.value === field.defaultValue) return;
+      if (acceptedDraft && field.value === acceptedDraft[spec[0]]) return;
+      changed++;
+      reviewPanel.appendChild(
+        reviewRow(
+          spec[0],
+          spec[1],
+          reviewText(field.defaultValue, spec[2], false),
+          reviewText(field.value, spec[2], true),
+        ),
+      );
+    });
+    var reviewOptOut = optOutField();
+    if (reviewOptOut && reviewOptOut.checked !== reviewOptOut.defaultChecked) {
+      changed++;
+      reviewPanel.appendChild(
+        reviewRow(
+          "leaderboard_opt_out",
+          "Leaderboard visibility",
+          reviewChoice(reviewOptOut.defaultChecked),
+          reviewChoice(reviewOptOut.checked),
+        ),
+      );
+    }
+    if (!changed) {
+      var clean = document.createElement("p");
+      clean.textContent = "No unsaved changes — this form matches your saved profile.";
+      reviewPanel.appendChild(clean);
+    }
+  }
+  renderReview();
+  // Opening or tabbing to the disclosure re-renders from the live fields:
+  // a reset's restored values have landed by then, so the review the member
+  // reads is never the pre-reset draft the pending reset task still holds.
+  if (reviewPanel && reviewPanel.parentNode && reviewPanel.parentNode.tagName === "DETAILS") {
+    reviewPanel.parentNode.addEventListener("focusin", renderReview);
+    reviewPanel.parentNode.addEventListener("toggle", renderReview);
+  }
+
   // Reset-refresh timing lives at the reset listener: it must be a task, not
   // a microtask (see below).
 
@@ -723,7 +820,10 @@
     // This must be a task: for a user-initiated reset the listener runs with
     // an empty JS stack, so a microtask checkpoint fires right after the
     // listener returns, before the restore step lands the defaults.
-    setTimeout(refreshCounts, 0);
+    setTimeout(function () {
+      refreshCounts();
+      renderReview();
+    }, 0);
     // The draft that "still finishing" promised to keep is gone: an unsettled
     // write goes back to the plain saving line.
     if (pending) setPending(true);
@@ -766,10 +866,13 @@
   });
 
   // Live composition counts refresh the SSR nodes in place: no request, no
-  // truncation, no validation, no announcement.
+  // truncation, no validation, no announcement. The open review follows
+  // the same edits (and checkbox changes) without requesting anything.
   form.addEventListener("input", function () {
     refreshCounts();
+    renderReview();
   });
+  form.addEventListener("change", renderReview);
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();

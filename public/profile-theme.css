@@ -67,6 +67,12 @@
 .profile-theme .profile-secondary:hover { background: var(--paper); color: var(--ink); border-color: var(--brand); }
 .profile-theme .profile-editor [role='alert'], .profile-theme .profile-editor [role='status'] { color: var(--ink); background: var(--paper); border-left: 4px solid var(--brand); padding: .75rem 1rem; margin: 1rem 0; }
 .profile-theme .profile-editor [role='alert'] ul { margin: 0; padding-left: 1.25rem; }
+.profile-theme .profile-review-disclosure { margin-top: 1rem; }
+.profile-theme .profile-review-disclosure summary { cursor: pointer; font-weight: 700; padding: .5rem 0; min-height: 44px; }
+.profile-theme .profile-review { background: var(--paper); border: 1px solid var(--line); padding: .75rem 1rem; }
+.profile-theme .profile-review h3 { font-size: 1rem; margin: .75rem 0 .25rem; }
+.profile-theme .profile-review p { margin: .25rem 0; }
+.profile-theme .profile-review [data-review-saved], .profile-theme .profile-review [data-review-draft] { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .profile-theme [hidden] { display: none; }
 @media (max-width: 48rem) {
   .profile-theme main { padding: 1rem 1.25rem 2rem; }
