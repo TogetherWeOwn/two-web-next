@@ -92,6 +92,185 @@ describe("floor-guard", () => {
     );
   });
 
+  it("flags added conditional skip forms", () => {
+    // Fixture gated calls are built by concatenation, like the skip fixtures
+    // above, so this file's own added lines never match the guard.
+    const dot = ".";
+    const skipProp = "sk" + "ip:";
+    const forms = [
+      ["test/a.test.ts", `describe${dot}${"skip" + "If"}(!db)("x", () => {});`],
+      ["test/a.test.ts", `it${dot}${"run" + "If"}(db)("x", () => {});`],
+      ["test/a.test.ts", `it("x", { ${skipProp} !db }, () => {});`],
+      ["test/a.test.ts", `const suite = db ? describe : describe${dot}${"skip"};`],
+      ["test/a.test.ts", `const suite = db ? describe${dot}${"skip"} : describe;`],
+      ["test/a.test.ts", `const suite = describe${dot}${"skip"};`],
+      ["ci/test_example.py", `@pytest.mark${dot}${"skip" + "if"}(cond)`],
+      ["ci/test_example.py", `pytestmark = pytest.mark${dot}${"skip" + "if"}(cond)`],
+    ];
+    for (const [file, form] of forms) {
+      const findings = guardDiff(
+        diff(`--- a/${file}\n+++ b/${file}\n@@ -1,0 +2 @@\n+` + form + "\n"),
+      ).filter((f) => f.rule === "test-made-easier");
+      assert.equal(findings.length, 1, form);
+      assert.equal(findings[0].file, file, form);
+      assert.equal(findings[0].text, form, form);
+    }
+  });
+
+  it("flags a skip option on its own line under a test call", () => {
+    const skipProp = "sk" + "ip:";
+    const findings = guardDiff(
+      diff(
+        '--- a/ci/x.test.mjs\n+++ b/ci/x.test.mjs\n@@ -1,0 +3 @@\n+test("x", {\n+  ' +
+          skipProp +
+          " !db,\n+}, () => {});\n",
+      ),
+    ).filter((f) => f.rule === "test-made-easier");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, "ci/x.test.mjs");
+    assert.equal(findings[0].text, `${skipProp} !db,`);
+  });
+
+  it("still flags a conditional skip added to the guard's own test file", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ignore = loadIgnore(root);
+    const gated = "+describe" + "." + "skip" + 'If(!db)("x", () => {});\n';
+    const d = diff(
+      "--- a/ci/floor-guard.test.mjs\n+++ b/ci/floor-guard.test.mjs\n@@ -1,0 +2 @@\n" + gated,
+    );
+    assert.ok(
+      guardDiff(d, { ignore }).some((f) => f.rule === "test-made-easier"),
+      "ignore covers suppressions and stubs, never conditional skips",
+    );
+  });
+
+  it("stays silent when a conditional skip replaces one in the same file", () => {
+    const dot = ".";
+    const gatedOld = `describe${dot}${"skip" + "If"}(!db)("old", () => {});`;
+    const gatedNew = `describe${dot}${"skip" + "If"}(!db)("new", () => {});`;
+    const runGated = `describe${dot}${"run" + "If"}(db)("x", () => {});`;
+    const optionGated = `describe("x", { ${"sk" + "ip:"} !db }, () => {});`;
+    const ternary = `const suite = db ? describe : describe${dot}${"skip"};`;
+    const plainSkip = `describe${dot}${"skip"}("x", () => {});`;
+    const swaps = [
+      [gatedOld, gatedNew],
+      [gatedOld, runGated],
+      [gatedOld, optionGated],
+      [ternary, gatedNew],
+      // Replacing an unconditional skip with a gated one tightens the bar:
+      // the removed skip pairs against the added conditional form.
+      [plainSkip, gatedNew],
+    ];
+    for (const [before, after] of swaps) {
+      const findings = guardDiff(
+        diff(
+          "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1 +1 @@\n-" +
+            before +
+            "\n+" +
+            after +
+            "\n",
+        ),
+      ).filter((f) => f.rule === "test-made-easier");
+      assert.deepEqual(findings, [], `${before} -> ${after}`);
+    }
+  });
+
+  it("flags only the net increase in conditional skips in a file", () => {
+    const dot = ".";
+    const gated = (name) => `describe${dot}${"skip" + "If"}(!db)("${name}", () => {});`;
+    const findings = guardDiff(
+      diff(
+        "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1 +1,2 @@\n-" +
+          gated("old") +
+          "\n+" +
+          gated("new") +
+          "\n+" +
+          gated("extra") +
+          "\n",
+      ),
+    ).filter((f) => f.rule === "test-made-easier");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, "test/a.test.ts");
+    assert.equal(findings[0].text, gated("extra"));
+  });
+
+  it("does not pair conditional skips across files", () => {
+    const dot = ".";
+    const gated = `describe${dot}${"skip" + "If"}(!db)("x", () => {});`;
+    const d = [
+      "diff --git a/test/a.test.ts b/test/a.test.ts",
+      "--- a/test/a.test.ts",
+      "+++ b/test/a.test.ts",
+      "@@ -1 +0,0 @@",
+      `-${gated}`,
+      "diff --git a/test/b.test.ts b/test/b.test.ts",
+      "--- a/test/b.test.ts",
+      "+++ b/test/b.test.ts",
+      "@@ -1,0 +2 @@",
+      `+${gated}`,
+    ].join("\n");
+    const findings = guardDiff(d).filter((f) => f.rule === "test-made-easier");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, "test/b.test.ts");
+  });
+
+  it("still flags a conditional skip replaced by an unconditional skip", () => {
+    const dot = ".";
+    const gated = `describe${dot}${"skip" + "If"}(!db)("x", () => {});`;
+    const plainSkip = `describe${dot}${"skip"}("x", () => {});`;
+    const findings = guardDiff(
+      diff(
+        "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1 +1 @@\n-" +
+          gated +
+          "\n+" +
+          plainSkip +
+          "\n",
+      ),
+    ).filter((f) => f.rule === "test-made-easier");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].text, plainSkip);
+  });
+
+  it("pairs a conditional skip swap in a renamed test at its destination", () => {
+    const dot = ".";
+    const gated = `describe${dot}${"skip" + "If"}(!db)("x", () => {});`;
+    const optionGated = `describe("x", { ${"sk" + "ip:"} !db }, () => {});`;
+    const swapped = [
+      "diff --git a/test/a.test.ts b/test/unit/a.test.ts",
+      "similarity index 90%",
+      "rename from test/a.test.ts",
+      "rename to test/unit/a.test.ts",
+      "--- a/test/a.test.ts",
+      "+++ b/test/unit/a.test.ts",
+      "@@ -1 +1 @@",
+      `-${gated}`,
+      `+${optionGated}`,
+    ].join("\n");
+    assert.deepEqual(
+      guardDiff(swapped).filter((f) => f.rule === "test-made-easier"),
+      [],
+    );
+  });
+
+  it("does not flag skip data, prose, or non-test code", () => {
+    const dot = ".";
+    const skipProp = "sk" + "ip:";
+    const cases = [
+      [
+        "ci/a11y-policy.test.mjs",
+        `const coverage = { "/health": { ${skipProp} true, reason: "json" } };`,
+      ],
+      ["test/a.test.ts", `// test${dot}${"skip"} records the reason in the report.`],
+      ["src/a.ts", `foo${dot}${"skip" + "If"}(x);`],
+    ];
+    for (const [file, line] of cases) {
+      const findings = guardDiff(
+        diff(`--- a/${file}\n+++ b/${file}\n@@ -1,0 +2 @@\n+` + line + "\n"),
+      ).filter((f) => f.rule === "test-made-easier");
+      assert.deepEqual(findings, [], line);
+    }
+  });
+
   it("flags an added not-implemented stub", () => {
     const findings = guardDiff(
       diff('--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,0 +2 @@\n+throw new Error("Not implemented");\n'),

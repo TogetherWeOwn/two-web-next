@@ -30,6 +30,38 @@ const STUBS =
 // Only test skip calls weaken the test floor; property reads and prose do not.
 const TEST_SKIP_CALL =
   /\.(?:skip|todo)\s*\(|\b(?:xit|xdescribe)\s*\(|@pytest\.mark\.skip\s*\(|\bt\.Skip\s*\(/;
+// Conditional (gated) skips weaken it too: `.skipIf(`/`.runIf(` calls (and
+// pytest's `skipif`), an options-object `skip:` (on its own line under a test
+// call the zero-context diff cannot see, or inline in the call's options), and
+// ternary suite/test selection that routes to a `.skip`/`.todo` member
+// (`cond ? describe : describe.skip`). A direct alias of that member
+// (`const suite = describe.skip`) is unconditional, so it joins
+// TEST_SKIP_CALL below rather than the conditional tier. The member and
+// inline-option forms name the suite/test functions only, so property reads
+// (`entry.skip`), prose and inline data objects (`{ "/health": { skip: true }
+// }`) stay silent. Values are never evaluated, matching TEST_SKIP_CALL: the
+// guard is syntactic. Conditional adds pair against skips removed from the
+// same file in scanAdded; unconditional adds never pair, so gating a skip
+// that was unconditional (or swapping one gated form for another) is silent
+// while replacing a gated form with an unconditional skip still flags.
+const CONDITIONAL_SKIP_CALL = /\.(?:skipIf|runIf|skipif)\s*\(/;
+const SUITE_OR_TEST = String.raw`(?:describe|context|suite|it|test)(?:\.\w+)*`;
+const SKIP_OPTION_LINE = /^\s*["']?skip["']?\s*:/;
+const SKIP_OPTION_INLINE = new RegExp(
+  String.raw`\b${SUITE_OR_TEST}\s*\([^\n]*\{\s*(?:[^{}]*,\s*)?["']?skip["']?\s*:`,
+);
+const SKIP_MEMBER_TERNARY = new RegExp(
+  String.raw`\?\s*(?:${SUITE_OR_TEST}\.(?:skip|todo)\b|[^?:]*:\s*${SUITE_OR_TEST}\.(?:skip|todo)\b)`,
+);
+const SKIP_MEMBER_ALIAS = new RegExp(
+  String.raw`(?:(?<![=!<>])=(?![=>])|\breturn\b)\s*${SUITE_OR_TEST}\.(?:skip|todo)\s*(?=[;,)\]]|$)`,
+);
+const isConditionalSkip = (text) =>
+  CONDITIONAL_SKIP_CALL.test(text) ||
+  SKIP_OPTION_LINE.test(text) ||
+  SKIP_OPTION_INLINE.test(text) ||
+  SKIP_MEMBER_TERNARY.test(text);
+const isUnconditionalSkip = (text) => TEST_SKIP_CALL.test(text) || SKIP_MEMBER_ALIAS.test(text);
 // *-selftest scripts are CI-executed checks too (ci/*-selftest.mjs, .sh and
 // extensionless forms, plus dotted and nested variants such as
 // ci/release-on-promote.selftest.cjs and ci/backup-restore-proof/selftest.py),
@@ -182,9 +214,28 @@ export function loadIgnore(root) {
     .filter((l) => l && !l.startsWith("#"));
 }
 
-export function scanAdded(added, ignore = []) {
+export function scanAdded(added, ignore = [], removed = []) {
   const findings = [];
   const ignored = ignore.map(globToRegExp);
+  // A conditional skip paired with a skip removed from the same test file is
+  // a replacement (a retitled gated suite, one gated form swapped for
+  // another, an unconditional skip made conditional), not an addition: only
+  // the net excess is flagged, mirroring the assertion pairing in
+  // scanRemoved. Removed lines pair by their destination path, so a swap in
+  // a renamed test still pairs; unconditional adds never consume a pair, so
+  // replacing a gated form with a plain skip stays loud.
+  const removedSkips = new Map();
+  for (const { file, from, text } of removed) {
+    const origin = from ?? file;
+    if (
+      file &&
+      CODE_PATH.test(origin) &&
+      TEST_PATH.test(origin) &&
+      (isUnconditionalSkip(text) || isConditionalSkip(text))
+    )
+      removedSkips.set(file, (removedSkips.get(file) ?? 0) + 1);
+  }
+  const pairedSkips = new Map();
   for (const { file, text } of added) {
     // Exception rows are never ignorable, even when the file is listed.
     if (CONSTRAINTS_FILE.test(file) && /^\| *(W|E)\d+ *\|/.test(text))
@@ -196,8 +247,15 @@ export function scanAdded(added, ignore = []) {
     }
     // Test skips always run, even for ignored paths: ignoring the guard's own
     // test file must not hide a real skip added there.
-    if (CODE_PATH.test(file) && TEST_PATH.test(file) && TEST_SKIP_CALL.test(text))
-      flag(findings, "test-made-easier", file, text);
+    if (CODE_PATH.test(file) && TEST_PATH.test(file)) {
+      if (isUnconditionalSkip(text)) {
+        flag(findings, "test-made-easier", file, text);
+      } else if (isConditionalSkip(text)) {
+        const used = pairedSkips.get(file) ?? 0;
+        if (used < (removedSkips.get(file) ?? 0)) pairedSkips.set(file, used + 1);
+        else flag(findings, "test-made-easier", file, text);
+      }
+    }
   }
   return findings;
 }
@@ -400,7 +458,7 @@ export function guardDiff(diff, opts = {}) {
   const { added, removed, deletedFiles } = parseDiff(diff);
   const waivers = opts.waivers ?? new Map();
   return [
-    ...scanAdded(added, opts.ignore ?? []),
+    ...scanAdded(added, opts.ignore ?? [], removed),
     ...scanIgnoreAdditions(added, opts.baseIgnore ?? [], waivers),
     ...scanRemoved(removed, added, waivers),
     ...scanDeleted(deletedFiles, waivers),
