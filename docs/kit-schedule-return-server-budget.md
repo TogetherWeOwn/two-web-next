@@ -1,25 +1,97 @@
 # Kit schedule return: measured server gzip allowance
 
-## Current decision
+## Current decision (after the second reconciliation)
 
-The `feat/schedule-detail-return` slice at its frozen head fits every budget
-except Kit server gzip. Admit the measured growth with the smallest aligned
-allowance:
+Main has independently landed the identical ceiling this PR proposed, so the
+reconciled PR now moves **no** numeric bound and records the evidence only:
 
-| Budget field | Current main | Proposal | Increase from main | Minimum measured margin |
+| Budget field | Original main | Current main | This PR | Net increase |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 334080 | 335104 | 1024 | 162 |
+| `server.js.maxGzipBytes` | 334080 | 335104 | 335104 | 0 |
 
-`ceil(334942 / 256) * 256 = 335104` after reconciliation. Every other numeric
-field, checker, inventory, manifest, lock, constraint and test stays identical
-to incoming main. Main's independently authored fixed-allocation tests now
-support this ceiling, so the original three literal edits are superseded;
-the test file is taken byte-for-byte from main. No feature/runtime change is
-authored here. This prerequisite does not reserve capacity or approve the
-feature: the parent must remeasure its actual integrated head and pass
-exact-head CI and independent review.
+The fresh composition below re-proves 335104 remains the minimum aligned
+allowance on the newest main: `ceil(335087 / 256) * 256 = 335104`, 17 bytes of
+observed margin. Every numeric field, checker, inventory, manifest, lock,
+constraint and test stays identical to incoming main; the shipping test file
+is taken byte-for-byte from main. No feature/runtime change is authored here.
+This prerequisite does not reserve capacity or approve the feature: the
+parent must remeasure its actual integrated head and pass exact-head CI and
+independent review.
 
-## Conflict reconciliation and fresh measurements
+## Second reconciliation and fresh measurements
+
+After the first reconciliation (below), main advanced three commits past
+`4d9ebeee5` and GitHub reported conflicts again on head `e976dbda6`:
+
+- [#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826) raised
+  main's own server gzip ceiling 334080 → 335104 for the merged
+  inventory-return slice (its head measured 334807) — the same value this PR
+  proposed independently.
+- [#1812](https://github.com/TogetherWeOwn/two-web-next/pull/1812) added
+  search-match context to the events cards, growing the pristine-main server
+  bundle (fresh builds below).
+- [#1827](https://github.com/TogetherWeOwn/two-web-next/pull/1827) added a
+  third supported allocation, 335360, to `ci/check-kit-perf.test.mjs` (its
+  combined worst 335338, margin 22) without changing the shipping 335104
+  ceiling.
+
+Resolve the single conflict (`ci/kit-perf-budget.json` `$comment` history)
+by keeping incoming main's complete history verbatim as the prefix, retaining
+the branch-only schedule-return record once, appending one reconciliation
+note, and keeping every number exactly equal to main — a reviewer can verify
+this by comparing the parsed JSON values. `ci/check-kit-perf.test.mjs` stays
+byte-identical to incoming main, including the #1827 335360 allocation
+controls; no acceptance test is authored or edited. The inherited
+335104-allocation interval probe is fixed at 334994, now **below** this
+composition's 335087 maximum; it remains #1814's fixed evidence for the
+allocation, not this slice's measured size — which is exactly why the parent's
+own exact-head measurement, not this probe, is the gate.
+
+Fresh builds on newest main `0fe4dd90396dc17d7985ae6e5df24ebad46c226e`
+(Node 24.22.1, npm 11.19.1, external locked installs — root lock SHA-256
+`023b560f…631d`, web lock `feaa492a…565e`, byte-identical across the measured
+trees; `NODE_ENV=production`, database/token/secret variables scrubbed):
+
+- Pristine main, two builds: checker exit 0; server 1179526 raw,
+  334041/334038 gzip, 115 files; client 253949 raw / 102273 gzip, 54 files.
+  Main alone now sits 1063 bytes under its own 335104 ceiling after #1812.
+- Composing newest main with the frozen feature `9968879` conflicts in
+  exactly one file, `src/events/pages-calendar-card.tsx`, at the two lines
+  both slices touched (the `schedule` prop destructure and the title anchor).
+  For measurement only, resolve those two lines as the union of both changes
+  in a scratch worktree (scratch tree
+  `20651183e15ea9337f94b400aae18584babcba17`); that resolution is never
+  shipped and binds nothing — the parent's owner resolves the same lines in
+  the feature integration. Two builds: server 1183212 raw, 335085/335087
+  gzip, 115 files; client 254010 raw / 102287 gzip, 54 files; Worker and CSS
+  unchanged. The feature adds +3686 raw / about +1046 gzip over the new
+  pristine main, the whole raw delta again in `chunks/events.js` (+3686 raw,
+  +1027 gzip by per-file compare; remaining bytes are same-size repeat churn
+  in five other chunks), and the composed tree **fits** the already-shipping
+  335104 ceiling with 17 bytes of observed margin.
+- Unchanged-checker `runJson` controls on the archived composed output,
+  **5/5**: 335104 admits (exit 0, every group fits); 334848, exact-minus-one
+  (335086) and the former 334080 each reject with server gzip the only
+  failing group; exact fit (335087) admits.
+- The resolved decision-only tree (newest main plus the history and doc
+  records) therefore needs no new build to fit: it is numerically identical
+  to the pristine-main builds above. Net diff versus main is the budget
+  history line and this document only.
+- The CI Kit node-test batch, selftest, lint and typecheck results for this
+  reconciled head are reported in the PR verification section. Full
+  `npm run check` and browser/DB/live checks are not run. The prior
+  pre-review score applies to its original head; new exact-head CI and
+  review remain required.
+
+Because the composed maximum now sits only 17 bytes under the ceiling, the
+parent's true union head could need the already-supported 335360 allocation.
+This PR proposes no such step: only the parent's measured integrated head can
+justify it, by the same reconcile-and-remeasure discipline used here.
+
+The first reconciliation, its measurements, and the original pinned evidence
+below remain historical records for their named trees.
+
+## First conflict reconciliation and its measurements
 
 Merge incoming main head `4d9ebeee5b311dd5bedb606a57ea91183625c3c7` into this
 PR after GitHub reports conflicts. The two conflicts are decision history and
@@ -156,28 +228,31 @@ island budget already fits unchanged on the feature branch.
 ## History, scope and limitations
 
 Incoming main's `$comment` history stays byte-for-byte as the prefix, followed
-by this decision's unique record and reconciliation; no earlier record is
-edited or removed. The standalone decision tree
-(main plus this budget and note, without the feature) builds and passes the
-canonical checker (see the PR verification section for its exact numbers).
+by this decision's unique record and its two reconciliations; no earlier
+record is edited or removed. After the second reconciliation the standalone
+decision tree is numerically identical to the measured pristine main, so its
+fits verdict is the pristine builds above.
 
 Two parked sibling budget PRs propose higher server gzip ceilings
 (`#1786` → 335360, `#1806` → 334592); both currently conflict and neither is
 merged or relied upon here. If `#1786` lands first, its ceiling absorbs the
-measured 334940 and this PR reconciles to history-only; `#1806`'s ceiling
+measured 335087 and this PR reconciles to history-only; `#1806`'s ceiling
 would not absorb it. If this PR lands first, the siblings reconcile upward on
-their own measurements. Either order keeps exact-head enforcement.
+their own measurements. Either order keeps exact-head enforcement. Since
+then, [#1827](https://github.com/TogetherWeOwn/two-web-next/pull/1827)
+already landed the test support for 335360 while keeping 335104 the shipping
+ceiling; this PR does not select that allocation.
 
 No feature source or feature acceptance-test change ships on the decision
 branch. Feature behavior, database cases, browser journeys, accessibility,
 live pages, startup latency and full `npm run check` are not established by
 this experiment.
 
-ACT: raise only the server gzip ceiling to the minimum aligned measured
-allowance, consume main's independent fixed-allocation tests unchanged and
-record the evidence.
-WHY: three combined builds reproducibly breach only that axis while pristine
-main fits, and one step less fails on both archived outputs. UNDO: revert
-these scalar changes and notes if the composition is abandoned, after
-remeasuring intervening main growth. The parent owns actual reintegration and
+ACT: reconcile to main's identical 335104 ceiling with no numeric change,
+consume main's independent fixed-allocation tests unchanged and record the
+remeasured evidence.
+WHY: main landed the proposed value on its own evidence, and two fresh
+compositions on the newest main fit it (335087 maximum) while one aligned
+step less still rejects. UNDO: revert this history and document record; the
+ceiling itself now belongs to main. The parent owns actual reintegration and
 acceptance.
