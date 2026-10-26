@@ -1,12 +1,15 @@
 import type { FC } from "hono/jsx";
 import type { Counts } from "../counts";
 import type { Session } from "../env";
+import { teaserAvailability } from "../events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../events/reads";
 import { groupTeaserEvents } from "../events/teaser-groups";
 import type { VisibleFeatured } from "../featured";
 import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
 import {
+  EVENT_CARD_HOST_TESTID,
+  SCHEDULE_AVAILABILITY_TESTID,
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
   goingCountText,
@@ -54,6 +57,10 @@ export const Home: FC<{
   const inviteUrl = inviteDestination(configuredInviteUrl);
   // Site identities for AI consumers: stable Organization + WebSite @ids.
   const siteIdentities = siteJsonLd(appUrl);
+  // One render instant for grouping and every availability verdict, so a
+  // row that ended between the read and this render reads Ended below
+  // instead of advertising seats.
+  const now = new Date();
   return (
     <Layout
       title="Together We Own — the lobby is open"
@@ -198,7 +205,7 @@ export const Home: FC<{
           {upcomingEvents.length > 0 ? (
             <>
               <ul class="facts home-events" data-testid="home-events-list">
-                {groupTeaserEvents(upcomingEvents, new Date()).flatMap((group) => [
+                {groupTeaserEvents(upcomingEvents, now).flatMap((group) => [
                   <li
                     class="home-events-group"
                     data-testid={`home-events-group-${group.key}`}
@@ -206,26 +213,39 @@ export const Home: FC<{
                   >
                     <h3 class="strap">{group.label}</h3>
                   </li>,
-                  ...group.events.map((event) =>
-                    event.source === "discord" ? (
-                      <li class="card" data-source="discord" key={`discord-${event.discordId}`}>
-                        <a
-                          class="home-event-link"
-                          href={inviteUrl}
-                          data-testid="home-event-discord"
-                        >
-                          <p>
-                            <time datetime={event.startsAt.toISOString()}>
-                              {cardTimeLabel(event.startsAt, event.timezone)} (
-                              {isValidZone(event.timezone) ? event.timezone : "UTC"})
-                            </time>
-                          </p>
-                          <h3>{event.title}</h3>
-                          {event.location ? <p>{event.location}</p> : null}
-                          <p>RSVP in Discord</p>
-                        </a>
-                      </li>
-                    ) : (
+                  ...group.events.map((event) => {
+                    if (event.source === "discord") {
+                      return (
+                        <li class="card" data-source="discord" key={`discord-${event.discordId}`}>
+                          <a
+                            class="home-event-link"
+                            href={inviteUrl}
+                            data-testid="home-event-discord"
+                          >
+                            <p>
+                              <time datetime={event.startsAt.toISOString()}>
+                                {cardTimeLabel(event.startsAt, event.timezone)} (
+                                {isValidZone(event.timezone) ? event.timezone : "UTC"})
+                              </time>
+                            </p>
+                            <h3>{event.title}</h3>
+                            {event.location ? <p>{event.location}</p> : null}
+                            {/* Same transient verdict as the schedule card:
+                              Discord rows carry no site seats, only the
+                              invite link and its RSVP line below. */}
+                            <p data-testid={SCHEDULE_AVAILABILITY_TESTID}>Discord-managed</p>
+                            <p>RSVP in Discord</p>
+                          </a>
+                        </li>
+                      );
+                    }
+                    // Trimmed public game/host, like the schedule card:
+                    // blank or missing renders no node at all. The read
+                    // already trims; direct fixtures may not have.
+                    const game = (event.game ?? "").trim();
+                    const host = (event.organizer_name ?? "").trim();
+                    const availability = teaserAvailability(event, now);
+                    return (
                       <li class="card" data-source="canonical" key={`canonical-${event.eventKey}`}>
                         <a
                           class="home-event-link"
@@ -238,17 +258,24 @@ export const Home: FC<{
                             </time>
                           </p>
                           <h3>{event.title}</h3>
+                          {game !== "" ? <p>{game}</p> : null}
+                          {host !== "" ? (
+                            <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p>
+                          ) : null}
                           {event.location ? <p>{event.location}</p> : null}
                           <p>
                             {goingCountText(event.goingCount, event.capacity)}
-                            {/* Full marker, same node and copy as cards and the
-                              detail lineup. The verdict reads seat occupancy,
-                              never the attributable count alone, so the teaser
-                              never offers a seat the write path cannot grant;
-                              older fixtures without occupancy fall back to the
-                              named count (the GoingCountState precedent). */}
-                            {event.capacity !== null &&
-                            (event.goingOccupancy ?? event.goingCount) >= event.capacity ? (
+                            {/* Exactly one availability marker: a full row
+                              keeps the Full node shared with cards and the
+                              detail lineup, every other verdict renders the
+                              schedule availability snapshot (paused, seats
+                              left, no limit, ended) — never both. Both
+                              read seat occupancy, never the attributable
+                              count alone, so the teaser never offers a seat
+                              the write path cannot grant; older fixtures
+                              without the widened fields fall back inside
+                              `teaserAvailability`. */}
+                            {availability?.state === "full" && event.capacity !== null ? (
                               <>
                                 {" · "}
                                 <span data-testid={SPOTS_LEFT_TESTID}>
@@ -258,12 +285,19 @@ export const Home: FC<{
                                   )}
                                 </span>
                               </>
+                            ) : availability && availability.state !== "full" ? (
+                              <>
+                                {" · "}
+                                <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
+                                  {availability.text}
+                                </span>
+                              </>
                             ) : null}
                           </p>
                         </a>
                       </li>
-                    ),
-                  ),
+                    );
+                  }),
                 ])}
               </ul>
               <p>
