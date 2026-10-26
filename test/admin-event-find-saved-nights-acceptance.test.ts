@@ -481,9 +481,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       expect(res.status).toBe(200);
       const html = await res.text();
-      expect(html).toContain('href="/admin/events/live-game"');
-      expect(html).not.toContain('href="/admin/events/live-title"');
-      expect(html).not.toContain('href="/admin/events/live-decoy"');
+      expect(html).toMatch(/href="\/admin\/events\/live-game(?:\?[^"]*)?"/);
+      expect(html).not.toMatch(/href="\/admin\/events\/live-title(?:\?[^"]*)?"/);
+      expect(html).not.toMatch(/href="\/admin\/events\/live-decoy(?:\?[^"]*)?"/);
       expect(titleCellFor(html, "live-game")).toContain("Terraforming Mars");
     });
 
@@ -492,9 +492,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("private, no-store");
       const html = await res.text();
-      expect(html).toContain('href="/admin/events/live-title"');
-      expect(html).not.toContain('href="/admin/events/live-game"');
-      expect(html).not.toContain('href="/admin/events/live-decoy"');
+      expect(html).toMatch(/href="\/admin\/events\/live-title(?:\?[^"]*)?"/);
+      expect(html).not.toMatch(/href="\/admin\/events\/live-game(?:\?[^"]*)?"/);
+      expect(html).not.toMatch(/href="\/admin\/events\/live-decoy(?:\?[^"]*)?"/);
     });
 
     it("RED: the Kit loader returns the game-matching rows", async () => {
@@ -536,7 +536,7 @@ describe("saved-nights Hono inventory render (executed EventsPage, no DB)", () =
       { q: "terraforming" },
     );
     const cell = titleCellFor(html, "hono-game");
-    expect(cell).toContain('href="/admin/events/hono-game"');
+    expect(cell).toMatch(/href="\/admin\/events\/hono-game(?:\?[^"]*)?"/);
     expect(cell).toContain("Friday social");
     expect(cell).toContain("Terraforming Mars");
   });
@@ -613,7 +613,7 @@ describe("saved-nights Kit inventory (executed view model + compiled SSR, no DB)
       }) as unknown as Record<string, unknown>,
     );
     const cell = titleCellFor(html, "kit-game");
-    expect(cell).toContain('href="/admin/events/kit-game"');
+    expect(cell).toMatch(/href="\/admin\/events\/kit-game(?:\?[^"]*)?"/);
     expect(cell).toContain("Friday social");
     expect(cell).toContain("Terraforming Mars");
   });
