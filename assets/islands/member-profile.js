@@ -22,11 +22,15 @@
 // While a write is unsettled the form is aria-busy and a polite progress line
 // sits just after it; a Save press then says the earlier save is still finishing.
 
+import { suggestTimezones } from "../timezone-suggestions.ts";
+
 (function () {
   var root = document.querySelector('[data-island="member-profile"]');
-  if (!root) return;
+  if (!root || root.__profileBound) return;
   var form = root.querySelector("form");
   if (!form) return;
+  root.__profileBound = true;
+  suggestTimezones(form.elements.timezone);
   var id = root.getAttribute("data-member-id");
   var edit = root.querySelector('[data-testid="profile-edit-again"]');
   var editControl = root.querySelector('[data-testid="profile-edit-control"]');

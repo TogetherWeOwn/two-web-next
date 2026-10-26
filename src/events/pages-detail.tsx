@@ -220,13 +220,19 @@ export const EventPage: FC<{
             <input
               type="text"
               id="chosen-timezone-input"
+              list="chosen-timezone-suggestions"
+              aria-describedby="chosen-timezone-help"
               data-testid="event-chosen-timezone-input"
               maxlength={64}
               hidden
               autocomplete="off"
               spellcheck={false}
             />
-            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+            <datalist id="chosen-timezone-suggestions"></datalist>
+            <p id="chosen-timezone-help" data-testid="event-chosen-timezone-examples">
+              e.g. Europe/London, Asia/Tokyo. Browser suggestions are optional; other valid
+              identifiers also work.
+            </p>
             <button type="button" hidden data-testid="event-chosen-timezone-button">
               Compare times
             </button>

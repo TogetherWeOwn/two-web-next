@@ -289,6 +289,16 @@ jobs:
         run: |
           npx vitest run test/event-chosen-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-chosen-timezone.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-chosen-timezone.json "event chosen timezone browser acceptance" 30
+      - name: Timezone suggestions (Hono and Kit, intercepted fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/timezone-suggestions.tap ci/timezone-suggestions-browser.test.mjs
+          for view in Hono Kit; do
+            node ci/rsvp-focus-require-executed.mjs artifacts/a11y/timezone-suggestions.tap "$view profile timezone suggestions" 14
+            node ci/rsvp-focus-require-executed.mjs artifacts/a11y/timezone-suggestions.tap "$view event timezone suggestions" 14
+            node ci/rsvp-focus-require-executed.mjs artifacts/a11y/timezone-suggestions.tap "$view profile suggestion draft lifecycle" 7
+            node ci/rsvp-focus-require-executed.mjs artifacts/a11y/timezone-suggestions.tap "$view event suggestion explicit action" 2
+          done
       - name: Kit member auth (real Chromium, local HTTPS fixtures)
         run: |
           mkdir -p artifacts/a11y
