@@ -146,6 +146,14 @@ describe("RSVP outcome focus in Chromium", {
     return { context, page, pending, succeed, focused };
   }
 
+  // Tabbing away from the widget now passes the in-widget help link
+  // ("How RSVPs and waitlists work", the first Tab stop after the control)
+  // before reaching the outside field: two Tabs leave the widget.
+  async function tabToOutside(page) {
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+  }
+
   it("keeps keyboard focus on the field the member tabbed to while the write is pending", async (t) => {
     const member = await openMember();
     t.after(() => member.context.close());
@@ -153,7 +161,7 @@ describe("RSVP outcome focus in Chromium", {
     await page.getByTestId("rsvp-going").focus();
     await page.keyboard.press("Enter");
     const route = await member.pending();
-    await page.keyboard.press("Tab");
+    await tabToOutside(page);
     assert.equal(await member.focused(), "outside");
     await member.succeed(route);
     await page.getByTestId("rsvp-confirmed").waitFor();
@@ -199,7 +207,7 @@ describe("RSVP outcome focus in Chromium", {
     await page.getByTestId("rsvp-going").focus();
     await page.keyboard.press("Enter");
     const route = await member.pending();
-    await page.keyboard.press("Tab");
+    await tabToOutside(page);
     assert.equal(await member.focused(), "outside");
     await route.fulfill({ status: 500, contentType: "application/json", body: "" });
     await page.getByTestId("rsvp-failed").waitFor();
@@ -323,7 +331,7 @@ describe("RSVP outcome focus in Chromium", {
     await page.getByTestId("rsvp-going").focus();
     await page.keyboard.press("Enter");
     await member.pending();
-    await page.keyboard.press("Tab");
+    await tabToOutside(page);
     assert.equal(await member.focused(), "outside");
     await page.getByTestId("rsvp-unknown").waitFor({ timeout: 15000 });
     assert.equal(await page.getByTestId("rsvp-unknown").getAttribute("role"), "alert");
@@ -350,7 +358,7 @@ describe("RSVP outcome focus in Chromium", {
     await page.getByTestId("rsvp-going").focus();
     await page.keyboard.press("Enter");
     const route = await member.pending();
-    await page.keyboard.press("Tab");
+    await tabToOutside(page);
     assert.equal(await member.focused(), "outside");
     await route.fulfill({ status: 401, contentType: "application/json", body: "" });
     await page.getByTestId("rsvp-session-expired").waitFor();
