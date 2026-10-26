@@ -64,8 +64,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
+
+// Minimal real catalog fixture: empty pg-proxy answers the published-games
+// read with no games; guest bounce still fires before any read.
+const emptyCatalogDb = () => drizzle(async () => ({ rows: [] }));
 import type { Env } from "../src/env";
 import { MAX_RETURN_DESTINATION_BYTES } from "../src/join/service";
 import {
@@ -125,7 +130,7 @@ function args(overrides: Record<string, unknown> = {}): ArgsWithUrl {
     scopeParam: null,
     activityParam: null,
     setHeaders: vi.fn((_headers: Record<string, string>) => {}),
-    dbForFn: vi.fn(async () => ({}) as never),
+    dbForFn: vi.fn(async () => emptyCatalogDb() as never),
     loadRankingFn: vi.fn(async () => ranked),
     queueBoardViewFn: vi.fn(() => {}),
     ...overrides,

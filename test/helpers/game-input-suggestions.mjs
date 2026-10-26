@@ -200,7 +200,8 @@ export const outage = () =>
 // Adapted from the existing member-period/roster SSR fixture transport.
 export async function compileSuggestionKit() {
   const root = fileURLToPath(new URL("../../", import.meta.url));
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const requireWeb = createRequire(join(root, "web/package.json"));
+  const { compile } = requireWeb("svelte/compiler");
   const styles = [];
   const built = await build({
     stdin: {
