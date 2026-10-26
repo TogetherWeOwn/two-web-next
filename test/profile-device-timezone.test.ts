@@ -269,7 +269,12 @@ async function noPrivateEffects(page: Page) {
 async function guidance(page: Page) {
   const field = timezoneField(page);
   expect(await field.isEditable()).toBe(true);
-  expect(await page.getByRole("textbox", { name: /timezone/i }).count()).toBe(1);
+  // An associated native datalist exposes this editable input as a combobox,
+  // including without JavaScript; an ordinary manual input remains a textbox.
+  const role = (await field.evaluate((node) => "list" in node && Boolean(node.list)))
+    ? "combobox"
+    : "textbox";
+  expect(await page.getByRole(role, { name: /timezone/i }).count()).toBe(1);
   // No-error association: the field's aria-describedby must resolve exactly
   // once to the visible IANA help text. A mistyped help id in either
   // renderer fails here instead of silently dropping screen-reader guidance.

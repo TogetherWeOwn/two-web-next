@@ -181,17 +181,14 @@ export async function openZoneControl(browser, view, control, options = {}) {
       async rebind() {
         if (view === "Kit" && control === "event")
           await page.evaluate(() => window.__zoneRerender());
-        else
-          await page.addScriptTag({
-            content: readFileSync(
-              resolve(
-                ZONE_ROOT,
-                "public/islands",
-                control === "profile" ? "member-profile.js" : "event-device-timezone.js",
-              ),
-              "utf8",
-            ),
-          });
+        // Native islands enhance SSR-only Kit routes too. Replaced DOM needs
+        // their real initializer; load served bytes without bypassing CSP.
+        await page.addScriptTag({
+          url: new URL(
+            `/islands/${control === "profile" ? "member-profile.js" : "event-device-timezone.js"}`,
+            ZONE_ORIGIN,
+          ).href,
+        });
         await settle(page);
         if (await input.isVisible()) await input.focus();
       },
