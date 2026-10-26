@@ -122,8 +122,19 @@ npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
 npm run format        # formatting only; no lint fixes or import reordering
 npm run lint          # read-only Biome lint + format gate
-env -u BOT_DATABASE_URL npm run check # lint + format + types + config drift/selftest + Vitest
+env -u BOT_DATABASE_URL npm run check # shared core + local configuration/docs/budget/smoke checks
 ```
+
+`npm run check:core` is the authoritative core chain used by both `npm run check`
+and CI's **Check (lint + typecheck + coverage gate)** step: lint, source/CI and
+E2E typechecks, full Vitest coverage, E2E safety selftests and the core Node
+contract suites. Local checks therefore enforce the same coverage floors as CI;
+install both root and Kit dependencies (`npm ci --prefix web --include=dev`) and
+migrate the disposable test database first. CI still owns service setup, migrations,
+and its separate security, browser, build and performance gates. The surrounding
+local checks remain in `npm run check`; `npm run check:offline` is deliberately
+partial and is not equivalent evidence. Smoke selftests use loopback fixtures,
+not a staging deployment or real-service side-effect proof.
 
 For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).

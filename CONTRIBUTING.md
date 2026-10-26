@@ -267,12 +267,20 @@ from `1.0.0` onward, it bumps the major version.
 
 ```sh
 npm ci --include=dev
+npm ci --prefix web --include=dev
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
 npm run format                   # formatting only; never rewrites lint violations
 npm run lint                     # read-only Biome lint + format gate
-npm run check                    # lint + format + typecheck + config drift + tests
+npm run check                    # shared coverage core + local config/docs/budget/smoke checks
 ```
+
+`npm run check` and CI's **Check (lint + typecheck + coverage gate)** step both
+invoke `npm run check:core`. That script owns lint, typechecks, full coverage,
+E2E safety and the core Node contract suites; change that definition rather than
+inlining another copy in either caller. Local-only checks wrap it in `check`.
+Prepare the disposable database as described in the README before running either
+full check. CI's other security, browser, build and performance gates remain separate.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
