@@ -479,24 +479,24 @@ function shippingServerGzipCases() {
   ];
 }
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
-  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 254769 },
-  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 254976 },
+  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 257165 },
+  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 257536 },
   {
     name: "client raw one byte over",
     group: "kit.client.js",
     axis: "raw",
-    bytes: 254977,
-    ceiling: 254976,
+    bytes: 257537,
+    ceiling: 257536,
     breach: true,
   },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
+  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
   {
     name: "client gzip one byte over",
     group: "kit.client.js",
     axis: "gzip",
-    bytes: 102913,
-    ceiling: 102912,
+    bytes: 103169,
+    ceiling: 103168,
     breach: true,
   },
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
