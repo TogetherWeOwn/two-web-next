@@ -111,7 +111,11 @@ describe("expired-session RSVP recovery (no database or network)", () => {
         expect(res.status).toBe(401);
         expect(res.headers.get("location")).toBeNull();
         expect(res.headers.get("content-type")).toContain("application/json");
-        expect(await res.json()).toEqual({ error: "Unauthorized", recovery: RECOVERY });
+        expect(await res.json()).toEqual({
+          error: "unauthenticated",
+          recovery: RECOVERY,
+          request_id: expect.any(String),
+        });
         expect(res.headers.getSetCookie()).toEqual([]);
       },
     );
@@ -136,7 +140,10 @@ describe("expired-session RSVP recovery (no database or network)", () => {
         );
         expect(res.status).toBe(401);
         expect(res.headers.get("location")).toBeNull();
-        expect(await res.json()).toEqual({ error: "unauthenticated" });
+        expect(await res.json()).toEqual({
+          error: "unauthenticated",
+          request_id: expect.any(String),
+        });
       },
     );
   }
@@ -158,7 +165,11 @@ describe("expired-session RSVP recovery (no database or network)", () => {
       );
       expect(res.status).toBe(401);
       expect(res.headers.get("location")).toBeNull();
-      expect(await res.json()).toEqual({ error: "Unauthorized", recovery: RECOVERY });
+      expect(await res.json()).toEqual({
+        error: "unauthenticated",
+        recovery: RECOVERY,
+        request_id: expect.any(String),
+      });
     },
   );
 

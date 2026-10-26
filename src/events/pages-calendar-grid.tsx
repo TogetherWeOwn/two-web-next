@@ -18,6 +18,7 @@ import {
   EVENTS_CALENDAR_SCROLL_LABEL,
   EVENTS_CALENDAR_SCROLL_TESTID,
   GRID_CANCELLED_COPY,
+  SCHEDULE_AVAILABILITY_TESTID,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
   calendarJumpUrl,
@@ -32,7 +33,14 @@ import {
   type CalendarDay,
   type CalendarState,
 } from "../islands/contracts";
-import { type CalRow, isTransient, rowKey, rowTitle, rowZone } from "./pages-calendar-row";
+import {
+  type CalRow,
+  isTransient,
+  rowAvailability,
+  rowKey,
+  rowTitle,
+  rowZone,
+} from "./pages-calendar-row";
 
 /** The month grid: prev/next anchors are real links; cells link into the list. */
 export const MonthGrid: FC<{
@@ -123,6 +131,13 @@ export const MonthGrid: FC<{
                       // list card, but say so in words — never color alone —
                       // with the same badge word the card carries.
                       const cancelled = !isTransient(e) && e.status === "cancelled";
+                      // Same availability verdict as the list card, so the grid
+                      // exposes paused/full/remaining without opening the
+                      // night. Cancelled and draft rows carry no suffix: the
+                      // badge is the verdict there. The suffix sits inside the
+                      // visible prefix of the accessible name (WCAG 2.5.3).
+                      const availability = rowAvailability(e, now);
+                      const availabilityText = availability?.text ?? null;
                       return (
                         <li>
                           <a
@@ -131,8 +146,19 @@ export const MonthGrid: FC<{
                             data-cancelled={cancelled ? "true" : undefined}
                             aria-label={
                               continued
-                                ? gridContinuationAccessibleName(rowTitle(e), day.iso, cancelled)
-                                : gridAccessibleName(rowTitle(e), e.startsAt, entryZone, cancelled)
+                                ? gridContinuationAccessibleName(
+                                    rowTitle(e),
+                                    day.iso,
+                                    cancelled,
+                                    availabilityText,
+                                  )
+                                : gridAccessibleName(
+                                    rowTitle(e),
+                                    e.startsAt,
+                                    entryZone,
+                                    cancelled,
+                                    availabilityText,
+                                  )
                             }
                           >
                             {continued
@@ -142,6 +168,14 @@ export const MonthGrid: FC<{
                               <>
                                 {" "}
                                 <span class="schedule-badge">{GRID_CANCELLED_COPY}</span>
+                              </>
+                            ) : null}
+                            {availabilityText ? (
+                              <>
+                                {" "}
+                                <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
+                                  {availabilityText}
+                                </span>
                               </>
                             ) : null}
                           </a>

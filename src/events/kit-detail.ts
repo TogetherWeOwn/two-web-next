@@ -125,6 +125,9 @@ export interface KitEventDetailModel {
   description: string | null;
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
+  /** Trimmed accessibility notes; null when the event has none. The section
+   * renders only when set, mirroring the served detail page. */
+  accessibilityNotes: string | null;
   location: string | null;
   /** Maps search URL for the venue; null when no venue is set. The view
    * renders this verbatim and never builds URLs from location itself. */
@@ -389,6 +392,7 @@ export async function resolveKitEventDetail(
             title: event.title,
             game: event.game,
             eventKey: event.eventKey,
+            existingResponses: event.goingCount,
             icsUrl: `/events/${event.eventKey}.ics`,
             markdownAlternate: `/e/${event.eventKey}.md`,
             upcomingUrl: "/events",
@@ -510,6 +514,9 @@ export async function resolveKitEventDetail(
           game: event.game,
           description: event.description,
           shareDescription: event.description || "An event at Together We Own.",
+          // Trimmed notes, null when absent or blank: the served detail
+          // page's section rule (src/events/pages-detail.tsx).
+          accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           directionsUrl: event.location ? directionsUrl(event.location) : null,
           status: event.status,
