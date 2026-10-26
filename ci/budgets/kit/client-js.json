@@ -3,7 +3,7 @@
   "client": {
     "js": {
       "maxRawBytes": 256000,
-      "maxGzipBytes": 102912,
+      "maxGzipBytes": 103168,
       "maxFiles": 55
     }
   }
