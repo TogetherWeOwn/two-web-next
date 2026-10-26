@@ -145,6 +145,12 @@ export const RSVP_PAUSED_COPY = "RSVPs are paused for this event — check back 
 export const RSVP_GUEST_CTA_COPY = "Log in with Discord";
 export const RSVP_MAYBE_COPY = "You're down as a maybe for this one.";
 export const RSVP_NOT_GOING_COPY = "You can't go to this one.";
+/** SSR-only contextual help beside the reservation controls: a native link
+ * to the shipped FAQ Events section (seats, FIFO waitlist, syncing states).
+ * Rendered outside the form the island repaints, so it survives every island
+ * state replacement, never submits and never takes focus. */
+export const RSVP_HELP_COPY = "How RSVPs and waitlists work";
+export const RSVP_HELP_HREF = "/faq#faq-events";
 
 /** Member-visible copy, pinned verbatim (CM-frozen rows noted). */
 export const RSVP_COPY = {

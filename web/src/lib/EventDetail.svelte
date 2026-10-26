@@ -14,6 +14,8 @@ import {
   RSVP_FULL_COPY,
   RSVP_GOING_TESTID,
   RSVP_GUEST_CTA_COPY,
+  RSVP_HELP_COPY,
+  RSVP_HELP_HREF,
   RSVP_MAYBE_COPY,
   RSVP_MAYBE_TESTID,
   RSVP_NOT_GOING_COPY,
@@ -310,6 +312,8 @@ const lineup = $derived(
             {/if}
           {/if}
         </form>
+      {/if}{#if !closed}
+        <p><a href={RSVP_HELP_HREF}>{RSVP_HELP_COPY}</a></p>
       {/if}
     </section>
   </div>

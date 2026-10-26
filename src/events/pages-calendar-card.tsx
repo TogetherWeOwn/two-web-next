@@ -2,6 +2,7 @@
 import type { FC } from "hono/jsx";
 import {
   EVENTS_EMPTY_COPY,
+  EVENT_ACCESSIBILITY_CUE_COPY,
   EVENT_CANCELLED_TESTID,
   EVENT_CARD_HOST_TESTID,
   EVENT_CARD_TESTID,
@@ -69,6 +70,11 @@ export const CalCard: FC<{
   // new read). Transients carry no organizer and blank/missing renders no
   // node, so the badge and attendance never shift for unhosted cards.
   const host = transient ? "" : (e.organizer_name ?? "").trim();
+  // Planning-information cue: only a published persisted row whose organizer
+  // notes survive trimming earns the link to the detail page's existing
+  // accessibility heading. The note text itself never reaches the card.
+  const hasAccessibilityNotes =
+    !transient && e.status === "published" && (e.accessibilityNotes ?? "").trim() !== "";
   const startDay = wallDateIso(e.startsAt, tz);
   const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
   const descriptionPoints = [...(e.description ?? "")];
@@ -165,6 +171,13 @@ export const CalCard: FC<{
             </details>
           ) : e.description ? (
             <p>{passage ?? e.description}</p>
+          ) : null}
+          {hasAccessibilityNotes ? (
+            <p>
+              <a href={`/e/${e.eventKey}#event-accessibility-heading`}>
+                {EVENT_ACCESSIBILITY_CUE_COPY}
+              </a>
+            </p>
           ) : null}
         </div>
         <div class="schedule-actions">

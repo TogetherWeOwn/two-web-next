@@ -7,6 +7,8 @@ import {
   RSVP_CONFIRMED_TESTID,
   RSVP_COPY,
   RSVP_GOING_TESTID,
+  RSVP_HELP_COPY,
+  RSVP_HELP_HREF,
   RSVP_MAYBE_TESTID,
   RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_TESTID,
@@ -153,6 +155,15 @@ export const RsvpButton: FC<{
             )
           ) : null}
         </form>
+      )}
+      {/* Contextual help stays outside the form the island repaints, so it
+          survives state replacement, never submits and never takes focus
+          from the refresh-before-retry recovery action. Closed events have
+          no reservation decision left to explain. */}
+      {closed ? null : (
+        <p>
+          <a href={RSVP_HELP_HREF}>{RSVP_HELP_COPY}</a>
+        </p>
       )}
     </section>
   );

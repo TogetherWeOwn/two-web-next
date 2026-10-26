@@ -285,6 +285,12 @@ export const EVENT_CARD_TESTID = "event-card";
  * a non-blank organizer, no node at all when blank/missing. Plain text, never
  * a link — the same public name the detail page shows as `event-organizer`. */
 export const EVENT_CARD_HOST_TESTID = "event-card-host";
+/** Quiet schedule-card cue shown only when a published row carries trimmed
+ * organizer accessibility notes. It links to the detail page's existing
+ * accessibility heading and never carries the note text itself, so the card
+ * announces that planning information exists without promising any specific
+ * accommodation. */
+export const EVENT_ACCESSIBILITY_CUE_COPY = "Accessibility details available";
 export const EVENT_DRAFT_TESTID = "event-draft";
 export const EVENT_CANCELLED_TESTID = "event-cancelled";
 export const EVENT_DISCORD_RSVP_TESTID = "event-discord-rsvp";
