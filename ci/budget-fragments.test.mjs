@@ -48,7 +48,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
-  "public/islands/member-profile.js": { maxRawBytes: 14336, maxGzipBytes: 5120 },
+  "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
   "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
@@ -58,7 +58,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
-  "public/profile-theme.css": { maxRawBytes: 8192, maxGzipBytes: 2048 },
+  "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
 };

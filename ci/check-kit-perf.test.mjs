@@ -621,7 +621,8 @@ function shippingClientGzipCases() {
 }
 
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
-  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 254769 },
+  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 255856 },
+  { name: "client raw original interval", group: "kit.client.js", axis: "raw", bytes: 254769 },
   { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
   {
     name: "client raw one byte over",
