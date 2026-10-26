@@ -390,8 +390,9 @@ export function printableJoinInstructions(raw: string): string {
         )
       )
         return false;
-      // Quotes and angle brackets can be URL content, not safe token boundaries.
-      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/\S+/gi) ?? [];
+      // Unicode spaces, quotes and angle brackets can be admitted URL content.
+      // Only ASCII spaces/control characters delimit the complete spelling.
+      const urls = line.match(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\x00-\x20]+/gi) ?? [];
       return urls.every(isPrintableJoinDestination);
     })
     .join("\n");

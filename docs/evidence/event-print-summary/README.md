@@ -15,7 +15,12 @@ bare public URL (absolute http(s), no userinfo, query, fragment, malformed
 encoding, decoded private segment, matrix parameter or recognized credential
 path marker). Instruction lines containing an unsafe destination or labeled
 credential stay screen-only; separate harmless lines remain printable. The
-original instruction text stays unchanged on screen. Suppress in print: skip
+original instruction text stays unchanged on screen. Unicode spaces inside
+admitted URLs stay inside the complete token being classified; only ASCII
+spaces/control characters delimit it. Suppress the whole chosen-timezone
+comparison entry row on paper (heading, input, label, examples, button and
+transient result), retaining the authoritative full start/end dates and zone.
+Screen entry/value/comparison behavior remains unchanged. Suppress in print: skip
 link, site header/footer, all navs, RSVP
 block, share block, named attendee roster, join pitch, join-result flash,
 discovery, and the cancelled-page alternatives / .ics link / upcoming
@@ -118,3 +123,58 @@ Round gates: lint/types, a11y (146/0), Lighthouse and Lighthouse quality
 not exercise Kit routes. The full local check was stopped after ten minutes
 without a final result and is not claimed green. Hosted exact-head CI and
 independent review remain required.
+
+## Unicode URL and chosen-timezone correction
+
+Two real-route regressions reproduced on the reviewed source: Unicode spaces
+truncated an unsafe instruction URL before classification, and the real island
+revealed the chosen-timezone input on paper. The correction classifies Unicode
+spaces as URL content and marks the whole comparison entry row screen-only in
+both renderers. Existing print selectors, screen styles, islands and budgets
+are unchanged. The original full start/end dates and timezone remain printable;
+the optional comparison entry and its transient result do not.
+
+The local probe exercises actual form admission and real Hono routing for
+U+00A0, U+2009 and U+3000, plus the real timezone island in both twins at both
+widths. Before: seven failing scenarios. After: seven passing scenarios,
+including screen-print-screen input/value restoration and zero unexpected
+network requests. A separate 110-input probe in Wrangler's locked workerd
+1.20261012.1 (compatibility date 2026-09-29) reports 90 unsafe destinations,
+zero retained unsafe markers, and 20 safe controls retained; 109/110 full URLs
+are admitted by the form (one ASCII-space prose control is deliberately not a
+standalone admitted URL).
+
+All 24 captured screen/print PNGs were opened. The six before/after screen
+pairs are byte-identical; only the after screen files are retained below to
+avoid duplicate binaries. The `1280` captures use a 1280x800 viewport and `390`
+a 390x844 viewport; these are full-page images. Native A4 PDFs were generated,
+but this round's PDF pages were not opened because the local renderer lacks
+`pdftoppm`. The original inspected PDF evidence above is not a claim of fresh
+PDF-pixel review.
+
+| Scenario | Before print | After print | Unchanged screen (both sides) |
+| --- | --- | --- | --- |
+| Hono, desktop | [before](review-boundaries/before/Hono-1280-print.png) | [after](review-boundaries/after/Hono-1280-print.png) | [screen](review-boundaries/after/Hono-1280-screen.png) |
+| Hono, mobile | [before](review-boundaries/before/Hono-390-print.png) | [after](review-boundaries/after/Hono-390-print.png) | [screen](review-boundaries/after/Hono-390-screen.png) |
+| Kit, desktop | [before](review-boundaries/before/Kit-1280-print.png) | [after](review-boundaries/after/Kit-1280-print.png) | [screen](review-boundaries/after/Kit-1280-screen.png) |
+| Kit, mobile | [before](review-boundaries/before/Kit-390-print.png) | [after](review-boundaries/after/Kit-390-print.png) | [screen](review-boundaries/after/Kit-390-screen.png) |
+| Unicode joining URL, desktop | [before](review-boundaries/before/unicode-1280-print.png) | [after](review-boundaries/after/unicode-1280-print.png) | [screen](review-boundaries/after/unicode-1280-screen.png) |
+| Unicode joining URL, mobile | [before](review-boundaries/before/unicode-390-print.png) | [after](review-boundaries/after/unicode-390-print.png) | [screen](review-boundaries/after/unicode-390-screen.png) |
+
+### Independent regression proof
+
+The test-only correction from `8a0e06d3e99d` is consumed unchanged; all five
+file hashes match the independent handoff. Fresh combined-tree verification
+passes 110/110 cases: 37 direct instruction cases, 71 real-route summary browser
+cases and 2 narrow-wrap browser cases, with zero skips and both executed-count
+verifiers passing. Reverting only the three source fixes produces exactly 22
+expected failures: 9 direct Unicode leaks, 9 Hono printed-instruction leaks,
+and 4 Hono/Kit revealed-timezone-input cases. Restoring the exact source bytes
+passes 110/110 again. All three runs disable the filesystem module cache.
+
+The real chosen-timezone and available host/join suites also pass 65/65,
+including 48 executed timezone browser cases. The preserved 22-file checkpoint
+matches before incorporation, so the opened screen/print captures above are
+reused; no baseline or threshold is changed. A fresh full `npm run check` on a
+run-owned disposable database reaches the full Vitest suite but is stopped at
+the nine-minute bound without a final suite verdict: it is incomplete, not green.

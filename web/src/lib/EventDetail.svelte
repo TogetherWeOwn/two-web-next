@@ -231,7 +231,7 @@ const lineup = $derived(
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
     </div>
-    <div hidden>
+    <div class="event-screen-only" hidden>
       <dt>Compare in another timezone</dt>
       <dd class="event-device-timezone" data-event-chosen-timezone>
         <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
