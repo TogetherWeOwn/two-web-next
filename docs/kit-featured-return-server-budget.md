@@ -1,16 +1,21 @@
 # Featured inventory return: server gzip allocation
 
-Measured 2026-10-25. This separate budget decision supports the native navigation
+Measured 2026-10-25, remeasured 2026-10-26. This separate budget decision supports the native navigation
 in [#1805](https://github.com/TogetherWeOwn/two-web-next/pull/1805); it does not
 ship or approve that feature. The initial proposal changed only
 `server.js.maxGzipBytes` in [`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json):
 **333568 → 333824 B**. Main subsequently allocated that ceiling in
 [#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799), then independently
 raised server gzip to 334080 B and client raw to 254976 B through
-[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800). After conflict
-reconciliation, **no numeric ceiling changes relative to main**. All incoming
-history and both earlier featured-return decisions are retained; the latest
-remeasurement below confirms the feature fits without an additional allowance.
+[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800). Two conflict
+reconciliations kept **no numeric change relative to main** while the base moved
+only through budgets. The third reconciliation remeasures on a base that moved
+through product sources (#1778, #1808): pristine main now builds 333874 gzip B
+and the true combined tree builds 334473–334474 gzip B, over the inherited
+334080 cap by 393–394 B. This PR therefore allocates two 256 B steps,
+**334080 → 334592 B**, the minimum fitting allocation. All incoming
+history and all three earlier featured-return records are retained; the latest
+remeasurement below confirms the feature fits without any further allowance.
 
 ## Locked inputs and method
 
@@ -186,11 +191,81 @@ WHY: complete frozen featured-return output already fits main's independent
 allocations. UNDO: remove only this branch's history and note, not main's limits.
 The 18 B CSS gzip margin remains thin; future application unions must remeasure.
 
+## Third reconciliation and allocation: base sources moved
+
+Main `732a9582a` merges #1668 (combined-board client history), #1808
+(admission-diagnostics sources) and #1778 (schedule-availability sources,
+styles, baselines) on top of `2f9e60791`. Twelve product paths moved under
+`src/` and `public/`; lockfiles (root
+`023b560fb97de0f5a91332701e2d0100c24d53e964dbd19863e5d5133d18631d`, web
+`feaa492a89fb6ffe07ea4114e2111219e1f8ff4d2a99dc53fc7b7898f8be565e`) and checkers
+are byte-identical, and every numeric ceiling still equals the previous head.
+Because application inputs moved, the prior "no allowance" conclusion cannot be
+carried forward: both trees were rebuilt on the post-merge head.
+
+The combined tree is a clean scratch merge of current main `732a9582a` with the
+frozen feature `576d7051f7d58fd7da55fdca5a047ed1de00b307` (8 build-input files,
+no conflicts), overlaid with the resolved budget only. Feature #1805 has since
+moved to `e7950bc1`, but its drift is three test-only commits: every build
+input is byte-identical to the frozen ref, so the measurement stands for the
+current feature head too. Two locked builds per tree (Node 24.22.1, npm 11.19.1,
+zlib `1.3.2.1-motley-285e94b`, identical dependency installations):
+
+| Group | Pristine main raw / gzip B | Combined raw / gzip B | Files / cap |
+| --- | ---: | ---: | ---: |
+| Worker entry | 2551 / 1219 | 2551 / 1219 | one entry |
+| Server JS | 1178764 / 333874 | 1180797–1180799 / 334473–334474 | 115 / 126 |
+| Client JS | 253949 / 102273 | 254365 / 102446 | 54 / 55 |
+| Client CSS | 2833 / 1006 | 2833 / 1006 | 2 / 4 |
+
+Pristine passes the inherited 334080 B cap with 206 B; combined fails it by
+393–394 B (exit 1). Per-chunk attribution on the second build pair shows the
+feature delta is the same code as originally measured: `chunks/admin.js`
++1617 / +470, the two featured loaders +296 / +95 and +122 / +44, with 23
+raw-identical files contributing only ±8 B of gzip-context noise (net +2033 /
++600). The base itself moved +724 gzip B under the feature through #1778/#1808.
+The prior single-pass parser experiment's conclusion stands: no
+behavior-preserving no-allowance optimization is established, and any
+application change belongs on the feature PR, not here.
+
+One 256 B step (334336) still refuses the second combined artifact by 138 B,
+so the minimum fitting allocation is two steps, **334080 → 334592 B** (+512,
+118 B minimum margin). No other ceiling moves: server raw (22401 B margin),
+file count, client, CSS, Worker and startup limits are unchanged.
+
+Disposable budget controls on the retained second combined artifact, using the
+unchanged exported checker:
+
+- Inherited 334080 B cap: exit 1, 394 B over.
+- One-step 334336 B cap: exit 1, 138 B over.
+- Proposed 334592 B cap: exit 0 across all asset groups.
+- Exact actual server raw/gzip/file caps: exit 0.
+- Actual server gzip minus one byte: exit 1.
+- Actual server raw minus one byte, with the proposed gzip cap: exit 1.
+- Actual server file count minus one, with the proposed gzip cap: exit 1.
+- Existing `node ci/check-kit-perf.mjs --selftest`: 12 passed.
+- Existing `node --test ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs`:
+  64 passed, zero failures or skips. No acceptance test files were edited.
+
+Lint (Biome, 2067 files), docs links (164 files), floor guard, strict test
+inventory (1254/1254 files, 55/55 browser specs), config docs, island bundle
+budget, and root/CI/E2E typechecks pass. No test pins the old cap value. The
+full `npm run check` suite is not claimed; CI runs it on the exact head.
+
+ACT: resolve the history conflict and allocate the minimum fitting two-step
+server gzip increase. WHY: the remeasured post-merge union exceeds the
+inherited cap by 394 B and one step still refuses it. UNDO: revert only this
+334592 → 334080 B step and this PR's appended history/note, never main's
+allocations. The 118 B server and 18 B CSS gzip margins remain thin; the
+feature's exact integrated head must still remeasure and pass all normal gates.
+
 ## Undo and scope
 
 The original pre-main proposal's undo was 333824 → 333568 B, intentionally
 refusing the measured feature. That numeric change now belongs to #1799, not
-this reconciled PR. Reverting this PR removes only its appended history/note;
-it must not undo main's allocation. No application, schema, test, dependency,
+this reconciled PR. The first two reconciliations were history-only. This third
+reconciliation adds one numeric step pair, 334080 → 334592 B: reverting this PR
+removes that step and its appended history/note, and must not undo main's own
+allocations. No application, schema, test, dependency,
 workflow, checker, mask, skip or exemption changes are included. No deployment
 or production/staging database test is part of this work.

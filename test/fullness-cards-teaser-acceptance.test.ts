@@ -333,6 +333,7 @@ describe("F3 fullness acceptance: calendar cards", () => {
     const html = await (await src.request("/events?past=1")).text();
     const card = calendarCard(html, fullPast.eventKey);
     expect(card).toContain(fullPast.title);
+    expect(card).toContain("Ended");
     expect(card).not.toContain("event-spots-left");
     expect(card).not.toContain("Full");
   });
