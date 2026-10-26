@@ -309,21 +309,38 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `test-results-kit-visual/` and `test-results-kit-parity/`, as well as
   baselines under `__screenshots-kit__/`. An intentional redesign is a reviewed
   artifact committed in the same PR — reviewers treat a baseline change like
-  code — never a silent regeneration. Kit baselines pin the events index,
-  member board, and archive. `e2e/kit-parity/events-index.visual.spec.ts`
-  captures the populated `/events` state at desktop and mobile widths against
-  the built Kit Worker as a guest. It runs before mutable journeys and asserts
-  exactly the three seeded upcoming event rows plus the zero-RSVP count, so
-  fixture leftovers cannot silently become the reference image.
-  `e2e/kit-parity/parity.spec.ts` captures member-board default, relative,
-  season and activity views at desktop and mobile widths, reusing the journey's
-  single shared QA login. The archive visual case captures populated and
-  out-of-range `/events/past` at desktop and mobile widths against the built
-  Kit Worker as a guest on the deterministic seeded past row; its DOM/state
-  parity runs in the same spec.
-- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
-  masked, animations disabled, caret hidden. Raising the threshold or masking
-  more needs its own PR with justification.
+  code — never a silent regeneration. The
+  [visual evidence lookup](visual-regression.md#evidence-lookup) maps each
+  entrypoint to its command and attempt-specific artifact directories.
+- [`playwright.kit-visual.config.ts`](../playwright.kit-visual.config.ts)
+  selects only
+  [`events-index.visual.spec.ts`](../e2e/kit-parity/events-index.visual.spec.ts),
+  whose first-line `import "./member-board-viewer.visual"` also registers
+  [`member-board-viewer.visual.ts`](../e2e/kit-parity/member-board-viewer.visual.ts).
+  The entrypoint captures populated guest `/events` against the built Kit
+  Worker at desktop (1280×800) and mobile (390×844), before mutable journeys:
+  exactly three seeded upcoming rows and the zero-RSVP count must be present.
+  The imported viewer suite uses offline Hono/Kit SSR fixtures with served CSS,
+  aborts every browser request, and needs no live login or DB. Its 16 cases
+  cross Hono/Kit × overall/relative × both widths × forced colors none/active.
+  `member-board-viewer-<twin>-<scope>-<viewport>-<forcedColors>.png` is a
+  viewport-only capture after scrolling, not a full-page capture. Assertions
+  cover a visible viewer marker (a distinct outline/border in forced colors),
+  readable sticky headers, opaque headers in normal colors, viewer visibility
+  and no document overflow. These are fixture visual proofs, not authenticated
+  deployed-board acceptance.
+- Separately, [`parity.spec.ts`](../e2e/kit-parity/parity.spec.ts) captures
+  full-page `member-board-<view>-<viewport>.png` images against the built Kit
+  Worker for default/relative (populated QA member) and season/activity (empty)
+  views at both widths. It reuses the journey's single shared QA login. The
+  same spec captures guest archive populated/out-of-range states at both widths
+  on the deterministic seeded past row and checks DOM/state parity. These
+  screenshots land in the Kit baseline directory too, but their actuals are in
+  `test-results-kit-parity/`, not `test-results-kit-visual/`.
+- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), animations
+  disabled, caret hidden; the full-page event, board and archive captures mask
+  `<time>`. Raising the threshold or masking more needs its own PR with
+  justification.
 
 ## Performance gates (`ci/check-kit-perf.mjs`, `ci/kit-perf-budget.json`)
 
