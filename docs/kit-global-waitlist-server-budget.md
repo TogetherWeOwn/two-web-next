@@ -6,10 +6,11 @@ Move Kit server JavaScript gzip bytes from **334080 to 334848** (three
 256-byte steps, +768) for the global-waitlist roster composition on current
 main. Every other numeric ceiling, file cap, startup bound, checker,
 inventory, workflow, runtime, test, manifest, lock and constraint stays
-unchanged. The budget's complete `$comment` history is preserved byte-for-byte
-(621575 characters). The three fixed server gzip shipping-regression literals
-move with the ceiling: exact admission 334848, upper fixture 334849 and its
-diagnostic ceiling 334848.
+unchanged. The budget's complete incoming `$comment` history is preserved
+byte-for-byte (622700 characters after reconciling current main). The independent
+shipping-regression correction adds fixed literals for this measured allowance
+alongside main's existing allocations: interval witness 334660, exact admission
+334848, upper fixture 334849 and diagnostic ceiling 334848.
 
 This allocation is neither feature approval nor release approval. The feature
 owner must incorporate the reviewed decision, remeasure the actual integrated
@@ -129,12 +130,14 @@ checker: client 253949/102273, server 1178764/333874 raw/gzip, exit 0. No
 feature source or feature acceptance-test changes ship on the decision
 branch.
 
-## Shipping-regression proof
+## Initial shipping-regression proof
 
-`ci/check-kit-perf.test.mjs` moves only the three server gzip boundary
+Before main's independent mapping change in #1814,
+`ci/check-kit-perf.test.mjs` moved only the three server gzip boundary
 literals to the new ceiling, as the suite's own history requires of an
 intentional budget decision. All helpers, existing assertions and remaining
-cases are untouched. Reproduce:
+cases were untouched. The following results record that original head; the
+current-base reconciliation below supersedes its test-file alignment. Reproduce:
 
 ```sh
 node --test ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs
@@ -153,6 +156,65 @@ ceiling and leave the checker unchanged:
 
 These results exercise checker behavior on synthetic complete fixtures, not
 a substitute measurement of feature artifacts or a whole-app verdict.
+
+## Current-base conflict reconciliation
+
+The preceding measurements and literal controls record the original decision
+on `91b66a68d`. After #1779 and #1814 merged, reconcile onto main
+`4d9ebeee5b311dd5bedb606a57ea91183625c3c7` (tree
+`e14030ae33c63ca1c1b791d0a044e5d7578bedeb`). Preserve the complete incoming
+622700-character history, including #1779's allocation record. The only numeric
+budget difference from this base remains server gzip 334080 to 334848.
+
+Rerun the same frozen six-source-file patch on this base, with the same locked
+dependencies and Node 24.22.1/npm 11.19.1, in two archived scratch trees; no
+database-URL variable is available to either measurement build. The combined
+source tree is `1afde3506e7b9694e65af7fe6c36c3491e019f7d`.
+
+| Group | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Server JS raw | 1178764 / 1178764 | 1181315 / 1181317 |
+| Server JS gzip | 333874 / 333876 | 334660 / 334662 |
+| Client JS raw | 253949 / 253949 | 254249 / 254249 |
+| Client JS gzip | 102273 / 102273 | 102421 / 102421 |
+
+All four builds exit 0. Both pristine checks pass; both combined checks fail
+only server gzip under 334080. Worker, CSS and file counts remain as above.
+Build-2 server attribution is `chunks/admin.js` +2553 raw/+784 gzip;
+`chunks/instance.js` 0/+2, `chunks/internal.js` 0/-2 and `nodes/14.js` 0/+2.
+These sum to +2553/+786. The maximum measured 334662 still needs the same
+smallest aligned ceiling, 334848, now leaving **186 bytes**. On retained
+build-2 artifacts the unchanged checker rejects 334080, 334592 and 334661,
+and admits 334662 and 334848. The merged standalone decision tree builds and
+passes too: server 1178764 raw/333873 gzip, client 253949/102273, exit 0.
+
+Main #1814 replaced the original boundary rows with an explicit fixed-literal
+334080/335104 mapping. Keeping main's test file unchanged with the measured
+334848 budget reproduces four refusals (allocation control plus three server
+cases), 27/31 passing and no skips. This is an unsupported allocation in the
+oracle, not evidence for widening the measured budget to 335104. An independent
+test owner supplies the narrowly scoped 334848 mapping; the budget owner
+incorporates that file unchanged, preserving both existing allocations and
+all other-axis fixtures. The interval witness is fixed at the observed 334660,
+exact admission at 334848 and one-byte-over refusal at 334849; no fixture is
+computed as `cap` or `cap + 1`.
+
+Consume the independent correction from
+`5fce978627370f459a0b9da2f9a249ac2b4d3ea2` byte-for-byte (owned file
+`ci/check-kit-perf.test.mjs`, SHA256
+`3425c29fe3a2cd3b1ef71c02d034b15b03617c9de079fead1b3f266155da115e`).
+The collected eight-file Kit checker suite passes **161/161**, with no skips.
+Scratch controls with the unchanged checker prove 334080, 334848 and 335104 each
+pass 31/31; unsupported 334849, 335105 and 334592 each fail exactly the allocation
+control and three server cases (27 pass/4 fail). Client raw +1 to 254977 still
+fails its one-byte-over case; reverting client raw to 254464 still fails three
+client cases. Every other boundary fixture and assertion is unchanged from
+main. Lint, typecheck, doc links, floor guard and strict test inventory pass;
+full `npm run check`, browser suites and staging checks were not run for this
+non-UI decision. `context-pack --base origin/main` still fails at tool startup
+(`RuntimeError: MCP server exited`); manual consumer audit covers the canonical
+checker, its shipping suite and the CI Kit selftest collection, with no product
+caller or changed function signature.
 
 ACT: allocate three 256-byte server-gzip composition steps with their
 measurement record and regression alignment. WHY: repeated same-dependency
