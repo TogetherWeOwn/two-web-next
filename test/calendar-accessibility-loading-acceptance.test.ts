@@ -8,7 +8,7 @@
 // history, recovery and filter assertions PASS on the same base and must stay
 // green after the build.
 //
-// Contract under test (TOG-42589 item U7):
+// Contract under test (calendar accessibility item U7):
 // - Member-started loading is exposed through an existing suitable status host
 //   outside suppressed busy content; the already-owned busy toggle is
 //   preserved, not duplicated. No every-keystroke announcements. The current
