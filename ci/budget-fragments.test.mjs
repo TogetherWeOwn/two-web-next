@@ -26,13 +26,13 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ported into its fragment: client.js.maxRawBytes 254976 -> 256000 (see
 // ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md),
 // plus the hotzone peak/outage raise ported alongside:
-// server.js.maxGzipBytes 335104 -> 335360 (see
-// ci/budgets/decisions/kit-perf/2026-10-26-hotzone-peak-server-gzip-335360.md).
+// server.js.maxGzipBytes 335104 -> 336128 (see
+// ci/budgets/decisions/kit-perf/2026-10-26-hotzone-peak-server-gzip-336128.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 336128, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
