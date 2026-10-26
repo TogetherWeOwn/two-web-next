@@ -35,6 +35,7 @@ Installation does not replace the required dependency audit in CI.
 | --- | --- |
 | Pristine main | `2fa2ef0885c5eb39d795f7412943bcfed7abe4b3` |
 | Pristine main tree | `9aa557cb545ba05e6073a62c1a55a2194c8dc52c` |
+| Current main remeasurement | `91b66a68d2d37bd2c717f3a75299300d3617b811` |
 | Frozen feature head | `80a2a9652d57921f1c7b53c494b23e26c8c361c1` |
 | Frozen feature tree | `4ffda07059f4c892f0bed501fa2b0f55734b9bef` |
 | Root lock SHA-256 | `023b560fb97de0f5a91332701e2d0100c24d53e964dbd19863e5d5133d18631d` |
@@ -44,10 +45,13 @@ Installation does not replace the required dependency audit in CI.
 | Original `test/kit-error-request-correlation.test.ts` SHA-256 | `7f90959f02d315a31b348041185bde8885a5547681d7c61e0ae81571e5d6ecb9` |
 | Inherited `$comment` SHA-256 (decoded UTF-8) | `da07d2fd7cdb07d116e1c7f70f27c6eab99a10562f6956bd3ca469546f34fff0` |
 
-Main was still this exact ref when the measurements were checked. The feature
-was OPEN/MERGEABLE at the frozen head; no feature push, main merge or rebase
-was performed. The union is an archive of this main plus the frozen runtime
-patch, not a stale feature checkout replacing newer main files. All 25
+Main subsequently advanced to `91b66a68d` through documentation-only #1810.
+Remeasured both pristine and union twice on fresh archives of that exact ref;
+its runtime, checker, tests, budget, history and locks are byte-identical to
+the first base. The feature was OPEN/MERGEABLE at the frozen head; no feature
+push, main merge or rebase was performed. Each union is an archive of its
+exact main plus the frozen runtime patch, not a stale feature checkout
+replacing newer main files. All 25
 resulting runtime files match the frozen source's SHA-256 manifest. The
 separate support overlay copies its unchanged tests, payload inventory/checker
 support and log documentation into the scratch union only. It changes no
@@ -75,11 +79,22 @@ results, not predicted results.
 | Correlation union 1 | 116 | 1181665 / 334682 | 54 / 254929 / 102692 | 2 / 2861 / 1019 | 2551 / 1219 | 1 |
 | Correlation union 2 | 116 | 1181667 / 334683 | 54 / 254929 / 102692 | 2 / 2861 / 1019 | 2551 / 1219 | 1 |
 
-All four builds exit 0. Both union gates fail **only** server gzip, by 602
-and 603 bytes. Pristine main has 207 bytes of server-gzip margin. All 54 client
-JS paths and hashes are identical across repeated builds within each tree.
-The small server output variation does not explain away the persistent
-breach, and no flake rerun is used.
+Current-main `91b66a68d` remeasurement, using fresh archives and fresh same-lock
+installs rather than assuming a documentation-only merge cannot matter:
+
+| Tree / build | Server files | Server raw / gzip | Old-cap exit |
+| --- | ---: | ---: | ---: |
+| Current pristine 1 | 115 | 1178764 / 333874 | 0 |
+| Current pristine 2 | 115 | 1178764 / 333873 | 0 |
+| Current union 1 | 116 | 1181665 / 334683 | 1 |
+| Current union 2 | 116 | 1181667 / 334683 | 1 |
+
+Client JS, CSS and Worker totals are identical to the first-base table. All
+eight builds exit 0. All four union gates fail **only** server gzip, by
+602–603 bytes; current pristine main has 206–207 bytes of server-gzip margin.
+All 54 client JS paths and hashes are identical across repeated builds within
+each tree. The small server output variation does not explain away the
+persistent breach, and no flake rerun is used.
 
 The unchanged union margins are small and explicit: client raw **47 bytes**,
 client gzip **220 bytes**, CSS raw **211 bytes**, CSS gzip **5 bytes**.
@@ -95,8 +110,9 @@ They are not permission to allocate additional client or CSS headroom.
 
 ## Attribution
 
-The second-build canonical server delta reconciles to **+1 file, +2905 raw
-bytes, +810 gzip bytes**. The newly emitted file is the root layout server
+The first-base second-build canonical server delta reconciles to **+1 file,
++2905 raw bytes, +810 gzip bytes**. The fresh current-main second-build delta
+is +1 file, +2903 raw bytes and the same +810 gzip bytes. The newly emitted file is the root layout server
 entry. The largest costs are expected support-reference propagation, not a
 dependency or lock change:
 
@@ -137,25 +153,52 @@ No artifact was rebuilt or changed during these controls.
 | Measured minus one 334682 | 1 / 1 | rejects by one byte |
 | Restored old 334080 | 1 / 1 | rejects by 603 bytes |
 
-Worker, client JS and CSS groups pass in all six controls. This proves the
-allocation's necessity and lower-step refusal on real output, but does not
-replace fixed shipping-plan boundary tests.
+Worker, client JS and CSS groups pass in all six controls. Repeated all six
+controls on the fresh `91b66a68d` union output with identical results. This
+proves the allocation's necessity and lower-step refusal on real output, but
+does not replace fixed shipping-plan boundary tests.
 
 ## Shipping evidence and verification
 
-The current main shipping fixture intentionally expects 334081 to fail under
+Red-before: main's original shipping fixture expects 334081 to fail under
 334080. Under the proposed cap, the **unchanged original suite is 29 passed /
-1 failed** (`server gzip one byte over`, actual 0 versus expected 1). That is
-a test-ownership correction prerequisite, not an accepted failure, permission
-to delete the negative, or evidence of a clean final head. The owned correction
-must retain explicit old-plan enforcement and add fixed composition/exact/new
-one-over evidence before the allocation PR can be marked ready. It may not
-auto-generate fixture lengths from whichever cap happens to be loaded.
+1 failed** (`server gzip one byte over`, actual 0 versus expected 1). The
+original eight-file collected suite likewise gives 159 passed / 1 failed.
+Neither failure was bypassed or accepted as a clean head.
+
+The owned correction is now incorporated byte-verbatim:
+`ci/check-kit-perf.test.mjs` SHA-256
+`9b28e4b58e020b271e17fe6694b72f7c7c2798cfab6150fd854fd60d6a4948fd`.
+It preserves #1814's explicit 334080 and 335104 branches and adds the measured
+334848 branch, without adopting either other proposal's numeric allocation.
+Fixture sizes are fixed literals, not loaded-cap arithmetic:
+
+| Explicit plan | Fixed interval | Fixed exact | Fixed one-over |
+| --- | ---: | ---: | ---: |
+| Old-plan control 334080 | 333639 | 334080 | 334081 |
+| This proposal 334848 | 334683 | 334848 | 334849 |
+| Preserved alternate 335104 | 334994 | 335104 | 335105 |
+
+Independent incorporation verification with the real checker:
+
+- **31/31 pass** with each explicit plan (334080, 334848, 335104), no skips.
+- Unsupported caps **334847, 334849, 335360** each produce four failures
+  (allocation control plus all three unsupported server cases), never green.
+- Under 334848, client raw 254975 and server raw 1203199 mutants each retain
+  their two existing fixed-boundary failures; other-axis enforcement survives.
+- Actual branch's collected eight-file checker suite: **161/161 pass**.
+  Missing/empty/incompletely enumerated output and one-byte failures retain
+  their unchanged real-checker semantics.
+
+This is an owned test correction and executable allocation evidence, not the
+independent final review verdict. The source correlation acceptance stays
+unchanged.
 
 Additional observed checks:
 
-- Actual budget-only branch build: exit 0; unchanged canonical checker exit 0,
-  server 115 files, 1178764 raw / 333876 gzip. The branch contains no feature.
+- Actual budget-only branch builds before and after the owned correction:
+  exit 0; unchanged canonical checker exit 0. Server 115 files, 1178764 raw /
+  333876 then 333875 gzip. The branch contains no feature.
 - Kit gate selftests: **12/12**; bundle-inventory acceptance: **51/51**;
   served-asset budget selftests: **34/34**; served-asset budget: pass.
 - `npm run floor-guard -- --base origin/main`, `npm run config:check`,
