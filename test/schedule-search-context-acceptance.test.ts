@@ -20,7 +20,15 @@ function render(q: string, upcoming: CalRow[] = [scheduleSearchEvent()]) {
   return document(
     String(
       EventsCalendarPage({
-        state: { view: "list", month: "2035-06", q, game: "Tabletop", past: false, page: 1 },
+        state: {
+          view: "list",
+          month: "2035-06",
+          q,
+          game: "Tabletop",
+          past: false,
+          page: 1,
+          weekStart: "monday",
+        },
         upcoming,
         past: [],
         zone: "UTC",
