@@ -119,6 +119,7 @@ export function hotzoneBrowsingHarness(kit: PeriodKit) {
         const event = {
           url,
           params: { signal },
+          locals: {},
           setHeaders: (values: Record<string, string>) => {
             for (const [key, value] of Object.entries(values)) headers.set(key, value);
           },
