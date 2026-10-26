@@ -42,6 +42,7 @@ export const CalendarList: FC<{
   upcoming: CalRow[];
   past: PublicEvent[];
   zone: string;
+  now: Date;
   totalPages: number;
   outOfRange: boolean;
   showPast: boolean;
@@ -53,6 +54,7 @@ export const CalendarList: FC<{
   upcoming,
   past,
   zone,
+  now,
   totalPages,
   outOfRange,
   showPast,
@@ -72,6 +74,7 @@ export const CalendarList: FC<{
         <CalCard
           e={e}
           zone={zone}
+          now={now}
           isPast={false}
           member={member}
           inviteUrl={inviteUrl}
@@ -110,6 +113,7 @@ export const CalendarList: FC<{
             <CalCard
               e={e}
               zone={zone}
+              now={now}
               isPast
               member={member}
               inviteUrl={inviteUrl}
