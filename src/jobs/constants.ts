@@ -61,6 +61,21 @@ export const PRUNE_DELETE_BATCH_SIZE = 1000;
 // rows/day from one client) with headroom, plus the smaller join inflow
 // (14,400/day); larger floods page once per pass instead of silently piling past retention.
 export const PRUNE_DELETE_MAX_BATCHES = 100;
+// Server-side Postgres bound (`statement_timeout` + `lock_timeout`) for the
+// queue consumer's ledger, unique-lock and terminal-settlement statements
+// (`pgQueueLedger`, `pgUniqueLock`, `pgEventStore` sync paths). The consumer
+// races these waits client-side at the same bound (`LEDGER_TIMEOUT_MS` /
+// `LOCK_TIMEOUT_MS` in consumer.ts), but a `Promise.race` only stops the
+// wait — Postgres must cancel the statement server-side to free the `max: 1`
+// pool connection for the next message. One source of truth for the DB side;
+// change it together with the consumer's client-side bounds.
+export const LEDGER_DB_TIMEOUT_MS = 2000;
+// Lock waits abort 50ms before the statement bound so a lock-blocked ledger,
+// lock or needsSync statement surfaces 55P03 (lock timeout), not 57014: with
+// equal bounds the statement timer — armed when the statement starts, before
+// the lock wait — always fires first and masks the lock error (same
+// derivation as src/events/discord-snapshot-postgres.ts).
+export const LEDGER_DB_LOCK_TIMEOUT_MS = LEDGER_DB_TIMEOUT_MS - 50;
 
 /** Gap before the attempt after `attempts` (1-based), holding at the last value (nextDelay / backoffFor). */
 export function backoffFor(backoff: readonly number[], attempts: number): number {
