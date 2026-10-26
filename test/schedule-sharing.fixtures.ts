@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import { type Browser, type Page } from "playwright";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
+import { EventsCalendarPage } from "../src/events/pages";
+import { renderEventsHtml } from "../src/kit-events-html";
+import type { CalendarState } from "../src/islands/contracts";
 
 export type CopyProbe = {
   calls: string[];
@@ -30,9 +32,6 @@ export function renderedElements(html: string) {
   walk(parse(html));
   return result;
 }
-import { EventsCalendarPage } from "../src/events/pages";
-import { renderEventsHtml } from "../src/kit-events-html";
-import type { CalendarState } from "../src/islands/contracts";
 
 export const fixtureOrigin = "http://127.0.0.1:43719";
 export const viewLabel = "Copy this schedule view";
@@ -180,5 +179,3 @@ export async function clipboard(page: Page) {
     document.execCommand = () => false;
   });
 }
-
-export const shippedCopyBinder = readFileSync(resolve("public/islands/copy-link.js"), "utf8");
