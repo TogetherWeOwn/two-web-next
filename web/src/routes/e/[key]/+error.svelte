@@ -29,5 +29,5 @@ const missing = $derived(page.status === 404 ? page.error?.missing : undefined);
 {:else if missing}
   <EventMissing model={missing} />
 {:else}
-  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />
+  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} />
 {/if}
