@@ -73,11 +73,18 @@ function anchor(html: string, testid: string): { tag: string; body: string; text
   );
   expect(match, `missing destination link ${testid}`).not.toBeNull();
   const body = match![2]!;
+  // Strip comments to a fixpoint: one global pass can leave a re-formed
+  // comment behind, which CodeQL flags as incomplete sanitization.
+  let stripped = body;
+  let previous: string;
+  do {
+    previous = stripped;
+    stripped = stripped.replace(/<!--[\s\S]*?-->/g, "");
+  } while (previous !== stripped);
   return {
     tag: match![1]!,
     body,
-    text: body
-      .replace(/<!--[\s\S]*?-->/g, "")
+    text: stripped
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim(),
