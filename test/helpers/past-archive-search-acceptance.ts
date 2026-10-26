@@ -13,7 +13,7 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
-import { listPast, type PublicEvent } from "../../src/events/reads";
+import { eventLinkAvailability, listPast, type PublicEvent } from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
 import {
@@ -207,6 +207,7 @@ export function archiveReadFixture() {
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
   listPast,
+  eventLinkAvailability,
   loadPastArchivePage,
   toPublicPastArchiveRow,
   loadEventsPage,
@@ -233,7 +234,7 @@ export async function compileArchiveKit() {
   const outfile = join(scratch, "kit.mjs");
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
-    [join(root, "src/events/reads.ts"), ["listPast"]],
+    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability"]],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
