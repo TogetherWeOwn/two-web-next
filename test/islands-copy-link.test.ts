@@ -241,6 +241,70 @@ describe("Copy-link committed-control ownership", () => {
     },
   );
 
+  it.each(["resolve", "reject"] as const)(
+    "does not touch feedback when only the control is detached after clipboard %s",
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: () => void;
+      const b = browser({
+        feed: true,
+        clipboard: {
+          writeText: () =>
+            new Promise<void>((ok, no) => {
+              resolve = ok;
+              reject = () => no(new Error("Denied"));
+            }),
+        },
+      });
+      await b.click();
+      b.link.isConnected = false;
+      expect(b.link.isConnected).toBe(false);
+      expect(b.toast.isConnected).toBe(true);
+      const before = b.toast.textContent;
+      expect(before).toBe("");
+      if (outcome === "resolve") resolve();
+      else reject();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(b.toast.isConnected).toBe(true);
+      expect(b.toast.textContent, "a detached control has lost feedback ownership").toBe(before);
+      expect(b.toast.textContent).toBe("");
+    },
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "does not touch feedback when only the status is detached after clipboard %s",
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: () => void;
+      const b = browser({
+        feed: true,
+        clipboard: {
+          writeText: () =>
+            new Promise<void>((ok, no) => {
+              resolve = ok;
+              reject = () => no(new Error("Denied"));
+            }),
+        },
+      });
+      await b.click();
+      b.toast.isConnected = false;
+      expect(b.toast.isConnected).toBe(false);
+      expect(b.link.isConnected).toBe(true);
+      const before = b.toast.textContent;
+      expect(before).toBe("");
+      if (outcome === "resolve") resolve();
+      else reject();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(b.link.isConnected).toBe(true);
+      expect(b.toast.textContent, "a detached live region has lost feedback ownership").toBe(
+        before,
+      );
+      expect(b.toast.textContent).toBe("");
+    },
+  );
+
   it("CONTROL: keeps feed keyboard activation native and only reveals its button", async () => {
     const writeText = vi.fn(async () => {});
     const b = browser({ feed: true, clipboard: { writeText } });
