@@ -418,28 +418,19 @@ async function processAgentEvent(
     const code = (err as { code?: string }).code;
     if (code === "55P03") {
       // A replay's grant may be held/deleted: do not wait on the same FK again.
-      // Bound the error receipt too; an unavailable audit table must not turn
-      // a retryable failure into a hung connection or an unaudited success.
-      try {
-        await sql.begin(async (tx) => {
-          await tx.unsafe(
-            `SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`,
-          );
-          await audit(
-            tx,
-            replaying ? null : grant,
-            op,
-            eventKeyIn,
-            idem,
-            dig,
-            requestId,
-            "error",
-            "operation_busy",
-          );
-        });
-      } catch (auditErr) {
-        if ((auditErr as { code?: string }).code !== "55P03") throw auditErr;
-      }
+      // The error receipt uses the shared bounded busy audit: its own short
+      // transaction with the admission's lock/statement deadlines, holding no
+      // admission lock. An expected audit timeout keeps the same retryable 503.
+      await auditOperationBusy(
+        sql,
+        cfg.lockWaitMs,
+        replaying ? null : grant,
+        op,
+        eventKeyIn,
+        idem,
+        dig,
+        requestId,
+      );
       return {
         status: 503,
         body: ingressDenial(
