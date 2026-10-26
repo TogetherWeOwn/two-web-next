@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { eventPublicLink } from "../../../../../../src/admin/moderator-links";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -31,6 +32,10 @@ const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
 const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
+// Status-correct public target beside the transitions (Hono parity:
+// src/admin/pages/event-form-status.tsx): preview for drafts, the public
+// page for published/past rows, nothing for cancelled or unknown statuses.
+const publicLink = $derived(eventPublicLink(view.status, view.key));
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const textLimitsIsland =
   '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
@@ -222,6 +227,9 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         <form method="post" action={`/admin/events/${view.key}/duplicate`}>
           <button type="submit" class="link" data-testid="duplicate-event">Duplicate as draft</button>
         </form>
+      {/if}
+      {#if publicLink}
+        <a href={publicLink.href}>{publicLink.label}</a>
       {/if}
       {#if view.rsvpAction === "rsvp-pause"}
         {@html view.pauseReviewHtml ?? ""}

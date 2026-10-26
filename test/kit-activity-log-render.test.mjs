@@ -93,7 +93,9 @@ describe("Kit activity-log rendered output", () => {
     const html = renderPage(pageData());
     expect(html).toContain("<td>100000000000000111</td>");
     expect(html).toContain("<td>42 (legacy ID)</td>");
-    expect(html).toContain("Event 01J00000000000000000000015 (updated)");
+    expect(html).toContain(
+      '<a href="/admin/events/01J00000000000000000000015">Event 01J00000000000000000000015</a> (updated)',
+    );
     expect(html).toContain("legacy-subject-2 (created)");
     const systemRow = html
       .match(/<tr[^>]*>[\s\S]*?<\/tr>/g)
@@ -101,7 +103,7 @@ describe("Kit activity-log rendered output", () => {
     expect(systemRow).toBeDefined();
     expect(systemRow).toContain("<td>—</td><td>system sweep</td>");
     expect(systemRow).toContain(
-      '<time datetime="2026-10-01T10:00:00.000Z">2026-10-01T10:00:00.000Z</time></td><td>—</td>',
+      '<time datetime="2026-10-01T10:00:00.000Z">2026-10-01T10:00:00.000Z</time></td><td><!--[-1-->—<!--]--></td>',
     );
   });
 

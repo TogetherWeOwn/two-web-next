@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { resolveActivitySubjectHref } from "../../../../../src/admin/moderator-links";
 import {
   formatActivityCauser,
   activityLogEmptyText,
@@ -18,17 +19,20 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const { rows, query, hasNext } = $derived(data);
 const emptyText = $derived(activityLogEmptyText(query as ActivityLogQuery));
-const subjectOf = (row: {
+type SubjectRow = {
   subjectType: string | null;
   subjectId: string | null;
   event: string;
-}) => {
-  const base =
-    row.subjectType && row.subjectId
-      ? `${row.subjectType} ${row.subjectId}`
-      : row.subjectType || row.subjectId || "—";
-  return row.event ? `${base} (${row.event})` : base;
 };
+// Hono parity (src/admin/pages/activity-log.tsx): the subject pair is the
+// link text when the resolver validates it, inert text otherwise, and the
+// event suffix always stays plain text beside the link, never inside it.
+const subjectBase = (row: SubjectRow) =>
+  row.subjectType && row.subjectId
+    ? `${row.subjectType} ${row.subjectId}`
+    : row.subjectType || row.subjectId || "—";
+const subjectOf = (row: SubjectRow) =>
+  row.event ? `${subjectBase(row)} (${row.event})` : subjectBase(row);
 </script>
 
 <AdminShell title="Activity log">
@@ -77,11 +81,12 @@ const subjectOf = (row: {
             </tr>
           {:else}
             {#each rows as r (r.id)}
+              {@const subjectHref = resolveActivitySubjectHref(r.subjectType, r.subjectId)}
               <tr>
                 <td>{formatActivityCauser(r.causerId)}</td>
                 <td>{r.description}</td>
                 <td><time datetime={r.createdAt}>{r.createdAt}</time></td>
-                <td>{subjectOf(r)}</td>
+                <td>{#if subjectHref}<a href={subjectHref}>{subjectBase(r)}</a>{r.event ? ` (${r.event})` : ""}{:else}{subjectOf(r)}{/if}</td>
               </tr>
             {/each}
           {/if}

@@ -2,6 +2,7 @@
 
 import type { FC } from "hono/jsx";
 import type { ActivityLogViewerRow } from "../reads";
+import { resolveActivitySubjectHref } from "../moderator-links";
 import {
   formatActivityCauser,
   activityLogEmptyText,
@@ -70,19 +71,27 @@ export const ActivityLogPage: FC<{
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.id}>
-                  <td>{formatActivityCauser(r.causerId)}</td>
-                  <td>{r.description}</td>
-                  <td>
-                    <time datetime={r.createdAt.toISOString()}>{r.createdAt.toISOString()}</time>
-                  </td>
-                  <td>
-                    {[r.subjectType, r.subjectId].filter(Boolean).join(" ") || "—"}
-                    {r.event ? ` (${r.event})` : ""}
-                  </td>
-                </tr>
-              ))
+              rows.map((r) => {
+                // Validated Next-written subjects link straight to their
+                // canonical saved editor; anything else keeps the inert
+                // escaped text it always rendered. The event suffix stays
+                // plain text beside the link, never inside it.
+                const href = resolveActivitySubjectHref(r.subjectType, r.subjectId);
+                const label = [r.subjectType, r.subjectId].filter(Boolean).join(" ") || "—";
+                return (
+                  <tr key={r.id}>
+                    <td>{formatActivityCauser(r.causerId)}</td>
+                    <td>{r.description}</td>
+                    <td>
+                      <time datetime={r.createdAt.toISOString()}>{r.createdAt.toISOString()}</time>
+                    </td>
+                    <td>
+                      {href ? <a href={href}>{label}</a> : label}
+                      {r.event ? ` (${r.event})` : ""}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

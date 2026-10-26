@@ -2,10 +2,15 @@
 // Edit-only status heading with the publish, cancel and RSVP pause/reopen actions.
 
 import type { FC } from "hono/jsx";
+import { eventPublicLink } from "../moderator-links";
 import type { EventRow } from "../store";
 import { RsvpAction } from "./shell";
 
 export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
+  // Status-correct public target beside the transitions: preview for
+  // drafts, the public page for published/past rows, nothing for
+  // cancelled rows (the route answers 410 Gone) or unknown statuses.
+  const publicLink = eventPublicLink(row.status, row.eventKey);
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
@@ -31,6 +36,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
             </button>
           </form>
         ) : null}
+        {publicLink ? <a href={publicLink.href}>{publicLink.label}</a> : null}
         <RsvpAction row={row} />
       </div>
     </section>
