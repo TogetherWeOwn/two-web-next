@@ -44,7 +44,8 @@ import {
   type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { utcToWall } from "./validation-wall-time";
+import { renderableIso } from "./kit-events";
+import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
@@ -238,12 +239,16 @@ export async function resolveKitEventEdit(
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
   const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
-    row.status === "published" && row.endsAt > now
+    row.status === "published" && Number.isFinite(row.endsAt.getTime()) && row.endsAt > now
       ? row.rsvpOpen
         ? "rsvp-pause"
         : "rsvp-reopen"
       : null;
   const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
+  // Same guard as the Hono eventValues fill: a corrupt stored zone or an
+  // instant a JS Date cannot represent stays visible for correction, but is
+  // never formatted — the wall fields open empty instead of throwing.
+  const knownTimezone = isKnownTimezone(row.timezone);
   return {
     kind: "ok",
     view: {
@@ -256,8 +261,14 @@ export async function resolveKitEventEdit(
         description: row.description ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: utcToWall(row.startsAt, row.timezone),
-        ends_at: utcToWall(row.endsAt, row.timezone),
+        starts_at:
+          knownTimezone && Number.isFinite(row.startsAt.getTime())
+            ? utcToWall(row.startsAt, row.timezone)
+            : "",
+        ends_at:
+          knownTimezone && Number.isFinite(row.endsAt.getTime())
+            ? utcToWall(row.endsAt, row.timezone)
+            : "",
         timezone: row.timezone,
         location: row.location ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
@@ -271,7 +282,7 @@ export async function resolveKitEventEdit(
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
-      endsAt: row.endsAt.toISOString(),
+      endsAt: renderableIso(row.endsAt),
       roster: {
         total: roster.total,
         query,
