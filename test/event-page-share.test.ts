@@ -150,7 +150,7 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).toContain(`rel="canonical" href="${CANONICAL}"`);
     expect(html).toContain(`property="og:url" content="${CANONICAL}"`);
     expect(html).toContain(
-      `href="${CANONICAL}" data-copy-link="${CANONICAL}" data-testid="event-copy-link">Copy link</a>`,
+      `href="${CANONICAL}" data-copy-link="${CANONICAL}" hidden="" data-testid="event-copy-link">Copy link</a>`,
     );
     expect(html).toContain("<title>Chess night — Together We Own</title>");
     expect(html).toContain('<h1 data-waitlist-position="">Chess night</h1>');

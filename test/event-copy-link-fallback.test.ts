@@ -171,7 +171,7 @@ describe("Event copy-link clipboard fallback (fixture-only)", () => {
   it("renders the copy control with the canonical event URL", async () => {
     const html = await pageHtml();
     expect(html).toContain(
-      `<a href="${CANONICAL}" data-copy-link="${CANONICAL}" data-testid="event-copy-link">Copy link</a>`,
+      `<a href="${CANONICAL}" data-copy-link="${CANONICAL}" hidden="" data-testid="event-copy-link">Copy link</a>`,
     );
     expect(html).toContain('role="status" aria-live="polite" data-testid="event-copy-toast"');
     expect(html).toContain('src="/islands/copy-link.js" defer');

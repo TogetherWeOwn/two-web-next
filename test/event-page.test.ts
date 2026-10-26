@@ -144,7 +144,7 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).toContain(`href="/join?next=${encodeURIComponent(PATH)}"`);
     expect(html).toContain('data-testid="discord-join"');
     expect(html).toContain(
-      `href="${APP_URL}${PATH}" data-copy-link="${APP_URL}${PATH}" data-testid="event-copy-link">Copy link</a>`,
+      `href="${APP_URL}${PATH}" data-copy-link="${APP_URL}${PATH}" hidden="" data-testid="event-copy-link">Copy link</a>`,
     );
     expect(html).toContain('role="status" aria-live="polite" data-testid="event-copy-toast"');
     expect(html).toContain('src="/islands/copy-link.js" defer');
