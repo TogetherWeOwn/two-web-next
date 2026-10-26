@@ -1,7 +1,7 @@
 import type { Sql } from "postgres";
 import { createLogBudget } from "../log-budget";
 import type { Answer, IngressConfig } from "./types";
-import { audit } from "./audit";
+import { audit, auditOperationBusy } from "./audit";
 import { ingressDenial } from "./envelope";
 import { pruneAgentEventHits } from "./prune-hits";
 import { throttleEnvelope } from "./rate-limit";
@@ -93,7 +93,9 @@ export async function shield(
   } catch (err) {
     if ((err as { code?: string }).code === "55P03") {
       // Contention, not a decision. Audited as an error so a run of these reads as load.
-      await audit(sql, null, "unknown", null, null, null, requestId, "error", "operation_busy");
+      // The audit runs in its own short deadline-bound transaction after the
+      // admission settled; an expected audit timeout keeps this same 503.
+      await auditOperationBusy(sql, cfg.lockWaitMs, null, "unknown", null, null, null, requestId);
       return {
         status: 503,
         body: ingressDenial(
