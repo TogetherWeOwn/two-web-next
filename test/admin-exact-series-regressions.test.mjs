@@ -117,8 +117,14 @@ const privateResponse = (r) => {
   expect(r.headers["cache-control"]).toMatch(/no-store/);
 };
 const allEvents = (html) => links(html).find((a) => /^All events$/i.test(a.text));
-const swapCase = (value) =>
-  [...value].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join("");
+// Genuinely mixed case: alphabetic characters alternate lower/upper by
+// alphabetic position, so the result matches neither uniform spelling.
+const mixedCase = (value) => {
+  let letterIndex = 0;
+  return [...value]
+    .map((c) => (/[A-Z]/i.test(c) ? (letterIndex++ % 2 ? c.toUpperCase() : c.toLowerCase()) : c))
+    .join("");
+};
 
 // Real drizzle over the fixture pool, counting every logged statement and
 // every session transaction. Positive controls below prove both counters
@@ -432,7 +438,9 @@ describe("pre-database admission and ULID canonicalization", () => {
     });
     it(`${twin}: mixed-case ULID scope returns the exact stored uppercase family`, async () => {
       const entry = envNamed("production");
-      for (const raw of [swapCase(LETTER_PARENT), swapCase(LETTER_CHILD)]) {
+      for (const raw of [mixedCase(LETTER_PARENT), mixedCase(LETTER_CHILD)]) {
+        expect(raw).not.toBe(raw.toLowerCase());
+        expect(raw).not.toBe(raw.toUpperCase());
         const r = await request(entry, twin, `/admin/events?series_event=${raw}`);
         expect(r.status, raw).toBe(200);
         expect(rowKeys(r.html), raw).toEqual([LETTER_PARENT, LETTER_CHILD]);
