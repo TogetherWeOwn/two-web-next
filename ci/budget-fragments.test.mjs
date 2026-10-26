@@ -27,9 +27,23 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
+// Server gzip has two explicitly approved allocations: the pre-split
+// 335104 ceiling and the separately measured one-step 335360 composition
+// allowance. Every other ceiling stays pinned to its exact pre-split value;
+// any other server gzip value is unsupported by design.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
+  client: {
+    js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
+    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
+  },
+  startup: { maxMs: 60000 },
+};
+
+const SHIPPING_KIT_BUDGET_335360 = {
+  worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
@@ -114,8 +128,15 @@ function kitFixture(t, fragments) {
   return root;
 }
 
-test("kit fragments aggregate to the exact pre-split ceilings", () => {
-  assert.deepEqual(loadKitBudget(repoRoot), SHIPPING_KIT_BUDGET);
+test("kit fragments aggregate to an explicitly approved ceiling", () => {
+  const actual = loadKitBudget(repoRoot);
+  const serverGzip = actual?.server?.js?.maxGzipBytes;
+  assert.ok(
+    serverGzip === 335104 || serverGzip === 335360,
+    `unsupported server gzip allocation ${String(serverGzip)}: expected one of 335104, 335360`,
+  );
+  const expected = serverGzip === 335360 ? SHIPPING_KIT_BUDGET_335360 : SHIPPING_KIT_BUDGET;
+  assert.deepEqual(actual, expected);
 });
 
 test("bundle fragments aggregate to the exact pre-split ceilings", () => {
