@@ -1338,18 +1338,79 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     { entry: "/events?view=calendar&month=2030-02", past: false },
     { entry: "/events?view=list&month=2030-02&past=0&q=old", past: false },
     { entry: "/events?view=bad&month=bad&past=true", past: false },
-  ])("drops view/month on changed and blank enhanced searches from $entry", ({ entry, past }) => {
-    const b = browser(entry);
-    for (const query of ["raid & friends", "", "   "]) {
+  ])(
+    "drops view/month on changed searches and blank list-scope searches from $entry",
+    ({ entry, past }) => {
+      const b = browser(entry);
+      for (const query of ["raid & friends", "", "   "]) {
+        b.input.value = query;
+        b.submit();
+        const url = new URL(b.requests.at(-1)!.url, APP_URL);
+        expect([...url.searchParams.keys()].sort()).toEqual(
+          [...(query.trim() ? ["q"] : []), ...(past ? ["past"] : [])].sort(),
+        );
+        expect(url.searchParams.get("q")).toBe(query.trim() ? query : null);
+        expect(url.searchParams.getAll("past")).toEqual(past ? ["1"] : []);
+      }
+    },
+  );
+
+  it("keeps the committed calendar scope on blank enhanced searches", () => {
+    const b = browser("/events?view=calendar&month=2027-02&weekStart=sunday&game=chess");
+    b.root.dataset.view = "calendar";
+    b.root.dataset.month = "2027-02";
+    for (const query of ["", "   "]) {
       b.input.value = query;
       b.submit();
       const url = new URL(b.requests.at(-1)!.url, APP_URL);
-      expect([...url.searchParams.keys()].sort()).toEqual(
-        [...(query.trim() ? ["q"] : []), ...(past ? ["past"] : [])].sort(),
-      );
-      expect(url.searchParams.get("q")).toBe(query.trim() ? query : null);
-      expect(url.searchParams.getAll("past")).toEqual(past ? ["1"] : []);
+      expect(url.pathname).toBe("/events");
+      expect([...url.searchParams.keys()].sort()).toEqual(["game", "month", "view", "weekStart"]);
+      expect(url.searchParams.get("view")).toBe("calendar");
+      expect(url.searchParams.get("month")).toBe("2027-02");
+      expect(url.searchParams.getAll("weekStart")).toEqual(["sunday"]);
+      expect(url.searchParams.get("game")).toBe("chess");
+      expect(url.searchParams.get("q")).toBeNull();
     }
+  });
+
+  it.each([
+    "/events?view=calendar&month=2027-02&weekStart=sunday&weekStart=monday",
+    "/events?view=calendar&month=2027-02&weekStart=funday",
+  ])("drops a duplicated or unknown weekStart on blank calendar searches from %s", (entry) => {
+    const b = browser(entry);
+    b.root.dataset.view = "calendar";
+    b.root.dataset.month = "2027-02";
+    b.input.value = "";
+    b.submit();
+    const url = new URL(b.requests.at(-1)!.url, APP_URL);
+    expect(url.searchParams.getAll("weekStart")).toEqual([]);
+    expect(url.searchParams.get("view")).toBe("calendar");
+    expect(url.searchParams.get("month")).toBe("2027-02");
+  });
+
+  it("carries one allowlisted weekStart on non-blank enhanced searches", () => {
+    const b = browser("/events?view=calendar&month=2027-02&weekStart=sunday");
+    b.input.value = "raid & friends";
+    b.submit();
+    const url = new URL(b.requests.at(-1)!.url, APP_URL);
+    expect([...url.searchParams.keys()].sort()).toEqual(["q", "weekStart"]);
+    expect(url.searchParams.get("q")).toBe("raid & friends");
+    expect(url.searchParams.getAll("weekStart")).toEqual(["sunday"]);
+  });
+
+  it("keeps one weekStart=sunday in the address after a blank Sunday search settles", async () => {
+    const b = browser("/events?view=calendar&month=2027-02&weekStart=sunday");
+    b.root.dataset.view = "calendar";
+    b.root.dataset.month = "2027-02";
+    b.input.value = "";
+    b.submit();
+    const fetched = new URL(b.requests.at(-1)!.url, APP_URL);
+    const target = fetched.pathname + fetched.search;
+    b.finish(0, target, { view: "calendar", month: "2027-02", input: "" });
+    await b.settle();
+    expect(b.history).toEqual([target]);
+    expect(fetched.searchParams.getAll("weekStart")).toEqual(["sunday"]);
+    expect(new URL(b.location.href).searchParams.getAll("weekStart")).toEqual(["sunday"]);
   });
 
   it("adds and removes Clear in a swapped form-actions zone without replacing the focused input", async () => {

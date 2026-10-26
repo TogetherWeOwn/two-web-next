@@ -507,17 +507,26 @@
   }
 
   // The URL for a settled search: the raw input value (blank means no search),
-  // the drawer stays as it was, the game facet rides along, and the search
+  // the drawer stays as it was, the game facet rides along. A real search
   // forces the list view — so view/month params are dropped, matching the
-  // server's calendarUrl(). The committed week layout rides along (it is a
+  // server's calendarUrl(); a blank submit keeps the committed calendar
+  // scope (view/month from the island state), matching the native form's
+  // hidden fields. The committed week layout rides along (it is a
   // list-harmless presentation choice, and the calendar toggle returns to
   // it); anything but exactly one allowlisted value stays dropped. The facet
   // reads the live select (like the input reads its live value), falling
   // back to the address bar where the form has no select yet.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
-    if (value.trim() !== "") url.searchParams.set("q", value);
     var current = new URL(window.location.href).searchParams;
+    // A blank submit keeps the committed calendar scope (data-month always
+    // renders the canonical month beside data-view): one search-string
+    // assignment, since view/month are URL-safe literals and state. Later
+    // param sets append to it.
+    if (value.trim() === "") {
+      if (root.dataset.view === "calendar")
+        url.search = "?view=calendar&month=" + root.dataset.month;
+    } else url.searchParams.set("q", value);
     if (current.get("past") === "1") {
       url.searchParams.set("past", "1");
     }
@@ -525,8 +534,9 @@
     if (weeks.length === 1 && (weeks[0] === "monday" || weeks[0] === "sunday")) {
       url.searchParams.set("weekStart", weeks[0]);
     }
+    // A select value or address param is string|null; undefined is unreachable.
     var game = gameField ? gameField.value : current.get("game");
-    if (game !== null && game !== undefined && String(game).trim() !== "") {
+    if (game !== null && String(game).trim() !== "") {
       url.searchParams.set("game", String(game).trim());
     }
     return url;
