@@ -108,7 +108,13 @@ export async function listSeriesEvents(
       // siblings stay visible here even though public history omits them.
       conds.push(or(eq(events.id, parentId), eq(events.parentEventId, parentId)));
     }
-    if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
+    if (opts.q) {
+      // One literal case-insensitive match against title OR the stored game,
+      // composed inside the same ANDed predicates as before. Null games never
+      // match the game arm, so title-only rows behave exactly as they did.
+      const pattern = `%${escapeLikeTerm(opts.q)}%`;
+      conds.push(or(ilike(events.title, pattern), ilike(events.game, pattern)));
+    }
     if (opts.status) conds.push(eq(events.status, opts.status));
     if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
     if (opts.series === "parent")

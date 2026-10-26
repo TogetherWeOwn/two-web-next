@@ -81,8 +81,11 @@ export const EventsPage: FC<{
           <input type="hidden" name="series_event" value={query.series_event} />
         ) : null}
         <div class="field">
-          <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={query.q} />
+          <label for="q">Search titles and games</label>
+          <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+          <p class="hint" id="q-help">
+            Matches event titles and saved games.
+          </p>
         </div>
         <div class="field">
           <label for="status">Status</label>
@@ -185,6 +188,12 @@ export const EventsPage: FC<{
                 <tr key={r.eventKey}>
                   <td>
                     <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                    {r.game?.trim() ? (
+                      <span class="hint">
+                        <br />
+                        {r.game}
+                      </span>
+                    ) : null}
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>

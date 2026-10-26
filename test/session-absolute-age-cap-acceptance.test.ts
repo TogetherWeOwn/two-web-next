@@ -807,7 +807,11 @@ describe("JSON writes past the cap (hermetic full app)", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("location")).toBeNull();
     expect(response.headers.get("content-type")).toContain("application/json");
-    expect(await response.json()).toEqual({ error: "Unauthorized", recovery: RSVP_RECOVERY });
+    expect(await response.json()).toEqual({
+      error: "unauthenticated",
+      recovery: RSVP_RECOVERY,
+      request_id: expect.any(String),
+    });
     expect(response.headers.getSetCookie()).toEqual([]);
   });
 });

@@ -10,14 +10,14 @@ import type { PageProps } from "./$types";
 // and POST /admin/featured/:id/delete validators keep accepting these forms
 // unchanged during mixed mode. Values arrive from the load in the exact
 // featuredValues() shape the Hono edit page renders (Svelte escapes every
-// value on render, like the Hono JSX shell). The homepage preview shows the
-// last saved status through the shared featuredStatus() the load resolves —
-// never a UI-local copy — with the saved headline, body, judged link and
-// image when the slot is currently visible (a simplified rendering of the
-// Hono panel's full homepage item, through the shared stored-link judge and
-// the shared featuredImageSrc() policy with the homepage alt fallback) and
-// the same hidden-slot note the Hono panel renders when it is not. No
-// JavaScript: plain POSTs
+// value on render, like the Hono JSX shell). The preview panel mirrors the
+// Hono panel exactly: a Saved content preview with the saved headline, body,
+// judged link and image in the public card presentation for every saved
+// status (through the shared stored-link judge and the shared
+// featuredImageSrc() policy with the homepage alt fallback), then a Homepage
+// eligibility verdict with the shared status the load resolves — never a
+// UI-local copy — the shared eligibility reason and the saved UTC window
+// bounds. No JavaScript: plain POSTs
 // and links, like the Hono panel. The edit form mounts the deferred
 // dirty-draft/double-submit guard island as progressive markup (like
 // join/+page.svelte): with csr=false the no-JS contract still holds, and a
@@ -42,26 +42,36 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <time datetime={data.view.checkedAt}>{data.view.checkedAt}</time> (UTC). Save changes to
       refresh this preview.
     </p>
+    <h3>Saved content preview</h3>
+    <article class="card" data-testid="featured-item">
+      <h3>{#if data.view.previewUrl}<a href={data.view.previewUrl}>{data.view.title}</a>{:else}{data.view.title}{/if}</h3>
+      {#if data.view.values.body}<p>{data.view.values.body}</p>{/if}
+      {#if data.view.imageSrc}<img
+        class="featured-image"
+        src={data.view.imageSrc}
+        alt={data.view.imageAlt}
+        width="640"
+        height="360"
+        loading="lazy"
+        decoding="async"
+        referrerpolicy="no-referrer"
+      />{/if}
+    </article>
+    <h3>Homepage eligibility at this check time</h3>
     <p>
       Status: <span
         class={`featured-status featured-status-${data.view.status}`}
         data-status={data.view.status}
       >{data.view.status}</span>
     </p>
-    {#if data.view.visible}
-      <p><strong>{data.view.title}</strong></p>
-      {#if data.view.values.body}<p>{data.view.values.body}</p>{/if}
-      {#if data.view.previewUrl}<p><a href={data.view.previewUrl}>Link</a></p>{/if}
-      {#if data.view.imageSrc}<p><img
-        src={data.view.imageSrc}
-        alt={data.view.imageAlt}
-        referrerpolicy="no-referrer"
-      /></p>{/if}
-    {:else}
-      <p data-testid="featured-preview-hidden">
-        This slot is not currently visible on the homepage.
-      </p>
-    {/if}
+    <p>{data.view.eligibilityReason}</p>
+    <p>
+      Saved window (UTC): show from
+      {#if data.view.startsAt}<time datetime={data.view.startsAt}>{data.view.startsAt}</time>{:else}{data.view.startsAtLabel}{/if},
+      show until
+      {#if data.view.endsAt}<time datetime={data.view.endsAt}>{data.view.endsAt}</time>{:else}{data.view.endsAtLabel}{/if}.
+      {data.view.windowRules}
+    </p>
   </section>
   <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="">
     <!-- Native maxlength counts UTF-16 units and truncates supplementary
@@ -124,6 +134,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <a href="/admin/featured">Cancel</a>
     </div>
   </form>
+  {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
   <form method="post" action={`/admin/featured/${data.view.id}/delete`}>
     <div class="actions">
       <button type="submit" class="link" data-testid="delete-featured">

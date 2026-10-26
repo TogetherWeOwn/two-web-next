@@ -187,7 +187,7 @@ jobs:
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
         run: |
           mkdir -p artifacts/a11y
-          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap ci/rsvp-focus-browser.test.mjs
+          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap --test-reporter=spec --test-reporter-destination=stdout ci/rsvp-focus-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/rsvp-focus.tap "RSVP outcome focus in Chromium" 16
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
@@ -265,6 +265,12 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
+      - name: Calendar game subscription follows the committed schedule (intercepted fixtures, no network or DB)
+        env:
+          CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
       - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -277,11 +283,22 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Event chosen timezone range (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-chosen-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-chosen-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-chosen-timezone.json "event chosen timezone browser acceptance" 30
       - name: Kit member auth (real Chromium, local HTTPS fixtures)
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
+      - name: Native event share (real Chromium, Hono and Kit fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
@@ -295,12 +312,32 @@ jobs:
           for surface in hono-calendar hono-archive kit-calendar kit-archive; do
             node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
           done
+      - name: Calendar game recovery (Hono and Kit, source and shipped bytes)
+        run: |
+          npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-recovery.json
+          for surface in Hono Kit; do
+            for bundle in source shipped; do
+              node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
+            done
+          done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
           PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/profile-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-device-timezone.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-device-timezone.json "profile device timezone in Chromium" 49
+      - name: Profile local time comparison (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-local-time-comparison-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-comparison-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-comparison-acceptance.json "profile local time comparison in Chromium" 72
+      - name: Profile local time after save (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-local-time-save.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-save.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-save.json "profile local time after save in Chromium" 40
       - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
         env:
           ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
@@ -395,6 +432,9 @@ jobs:
       - name: Kit public payload enumeration and checker selftests (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
+      - name: Security-pin contracts selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -468,6 +508,9 @@ jobs:
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
+      - name: Security-pin contracts (Host admission + CSP inline styles)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
@@ -521,7 +564,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
+        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
@@ -888,7 +931,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.

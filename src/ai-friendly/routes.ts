@@ -107,6 +107,11 @@ const toMdEvent = (e: {
   status: string;
   goingCount?: number | null;
   goingOccupancy?: number | null;
+  /** Carried through to MdEvent; the detail builder renders the section. */
+  accessibilityNotes?: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
 }): MdEvent => ({
   ...e,
   goingCount: e.goingCount ?? null,

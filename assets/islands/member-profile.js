@@ -191,12 +191,13 @@
       var game = line.trim();
       if (game && games.indexOf(game) < 0) games.push(game);
     });
-    var values = { bio: body.bio.trim(), games_text: games.join("\n"), timezone: body.timezone };
+    var zone = body.timezone;
+    var values = { bio: body.bio.trim(), games_text: games.join("\n"), timezone: zone };
     var unchanged = true;
     Object.keys(values).forEach(function (key) {
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
-    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
+    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: zone };
     // The switch is a checkbox, not text: pin its saved state so Cancel and
     // the dirty check agree with the server. Absent (an older page) leaves it.
     var optOut = optOutField();
@@ -220,15 +221,18 @@
       if (!kept && field.value === body[key]) field.value = values[key];
     });
     // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
-    var isNew = !values.bio && !games.length && !values.timezone;
+    var isNew = !values.bio && !games.length && !zone;
     var bio = document.querySelector('[data-testid="profile-bio"]');
     if (bio)
       bio.textContent =
         values.bio || (isNew ? "New here. More soon." : "You have not added a bio yet.");
     var timezone = document.querySelector('[data-testid="profile-timezone"]');
-    if (timezone)
+    if (timezone) {
       timezone.textContent =
-        "Timezone: " + (values.timezone || "Add yours so people know when you are around.");
+        "Timezone: " + (zone || "Add yours so people know when you are around.");
+      // Only an accepted save advances dependent displays, never a live draft.
+      timezone.dispatchEvent?.(new CustomEvent("two:timezone", { detail: zone }));
+    }
     var newMember = document.querySelector('[data-testid="profile-new-member"]');
     if (newMember) newMember.hidden = !isNew;
     var list = document.querySelector('[data-testid="profile-games"]');
@@ -512,7 +516,9 @@
   function validationMessages(j) {
     var out = [];
     if (j && typeof j === "object" && !Array.isArray(j)) {
-      var bag = j.errors;
+      // Unified refusal envelope ({ error: "invalid", fields }); `errors` is the
+      // pre-unification key, read so a cached island survives the rollout.
+      var bag = j.fields || j.errors;
       if (bag && typeof bag === "object" && !Array.isArray(bag)) {
         Object.keys(bag).forEach(function (k) {
           var m = bag[k];
