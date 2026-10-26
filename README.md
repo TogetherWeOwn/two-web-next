@@ -307,8 +307,9 @@ to execute the same Chromium proof.
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
-with memory stores. None needs a database, staging or the network. Install the
-browser once, then run a suite with its variable set:
+with memory stores. None needs a database, staging or the network. For rows that
+require Kit dependencies, install them once with `npm ci --prefix web --include=dev`.
+Install the browser once, then run a suite with its variable set:
 
 ```sh
 npx playwright install --with-deps chromium
