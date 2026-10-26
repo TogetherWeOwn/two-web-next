@@ -296,9 +296,21 @@ const anchorOf = (item: GameItem): Anchor | null => {
   const attrs = match[1] ?? "";
   const hrefRaw = /\bhref="([^"]*)"/.exec(attrs)?.[1] ?? null;
   const ariaRaw = /\baria-label="([^"]*)"/.exec(attrs)?.[1] ?? null;
-  // Svelte SSR may leave comment anchors around interpolated text; the
-  // displayed text is what remains once they are gone.
-  const rawText = (match[2] ?? "").replace(/<!--[\s\S]*?-->/g, "");
+  // Read around Svelte SSR comments, including an unfinished trailing one.
+  // Keep other markup and encoded text intact for the strict assertions below.
+  const inner = match[2] ?? "";
+  let rawText = "";
+  let index = 0;
+  while (index < inner.length) {
+    const start = inner.indexOf("<!--", index);
+    if (start === -1) {
+      rawText += inner.slice(index);
+      break;
+    }
+    rawText += inner.slice(index, start);
+    const end = inner.indexOf("-->", start + 4);
+    index = end === -1 ? inner.length : end + 3;
+  }
   return {
     hrefRaw,
     href: hrefRaw === null ? null : decodeEntities(hrefRaw),
@@ -347,6 +359,30 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
+
+describe("Scheduled-game anchor text reader", () => {
+  it.each([
+    { inner: " chess ", text: " chess " },
+    { inner: "<!--[-->Chess<!--]-->", text: "Chess" },
+    { inner: "<!--one--><!--two-->Chess<!---->", text: "Chess" },
+    { inner: "<!--outer <!--inner-->Chess", text: "Chess" },
+    { inner: "Chess<!--unfinished", text: "Chess" },
+    { inner: "&lt;!--Chess--&gt; &amp; Go", text: "<!--Chess--> & Go" },
+    { inner: "<b>Chess</b>", text: "<b>Chess</b>" },
+  ])("reads $inner without treating comment contents as game text", ({ inner, text }) => {
+    expect(
+      anchorOf({
+        attrs: "",
+        inner: `<a href="/events?game=Chess" aria-label="Chess — upcoming events">${inner}</a>`,
+      }),
+    ).toEqual({
+      hrefRaw: "/events?game=Chess",
+      href: "/events?game=Chess",
+      ariaLabel: "Chess — upcoming events",
+      text,
+    });
+  });
+});
 
 describe("findScheduledGames matcher (RED)", () => {
   const findScheduled = (): ((m: string[], p: readonly string[]) => Record<string, string>) => {
