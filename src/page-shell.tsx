@@ -1,6 +1,7 @@
 import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { HeaderSession, Session } from "./env";
+import { HOME_CRITICAL_CSS } from "./home-critical-css";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
@@ -25,12 +26,13 @@ export const Layout: FC<
     /** Rooted path of the curated Markdown alternate (A2), e.g. `/about.md`. */
     markdownAlternate?: string;
     /**
-     * Inline the shared critical-CSS bundle instead of linking it. Only the
-     * homepage sets this: it reuses the exact leaf bundle (styles.css +
-     * theme-tokens.css + theme.css), so first paint needs zero render-blocking
-     * stylesheet requests. Recovery/error shells keep theme="home" without the
-     * flag and stay on external stylesheets, so the CSP hash allowlist stays
-     * scoped to "/" plus the content leaves.
+     * Inline the homepage critical-CSS bundle instead of linking it. Only the
+     * homepage sets this: the bundle is exactly the shared sources
+     * (styles.css + theme-tokens.css + theme.css) with no leaf-only rules, so
+     * first paint needs zero render-blocking stylesheet requests and leaf-only
+     * CSS can never grow "/" against its byte caps. Recovery/error shells keep
+     * theme="home" without the flag and stay on external stylesheets, so the
+     * CSP hash allowlist stays scoped to "/" plus the content leaves.
      */
     inlineCriticalCss?: boolean;
   }>
@@ -112,18 +114,25 @@ export const Layout: FC<
           />
         ) : null}
         {theme === "content" || inlineCriticalCss ? (
-          // Content leaves inline the three stylesheets: the mobile audit
-          // measured ~150 ms of render-blocking savings on /rules, while
-          // preload hints for the same files measured zero. The homepage
-          // reuses the exact same bundle: its hero paints at first paint
-          // (LCP equals FCP every staging run), so removing the three external
-          // stylesheet requests is the primary FCP improvement. The Display-700
+          // Content leaves inline the full leaf bundle (the shared sources
+          // plus the leaf-only seam): the mobile audit measured ~150 ms of
+          // render-blocking savings on /rules, while preload hints for the
+          // same files measured zero. The flagged homepage shell inlines the
+          // homepage bundle instead — the shared sources only, never the
+          // seam: its hero paints at first paint (LCP equals FCP every
+          // staging run), so removing the three external stylesheet requests
+          // is the primary FCP improvement, and leaf-only rules stay off "/"
+          // and out of its byte caps. The Display-700
           // preload stays at the top of the head (above this block) for an early
           // font fetch; the Arial-metric 'Display Fallback' reduces delayed-font
           // layout shift (the preload alone cannot close the FCP/font gap on
-          // cold mobile). The block is allowlisted by hash in style-src
-          // (no unsafe-inline).
-          <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
+          // cold mobile). Each block is allowlisted by its own hash in
+          // style-src (no unsafe-inline).
+          <style
+            dangerouslySetInnerHTML={{
+              __html: theme === "content" ? LEAF_CRITICAL_CSS : HOME_CRITICAL_CSS,
+            }}
+          />
         ) : (
           <link rel="stylesheet" href="/styles.css" />
         )}

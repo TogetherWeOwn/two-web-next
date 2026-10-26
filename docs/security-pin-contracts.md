@@ -25,7 +25,8 @@ human-readable line, and `npm run check:security-pins:selftest` also emits
 | ID | What fails |
 | --- | --- |
 | `host-source-pin` | `src/trust-hosts.ts` reads any request header besides Host, or loses its deliberate-ignore marker. |
-| `leaf-lifecycle-static` | The recorded bundle bytes or hash differ from a fresh regeneration of the three leaf stylesheets. |
+| `leaf-lifecycle-static` | The recorded leaf bundle bytes or hash differ from a fresh regeneration of the three shared sources plus the leaf-only seam (`assets/leaf-only.css`). |
+| `home-lifecycle-static` | The recorded homepage bundle bytes or hash differ from a fresh regeneration of exactly the three shared sources. |
 | `inline-allowlist` | `INLINE_CRITICAL_CSS_PATHS` is anything but exactly `/`, `/about`, `/faq`, `/rules`, `/privacy`. |
 | `threat-evidence` | Either gaps row drops its pointer to the contract tests or this gate. |
 | `host-forward-matrix` | Any `host-admission forwarding contract` suite assertion fails, is vacuous, or misses its describe. |

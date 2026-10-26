@@ -297,6 +297,7 @@ exactly once.
 | `src/headers.ts` | http-guard |
 | `src/home-cache.ts` | content |
 | `src/home-copy.ts` | content |
+| `src/home-critical-css.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
