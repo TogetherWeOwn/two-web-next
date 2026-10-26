@@ -161,10 +161,10 @@ export const CalCard: FC<{
                 </span>
                 Full description
               </summary>
-              <p>{e.description}</p>
+              <p class="schedule-full-text">{e.description}</p>
             </details>
           ) : e.description ? (
-            <p>{passage ?? e.description}</p>
+            <p class="schedule-short-text">{passage ?? e.description}</p>
           ) : null}
         </div>
         <div class="schedule-actions">

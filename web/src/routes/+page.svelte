@@ -135,7 +135,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
           {@const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null}
           <article class="card" data-testid="featured-item">
             <h3>{#if item.url}<a href={item.url}>{item.title}</a>{:else}{item.title}{/if}</h3>
-            {#if item.body}<p>{item.body}</p>{/if}
+            {#if item.body}<p class="featured-body">{item.body}</p>{/if}
             {#if src}
               <img
                 class="featured-image"

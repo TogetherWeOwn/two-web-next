@@ -69,6 +69,7 @@
 .base-theme .card { background: var(--surface); border: 1px solid var(--line); border-radius: 0; padding: 1.5rem; min-width: 0; overflow-wrap: anywhere; }
 .base-theme .card h3 { font-size: 1.6rem; }
 .base-theme .card p { margin-top: .5rem; }
+.base-theme :is(.featured-body,.schedule-excerpt,.schedule-full-text,.schedule-short-text,.archive-passage) { white-space: pre-line; }
 .base-theme .featured-image { border: 0; }
 .base-theme .home-event-link { color: var(--ink); }
 .base-theme .home-event-link time { font-size: .85rem; }
