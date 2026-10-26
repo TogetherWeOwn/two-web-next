@@ -115,10 +115,32 @@ The existing shipping-boundary suite on the proposed budget initially produces
 78 passes and three expected failures: its literal one-byte-over cases still pin
 the superseded server gzip 334080, client raw 254976 and client gzip 102912 limits.
 These are stale test boundaries, not flaky runs; no rerun, skip or checker change
-can substitute for independently authored acceptance updates. Preserve the
-historical admitted-interval checks and every unrelated boundary. Acceptance
-updates and their red/green proof must be incorporated unchanged from the
-independent test owner before this PR is ready.
+can substitute for independently authored acceptance updates.
+
+The [independently authored acceptance correction](https://github.com/TogetherWeOwn/two-web-next/commit/0f76d9f0387ea1913e00ef3bb6903e182e64daa5)
+is incorporated unchanged. Its test-file SHA256 is
+`cd3314aec99bb7c255ba132d99ce692ab80995201acd48bd7ea90182b6129716`.
+It preserves the historical admitted intervals and every unrelated boundary,
+updates the three exact/upper limits, and adds fixed measured-feature intervals
+at client raw 255698, client gzip 103034 and server gzip 334762. The checker and
+fixture helpers are unchanged.
+
+Local red/green verification of those exact authored bytes:
+
+- Original main caps: 24/33 pass, nine intended failures, no skips.
+- Proposed caps: the complete existing Kit gate step passes 163/163, no skips.
+- Each proposed cap reduced by one rounding step: 30/33 pass, three failures.
+- Each proposed cap reduced by one byte: 31/33 pass, two failures (exact admission
+  and the diagnostic ceiling).
+- Each proposed cap increased by one byte: 32/33 pass, one upper-bound failure.
+
+The nine individual mutation runs use copied plans and the real unchanged
+checker. They do not alter the shipping budget or authored tests. A first scratch
+bookkeeping assertion expected one failure rather than two for the minus-one
+case; inspecting the exact-admission and diagnostic assertions corrected that
+expectation, not the product or tests. All nine final controls reject as listed.
+This synthetic evidence complements, but does not replace, the exact application
+build measurements above.
 
 ## Scope of the evidence
 
