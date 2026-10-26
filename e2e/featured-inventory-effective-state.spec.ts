@@ -228,9 +228,11 @@ for (const twin of INVENTORY_TWINS) {
               await expect(
                 page.getByRole("link", { name: "Healthy inventory sibling", exact: true }),
               ).toBeVisible();
-              await expect(
-                page.getByRole("link", { name: "Inspect undecodable slot", exact: true }),
-              ).toHaveAttribute("href", "/admin/featured/902");
+              const edit = await page
+                .getByRole("link", { name: "Inspect undecodable slot", exact: true })
+                .getAttribute("href");
+              // Browse-return context may already be present; preserve it rather than forbidding it.
+              expect(new URL(edit!, origin).pathname).toBe("/admin/featured/902");
               await expect(page.getByTestId("featured-status-902")).toContainText(/unavailable/i);
               expect(
                 await page
