@@ -35,7 +35,7 @@ const seeded = {
   timezone: "UTC",
 };
 const NUL = "\u0000";
-const controlError = "Remove control characters.";
+const controlError = "Remove control or invisible characters.";
 
 async function setup(throttleLimited = false) {
   const sessions = createMemorySessionStore();

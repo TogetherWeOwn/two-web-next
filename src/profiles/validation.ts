@@ -3,6 +3,8 @@
 // timezone a real IANA zone or blank. `games_text` (one per line) is the form
 // shape; `games` the array shape.
 
+import { containsControlCharacters } from "../admin/validation-shared";
+
 export type ProfileAttrs = {
   bio: string | null;
   games: string[];
@@ -11,9 +13,6 @@ export type ProfileAttrs = {
   leaderboardOptOut?: boolean;
 };
 export type ProfileInput = Record<string, unknown>;
-
-// Match the MemberProfile browser policy; tab, LF and CR remain allowed.
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 export function isIanaTimeZone(tz: string): boolean {
   try {
@@ -74,8 +73,8 @@ export function validateProfile(
   if (bioRaw !== null && typeof bioRaw !== "string") errors.bio = "Bio must be text.";
   else if (typeof bioRaw === "string" && [...bioRaw].length > 1000)
     errors.bio = "Keep your bio to 1000 characters or fewer.";
-  else if (typeof bioRaw === "string" && CONTROL_CHARS.test(bioRaw))
-    errors.bio = "Remove control characters.";
+  else if (typeof bioRaw === "string" && containsControlCharacters(bioRaw))
+    errors.bio = "Remove control or invisible characters.";
 
   let gamesRaw: unknown = input.games;
   if (typeof input.games_text === "string") {
@@ -91,8 +90,8 @@ export function validateProfile(
         errors.games ??= "Each game must be text.";
         continue;
       }
-      // Check raw input: trim() would hide forbidden VT/FF at the edges.
-      if (CONTROL_CHARS.test(g)) errors.games ??= "Remove control characters.";
+      // Check raw input: trim() would hide forbidden VT/FF/BOM at the edges.
+      if (containsControlCharacters(g)) errors.games ??= "Remove control or invisible characters.";
       const t = g.trim();
       if ([...t].length > 80) errors.games ??= "Keep each game name to 80 characters or fewer.";
       if (t !== "" && !games.includes(t)) games.push(t);
