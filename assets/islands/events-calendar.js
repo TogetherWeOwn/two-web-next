@@ -235,7 +235,17 @@
     var content = root.querySelector('[data-cal-zone="content"]');
     if (content) content.hidden = on;
     root.setAttribute("aria-busy", on ? "true" : "false");
-    if (!on) root.removeAttribute("aria-busy");
+    if (!on) {
+      root.removeAttribute("aria-busy");
+      // Release the announcement with its existing loading owner, including
+      // untargeted search handoffs, cancellation and current AbortError cleanup.
+      // An SSR success may already have supplied a new month: never replace it.
+      if (monthStatusSaved !== null && monthStatus) {
+        if (monthStatus.textContent === skeleton.textContent)
+          monthStatus.textContent = monthStatusSaved;
+        monthStatusSaved = null;
+      }
+    }
   }
 
   // URLs change across month steps; the control's test ID or label is stable.
@@ -329,12 +339,6 @@
     function failRead(cooldownMs) {
       feedback.textContent = root.dataset.loadError;
       setLoading(false);
-      // Current failure restores the last-good month; superseded reads never
-      // reach here (active guard or AbortError), so they stay silent.
-      if (monthStatusSaved !== null && monthStatus) {
-        monthStatus.textContent = monthStatusSaved;
-        monthStatusSaved = null;
-      }
       if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
         window.location.assign(window.location.href);
       } else {
@@ -470,12 +474,6 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
-      // Success replaces loading from SSR; when the fragment carries no live
-      // source (harnesses), restore the saved month so no loading lingers.
-      if (monthStatusSaved !== null && monthStatus) {
-        if (/loading/i.test(monthStatus.textContent)) monthStatus.textContent = monthStatusSaved;
-        monthStatusSaved = null;
-      }
       var sourceGame = page.querySelector('select[name="game"]');
       // The admitted page owns this scope even when newer drafts keep the select.
       renderedGame = sourceGame ? sourceGame.value : "";
