@@ -61,7 +61,7 @@ describe("hot-zone grid UTC labelling", () => {
           total: 0,
         }),
       );
-      expect(html.match(new RegExp(UTC_SUFFIX.replace(/[()]/g, "\\$&"), "g"))?.length ?? 0).toBe(2);
+      expect(html.split(UTC_SUFFIX).length - 1).toBe(2);
     },
   );
 
