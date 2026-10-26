@@ -34,6 +34,11 @@ against an insufficient budget.
   byte-identical, zero build-input change). The measurements below were
   taken against the `91b66a68d`-based trees and stand; the merged tree
   is rebuilt and re-verified under the proposed caps before merge.
+- Reconciled onto main `4d9ebeee5b311dd5bedb606a57ea91183625c3c7`
+  (`test(kit): support current and justified server-gzip allowances`),
+  which restructured only the shipping test (one-file diff, no numeric
+  or build-input change). This decision adopts the tier structure and
+  adds the measured 334848 tier; pinned values are unchanged.
 - Feature: `7d390f4b8c54e30b0da703c2085530d1876c78f4`.
 - Clean three-way merged source tree: `a51b15238a8a28880fc4e87c7f432e9143fcf81f`.
 - Runtime: Node 24.22.1, npm 11.19.1.
@@ -116,36 +121,46 @@ never change the checker, artifacts or other limits:
 | Proposed limits, client raw one step lower (255488) | 1 | client JS |
 | Proposed limits, client gzip one step lower (102912) | 1 | client JS |
 
-The existing shipping-boundary suite on the proposed budget initially produces
-78 passes and three expected failures: its literal one-byte-over cases still pin
-the superseded server gzip 334080, client raw 254976 and client gzip 102912 limits.
-These are stale test boundaries, not flaky runs; no rerun, skip or checker change
-can substitute for independently authored acceptance updates.
+The resolved shipping-boundary suite against the original caps produces
+78 passes and six expected failures: its client rows pin the proposed
+256000/103168 ceilings (interval, exact and diagnostic-ceiling assertions),
+while the server rows select the still-supported 334080 allocation tier and
+pass. (The inventory file contributes 51 budget-independent passes.) These are
+stale-cap failures, not flaky runs; no rerun, skip or checker change can
+substitute for the proposed limits.
 
 The [independently authored acceptance correction](https://github.com/TogetherWeOwn/two-web-next/commit/0f76d9f0387ea1913e00ef3bb6903e182e64daa5)
-is incorporated unchanged. Its test-file SHA256 is
-`cd3314aec99bb7c255ba132d99ce692ab80995201acd48bd7ea90182b6129716`.
-It preserves the historical admitted intervals and every unrelated boundary,
-updates the three exact/upper limits, and adds fixed measured-feature intervals
-at client raw 255698, client gzip 103034 and server gzip 334762. The checker and
-fixture helpers are unchanged.
+(test-file SHA256 `cd3314aec99bb7c255ba132d99ce692ab80995201acd48bd7ea90182b6129716`
+at incorporation) is preserved, then adapted to main's explicit-allocation
+structure without changing its pinned values: the 334848 tier carries the
+measured game-suggestion interval 334762 with exact 334848 and over 334849
+rows, and the client rows are unchanged. The checker, fixture helpers and
+every unrelated boundary are unchanged. A sibling capacity change justifies
+the same 334848 server tier with its own interval (334683); the first merger
+sets the test literal and the second reconciles rows while prose cites both
+measurements. Resolved test-file SHA256:
+`80bd867c662a848ff0dec33127b961e2f578d5c4897089b0edde84f24a7fb9df`.
 
-Local red/green verification of those exact authored bytes:
+Local red/green verification of those exact resolved bytes (copied budgets,
+unchanged checker and test file):
 
-- Original main caps: 24/33 pass, nine intended failures, no skips.
-- Proposed caps: the complete existing Kit gate step passes 163/163, no skips.
-- Each proposed cap reduced by one rounding step: 30/33 pass, three failures.
-- Each proposed cap reduced by one byte: 31/33 pass, two failures (exact admission
-  and the diagnostic ceiling).
-- Each proposed cap increased by one byte: 32/33 pass, one upper-bound failure.
+- Original main caps: 27/33 pass, six intended client failures, no skips.
+- Proposed caps: file 33/33; the complete Kit gate step passes 163/163,
+  no skips.
+- Server cap one rounding step lower (334592), one byte lower (334847) or one
+  byte higher (334849): 29/33 pass; the allocation control plus all three
+  server rows reject the unsupported ceiling.
+- Client raw one step lower (255488): 30/33 with three row failures; one byte
+  lower (255999): 31/33 with exact plus diagnostic-ceiling failures; one byte
+  higher (256001): 32/33 with the diagnostic-ceiling failure only.
+- Client gzip one step lower (102912): 30/33 with three row failures; one byte
+  lower (103167): 31/33 with exact plus diagnostic-ceiling failures; one byte
+  higher (103169): 32/33 with the diagnostic-ceiling failure only.
 
-The nine individual mutation runs use copied plans and the real unchanged
-checker. They do not alter the shipping budget or authored tests. A first scratch
-bookkeeping assertion expected one failure rather than two for the minus-one
-case; inspecting the exact-admission and diagnostic assertions corrected that
-expectation, not the product or tests. All nine final controls reject as listed.
-This synthetic evidence complements, but does not replace, the exact application
-build measurements above.
+The over-row failures show the loaded (wrong) ceiling in the checker
+diagnostic, for example `over 254976B` where the test pins `over 256000B`.
+All ten controls reject as listed. This synthetic evidence complements, but
+does not replace, the exact application build measurements above.
 
 ## Scope of the evidence
 
