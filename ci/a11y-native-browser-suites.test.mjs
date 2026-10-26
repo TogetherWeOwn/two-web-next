@@ -1,3 +1,10 @@
+// Single registry of every browser suite the a11y job must really execute.
+// SUITES is the source of truth: each entry pins one workflow step (opt-in
+// env or unconditional config, JSON report, executed-count verifier with its
+// exact title and minimum), and the reverse scan at the bottom fails when a
+// *_BROWSER_TESTS-gated file or a ci/*-browser.vitest.ts config exists
+// without an entry (or a named bespoke exception). Run this file directly:
+// node --test ci/a11y-native-browser-suites.test.mjs
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, extname } from "node:path";
@@ -17,6 +24,25 @@ const SUITES = [
     env: "A11Y_BROWSER_TESTS",
     title: "native 422 baseline in a real browser",
     min: 4,
+  },
+  {
+    file: "test/profile-composition-browser.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "composition feedback in a real browser",
+    min: 6,
+  },
+  {
+    file: "test/profile-refused-draft-recovery-acceptance.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "refused-draft recovery in a real browser",
+    min: 2,
+  },
+  {
+    file: "test/admin-event-native-unicode.test.ts",
+    env: "ADMIN_EVENT_BROWSER_TESTS",
+    title: "native admin event text limits",
+    min: 48,
+    artifact: "artifacts/a11y/admin-native-unicode.json",
   },
   {
     file: "test/featured-native-length.test.ts",
@@ -98,48 +124,168 @@ const SUITES = [
     title: "event chosen timezone browser acceptance",
     min: 30,
   },
+  // Unconditional suites (env: null) run through their own Vitest config, so
+  // they carry no opt-in to skip. Their describes expand from a template, so
+  // sourceTitle pins the template while verifiers record every expanded
+  // exact title with its minimum. Where the workflow verifies through a
+  // shell loop, verifierLoops and titleTemplate rebuild that trailer and
+  // must expand to exactly the recorded verifiers.
+  {
+    file: "ci/schedule-search-context-browser.test.ts",
+    config: "ci/schedule-search-context-browser.vitest.ts",
+    env: null,
+    artifact: "artifacts/a11y/schedule-search-context.json",
+    sourceTitle: "${twin} schedule committed match context in Chromium",
+    verifiers: [
+      { title: "Hono schedule committed match context in Chromium", min: 5 },
+      { title: "Kit schedule committed match context in Chromium", min: 5 },
+    ],
+  },
+  {
+    file: "ci/calendar-subscription-browser.test.ts",
+    config: "ci/calendar-subscription-browser.vitest.ts",
+    env: null,
+    artifact: "artifacts/a11y/calendar-subscription.json",
+    sourceTitle: "%s real-browser subscription acceptance",
+    verifiers: [
+      { title: "hono-calendar real-browser subscription acceptance", min: 10 },
+      { title: "hono-archive real-browser subscription acceptance", min: 10 },
+      { title: "kit-calendar real-browser subscription acceptance", min: 10 },
+      { title: "kit-archive real-browser subscription acceptance", min: 10 },
+    ],
+    titleTemplate: "$surface real-browser subscription acceptance",
+    verifierLoops: [
+      { name: "surface", values: ["hono-calendar", "hono-archive", "kit-calendar", "kit-archive"] },
+    ],
+  },
+  {
+    file: "ci/calendar-game-recovery-browser.test.ts",
+    config: "ci/calendar-game-recovery-browser.vitest.ts",
+    env: null,
+    artifact: "artifacts/a11y/calendar-game-recovery.json",
+    sourceTitle: "${twin} ${bundle} real game recovery",
+    verifiers: [
+      { title: "Hono source real game recovery", min: 14 },
+      { title: "Hono shipped real game recovery", min: 14 },
+      { title: "Kit source real game recovery", min: 14 },
+      { title: "Kit shipped real game recovery", min: 14 },
+    ],
+    titleTemplate: "$surface $bundle real game recovery",
+    verifierLoops: [
+      { name: "surface", values: ["Hono", "Kit"] },
+      { name: "bundle", values: ["source", "shipped"] },
+    ],
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  a11y:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 const steps = job.split(/\n(?=      - )/);
-const stepRunning = (file) => steps.find((step) => step.includes(`npx vitest run ${file} `));
+const runCommand = (suite) =>
+  suite.config
+    ? `npx vitest run --config ${suite.config} ${suite.file} `
+    : `npx vitest run ${suite.file} `;
+const stepRunning = (suite) => steps.find((step) => step.includes(runCommand(suite)));
 const chromiumInstall = job.indexOf("npx playwright install --with-deps chromium");
+const kitDepsInstall = job.indexOf("npm ci --prefix web --include=dev");
 
 test("the a11y job does not bypass its steps at job level", () => {
   assert.doesNotMatch(job, /^    continue-on-error:/m);
 });
 
 for (const suite of SUITES) {
-  test(`a11y job runs ${suite.file} with its opt-in, a JSON report and the executed-count verifier`, async () => {
-    const step = stepRunning(suite.file);
+  const posture = suite.env ? "with its opt-in" : "unconditionally";
+  test(`a11y job runs ${suite.file} ${posture}, with a JSON report and the executed-count verifier`, async () => {
+    const step = stepRunning(suite);
     assert(step, `a11y job must run ${suite.file}`);
-    const artifact = `artifacts/a11y/${basename(suite.file).replace(/\.test\.(ts|mjs)$/, "")}.json`;
-    assert.match(step, new RegExp(`\\n        env:\\n          ${suite.env}: "true"\\n`));
+    const artifact =
+      suite.artifact ??
+      `artifacts/a11y/${basename(suite.file).replace(/\.test\.(ts|mjs)$/, "")}.json`;
+    if (suite.env) {
+      assert.match(step, new RegExp(`\\n        env:\\n          ${suite.env}: "true"\\n`));
+    } else {
+      assert.doesNotMatch(
+        step,
+        /\n        env:\n/,
+        `${suite.file} is unconditional and must not gain an opt-in env`,
+      );
+    }
     assert.match(
       step,
       new RegExp(
-        `\\n          npx vitest run ${escape(suite.file)} --reporter=default --reporter=json --outputFile\\.json=${escape(artifact)}\\n`,
+        `\\n          ${escape(runCommand(suite).trimEnd())} --reporter=default --reporter=json --outputFile\\.json=${escape(artifact)}\\n`,
       ),
     );
     const verifierLine = (title, min) =>
       `\\n          node ci/a11y-require-executed\\.mjs ${escape(artifact)} "${escape(title)}" ${min}`;
     const childSuites = suite.childSuites ?? [];
-    assert.match(
-      step,
-      new RegExp(
-        verifierLine(suite.title, suite.min) +
-          childSuites.map((child) => verifierLine(child.title, child.min)).join("") +
-          "\\s*$",
-      ),
-    );
+    if (suite.verifierLoops) {
+      const mins = new Set(suite.verifiers.map((verifier) => verifier.min));
+      assert.equal(mins.size, 1, `${suite.file} loop verifiers must share one minimum`);
+      let expanded = [suite.titleTemplate];
+      for (const loop of suite.verifierLoops)
+        expanded = expanded.flatMap((title) =>
+          loop.values.map((value) => title.replaceAll(`$${loop.name}`, value)),
+        );
+      assert.deepEqual(
+        expanded,
+        suite.verifiers.map((verifier) => verifier.title),
+        `${suite.file} verifier loops must expand to its recorded titles`,
+      );
+      const block = suite.verifierLoops.map(
+        (loop, depth) => `${"  ".repeat(depth)}for ${loop.name} in ${loop.values.join(" ")}; do`,
+      );
+      block.push(
+        `${"  ".repeat(suite.verifierLoops.length)}node ci/a11y-require-executed.mjs ${artifact} "${suite.titleTemplate}" ${suite.verifiers[0].min}`,
+      );
+      for (let depth = suite.verifierLoops.length - 1; depth >= 0; depth--)
+        block.push(`${"  ".repeat(depth)}done`);
+      assert.match(
+        step,
+        new RegExp(
+          "\\n          " + block.map((line) => escape(line)).join("\\n          ") + "\\s*$",
+        ),
+        `${suite.file} step must end with its exact verifier loop`,
+      );
+    } else {
+      const explicitVerifiers = suite.verifiers ?? [
+        { title: suite.title, min: suite.min },
+        ...childSuites.map((child) => ({ title: child.title, min: child.min })),
+      ];
+      assert.match(
+        step,
+        new RegExp(
+          explicitVerifiers.map(({ title, min }) => verifierLine(title, min)).join("") + "\\s*$",
+        ),
+      );
+    }
     assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
     assert(chromiumInstall >= 0, "a11y job must install Chromium");
     assert(chromiumInstall < job.indexOf(step));
+    if (suite.config) {
+      assert(
+        kitDepsInstall >= 0 && kitDepsInstall < job.indexOf(step),
+        `Kit install must precede the ${suite.file} step`,
+      );
+      const configSource = await readFile(new URL(`../${suite.config}`, import.meta.url), "utf8");
+      assert.match(configSource, new RegExp(`include: \\["${escape(suite.file)}"\\]`));
+    }
 
     const source = await readFile(new URL(`../${suite.file}`, import.meta.url), "utf8");
-    assert.match(source, new RegExp(`skipIf\\(process\\.env\\.${suite.env} !== "true"\\)`));
-    assert.match(source, new RegExp(`"${escape(suite.title)}"`));
+    if (suite.env) {
+      assert.match(source, new RegExp(`skipIf\\(process\\.env\\.${suite.env} !== "true"\\)`));
+    } else {
+      assert.doesNotMatch(
+        source,
+        /_BROWSER_TESTS/,
+        `${suite.file} is unconditional and must not gain an opt-out gate`,
+      );
+    }
+    if (suite.sourceTitle) {
+      assert(source.includes(suite.sourceTitle), `${suite.file} must keep its suite template`);
+    } else {
+      assert.match(source, new RegExp(`"${escape(suite.title)}"`));
+    }
     for (const child of childSuites) {
       const registrarSource = await readFile(
         new URL(`../${child.registrarFile}`, import.meta.url),
@@ -316,13 +462,93 @@ test("the README Browser regressions table lists every browser-gated suite", asy
   const section = readme.split("\n### Browser regressions\n")[1]?.split(/\n#{2,3} /)[0] ?? "";
   assert(section, "README must keep the Browser regressions section");
   const gated = await browserGatedSuites();
-  for (const suite of SUITES)
-    assert(
-      gated.some(({ file }) => file === suite.file),
-      suite.file,
-    );
+  for (const suite of SUITES) {
+    if (suite.env)
+      assert(
+        gated.some(({ file, env }) => file === suite.file && env === suite.env),
+        suite.file,
+      );
+    const row = section.split("\n").find((line) => line.startsWith(`| \`${suite.file}\` |`));
+    assert(row, `README table must list ${suite.file} with its local command`);
+    if (!suite.env) assert.match(row, /None—always runs/, suite.file);
+    if (suite.config)
+      assert.match(
+        row,
+        new RegExp(`--config ${escape(suite.config)}`),
+        `README row must give the config command for ${suite.file}`,
+      );
+  }
   for (const { file, env } of gated) {
     const row = new RegExp(`^\\|\\s*\`${escape(file)}\`\\s*\\|\\s*\`${env}\``, "m");
     assert.match(section, row, `README table must list ${file} with ${env}`);
   }
+});
+
+// Reverse direction: registration must be complete, not just consistent for
+// the entries someone remembered to add. The RSVP suite is the one bespoke
+// exception: it is a node --test TAP suite pinned by its dedicated test
+// above, not by the Vitest SUITES loop.
+const BESPOKE_GATED_EXCEPTIONS = [{ file: RSVP_FILE, env: RSVP_ENV }];
+
+function unregisteredGated(gated, suites, exceptions) {
+  const registered = new Map();
+  for (const suite of suites) if (suite.env) registered.set(suite.file, suite.env);
+  for (const exception of exceptions) registered.set(exception.file, exception.env);
+  return gated
+    .filter(({ file, env }) => registered.get(file) !== env)
+    .map(({ file, env }) => `${file} (${env})`);
+}
+
+function unregisteredConfigs(configFiles, suites) {
+  const registered = new Set(suites.map((suite) => suite.config).filter(Boolean));
+  return configFiles.filter((file) => !registered.has(file));
+}
+
+async function browserVitestConfigs() {
+  const found = [];
+  for (const entry of await readdir(new URL("../ci/", import.meta.url)))
+    if (/-browser\.vitest\.ts$/.test(entry)) found.push(`ci/${entry}`);
+  return found.sort();
+}
+
+test("every browser-gated suite and browser Vitest config is registered in SUITES", async () => {
+  const gated = await browserGatedSuites();
+  assert.deepEqual(unregisteredGated(gated, SUITES, BESPOKE_GATED_EXCEPTIONS), []);
+  assert.deepEqual(unregisteredConfigs(await browserVitestConfigs(), SUITES), []);
+});
+
+test("the reverse registry scan rejects planted removals and additions (fixture)", () => {
+  const refused = {
+    file: "test/profile-refused-draft-recovery-acceptance.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+  };
+  const withoutRefused = SUITES.filter((suite) => suite.file !== refused.file);
+  // Planted removal: dropping a SUITES entry must surface its gated file.
+  assert.deepEqual(unregisteredGated([refused], withoutRefused, []), [
+    `${refused.file} (A11Y_BROWSER_TESTS)`,
+  ]);
+  assert.deepEqual(unregisteredGated([refused], SUITES, []), []);
+  // A newly gated file nobody registered is unregistered, and renaming the
+  // gate env on a registered file does not silently inherit its entry.
+  assert.deepEqual(
+    unregisteredGated(
+      [{ file: "test/planted-browser.test.ts", env: "PLANTED_BROWSER_TESTS" }],
+      SUITES,
+      BESPOKE_GATED_EXCEPTIONS,
+    ),
+    ["test/planted-browser.test.ts (PLANTED_BROWSER_TESTS)"],
+  );
+  assert.deepEqual(
+    unregisteredGated([{ file: refused.file, env: "RENAMED_BROWSER_TESTS" }], SUITES, []),
+    [`${refused.file} (RENAMED_BROWSER_TESTS)`],
+  );
+  // The bespoke exception covers only its exact file and env.
+  assert.deepEqual(
+    unregisteredGated([{ file: RSVP_FILE, env: RSVP_ENV }], SUITES, BESPOKE_GATED_EXCEPTIONS),
+    [],
+  );
+  assert.deepEqual(unregisteredConfigs(["ci/planted-browser.vitest.ts"], SUITES), [
+    "ci/planted-browser.vitest.ts",
+  ]);
+  assert.deepEqual(unregisteredConfigs(["ci/calendar-subscription-browser.vitest.ts"], SUITES), []);
 });

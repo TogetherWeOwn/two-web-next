@@ -254,7 +254,8 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional Kit member-auth and native event share suites, these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional suites (Kit member-auth, native event share and
+the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -271,7 +272,10 @@ anywhere in the report (including suite teardown failures and unrelated cases)
 refuses admission. JSON stdout is capped at 16 KiB including its newline; an
 oversized receipt fails before any success output or CI-summary append rather
 than dropping case identities. Human output can still verify larger suites.
-The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
+The minimums live in `.github/workflows/ci.yml`. The `SUITES` registry in
+`ci/a11y-native-browser-suites.test.mjs` is the single source of truth that
+every gated file and browser Vitest config is wired there; check it with
+`node --test ci/a11y-native-browser-suites.test.mjs`. Run any listed command locally
 to execute the same Chromium proof.
 
 | Suite | Opt-in variable | Local command |
@@ -297,6 +301,9 @@ to execute the same Chromium proof.
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
+| `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
+| `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (14 cases for each Hono/Kit and source/shipped bundle pairing; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
