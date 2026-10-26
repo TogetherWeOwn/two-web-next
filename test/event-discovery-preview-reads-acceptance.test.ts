@@ -44,7 +44,7 @@ beforeEach(async () => {
     values
       (10, ${adjacentKey(10)}, 'Earlier series night', 'Earlier game', '2026-10-25T18:00Z', '2026-10-25T20:00Z', 'UTC', 'Earlier room', 'past', true, null, 1, 'weekly'),
       (20, ${adjacentKey(20)}, 'Current night', 'Current game', '2026-11-08T18:00Z', '2026-11-08T20:00Z', 'UTC', 'Current room', 'published', true, 10, 2, null),
-      (30, ${adjacentKey(30)}, 'Later series night', null, '2026-11-15T18:00Z', '2026-11-15T20:00Z', 'UTC', null, 'published', true, 10, 3, null),
+      (30, ${adjacentKey(30)}, 'Later series night', null, '2026-11-15T18:00Z', '2026-11-15T20:00Z', 'UTC', null, 'published', false, 10, 3, null),
       (15, ${adjacentKey(15)}, 'Global previous night', 'Co-op', '2026-11-07T18:00Z', '2026-11-07T20:00Z', 'America/New_York', 'Previous room', 'published', false, null, null, null),
       (25, ${adjacentKey(25)}, 'Global next night', 'Current game', '2026-11-09T18:00Z', '2026-11-09T20:00Z', 'UTC', 'Next room', 'published', true, null, null, null),
       (21, ${adjacentKey(21)}, 'Hidden draft', 'Private game', '2026-11-08T17:59Z', '2026-11-08T20:00Z', 'UTC', null, 'draft', false, 10, 4, null),
@@ -129,7 +129,7 @@ describe("discovery reads carry row-local preview data", () => {
     expect(related).toMatchObject([
       { id: 25, game: "Current game", rsvpOpen: true, endsAt: new Date("2026-11-09T20:00:00Z") },
       { id: 15, game: "Co-op", rsvpOpen: false, endsAt: new Date("2026-11-07T20:00:00Z") },
-      { id: 30, game: null, rsvpOpen: true, endsAt: new Date("2026-11-15T20:00:00Z") },
+      { id: 30, game: null, rsvpOpen: false, endsAt: new Date("2026-11-15T20:00:00Z") },
     ]);
   });
 
@@ -145,7 +145,7 @@ describe("discovery reads carry row-local preview data", () => {
       id: 30,
       game: null,
       endsAt: new Date("2026-11-15T20:00:00Z"),
-      rsvpOpen: true,
+      rsvpOpen: false,
     });
   });
 
@@ -180,7 +180,8 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(earlier).not.toContain("RSVPs paused");
       const later = link(html, "event-series-next");
       expect(later).toContain(`href="/e/${adjacentKey(30)}"`);
-      expect(later).not.toMatch(/Current game|Co-op|Earlier game|RSVPs paused|Ended|Past event/i);
+      expect(later).toContain("RSVPs paused");
+      expect(later).not.toMatch(/Current game|Co-op|Earlier game|Ended|Past event/i);
       expect(link(html, "event-next")).toContain("Current game");
       const related = [
         ...html.matchAll(/<a\b[^>]*data-testid="event-related-link"[^>]*>[\s\S]*?<\/a>/g),

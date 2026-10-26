@@ -153,6 +153,22 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(link.text).toMatch(/\b(?:Ended|Past event)\b/i);
       });
 
+      it("RED: ended beats paused when a destination is both", async () => {
+        const link = anchor(
+          await render(
+            twin,
+            destination({
+              startsAt: new Date("2026-11-01T16:00:00.000Z"),
+              endsAt: new Date("2026-11-01T17:59:59.999Z"),
+              rsvpOpen: false,
+            }),
+          ),
+          testid,
+        );
+        expect(link.text).toContain("Ended");
+        expect(link.text).not.toContain("RSVPs paused");
+      });
+
       it("CONTROL: a started but ongoing destination is not ended", async () => {
         const link = anchor(
           await render(twin, destination({ startsAt: new Date("2026-11-01T17:00:00.000Z") })),
