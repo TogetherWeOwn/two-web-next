@@ -325,6 +325,12 @@ jobs:
               node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
             done
           done
+      - name: Calendar navigation (Hono and Kit, shipped schedule navigation in Chromium)
+        run: |
+          npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-navigation.json
+          for surface in Hono Kit; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-navigation.json "$surface: shipped schedule navigation in Chromium" 16
+          done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
           PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS: "true"
