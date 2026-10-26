@@ -1,6 +1,7 @@
 // Event search logging + TopZeroResultSearches (ports legacy EventSearchLogTest, TOG-8400).
 // Unit parts need no DB; the round-trip runs on agent-testdb (skipped without DATABASE_URL).
 import { serializeSigned } from "hono/utils/cookie";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
@@ -120,6 +121,36 @@ describe("recordSearch is fail-open", () => {
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
+
+function nativeTitleLink(html: string, eventKey: string) {
+  type Node = DefaultTreeAdapterMap["node"];
+  type Element = DefaultTreeAdapterMap["element"];
+  const attribute = (node: Element, name: string) =>
+    node.attrs.find((attr) => attr.name === name)?.value;
+  function find(node: Node, predicate: (element: Element) => boolean): Element | undefined {
+    if ("tagName" in node && predicate(node)) return node;
+    if ("childNodes" in node) {
+      for (const child of node.childNodes) {
+        const match = find(child, predicate);
+        if (match) return match;
+      }
+    }
+    return undefined;
+  }
+  function text(node: Node): string {
+    if (node.nodeName === "#text") return (node as DefaultTreeAdapterMap["textNode"]).value;
+    return "childNodes" in node ? node.childNodes.map(text).join("") : "";
+  }
+  const card = find(
+    parse(html),
+    (node) =>
+      attribute(node, "data-testid") === "event-card" &&
+      attribute(node, "data-event-key") === eventKey,
+  );
+  const heading = card && find(card, (node) => node.tagName === "h3");
+  const link = heading && find(heading, (node) => node.tagName === "a");
+  return link && { href: attribute(link, "href"), text: text(link) };
+}
 
 async function cookieFor(store: SessionStore, moderator: boolean): Promise<string> {
   const token = newSessionToken();
@@ -241,7 +272,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
-    expect(html).toContain("Friday night Helldivers");
+    expect(nativeTitleLink(html, "01ARZ3NDEKTSV4RRFFQ69G5FAA")).toEqual({
+      href: "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
+      text: "Friday night Helldivers",
+    });
     expect(html).not.toContain("Secret draft");
     const past = await (await req("/events?q=chess")).text();
     expect(past).toContain("Old chess night");
@@ -366,7 +400,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     try {
       const res = await req("/events?q=helldiv");
       expect(res.status).toBe(200);
-      expect(await res.text()).toContain("Friday night Helldivers");
+      expect(nativeTitleLink(await res.text(), "01ARZ3NDEKTSV4RRFFQ69G5FAA")).toEqual({
+        href: "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
+        text: "Friday night Helldivers",
+      });
     } finally {
       await db
         .execute(
