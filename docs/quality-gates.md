@@ -90,7 +90,7 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
   `Floor-waiver:` line before matching; path-based waiver parsing removes
   wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:273-292, 294-320`).
+  (`ci/floor-guard.mjs:386-405, 407-433`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -100,7 +100,17 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `.constraintsignore`. An assertion paired with one added in the same test
   file reads as a replacement. A conditional skip paired with a skip removed
   from the same test file reads as a replacement; an unconditional skip added
-  in its place still fails. Failed or oversized diffs exit 2 rather than
+  in its place still fails. JavaScript/TypeScript skips are counted as syntax
+  constructs in complete merge-base and working-tree sources using the existing
+  Babel parser, without executing them or evaluating conditions. Wrapped
+  expressions and multiple gates on one line keep the same count; comments,
+  strings, fixture data and callback-local objects supply no replacement credit.
+  `skip:` keys count only in test-call options (including literal spreads), not
+  arbitrary nested objects. Other languages keep the legacy call spellings.
+  The `guardDiff` fixture API accepts complete source fragments; callers with
+  partial hunks must pass `sources: new Map([[path, { before, after }]])`.
+  Unparseable fragments throw. Unreadable or unparseable test sources make the
+  CLI fail closed with exit 2, as for failed or oversized diffs, rather than
   looking clean.
   Mirror every `Floor-waiver:` trailer from branch commits in canonical form
   in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans

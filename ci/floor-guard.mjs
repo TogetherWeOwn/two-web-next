@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
 
 // Silenced checker — extend for the ecosystem; biome-ignore is this repo's form.
 const SUPPRESSIONS =
@@ -27,41 +28,171 @@ const SUPPRESSIONS =
 const CODE_PATH = /\.(?:[cm]?[jt]sx?|py|sh|go|rs)$/i;
 const STUBS =
   /throw new (Error|NotImplemented).*[Nn]ot implemented|catch\s*\(\w*\)\s*\{\s*\}|catch\s*\{\s*\}|\bTODO\b|\bpass\s*# *stub/;
-// Only test skip calls weaken the test floor; property reads and prose do not.
-const TEST_SKIP_CALL =
-  /\.(?:skip|todo)\s*\(|\b(?:xit|xdescribe)\s*\(|@pytest\.mark\.skip\s*\(|\bt\.Skip\s*\(/;
-// Conditional (gated) skips weaken it too: `.skipIf(`/`.runIf(` calls (and
-// pytest's `skipif`), an options-object `skip:` (on its own line under a test
-// call the zero-context diff cannot see, or inline in the call's options), and
-// ternary suite/test selection that routes to a `.skip`/`.todo` member
-// (`cond ? describe : describe.skip`). A direct alias of that member
-// (`const suite = describe.skip`) is unconditional, so it joins
-// TEST_SKIP_CALL below rather than the conditional tier. The member and
-// inline-option forms name the suite/test functions only, so property reads
-// (`entry.skip`), prose and inline data objects (`{ "/health": { skip: true }
-// }`) stay silent. Values are never evaluated, matching TEST_SKIP_CALL: the
-// guard is syntactic. Conditional adds pair against skips removed from the
-// same file in scanAdded; unconditional adds never pair, so gating a skip
-// that was unconditional (or swapping one gated form for another) is silent
-// while replacing a gated form with an unconditional skip still flags.
-const CONDITIONAL_SKIP_CALL = /\.(?:skipIf|runIf|skipif)\s*\(/;
-const SUITE_OR_TEST = String.raw`(?:describe|context|suite|it|test)(?:\.\w+)*`;
-const SKIP_OPTION_LINE = /^\s*["']?skip["']?\s*:/;
-const SKIP_OPTION_INLINE = new RegExp(
-  String.raw`\b${SUITE_OR_TEST}\s*\([^\n]*\{\s*(?:[^{}]*,\s*)?["']?skip["']?\s*:`,
-);
-const SKIP_MEMBER_TERNARY = new RegExp(
-  String.raw`\?\s*(?:${SUITE_OR_TEST}\.(?:skip|todo)\b|[^?:]*:\s*${SUITE_OR_TEST}\.(?:skip|todo)\b)`,
-);
-const SKIP_MEMBER_ALIAS = new RegExp(
-  String.raw`(?:(?<![=!<>])=(?![=>])|\breturn\b)\s*${SUITE_OR_TEST}\.(?:skip|todo)\s*(?=[;,)\]]|$)`,
-);
-const isConditionalSkip = (text) =>
-  CONDITIONAL_SKIP_CALL.test(text) ||
-  SKIP_OPTION_LINE.test(text) ||
-  SKIP_OPTION_INLINE.test(text) ||
-  SKIP_MEMBER_TERNARY.test(text);
-const isUnconditionalSkip = (text) => TEST_SKIP_CALL.test(text) || SKIP_MEMBER_ALIAS.test(text);
+// Use the parser already installed for the timeout and payload guards. Complete
+// before/after test sources distinguish options from fixture data, ignore prose,
+// and count syntax nodes independently of line wrapping. Never execute sources.
+const JS_PATH = /\.[cm]?[jt]sx?$/i;
+const TEST_API = new Set(["describe", "context", "suite", "it", "test"]);
+const SKIP_NAMES = new Set(["skip", "todo"]);
+const GATED_NAMES = new Set(["skipIf", "runIf", "skipif"]);
+
+function skipInventory(source, file) {
+  const lines = source.split("\n");
+  const found = [];
+  const record = (node, conditional, anchor = node) =>
+    found.push({
+      conditional,
+      first: node.loc.start.line,
+      last: node.loc.end.line,
+      text: lines[anchor.loc.start.line - 1],
+    });
+  if (!JS_PATH.test(file)) {
+    // Keep all legacy spellings outside the JS parser's scope, including
+    // Python decorators and Go's capitalized method. No new language parser.
+    for (const [index, text] of lines.entries()) {
+      if (/^\s*(?:#|\/\/)/.test(text)) continue;
+      const calls =
+        /\.(skip|todo|skipIf|runIf|skipif)\s*\(|\b(?:xit|xdescribe)\s*\(|\bt\.Skip\s*\(/g;
+      for (const match of text.matchAll(calls))
+        found.push({
+          conditional: GATED_NAMES.has(match[1]),
+          first: index + 1,
+          last: index + 1,
+          text,
+        });
+    }
+    return found;
+  }
+  const ast = parse(source, {
+    sourceType: "unambiguous",
+    plugins: /x$/i.test(file) ? ["typescript", "jsx"] : ["typescript"],
+  });
+  const unwrap = (node) => {
+    while (/^TS(As|Satisfies|NonNull|TypeAssertion|Instantiation)Expression$/.test(node?.type))
+      node = node.expression;
+    return node;
+  };
+  const key = (node, computed = false) =>
+    !computed && node?.type === "Identifier"
+      ? node.name
+      : node?.type === "StringLiteral"
+        ? node.value
+        : undefined;
+  const isMember = (node) =>
+    node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression";
+  const isCall = (node) =>
+    node?.type === "CallExpression" || node?.type === "OptionalCallExpression";
+  const isTest = (node) => {
+    node = unwrap(node);
+    if (node?.type === "Identifier") return TEST_API.has(node.name);
+    if (isMember(node)) return isTest(node.object);
+    if (isCall(node)) return isTest(node.callee);
+    return false;
+  };
+  const isSkipMember = (node) => {
+    node = unwrap(node);
+    return (
+      isMember(node) && isTest(node.object) && SKIP_NAMES.has(key(node.property, node.computed))
+    );
+  };
+  const hasSkipOption = (node) => {
+    node = unwrap(node);
+    if (node?.type !== "ObjectExpression") return;
+    for (const prop of node.properties) {
+      if (prop.type === "ObjectProperty" && key(prop.key, prop.computed) === "skip")
+        return prop.key;
+      if (prop.type === "SpreadElement") {
+        const nested = hasSkipOption(prop.argument);
+        if (nested) return nested;
+      }
+    }
+  };
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (isCall(node)) {
+      const callee = unwrap(node.callee);
+      if (isMember(callee)) {
+        const name = key(callee.property, callee.computed);
+        if (SKIP_NAMES.has(name)) record(callee, false, callee.property);
+        else if (GATED_NAMES.has(name)) record(callee, true, callee.property);
+      } else if (callee?.type === "Identifier" && /^(xit|xdescribe)$/.test(callee.name)) {
+        record(callee, false);
+      }
+      if (isTest(callee)) {
+        // Node takes options second; Vitest also supports options third. Never
+        // descend into callback bodies or arbitrary nested metadata for a key.
+        const option = hasSkipOption(node.arguments[1]) ?? hasSkipOption(node.arguments[2]);
+        if (option) record(option, true);
+      }
+    } else if (node.type === "ConditionalExpression") {
+      const target = isSkipMember(node.consequent)
+        ? node.consequent
+        : isSkipMember(node.alternate)
+          ? node.alternate
+          : null;
+      if (target) record(node, true, unwrap(target).property);
+    } else {
+      const value =
+        node.type === "VariableDeclarator"
+          ? node.init
+          : node.type === "ReturnStatement"
+            ? node.argument
+            : node.type === "AssignmentExpression"
+              ? node.right
+              : null;
+      if (isSkipMember(value)) record(unwrap(value), false, unwrap(value).property);
+    }
+    for (const [name, value] of Object.entries(node)) {
+      if (name === "comments" || name.endsWith("Comments")) continue;
+      if (Array.isArray(value)) {
+        for (const child of value) if (child?.type) visit(child);
+      } else if (value?.type) visit(value);
+    }
+  };
+  visit(ast);
+  return found;
+}
+
+function scanSkips(added, removed, sources) {
+  const findings = [];
+  const files = new Set(
+    added
+      .filter(({ file }) => TEST_PATH.test(file) && CODE_PATH.test(file))
+      .map(({ file }) => file),
+  );
+  for (const file of files) {
+    const plus = added.filter((line) => line.file === file);
+    const minus = removed.filter((line) => line.file === file);
+    const source = sources?.get(file);
+    // guardDiff's fixture API accepts complete source fragments. The CLI always
+    // supplies full files, including unchanged context across zero-context hunks.
+    const origin = minus[0]?.from ?? file;
+    const before =
+      TEST_PATH.test(origin) && CODE_PATH.test(origin)
+        ? skipInventory(source?.before ?? minus.map((line) => line.text).join("\n"), origin)
+        : [];
+    const after = skipInventory(source?.after ?? plus.map((line) => line.text).join("\n"), file);
+    const touched = (skip) =>
+      !source || plus.some((line) => line.line >= skip.first && line.line <= skip.last);
+    for (const skip of after.filter((skip) => !skip.conditional && touched(skip)))
+      flag(findings, "test-made-easier", file, skip.text);
+    // Only executable registrations grant credits. Compare individual nodes,
+    // not lines; packing or expanding two registrations cannot alter the count.
+    const conditional = after.filter((skip) => skip.conditional);
+    const previous = before.filter((skip) => skip.conditional).length;
+    const tightened = Math.max(
+      0,
+      before.filter((skip) => !skip.conditional).length -
+        after.filter((skip) => !skip.conditional).length,
+    );
+    const excess = Math.max(0, conditional.length - previous - tightened);
+    if (excess > 0) {
+      for (const skip of conditional.filter(touched).slice(-excess))
+        flag(findings, "test-made-easier", file, skip.text);
+    }
+  }
+  return findings;
+}
 // *-selftest scripts are CI-executed checks too (ci/*-selftest.mjs, .sh and
 // extensionless forms, plus dotted and nested variants such as
 // ci/release-on-promote.selftest.cjs and ci/backup-restore-proof/selftest.py),
@@ -138,6 +269,8 @@ export function parseDiff(diff) {
   let file = "";
   let lastMinus = "";
   let renameFrom = "";
+  let oldLine = 0;
+  let newLine = 0;
   const unquote = (p) => p.replace(/^"(.*)"$/, "$1");
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
@@ -168,8 +301,14 @@ export function parseDiff(diff) {
       } else {
         file = stripPrefix(plus);
       }
+    } else if (line.startsWith("@@ ")) {
+      const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunk) {
+        oldLine = Number(hunk[1]);
+        newLine = Number(hunk[2]);
+      }
     } else if (line.startsWith("+") && !line.startsWith("+++")) {
-      added.push({ file, text: line.slice(1) });
+      added.push({ file, text: line.slice(1), line: newLine++ });
     } else if (line.startsWith("-") && !line.startsWith("---")) {
       // In a renamed file the hunk keeps the destination as its pairing key
       // and carries the old path separately; in a pure deletion (file reset
@@ -179,7 +318,11 @@ export function parseDiff(diff) {
         file,
         from: renameFrom && file ? renameFrom : undefined,
         text: line.slice(1),
+        line: oldLine++,
       });
+    } else if (line.startsWith(" ")) {
+      oldLine++;
+      newLine++;
     }
   }
   return { added, removed, deletedFiles };
@@ -214,28 +357,9 @@ export function loadIgnore(root) {
     .filter((l) => l && !l.startsWith("#"));
 }
 
-export function scanAdded(added, ignore = [], removed = []) {
-  const findings = [];
+export function scanAdded(added, ignore = [], removed = [], sources) {
+  const findings = scanSkips(added, removed, sources);
   const ignored = ignore.map(globToRegExp);
-  // A conditional skip paired with a skip removed from the same test file is
-  // a replacement (a retitled gated suite, one gated form swapped for
-  // another, an unconditional skip made conditional), not an addition: only
-  // the net excess is flagged, mirroring the assertion pairing in
-  // scanRemoved. Removed lines pair by their destination path, so a swap in
-  // a renamed test still pairs; unconditional adds never consume a pair, so
-  // replacing a gated form with a plain skip stays loud.
-  const removedSkips = new Map();
-  for (const { file, from, text } of removed) {
-    const origin = from ?? file;
-    if (
-      file &&
-      CODE_PATH.test(origin) &&
-      TEST_PATH.test(origin) &&
-      (isUnconditionalSkip(text) || isConditionalSkip(text))
-    )
-      removedSkips.set(file, (removedSkips.get(file) ?? 0) + 1);
-  }
-  const pairedSkips = new Map();
   for (const { file, text } of added) {
     // Exception rows are never ignorable, even when the file is listed.
     if (CONSTRAINTS_FILE.test(file) && /^\| *(W|E)\d+ *\|/.test(text))
@@ -244,17 +368,6 @@ export function scanAdded(added, ignore = [], removed = []) {
     if (!isIgnored) {
       if (SUPPRESSIONS.test(text)) flag(findings, "silenced-checker", file, text);
       if (CODE_PATH.test(file) && STUBS.test(text)) flag(findings, "unfinished-work", file, text);
-    }
-    // Test skips always run, even for ignored paths: ignoring the guard's own
-    // test file must not hide a real skip added there.
-    if (CODE_PATH.test(file) && TEST_PATH.test(file)) {
-      if (isUnconditionalSkip(text)) {
-        flag(findings, "test-made-easier", file, text);
-      } else if (isConditionalSkip(text)) {
-        const used = pairedSkips.get(file) ?? 0;
-        if (used < (removedSkips.get(file) ?? 0)) pairedSkips.set(file, used + 1);
-        else flag(findings, "test-made-easier", file, text);
-      }
     }
   }
   return findings;
@@ -458,7 +571,7 @@ export function guardDiff(diff, opts = {}) {
   const { added, removed, deletedFiles } = parseDiff(diff);
   const waivers = opts.waivers ?? new Map();
   return [
-    ...scanAdded(added, opts.ignore ?? [], removed),
+    ...scanAdded(added, opts.ignore ?? [], removed, opts.sources),
     ...scanIgnoreAdditions(added, opts.baseIgnore ?? [], waivers),
     ...scanRemoved(removed, added, waivers),
     ...scanDeleted(deletedFiles, waivers),
@@ -558,11 +671,28 @@ function main() {
   const ignore = waivers.get("new-exemption")?.has(".constraintsignore")
     ? [...new Set([...baseIgnore, ...treeIgnore])]
     : baseIgnore;
-  const findings = guardDiff(`${tracked}\n${untracked}`, {
-    ignore,
-    baseIgnore,
-    waivers,
-  });
+  let findings;
+  try {
+    const diff = `${tracked}\n${untracked}`;
+    const { added, removed } = parseDiff(diff);
+    const baseFilesText = git(["ls-tree", "-r", "--name-only", mergeBase]);
+    if (baseFilesText === null) throw new Error("base file inventory unavailable");
+    const baseFiles = new Set(baseFilesText.split("\n"));
+    const sources = new Map();
+    for (const { file } of added) {
+      if (sources.has(file) || !TEST_PATH.test(file) || !CODE_PATH.test(file)) continue;
+      const origin = removed.find((line) => line.file === file)?.from ?? file;
+      const before = baseFiles.has(origin) ? git(["show", `${mergeBase}:${origin}`]) : "";
+      if (before === null) throw new Error(`base test source unavailable: ${origin}`);
+      sources.set(file, { before, after: readFileSync(join(repoRoot, file), "utf8") });
+    }
+    findings = guardDiff(diff, { ignore, baseIgnore, waivers, sources });
+  } catch {
+    console.error(
+      "floor-guard: could not read or parse test sources; repair source syntax and retry",
+    );
+    process.exit(2);
+  }
 
   if (findings.length === 0) {
     console.log("floor-guard: clean");

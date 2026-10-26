@@ -271,6 +271,217 @@ describe("floor-guard", () => {
     }
   });
 
+  // Whole-source fixtures exercise registrations, not matching-line counts.
+  const skipChanges = (before, after, file = "test/a.test.ts") =>
+    guardDiff(
+      diff(
+        `--- a/${file}\n+++ b/${file}\n@@ -1,${before.split("\n").length} +1,${after.split("\n").length} @@\n` +
+          before
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => `-${line}`)
+            .join("\n") +
+          "\n" +
+          after
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => `+${line}`)
+            .join("\n"),
+      ),
+    ).filter((finding) => finding.rule === "test-made-easier");
+  const gated = (name) => `describe.${"skip" + "If"}(true)("${name}", () => {});`;
+
+  it("detects wrapped gated calls and both wrapped ternary branches", () => {
+    const member = `describe.${"skip"}`;
+    for (const source of [
+      `describe.${"skip" + "If"}\n(true)("x", () => {});`,
+      `describe\n.${"run" + "If"}(db)("x", () => {});`,
+      `const suite = db\n  ? describe\n  : ${member};`,
+      `const suite = db\n  ? ${member}\n  : describe;`,
+    ]) {
+      const findings = skipChanges("", source);
+      assert.equal(findings.length, 1, source);
+      assert.equal(findings[0].file, "test/a.test.ts");
+      assert.equal(
+        findings[0].text,
+        source
+          .split("\n")
+          .find((line) => /skip|runIf/.test(line))
+          .trim(),
+      );
+    }
+  });
+
+  it("detects every whitespace variant of ternary selection", () => {
+    const member = `describe.${"skip"}`;
+    for (let mask = 0; mask < 256; mask++) {
+      const gap = (i) => [" ", "\n", "\n  ", "\t"][(mask >> (i * 2)) & 3];
+      for (const [yes, no] of [
+        [member, "describe"],
+        ["describe", member],
+      ]) {
+        const source = `const suite = db${gap(0)}?${gap(1)}${yes}${gap(2)}:${gap(3)}${no};`;
+        assert.equal(skipChanges("", source).length, 1, source);
+      }
+    }
+  });
+
+  it("does not give replacement credits for comments strings or fixture data", () => {
+    const call = gated("old");
+    const prop = "sk" + "ip";
+    for (const before of [
+      `// ${call}`,
+      `/*\n${call}\n*/`,
+      `const example = ${JSON.stringify(call)};`,
+      `const example = \`${call}\`;`,
+      `const fixture = {\n  ${prop}: true,\n};`,
+    ]) {
+      assert.equal(skipChanges(before, gated("new")).length, 1, before);
+    }
+  });
+
+  it("finds only actual options keys through nested syntax", () => {
+    const prop = "sk" + "ip";
+    for (const source of [
+      `test("x", { ...{ concurrency: false }, ${prop}: true }, () => {});`,
+      `test("x", { metadata: { tags: [] }, "${prop}": true }, () => {});`,
+      `test("x", () => {}, { ${prop}: true });`,
+    ]) {
+      assert.deepEqual(skipChanges("", source), [
+        { rule: "test-made-easier", file: "test/a.test.ts", text: source },
+      ]);
+    }
+  });
+
+  it("does not flag multiline data or data inside test callbacks and titles", () => {
+    const prop = "sk" + "ip";
+    const call = gated("example");
+    for (const source of [
+      `const coverage = {\n  "/health": {\n    ${prop}: true,\n    reason: "JSON, not a document",\n  },\n};`,
+      `test("x", () => { const fixture = { ${prop}: true }; });`,
+      `test("x", { metadata: { ${prop}: true } }, () => {});`,
+      `test(${JSON.stringify(call)}, () => {});`,
+      `// ${call}\n/* ${call} */`,
+    ]) {
+      assert.deepEqual(skipChanges("", source), [], source);
+    }
+  });
+
+  it("counts gates rather than lines when packing or expanding replacements", () => {
+    const first = gated("first");
+    const second = gated("second");
+    const packed = `${first} ${second}`;
+    assert.equal(skipChanges(first, packed).length, 1, "one to two is an increase");
+    assert.deepEqual(skipChanges(packed, `${first}\n${second}`), []);
+    assert.deepEqual(skipChanges(`${first}\n${second}`, packed), []);
+    assert.deepEqual(skipChanges(packed, first), []);
+  });
+
+  it("pins todo ternaries in each branch and direct aliases", () => {
+    const member = `describe.${"to" + "do"}`;
+    for (const source of [
+      `const suite = db ? ${member} : describe;`,
+      `const suite = db ? describe : ${member};`,
+      `const suite = ${member};`,
+      `function choose() { return ${member}; }`,
+    ]) {
+      assert.deepEqual(skipChanges("", source), [
+        { rule: "test-made-easier", file: "test/a.test.ts", text: source },
+      ]);
+    }
+    assert.deepEqual(skipChanges("", `const fixture = { todo: true };`), []);
+    assert.deepEqual(skipChanges("", `const example = "${member}";`), []);
+    assert.equal(skipChanges(gated("old"), `const suite = ${member};`).length, 1);
+  });
+
+  it("uses unchanged call context in the CLI for options and wrapped members", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-syntax-"));
+    try {
+      const git = (args) => {
+        const result = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout.trim();
+      };
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      const path = join(dir, "a.test.mjs");
+      const original = `import { test, describe } from "node:test";\ntest("x", {\n  concurrency: false,\n}, () => {});\nconst suite = true\n  ? describe\n  : describe;\n`;
+      writeFileSync(path, original);
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = () =>
+        spawnSync("node", [guard, "--base", "HEAD"], { cwd: dir, encoding: "utf8" });
+      writeFileSync(
+        path,
+        original.replace("  concurrency:", `  ${"sk" + "ip"}: true,\n  concurrency:`),
+      );
+      const option = run();
+      assert.equal(option.status, 1, option.stderr);
+      assert.match(option.stderr, /\[test-made-easier\] a\.test\.mjs:/);
+      writeFileSync(path, original.replace("  : describe;", `  : describe.${"skip"};`));
+      const ternary = run();
+      assert.equal(ternary.status, 1, ternary.stderr);
+      assert.match(ternary.stderr, /\[test-made-easier\] a\.test\.mjs:/);
+      writeFileSync(path, `${original}\nconst invalid = ( ;\n`);
+      assert.equal(run().status, 2, "unparseable test source must fail closed");
+      const missing = spawnSync("node", [guard, "--base", "missing-ref"], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(missing.status, 2, "invalid base must fail closed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains legacy member and test-call spellings in non-JS paths", () => {
+    for (const file of [
+      "test_example.py",
+      "example_test.go",
+      "example_test.sh",
+      "test_example.rs",
+    ]) {
+      for (const source of [
+        `foo.${"skip"}("x")`,
+        `foo.${"to" + "do"}("x")`,
+        `foo.${"skip" + "if"}(True)`,
+        `${"x" + "it"}("x")`,
+        `${"x" + "describe"}("x")`,
+        `t.${"Skip"}("x")`,
+      ])
+        assert.equal(skipChanges("", source, file).length, 1, `${file}: ${source}`);
+    }
+  });
+
+  it("requires full source context for an ambiguous options-only fragment", () => {
+    const file = "test/a.test.ts";
+    const prop = "sk" + "ip";
+    const patch = diff(`--- a/${file}\n+++ b/${file}\n@@ -2,0 +3 @@\n+  ${prop}: true,`);
+    assert.throws(() => guardDiff(patch), SyntaxError);
+    for (const [before, count] of [
+      ['test("x", {\n  concurrency: false,\n}, () => {});', 1],
+      ["const fixture = {\n  concurrency: false,\n};", 0],
+    ]) {
+      const after = before.replace(
+        "  concurrency: false,",
+        `  concurrency: false,\n  ${prop}: true,`,
+      );
+      const findings = guardDiff(patch, { sources: new Map([[file, { before, after }]]) });
+      assert.equal(findings.filter((finding) => finding.rule === "test-made-easier").length, count);
+    }
+  });
+
+  it("does not charge unchanged gated suites for unrelated source edits", () => {
+    const file = "test/a.test.ts";
+    const old = `${gated("gated")}\ndescribe.${"skip"}("plain", () => {});\n`;
+    const after = `${old}const fixture = true;\n`;
+    const patch = diff(`--- a/${file}\n+++ b/${file}\n@@ -2,0 +3 @@\n+const fixture = true;`);
+    const sources = new Map([[file, { before: old, after }]]);
+    assert.deepEqual(guardDiff(patch, { sources }), []);
+  });
+
   it("flags an added not-implemented stub", () => {
     const findings = guardDiff(
       diff('--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,0 +2 @@\n+throw new Error("Not implemented");\n'),
