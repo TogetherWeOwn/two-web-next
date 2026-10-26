@@ -20,6 +20,12 @@ import {
 } from "../test/helpers/admin-rsvp-pause-review";
 
 const ORIGIN = "https://review.example.test";
+// On event-list the fixture renders the default inventory query, whose
+// normalized URL is /admin/events?sort=starts_at&order=desc, so
+// inventory-originated pause/reopen forms carry that single return_to field.
+// A direct event-edit has no inventory origin and still posts an empty body.
+const expectedPostBody = (surface: Surface) =>
+  surface === "event-list" ? "return_to=%2Fadmin%2Fevents%3Fsort%3Dstarts_at%26order%3Ddesc" : "";
 let kit: Awaited<ReturnType<typeof compileKitPauseReview>>;
 test.beforeAll(async () => {
   kit = await compileKitPauseReview();
@@ -207,7 +213,9 @@ for (const presentation of ["hono", "kit"] as const) {
         await expect(submit).toHaveCount(1);
         await submit.click();
         await expect(f.page.locator("h1")).toHaveText("Fixture pause result");
-        expect(f.mutations).toEqual([{ path: reopenActionFor(surface), body: "" }]);
+        expect(f.mutations).toEqual([
+          { path: reopenActionFor(surface), body: expectedPostBody(surface) },
+        ]);
         expect(new URL(f.page.url()).pathname).toBe(reopenActionFor(surface));
       } finally {
         await f.context.close();
@@ -245,7 +253,9 @@ for (const presentation of ["hono", "kit"] as const) {
           await expect(final).toBeFocused();
           await final.press("Enter");
           await expect(f.page.locator("h1")).toHaveText("Fixture pause result");
-          expect(f.mutations).toEqual([{ path: pauseActionFor(surface), body: "" }]);
+          expect(f.mutations).toEqual([
+            { path: pauseActionFor(surface), body: expectedPostBody(surface) },
+          ]);
           expect(new URL(f.page.url()).pathname).toBe(pauseActionFor(surface));
         } finally {
           await f.context.close();
