@@ -308,10 +308,9 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
 // grow with their bodies. Reverting either allocation must reject its interval;
 // raising either allocation must incorrectly admit its fixed one-byte-over case.
 const SHIPPING_BUDGET_BYTES = readFileSync(new URL("./kit-perf-budget.json", import.meta.url));
-// Three explicit server-gzip allocations are supported: current 334080, the
-// independently measured 334336 ceiling (historical witness 334189, margin 147),
-// and the independently justified 335104 ceiling (combined worst 334994,
-// margin 110; lower 334848 rejects by 146). Fixture lengths below are fixed literals
+// Two explicit server-gzip allocations are supported: current 334080 and the
+// independently justified 335104 ceiling (combined worst 334994, margin 110;
+// lower 334848 rejects by 146). Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
 // an arbitrary widening cannot go green.
@@ -324,7 +323,6 @@ try {
 }
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   334080: { intervalBytes: 333639, exactBytes: 334080, overBytes: 334081 },
-  334336: { intervalBytes: 334189, exactBytes: 334336, overBytes: 334337 },
   335104: { intervalBytes: 334994, exactBytes: 335104, overBytes: 335105 },
 };
 
@@ -332,7 +330,7 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
     Object.hasOwn(SHIPPING_SERVER_GZIP_ALLOCATIONS, String(SHIPPING_SERVER_GZIP_CAP)),
     `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-      `expected one of 334080, 334336, 335104`,
+      `expected one of 334080, 335104`,
   );
 });
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
@@ -429,25 +427,6 @@ function shippingServerGzipCases() {
         axis: "gzip",
         bytes: 334081,
         ceiling: 334080,
-        breach: true,
-      },
-    ];
-  }
-  if (SHIPPING_SERVER_GZIP_CAP === 334336) {
-    return [
-      {
-        name: "server gzip newly allowed interval",
-        group: "kit.server.js",
-        axis: "gzip",
-        bytes: 334189,
-      },
-      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 334336 },
-      {
-        name: "server gzip one byte over",
-        group: "kit.server.js",
-        axis: "gzip",
-        bytes: 334337,
-        ceiling: 334336,
         breach: true,
       },
     ];
@@ -568,7 +547,7 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
     if (unsupported) {
       assert.fail(
         `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-          `expected one of 334080, 334336, 335104`,
+          `expected one of 334080, 335104`,
       );
     }
     const fx = makeShippingFixture(t, group, axis, bytes);

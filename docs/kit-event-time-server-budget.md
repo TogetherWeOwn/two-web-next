@@ -1,15 +1,21 @@
 # Event time: measured server-gzip cost and composition allowance
 
-## Allocation proposal
+## Final decision: no budget change (superseded proposal below)
 
-Move Kit server JavaScript gzip bytes from **334080 to 334336** (one 256-byte
-step) for the event-time composition. Every other numeric ceiling, file cap,
-startup bound, checker, inventory, workflow, runtime, manifest, lock and
-constraint stays unchanged. The budget's complete incoming `$comment` history
-is preserved byte-for-byte (622700 characters on reconciliation main
-`4d9ebeee5`). The original branch aligned three fixed server-gzip boundary
-literals; the reconciliation below incorporates the independent test author's
-explicit allocation mapping instead.
+**No numeric ceiling changes in this branch.** Current main already carries
+the independently justified 335104-byte Kit server gzip ceiling
+([#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826)), which
+covers the event-time composition measured on current main with 753 bytes
+to spare; see the final section for the fresh proof. The earlier proposal
+in this note - move Kit server JavaScript gzip bytes from **334080 to
+334336** (one 256-byte step) - is **withdrawn**: on current main the
+combined composition measures 334351, exceeding 334336 by 15, and lowering
+main's 335104 to 334336 would also reject the composition #1826 covers.
+The budget file and its complete incoming `$comment` history therefore
+stay byte-identical to main, as do the shipping tests (the earlier 334336
+test alignment is reverted to main's version). The measurements below are
+preserved as the history of the superseded proposal; they were accurate
+on their pinned bases.
 
 This allocation is neither feature approval nor release approval. The feature
 owner must incorporate the reviewed decision, remeasure the actual integrated
@@ -229,3 +235,67 @@ These measurements establish build-size behavior only. They do not establish
 browser behavior, accessibility, startup timing or deployment health. No
 staging, production, deployment, host action, migration or new spend is
 involved.
+
+## Superseded by main's 335104 ceiling: current-base proof
+
+Main has since raised the server gzip ceiling from 334080 to 335104 for an
+unrelated composition ([#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826),
+`fdc6f0ea4`), and incoming application changes grew pristine server gzip.
+Recheck the premise on the current base before resolving this branch
+against it; the ACT above is superseded by this section.
+
+Method is unchanged: separate pristine and combined scratch worktrees on
+measured main `a902d670f50dddd0576cdb73606038aff957fa7d`, fresh locked
+root and web dependency installs shared from outside both trees, the
+frozen six-source-file patch reverified at SHA256
+`7c95ba292ed195f39d555b0f270bdd271bd2aee2161a9b094783470ef177d979` and
+applied cleanly (`git apply --check` then `git apply`, six files, no test
+changes), Node 24.22.1, npm 11.19.1, database-URL variables removed,
+two builds per tree. All four builds exit 0 and the canonical checker
+exits 0 on all four under main's unmodified budget:
+
+| Group | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Server JS raw | 1179526 / 1179526 | 1180585 / 1180587 |
+| Server JS gzip | 334043 / 334040 | 334351 / 334351 |
+| Client JS raw | 253949 / 253949 | 254142 / 254142 |
+| Client JS gzip | 102273 / 102273 | 102323 / 102323 |
+| Canonical checker exit under 335104 | 0 / 0 | 0 / 0 |
+
+Counts stay 115 server JS, 54 client JS and 2 CSS files; worker entry
+remains 2551/1219 raw/gzip and CSS 2833/1006. Pristine server gzip grew
+about 170 bytes from incoming main changes (333874 on `4d9ebeee5` to
+334043), so the withdrawn 334336 proposal would now fail. Current main
+later adds only a test-file change
+([#1827](https://github.com/TogetherWeOwn/two-web-next/pull/1827),
+`0fe4dd903`); application source, manifests, lockfiles, the checker and
+the budget are identical to the measured base, so these measurements
+carry forward unchanged.
+
+Per-chunk attribution on the retained build-2 pair (canonical per-file
+gzip arithmetic): `chunks/site-shell.js` +518 raw / +180 gzip,
+`chunks/events.js` +543 raw / +126 gzip, residual five files 0 raw /
++5 gzip net, for a total feature increment of +1061 raw / +311 gzip.
+
+Isolated scratch-budget controls on the retained combined artifacts
+(scratch budget copies only; checker and artifacts untouched): ceiling
+334336 rejects (exit 1), 334350 rejects (exit 1), 334351 admits
+(exit 0), and main's 335104 admits (exit 0). Main's ceiling therefore
+already covers the combined composition with **753 bytes** to spare, and
+no increase is justified. Lowering 335104 to the withdrawn 334336 would
+reject both this composition (334351) and the 334807 composition #1826
+justified.
+
+Resolution on this branch: `ci/kit-perf-budget.json` and
+`ci/check-kit-perf.test.mjs` are taken byte-identical to current main
+(empty `git diff` against main for both files); the only remaining
+change against main is this note. The feature owner still remeasures
+the actual integrated head and must pass exact-head CI and independent
+review; this no-change decision is not feature or release approval.
+
+ACT: withdraw the 334336 allocation and keep main's 335104 ceiling,
+history and shipping tests untouched. WHY: fresh same-dependency
+measurements on the current base prove the existing ceiling already
+covers the event-time composition, and the smaller proposal no longer
+fits. UNDO: not applicable to any shipped number (none changes); revert
+this note only.
