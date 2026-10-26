@@ -254,13 +254,13 @@ export async function compileArchiveKit() {
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
             if (new URL(request.url).pathname === "/events") {
-              return await GET({request, url: new URL(request.url), cookies: {delete() {
+              return await GET({request, url: new URL(request.url), locals: {}, cookies: {delete() {
                 throw new Error("Anonymous calendar fixture unexpectedly consumed a cookie");
               }}, setHeaders: next => {
                 for (const [key, value] of Object.entries(next)) headers.set(key, value);
               }});
             }
-            const data = await load({url: new URL(request.url), request, setHeaders: next => {
+            const data = await load({url: new URL(request.url), locals: {}, setHeaders: next => {
               for (const [key, value] of Object.entries(next)) {
                 if (headers.has(key)) throw new Error("duplicate setHeaders: " + key);
                 headers.set(key, value);

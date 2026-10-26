@@ -3,8 +3,18 @@
   "contract": "no-member-data",
   "version": 1,
   "suite": "test/kit-no-member-data-contract.test.ts",
-  "additionalSuites": ["test/kit-public-events-payload.test.ts"],
+  "additionalSuites": [
+    "test/kit-public-events-payload.test.ts",
+    "test/kit-root-layout-load.test.mjs"
+  ],
   "checks": [
+    {
+      "id": "kit-payload-root-layout",
+      "route": "GET /*",
+      "binding": "web/src/routes/+layout.server.ts",
+      "tests": ["Kit root layout load: requestId forwarding"],
+      "note": "Every Kit page inherits only the validated request reference, never member or session locals; executed exact-shape and hostile-locals checks."
+    },
     {
       "id": "kit-payload-detector",
       "route": null,
