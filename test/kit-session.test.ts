@@ -448,7 +448,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 
-  it("a public Kit-owned request never invokes the session bridge and resolves without locals", async () => {
+  it("a public Kit-owned request never invokes the session bridge and resolves with correlation-only locals", async () => {
     // Public routes render outside the member-read boundary: even a session
     // cookie must not trigger a bridge read. Member-merge detail is pinned in
     // kit-member-dispatch; the real-bridge composition is pinned below.
@@ -468,11 +468,13 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     const res = await dispatchHookRequest(event, deps);
     expect(sessionFor).not.toHaveBeenCalled();
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(seen[0]!.locals).toBeUndefined();
+    // Correlation is not session data: the dispatch merges only the validated
+    // request id, never bridge/session keys, into a public render.
+    expect(seen[0]!.locals).toEqual({ requestId: expect.any(String) });
     expect(res.status).toBe(200);
   });
 
-  it("a failing bridge never 500s a Kit render: resolve still runs without locals", async () => {
+  it("a failing bridge never 500s a Kit render: resolve still runs with correlation-only locals", async () => {
     const deps = depsFor({
       manifest: KIT_MANIFEST,
       sessionFor: vi.fn(async () => {
@@ -482,7 +484,9 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     const event = eventFor("/events/past");
     const res = await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(event.locals).toBeUndefined();
+    // The failed bridge merges nothing; only the dispatch's correlation id
+    // reaches the render.
+    expect(event.locals).toEqual({ requestId: expect.any(String) });
     expect(res.status).toBe(200);
   });
 
@@ -531,12 +535,12 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(deps.honoFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("without a bridge the dispatch behaves exactly as before (no locals)", async () => {
+  it("without a bridge the dispatch merges only the correlation id (no session locals)", async () => {
     const deps = depsFor({ manifest: KIT_MANIFEST });
     const event = eventFor("/events/past");
     await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(event.locals).toBeUndefined();
+    expect(event.locals).toEqual({ requestId: expect.any(String) });
   });
 });
 

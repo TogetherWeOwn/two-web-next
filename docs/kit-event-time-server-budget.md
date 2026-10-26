@@ -1,8 +1,18 @@
 # Event time: measured server-gzip cost and composition allowance
 
-## Final decision: no budget change (superseded proposal below)
+## Latest decision: one measured step on main `7f1dc8c55`
 
-**No numeric ceiling changes in this branch.** Current main already carries
+**Raise only Kit server gzip from 335104 to 335360 bytes.** New main source
+changes supersede the earlier no-change decision: fresh builds measure
+334839/334841 pristine and 335143/335144 with the frozen event-time delta.
+The existing ceiling rejects the composition by 39/40 bytes; one 256-byte
+step leaves at least 216 bytes. See the [current decision](../ci/budgets/decisions/kit-perf/2026-10-26-event-time-composition.md)
+for inputs, attribution, boundary controls and verification. No product or
+test changes ship here; all other ceilings and frozen history stay untouched.
+
+## Historical decision on `a902d670f`: no budget change
+
+**No numeric ceiling change was needed on this pinned base.** That main carried
 the independently justified 335104-byte Kit server gzip ceiling
 ([#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826)), which
 covers the event-time composition measured on current main with 753 bytes
@@ -237,7 +247,7 @@ browser behavior, accessibility, startup timing or deployment health. No
 staging, production, deployment, host action, migration or new spend is
 involved.
 
-## Superseded by main's 335104 ceiling: current-base proof
+## Historical proof on `a902d670f`: superseded by later source growth
 
 Main has since raised the server gzip ceiling from 334080 to 335104 for an
 unrelated composition ([#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826),

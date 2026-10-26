@@ -30,6 +30,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
+import { loadKitBudget } from "./budget-fragments.mjs";
 import {
   KIT_CHECK_IDS,
   KIT_CLIENT_DIR,
@@ -49,7 +50,7 @@ const SCRIPT_NAME = "ci/check-kit-perf.mjs";
 const CHECK_NAME = "kit-perf";
 
 const INVALID_PLAN_NEXT_ACTION =
-  "Fix ci/kit-perf-budget.json to match the canonical inventory " +
+  "Fix the kit budget fragments in ci/budgets/kit/ to match the canonical inventory " +
   "(worker _worker.js, server js, client js and css) defined in ci/bundle-inventory.mjs, " +
   "then rerun node ci/check-kit-perf.mjs";
 const REBUILD_NEXT_ACTION = "Run npm run build --prefix web, then rerun node ci/check-kit-perf.mjs";
@@ -110,7 +111,7 @@ export function measure(root = repoRoot) {
 
   let budget;
   try {
-    budget = JSON.parse(readFileSync(join(root, "ci/kit-perf-budget.json"), "utf8"));
+    budget = loadKitBudget(root);
   } catch (error) {
     errors.push(boundLine(`kit perf budget: cannot enforce: ${error.message}`));
     return fail(2, {
