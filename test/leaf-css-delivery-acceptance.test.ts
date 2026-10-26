@@ -333,10 +333,15 @@ describe("leaf-CSS delivery: leaf-only seam is a source, never a served styleshe
       "public/theme.css",
     ].sort();
     expect(publicCss).toEqual(expectedPublic);
-    const budgets = JSON.parse(readRepo("ci/bundle-budget.json")) as {
-      budgets: Record<string, unknown>;
-    };
-    for (const key of Object.keys(budgets.budgets)) {
+    const budgets: Record<string, unknown> = {};
+    for (const entry of readdirSync(new URL("ci/budgets/bundle", repoRoot))) {
+      if (!entry.endsWith(".json")) continue;
+      const fragment = JSON.parse(readRepo(`ci/budgets/bundle/${entry}`)) as {
+        budgets: Record<string, unknown>;
+      };
+      Object.assign(budgets, fragment.budgets);
+    }
+    for (const key of Object.keys(budgets)) {
       expect(key.endsWith(".css") && !expectedPublic.includes(key), key).toBe(false);
     }
     const minify = readRepo("ci/minify-assets.mjs");
