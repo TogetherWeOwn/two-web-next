@@ -143,7 +143,7 @@ for (const twin of ["Hono", "Kit"] as const) {
               expect(read.sql).toMatch(/leaderboard_opt_out/);
             }
             expect(
-              h.statements.filter((s) => /^select\b/i.test(s.sql) && /\bfrom\b/i.test(s.sql)),
+              h.statements.filter((s) => /^\s*select\b/i.test(s.sql) && /\bfrom\b/i.test(s.sql)),
             ).toHaveLength(reads.length);
             expect(
               h.statements.filter((s) => s.sql.includes('insert into "board_view_logs"')),
