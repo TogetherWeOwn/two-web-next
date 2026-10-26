@@ -1,6 +1,7 @@
 // Post-save regressions kept separate from the independent acceptance contract.
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { build } from "esbuild";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -64,10 +65,19 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         if (/^\/islands\/[a-z0-9-]+\.js$/.test(url.pathname))
           return route.fulfill({
             contentType: "text/javascript",
-            body: readFileSync(
-              (artifact === "source" ? "assets" : "public") + url.pathname,
-              "utf8",
-            ),
+            body:
+              artifact === "source"
+                ? (
+                    await build({
+                      entryPoints: ["assets" + url.pathname],
+                      bundle: true,
+                      platform: "browser",
+                      format: "iife",
+                      minify: false,
+                      write: false,
+                    })
+                  ).outputFiles[0]!.text
+                : readFileSync("public" + url.pathname, "utf8"),
           });
         if (url.pathname.endsWith(".css"))
           return route.fulfill({

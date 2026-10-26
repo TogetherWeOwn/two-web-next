@@ -8,6 +8,7 @@
 // The inventory gate already discovers this .test.ts. Do not merge RED alone.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { build } from "esbuild";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -253,7 +254,19 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           expect(existsSync(file), `requested ${root} island must exist`).toBe(true);
           return route.fulfill({
             contentType: "text/javascript",
-            body: readFileSync(file, "utf8"),
+            body:
+              options.artifact === "source"
+                ? (
+                    await build({
+                      entryPoints: [file],
+                      bundle: true,
+                      platform: "browser",
+                      format: "iife",
+                      minify: false,
+                      write: false,
+                    })
+                  ).outputFiles[0]!.text
+                : readFileSync(file, "utf8"),
           });
         }
         if (url.pathname.endsWith(".css")) {
