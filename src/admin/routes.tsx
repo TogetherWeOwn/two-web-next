@@ -42,6 +42,7 @@ import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
+import { loadGameSuggestions } from "../events/game-suggestions";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   FEATURED_PAGE_SIZE,
@@ -388,9 +389,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.get("/events/new", (c) => {
+  admin.get("/events/new", async (c) => {
     declareAccess(c, { resource: "events", action: "view", route: "admin.events.create" });
-    return bufferedMemberHtml(c, <EventFormPage mode="new" values={{}} errors={{}} />);
+    const games = await loadGameSuggestions(await dbFor(c));
+    return bufferedMemberHtml(
+      c,
+      <EventFormPage mode="new" values={{}} errors={{}} games={games} />,
+    );
   });
 
   admin.post(
@@ -428,7 +433,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            (errors, v) => c.html(<EventFormPage mode="new" values={v} errors={errors} />),
+            async (errors, v) =>
+              c.html(
+                <EventFormPage
+                  mode="new"
+                  values={v}
+                  errors={errors}
+                  games={await loadGameSuggestions(db)}
+                />,
+              ),
             values,
           );
         }
@@ -449,6 +462,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
     const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
+    const games = await loadGameSuggestions(db);
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -459,6 +473,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        games={games}
       />,
     );
   });
@@ -496,8 +511,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+            async (errors, v) =>
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  games={await loadGameSuggestions(db)}
+                />,
+              ),
             values,
           );
         }
@@ -519,8 +542,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+            async (errors, v) =>
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  games={await loadGameSuggestions(db)}
+                />,
+              ),
             values,
           );
         }
@@ -567,8 +598,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               return formError(
                 c,
                 err,
-                (errors, v) =>
-                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+                async (errors, v) =>
+                  c.html(
+                    <EventFormPage
+                      mode="edit"
+                      row={row}
+                      values={v}
+                      errors={errors}
+                      games={await loadGameSuggestions(db)}
+                    />,
+                  ),
                 eventValues(row),
               );
             }
@@ -613,8 +652,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+            async (errors, v) =>
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={row}
+                  values={v}
+                  errors={errors}
+                  games={await loadGameSuggestions(db)}
+                />,
+              ),
             eventValues(row),
           );
         }

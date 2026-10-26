@@ -1,4 +1,5 @@
 import { error } from "@sveltejs/kit";
+import { loadGameSuggestions } from "../../../../../../src/events/game-suggestions";
 import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../../src/admin/db";
 import { resolveKitEventEdit } from "../../../../../../src/admin/kit-event-edit";
@@ -50,5 +51,6 @@ export const load: PageServerLoad = async ({ parent, params, url, setHeaders }) 
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Event not found");
   setHeaders({ "cache-control": "private, no-store" });
-  return { view: outcome.view };
+  const games = await loadGameSuggestions(db);
+  return { view: outcome.view, games };
 };

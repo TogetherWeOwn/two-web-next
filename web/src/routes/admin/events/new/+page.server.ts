@@ -1,4 +1,7 @@
 import type { PageServerLoad } from "./$types";
+import { env } from "cloudflare:workers";
+import { dbFor } from "../../../../../../src/admin/db";
+import { loadGameSuggestions } from "../../../../../../src/events/game-suggestions";
 import { buildEventCreateView } from "../../../../../../src/admin/kit-event-create";
 
 // Server-rendered only: the Hono create form ships only progressive islands
@@ -9,8 +12,9 @@ import { buildEventCreateView } from "../../../../../../src/admin/kit-event-crea
 // admin.events.create): empty values and no errors on a fresh GET. The guard
 // must settle first: SvelteKit starts layout and page loads together, so the
 // read below waits on parent() — a guest 302 or non-moderator 403 propagates
-// before any work. Keep the await outside the try: there is no store read to
-// map to 503 here. Exactly one setHeaders call on the success path:
+// before the optional published-name read. Classified catalog failures omit
+// assistance; other failures retain the existing error diagnostics. Exactly
+// one setHeaders call on the success path:
 // SvelteKit throws `header_already_set` on a double-set.
 // POST /admin/events stays Hono-owned: the ported form keeps submitting to
 // the unchanged Hono handler during mixed mode, so draft-first creation,
@@ -24,5 +28,6 @@ export const csr = false;
 export const load: PageServerLoad = async ({ parent, setHeaders }) => {
   await parent();
   setHeaders({ "cache-control": "private, no-store" });
-  return buildEventCreateView({}, {});
+  const games = await loadGameSuggestions(await dbFor({ env }));
+  return { ...buildEventCreateView({}, {}), games };
 };

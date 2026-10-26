@@ -27,6 +27,7 @@ type Capture = {
 };
 export type NonSensitiveRead =
   | "events"
+  | "published-games"
   | "featured"
   | "activity-log"
   | "join-funnel"

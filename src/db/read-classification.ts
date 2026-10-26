@@ -7,6 +7,7 @@ export type SelectedField = { path: string[]; field: unknown };
 export const normalizedStatement = (statement: string) => statement.trim().replace(/\s+/g, " ");
 
 const fixedStatements = {
+  "published-games": `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1`,
   "join-funnel":
     'select "outcome", count(*) from "join_attempts" where "join_attempts"."created_at" >= $1 group by "join_attempts"."outcome"',
   "search-widget":

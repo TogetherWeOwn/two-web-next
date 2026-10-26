@@ -8,6 +8,7 @@
 // Kit load calls, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
 import { databaseUnavailable } from "../errors";
+import { loadGameSuggestions } from "../events/game-suggestions";
 import { parseSeasonParam } from "../hotzones/season";
 import { recordBoardView } from "../hotzones/board-log";
 import { bufferedMemberHtml, memberReadBoundary } from "../member-reads";
@@ -50,6 +51,7 @@ export function registerMemberLeaderboardRoutes(
     if (!activity.ok) return refused(activity.message);
     const db = await dbFor(c);
     const ranked = await loadMemberRanking(db, window, activity.game, scope.scope, viewer.id);
+    const games = await loadGameSuggestions(db);
     // The relative read already returns its SQL-numbered window (BoardRow):
     // only the overall ranking still needs numbering from the full list.
     const rows =
@@ -71,6 +73,7 @@ export function registerMemberLeaderboardRoutes(
         session={{ ...viewer, avatar: null }}
         query={{ season, scope: scope.scope, activity: activity.game }}
         rows={rows}
+        games={games}
         available={db !== null}
       />,
     );

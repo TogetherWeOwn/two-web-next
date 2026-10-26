@@ -3,6 +3,7 @@ import { deleteCookie } from "hono/cookie";
 import { serializeSigned } from "hono/utils/cookie";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
+import { loadGameSuggestions } from "./events/game-suggestions";
 import { alertRequestError } from "./alerts";
 import {
   queueBoardView,
@@ -238,6 +239,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   rows: MembersBoardRow[];
   viewerUsername: string;
   available: boolean;
+  games: string[];
   appUrl: string;
 }> {
   // Same gate order as the Hono handler: session gate before any grammar,
@@ -256,6 +258,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   if (!activity.ok) refuseWithNoStore(args, branded(activity.message, 400));
   let db: Db | null;
   let ranked: RankedMember[];
+  let games: string[];
   try {
     db = await args.dbForFn({ env: args.env });
     ranked = await (args.loadRankingFn ?? loadMemberRanking)(
@@ -265,6 +268,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
       scope.scope,
       args.session.userId,
     );
+    games = await loadGameSuggestions(db);
   } catch (err) {
     reportBoardFailure(err, args);
   }
@@ -307,6 +311,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
     // renders member chrome with this name, mirroring Hono's session header.
     viewerUsername: args.session.username ?? "",
     available: db !== null,
+    games,
     appUrl: args.env.APP_URL,
   };
 }

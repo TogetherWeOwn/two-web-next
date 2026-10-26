@@ -4,6 +4,7 @@
 // Server-rendered, no script. Rows never link to profiles from here.
 import type { FC } from "hono/jsx";
 import type { Session } from "../env";
+import { gameSuggestionsHint } from "../events/game-suggestions-copy";
 import { utcPeriodShortcuts } from "../hotzones/season";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
@@ -27,7 +28,8 @@ export const MemberLeaderboardPage: FC<{
   rows: BoardRow[];
   /** False when no database is configured: the empty board is not "nobody ranked". */
   available: boolean;
-}> = ({ appUrl, session, query, rows, available }) => {
+  games?: string[];
+}> = ({ appUrl, session, query, rows, available, games = [] }) => {
   const path = boardPath(query);
   const label = query.activity === null ? "every game" : query.activity;
   const periods = utcPeriodShortcuts();
@@ -97,7 +99,25 @@ export const MemberLeaderboardPage: FC<{
           </p>
           <p>
             <label for="board-activity">Game (blank for every game)</label>{" "}
-            <input id="board-activity" name="activity" type="text" value={query.activity ?? ""} />
+            <input
+              id="board-activity"
+              name="activity"
+              type="text"
+              value={query.activity ?? ""}
+              list={games.length ? "board-games" : undefined}
+              aria-describedby={games.length ? "board-games-hint" : undefined}
+            />
+            {games.length ? (
+              <>
+                <datalist id="board-games">
+                  {games.map((game) => (
+                    <option value={game} />
+                  ))}
+                </datalist>
+                <br />
+                <span id="board-games-hint">{gameSuggestionsHint}</span>
+              </>
+            ) : null}
           </p>
           <p>
             <button class="btn" type="submit">

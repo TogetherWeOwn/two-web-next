@@ -1,11 +1,13 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { gameSuggestionsHint } from "../../../../../src/events/game-suggestions-copy";
 import { canonicalUrl } from "../../../../../src/seo";
 import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
+const games = $derived(data.games ?? []);
 const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string, nextSeason = season) => {
@@ -59,7 +61,11 @@ const destination = (nextScope: string, nextSeason = season) => {
     </p>
     <p>
       <label for="board-activity">Game (blank for every game)</label>
-      <input id="board-activity" name="activity" type="text" value={activity ?? ""} />
+      <input id="board-activity" name="activity" type="text" value={activity ?? ""}
+        list={games.length ? "board-games" : undefined}
+        aria-describedby={games.length ? "board-games-hint" : undefined} />
+      {#if games.length}<datalist id="board-games">{#each games as game}<option value={game}></option>{/each}</datalist>
+        <br /><span id="board-games-hint">{gameSuggestionsHint}</span>{/if}
     </p>
     <p><button class="btn" type="submit">Show board</button></p>
   </form>

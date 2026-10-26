@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { gameSuggestionsHint } from "../../../../../../src/events/game-suggestions-copy";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -19,6 +20,7 @@ const values = $derived(data.values ?? {});
 const errors = $derived(data.errors ?? {});
 const hasErrors = $derived(data.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
+const games = $derived(data.games ?? []);
 const timezoneVal = $derived(val("timezone") || "Europe/London");
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const textLimitsIsland =
@@ -72,12 +74,17 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       <input
         id="f-game"
         name="game"
+        list={games.length ? "event-games" : undefined}
         type="text"
         value={val("game")}
         data-event-text-limit={100}
         aria-invalid={errors.game ? "true" : undefined}
-        aria-describedby={errors.game ? "f-game-error" : undefined}
+        aria-describedby={[games.length ? "f-game-hint" : "", errors.game ? "f-game-error" : ""].filter(Boolean).join(" ") || undefined}
       />
+      {#if games.length}
+        <datalist id="event-games">{#each games as game}<option value={game}></option>{/each}</datalist>
+        <p id="f-game-hint" class="hint">{gameSuggestionsHint}</p>
+      {/if}
       {#if errors.game}
         <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
       {/if}

@@ -5,6 +5,7 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { gameSuggestionsHint } from "../../events/game-suggestions-copy";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
@@ -16,7 +17,8 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  games?: string[];
+}> = ({ mode, row, values, errors, action, games = [] }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
@@ -38,17 +40,30 @@ export const EventFormFields: FC<{
             />
           )}
         </Field>
-        <Field name="game" label="Game" errors={errors}>
+        <Field
+          name="game"
+          label="Game"
+          errors={errors}
+          hint={games.length ? gameSuggestionsHint : undefined}
+        >
           {(id) => (
             <input
               id={id}
               name="game"
+              list={games.length ? "event-games" : undefined}
               type="text"
               value={val(values, "game")}
               data-event-text-limit={100}
             />
           )}
         </Field>
+        {games.length ? (
+          <datalist id="event-games">
+            {games.map((game) => (
+              <option value={game} />
+            ))}
+          </datalist>
+        ) : null}
         <Field name="description" label="Description" errors={errors}>
           {(id) => (
             <textarea id={id} name="description" rows={4} data-event-text-limit={1000}>
