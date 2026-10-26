@@ -6,7 +6,7 @@
 // table semantics, aria-current, event-link names, week-start, no-JS anchors)
 // PASS on the same base and must stay green after the build.
 //
-// Contract under test (TOG-42589 item U7):
+// Contract under test (calendar accessibility item U7):
 // - Every calendar date marker — empty cells included, December/January
 //   boundaries included — exposes full-date semantic context using the existing
 //   shared formatter calendarDayLongLabel. Adjacent-month dates are
