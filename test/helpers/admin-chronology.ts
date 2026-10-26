@@ -202,7 +202,8 @@ export type Renderer = "Hono" | "Kit";
 // Bridge the real read functions so the compiled loads share the request's
 // AsyncLocalStorage classifier. Only Worker/Kit environment bindings are faked.
 export async function compileChronologyKit() {
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler");
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler");
   const modules: Record<string, string> = {
     bridge: "export const state = {};",
     db: 'import {state} from "bridge"; export const dbFor=(...a)=>state.dbFor(...a);',
