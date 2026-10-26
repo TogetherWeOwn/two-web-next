@@ -362,5 +362,71 @@ for path in \
   expect_policy_scan "Hono: both approved ids remain detected at ${path}" "${hono_policy}" 1 "${expected}"
 done
 
+# -- RSS event-key exception: exact secrets, exact path, one rule only ---------
+# Missing an approved key must fail the positive case; broadening the exception
+# must fail the neighbouring-value, path or other-rule controls. Build the
+# synthetic literals at runtime so this policy test needs no exemption itself.
+rss_path="test/rss-game-scope-category-refresh-acceptance.test.ts"
+rss_key_one="$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA X)"
+rss_key_two="$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA Y)"
+
+plant_rss_keys() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'const THIRD_KEY = "%s";\nconst FOURTH_KEY = "%s";\n' \
+    "${rss_key_one}" "${rss_key_two}" > "${repo}/$1"
+}
+
+new_repo rss-approved
+plant_rss_keys "${rss_path}"
+base_commit
+expect_policy_scan "RSS: stock rules detect both synthetic event keys" "${work}/stock.toml" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+expect_policy_scan "RSS: candidate excludes both keys at the exact path" "${hono_policy}" 0 '[]'
+
+new_repo rss-other-secrets
+mkdir -p "${repo}/test"
+printf 'const NEIGHBOUR_KEY = "%s";\nvalue = "%s"\n' \
+  "$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA Z)" "${token}" > "${repo}/${rss_path}"
+base_commit
+expect_policy_scan "RSS: a nearby key and another secret rule remain detected at the allowed path" \
+  "${hono_policy}" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["github-pat","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+
+new_repo rss-longer-secrets
+mkdir -p "${repo}/test"
+printf 'const PREFIXED_KEY = "x%s";\nconst SUFFIXED_KEY = "%sx";\n' \
+  "${rss_key_one}" "${rss_key_two}" > "${repo}/${rss_path}"
+base_commit
+expect_policy_scan "RSS: approved keys embedded in longer secrets remain detected" "${hono_policy}" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/rss-game-scope-category-refresh-acceptance.test.ts \
+  test/rss-game-scope-category-refresh-acceptance.test.ts.bak \
+  test/rss-game-scope-category-refresh-acceptanceXtest.ts \
+  test/rss-game-scope-category-refresh-acceptance.testXts; do
+  new_repo "rss-path-${cases}"
+  plant_rss_keys "${path}"
+  base_commit
+  expected="$(printf '[["generic-api-key","%s",1],["generic-api-key","%s",2]]' "${path}" "${path}")"
+  expect_policy_scan "RSS: both keys remain detected at ${path}" "${hono_policy}" 1 "${expected}"
+done
+
+new_repo rss-pr-policy
+write_stock_config
+base_commit
+plant_rss_keys "${rss_path}"
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+pr_commit
+expect "RSS: candidate policy cannot exempt its own PR" 1 "$(scan_rc pull_request)"
+
+new_repo rss-base-policy
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+base_commit
+plant_rss_keys "${rss_path}"
+pr_commit
+expect "RSS: merged base policy admits the fixture history" 0 "$(scan_rc pull_request)"
+
 printf '\n%d cases, %d failed\n' "${cases}" "${failures}"
 [[ "${failures}" -eq 0 ]]
