@@ -1,7 +1,8 @@
 // Suggestions assist manual entry; they never define the validator's allowlist.
 // Bound both work and DOM size, even with a broken/polyfilled Intl provider.
-// Validating every zone is too much main-thread work for one task at page
-// load, so population runs in small slices and completes on first focus.
+// Validating every zone is too much main-thread work at page load, so only a
+// first slice is offered immediately; the rest completes on first focus,
+// before the suggestion list can be opened.
 export function suggestTimezones(input: HTMLInputElement | null): void {
   const list = input?.list;
   if (!list?.options || list.options.length) return;
@@ -10,27 +11,23 @@ export function suggestTimezones(input: HTMLInputElement | null): void {
   let index = 0;
   const seen = new Set<string>();
   function step(all?: boolean) {
-    // Per-zone validation can throw on a broken provider; the catch below
-    // skips just that entry and keeps going.
     try {
       zones ??= Intl.supportedValuesOf("timeZone");
       total ||= zones.length > 512 ? 512 : zones.length;
-      const end = !all && index + 32 < total ? index + 32 : total;
-      for (; index < end; index++) {
+    } catch {
+      // Missing/throwing Intl leaves manual entry alone.
+      return;
+    }
+    const end = !all && index + 32 < total ? index + 32 : total;
+    for (; index < end; index++) {
+      // Per-zone validation can throw on a broken provider; skip just it.
+      try {
         const zone = zones[index];
-        new Intl.DateTimeFormat("en", { timeZone: zone });
         if (!zone || seen.has(zone)) continue;
+        new Intl.DateTimeFormat("en", { timeZone: zone });
         seen.add(zone);
         list.appendChild(new Option(zone));
-      }
-      if (index < total) setTimeout(step, 0);
-    } catch {
-      // Missing/throwing Intl leaves manual entry alone. An unformattable
-      // entry from a broken provider only skips itself: retry past it.
-      if (index < total) {
-        index++;
-        setTimeout(step, 0);
-      }
+      } catch {}
     }
   }
   step();
