@@ -15,6 +15,12 @@ import type { Browser, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JoinResult } from "../src/return-journey";
 import {
+  SAFE_JOIN_DESTINATION,
+  SAFE_JOIN_INSTRUCTIONS,
+  UNICODE_JOIN_DESTINATIONS,
+  admittedPrintJoining,
+} from "./helpers/event-print-joining-fixtures";
+import {
   CANONICAL,
   RELATED_TITLE,
   ROSTER_NAME,
@@ -66,7 +72,7 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
     const TWINS: Twin[] = ["Hono", "Kit"];
     const evidence = process.env.EVENT_PRINT_EVIDENCE_DIR;
     const CLUTTER =
-      'header, footer, nav, form, button, select, a[href="#main"], a[href$=".ics"], a[href="/events"], a[href="/events/past"], [data-testid="event-attendees"], [data-testid="event-copy-link"], [data-testid="event-ics"], [data-testid="event-google-calendar"], [data-testid="event-join-pitch"]';
+      'header, footer, nav, form, button, input, select, a[href="#main"], a[href$=".ics"], a[href="/events"], a[href="/events/past"], [data-testid="event-attendees"], [data-testid="event-copy-link"], [data-testid="event-ics"], [data-testid="event-google-calendar"], [data-testid="event-join-pitch"]';
     const LONG_TITLE = `Overnight stories ${"with friends ".repeat(18)}終`;
     const LONG_DESCRIPTION = `${"A complete paragraph about a welcoming chess evening. ".repeat(180)}FINAL-PARAGRAPH`;
 
@@ -229,6 +235,94 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
 
         // These joining fields exist only in Hono. Do not invent a Kit surface.
         if (twin === "Hono") {
+          it.each(UNICODE_JOIN_DESTINATIONS)(
+            "U1.2 admitted Unicode joining URL stays off paper: $name",
+            async ({ destination }) => {
+              const parsed = admittedPrintJoining(destination);
+              const instructions = `Use headphones.\nOpen ${destination}\nBring a board.`;
+              expect(parsed.join_url, "CONTROL: actual form accepts full destination").toBe(
+                destination,
+              );
+              expect(parsed.join_instructions).toBe(instructions);
+              await usingPage(
+                twin,
+                printRow({
+                  join_url: parsed.join_url,
+                  join_instructions: parsed.join_instructions,
+                }),
+                "member",
+                async (page, data, reads) => {
+                  const link = page.getByTestId("event-public-join-link");
+                  const original = page.getByTestId("event-join-instructions");
+                  expect(await link.isVisible(), "CONTROL: authorized destination is served").toBe(
+                    true,
+                  );
+                  expect(await link.getAttribute("href")).toBe(destination);
+                  expect(await original.isVisible()).toBe(true);
+                  expect(await original.textContent(), "CONTROL: screen bytes remain intact").toBe(
+                    instructions,
+                  );
+                  expect(await printText(page)).toContain("fixture-secret");
+                  const beforeRequests = [...data.requests];
+                  const beforeReads = [...reads];
+                  await page.emulateMedia({ media: "print" });
+                  const text = await printText(page);
+                  expect
+                    .soft(text, "complete unsafe URL stays off paper")
+                    .not.toContain(destination);
+                  expect
+                    .soft(
+                      text,
+                      "Unicode separator cannot hide the unsafe suffix from classification",
+                    )
+                    .not.toContain("fixture-secret");
+                  const sensitive = page.locator('a[href*="fixture-secret"]');
+                  expect(await sensitive.count(), "CONTROL: unsafe link exists on screen").toBe(1);
+                  for (let i = 0; i < (await sensitive.count()); i++)
+                    expect
+                      .soft(await sensitive.nth(i).isVisible(), "no active paper link")
+                      .toBe(false);
+                  expect.soft(text).toContain("Use headphones.");
+                  expect.soft(text).toContain("Bring a board.");
+                  expect.soft(text).toContain(printRow().title);
+                  await page.emulateMedia({ media: "screen" });
+                  expect(await link.isVisible()).toBe(true);
+                  expect(await link.getAttribute("href")).toBe(destination);
+                  expect(await original.isVisible()).toBe(true);
+                  expect(await original.textContent()).toBe(instructions);
+                  expect(reads).toEqual(beforeReads);
+                  expect(data.requests).toEqual(beforeRequests);
+                  expect(data.unexpected).toEqual([]);
+                },
+              );
+            },
+          );
+
+          it("U1.2 CONTROL: harmless joining URL plus ASCII-space prose remains printable", async () => {
+            await usingPage(
+              twin,
+              printRow({
+                join_url: SAFE_JOIN_DESTINATION,
+                join_instructions: SAFE_JOIN_INSTRUCTIONS,
+              }),
+              "member",
+              async (page) => {
+                const original = page.getByTestId("event-join-instructions");
+                expect(await original.textContent()).toBe(SAFE_JOIN_INSTRUCTIONS);
+                await page.emulateMedia({ media: "print" });
+                const text = await printText(page);
+                expect(text).toContain(`Open ${SAFE_JOIN_DESTINATION} room for beginners.`);
+                expect(text).toContain("Use headphones.");
+                expect(text).toContain("Bring a board.");
+                expect(text).toContain(printRow().title);
+                expect(await page.getByTestId("event-public-join-link").isVisible()).toBe(false);
+                await page.emulateMedia({ media: "screen" });
+                expect(await original.isVisible()).toBe(true);
+                expect(await original.textContent()).toBe(SAFE_JOIN_INSTRUCTIONS);
+              },
+            );
+          });
+
           it.each([
             [
               "session path parameter",
@@ -584,6 +678,96 @@ describe.skipIf(process.env.EVENT_PRINT_BROWSER_TESTS !== "true")(
             true,
           );
         });
+
+        // A JS-disabled fixture cannot catch CSS that hides only the Compare
+        // button: the real island must first reveal the input, label and examples.
+        it.each(["before comparison", "after comparison"] as const)(
+          "U1.2 revealed chosen-timezone interaction stays off paper: %s",
+          async (state) => {
+            const row = printRow();
+            await usingPage(
+              twin,
+              row,
+              "guest",
+              async (page, data, reads) => {
+                const input = page.getByTestId("event-chosen-timezone-input");
+                const button = page.getByTestId("event-chosen-timezone-button");
+                const status = page.getByTestId("event-chosen-timezone-status");
+                const label = page.locator('label[for="chosen-timezone-input"]');
+                const examples = page.getByTestId("event-chosen-timezone-examples");
+                const heading = page.getByText("Compare in another timezone", { exact: true });
+                await input.waitFor({ state: "visible" });
+                expect(await input.isEditable(), "CONTROL: real island initialized").toBe(true);
+                for (const control of [button, label, examples, heading])
+                  expect(await control.isVisible(), "CONTROL: real comparison UI revealed").toBe(
+                    true,
+                  );
+                const labelText = (await label.innerText()).trim();
+                const examplesText = (await examples.innerText()).trim();
+                const starts = page
+                  .locator(`time[datetime="${row.startsAt.toISOString()}"]`)
+                  .first();
+                const ends = page.locator(`time[datetime="${row.endsAt!.toISOString()}"]`).first();
+                const authoritative = [await starts.innerText(), await ends.innerText()];
+                expect(authoritative[0]).toMatch(/10 Jan(?:uary)? 2030/);
+                expect(authoritative[0]).toContain("23:30");
+                expect(authoritative[1]).toMatch(/11 Jan(?:uary)? 2030/);
+                expect(authoritative[1]).toContain("02:15");
+                for (const text of authoritative) expect(text).toMatch(/GMT\+00:00|UTC/);
+                await input.fill("Asia/Tokyo");
+                if (state === "after comparison") {
+                  await button.click();
+                  await expect.poll(() => status.innerText()).toContain("Asia/Tokyo");
+                  expect(await status.innerText()).toMatch(/08:30/);
+                  expect(await status.innerText()).toMatch(/11:15/);
+                } else expect(await status.innerText()).toBe("");
+                const beforeRequests = [...data.requests];
+                const beforeReads = [...reads];
+                await page.emulateMedia({ media: "print" });
+                for (const [name, control] of [
+                  ["input", input],
+                  ["label", label],
+                  ["examples", examples],
+                  ["heading", heading],
+                  ["button", button],
+                ] as const)
+                  expect
+                    .soft(await control.isVisible(), `no chosen-timezone ${name} on paper`)
+                    .toBe(false);
+                expect.soft(await visibleClutter(page), "including the revealed input").toEqual([]);
+                const text = await printText(page);
+                expect.soft(text).not.toContain(labelText);
+                expect.soft(text).not.toContain(examplesText);
+                expect.soft(text).not.toContain("Compare in another timezone");
+                expect.soft(text).toContain(row.title);
+                expect.soft(text).toContain(row.description!);
+                for (const original of authoritative) expect.soft(text).toContain(original);
+                expect.soft(await starts.isVisible()).toBe(true);
+                expect.soft(await ends.isVisible()).toBe(true);
+                // The computed result may stay printable or the entire row may
+                // be hidden. Neither choice may erase the authoritative schedule.
+                await page.emulateMedia({ media: "screen" });
+                expect(await input.isVisible()).toBe(true);
+                expect(await input.inputValue(), "media changes preserve the user's draft").toBe(
+                  "Asia/Tokyo",
+                );
+                for (const control of [button, label, examples, heading])
+                  expect(await control.isVisible()).toBe(true);
+                await input.fill("Europe/London");
+                await button.click();
+                await expect.poll(() => status.innerText()).toContain("Europe/London");
+                expect(await status.innerText()).toContain("23:30");
+                expect(await status.innerText()).toContain("02:15");
+                expect([await starts.innerText(), await ends.innerText()]).toEqual(authoritative);
+                expect(reads).toEqual(beforeReads);
+                expect(data.requests).toEqual(beforeRequests);
+                expect(data.unexpected).toEqual([]);
+              },
+              1280,
+              true,
+            );
+          },
+        );
 
         it("U1.1 CONTROL: overnight dates follow the host zone, not the UTC calendar date", async () => {
           const row = printRow({
