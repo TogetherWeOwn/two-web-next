@@ -1,6 +1,36 @@
 # Kit schedule return: measured server gzip allowance
 
-## Current decision (after the second reconciliation)
+## Current decision (after the budget-fragment reconciliation)
+
+Main's [#1858](https://github.com/TogetherWeOwn/two-web-next/pull/1858) replaced
+the monolithic budget files with per-unit fragments. Reconcile onto main
+`0f8fdd17f21abe7d0f7c015001b9415b180efe99` by accepting that deletion and moving
+only this branch's unique history, verbatim, into the new
+[schedule-return decision](../ci/budgets/decisions/kit-perf/2026-10-26-schedule-return-server-gzip.md).
+Every fragment, frozen legacy decision, checker and test remains byte-identical
+to incoming main. Do not restore `ci/kit-perf-budget.json`: alongside fragments
+it is ambiguous authority and the checker fails closed.
+
+All production inputs (`src/`, `assets/`, `public/`, `web/`, root package manifest
+and lockfile, TypeScript and Wrangler configuration) are byte-identical between
+this main and the previously measured `0fe4dd903`. The earlier composition below
+is same-input historical evidence, not a new execution or approval. The parent
+must remeasure its real integrated head with the fragment-aware checker.
+
+Fresh resolved-tree verification (Node 24.22.1, npm 11.19.1, locked external
+installs, production build with database/token/secret variables scrubbed):
+
+- Two `npm run build --prefix web` executions and the fragment-aware canonical
+  checker both exit 0. Server: 115 files, 1179528/1179526 raw bytes, both
+  334041 gzip; client: 54 files, 253949 raw / 102273 gzip. Worker: 2551 raw /
+  1219 gzip; CSS: two files, 2833 raw / 1006 gzip. Startup is not timed.
+- The exact CI Kit node-test batch, now including fragment tests, passes
+  **192/192**; checker selftest passes **12/12**. Before removing the obsolete
+  monolith, the fragment/shipping batch fails on ambiguous authority; afterwards
+  it passes **62/62**, with no test changes.
+- Lint (2104 files), typecheck, documentation links and floor guard pass.
+  Full `npm run check`, browser/a11y/Lighthouse, DB and live probes are not run.
+  No feature or release acceptance is claimed.
 
 Main has independently landed the identical ceiling this PR proposed, so the
 reconciled PR now moves **no** numeric bound and records the evidence only:
