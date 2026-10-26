@@ -309,7 +309,7 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
 // raising either allocation must incorrectly admit its fixed one-byte-over case.
 const SHIPPING_BUDGET_BYTES = readFileSync(new URL("./kit-perf-budget.json", import.meta.url));
 // Three explicit server-gzip allocations are supported: current 334080, the
-// independently measured 334336 ceiling (combined worst 334189, margin 147),
+// independently measured 334336 ceiling (historical witness 334189, margin 147),
 // and the independently justified 335104 ceiling (combined worst 334994,
 // margin 110; lower 334848 rejects by 146). Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
