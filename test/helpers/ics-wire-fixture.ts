@@ -41,7 +41,7 @@ export function calendarRow(overrides: Partial<CalendarRow> = {}): CalendarRow {
 }
 
 // Hand-derived wire fixture, not computed with a production encoder.
-export function healthyVevent(key = KEY): string {
+export function healthyVevent(key = KEY, game: string | null = null): string {
   return [
     "BEGIN:VEVENT",
     `UID:${key}@next.example.test`,
@@ -53,6 +53,7 @@ export function healthyVevent(key = KEY): string {
     "STATUS:CONFIRMED",
     "DESCRIPTION:Bring stims.",
     "LOCATION:Voice: General",
+    ...(game === null ? [] : [`CATEGORIES:${game}`]),
     `URL:${APP_URL}/e/${key}`,
     "BEGIN:VALARM",
     "TRIGGER:-PT30M",
@@ -73,6 +74,8 @@ export function calendarBytes(...vevents: string[]): string {
       "METHOD:PUBLISH",
       "X-WR-CALNAME:Together We Own Events",
       "X-WR-CALDESC:Upcoming events from Together We Own",
+      "REFRESH-INTERVAL;VALUE=DURATION:PT5M",
+      "X-PUBLISHED-TTL:PT5M",
       "",
     ].join("\r\n") +
     vevents.join("") +

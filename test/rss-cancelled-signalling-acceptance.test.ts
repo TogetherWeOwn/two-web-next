@@ -98,6 +98,7 @@ function channelHead(lastBuildDate: string): string {
     `<link>${APP_URL}/events</link>` +
     `<atom:link href="${APP_URL}/events.rss" rel="self" type="application/rss+xml" />` +
     "<description>Upcoming events from Together We Own</description>" +
+    "<ttl>5</ttl>" +
     `<lastBuildDate>${lastBuildDate}</lastBuildDate>`
   );
 }

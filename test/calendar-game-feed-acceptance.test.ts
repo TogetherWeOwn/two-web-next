@@ -127,7 +127,7 @@ describe("public game-scoped calendar collection", () => {
       expect(response.status).toBe(200);
       assertPublic(response);
       const body = await response.text();
-      expect(body).toBe(calendarBytes(healthyVevent()));
+      expect(body).toBe(calendarBytes(healthyVevent(KEY, "Helldivers 2")));
       expect(response.headers.get("etag")).toBe(
         `"${createHash("sha256").update(body).digest("hex")}"`,
       );
@@ -292,11 +292,11 @@ describe("public game-scoped calendar collection", () => {
     expect(source.getSession).not.toHaveBeenCalled();
   });
 
-  it("CONTROL: q/month/page do not filter ICS and game does not scope RSS", async () => {
+  it("CONTROL: q/month/page do not filter ICS or RSS", async () => {
     const source = fixture();
     const feed = await source.request("/events.ics?q=not-found&month=2030-01&page=9");
-    expect(await feed.text()).toBe(calendarBytes(healthyVevent()));
-    const rss = await source.request("/events.rss?game=not-found");
+    expect(await feed.text()).toBe(calendarBytes(healthyVevent(KEY, "Helldivers 2")));
+    const rss = await source.request("/events.rss?q=not-found&month=2030-01&page=9");
     expect(rss.status).toBe(200);
     expect(await rss.text()).toContain("Friday night Helldivers");
     expect(source.queries).toHaveLength(2);
