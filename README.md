@@ -254,8 +254,8 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional suites (Kit member-auth, native event share and
-the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional suites (Kit member-auth, Kit admin contrast,
+native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -303,7 +303,7 @@ to execute the same Chromium proof.
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
 | `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
-| `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (14 cases for each Hono/Kit and source/shipped bundle pairing; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (16 cases for each Hono/Kit and source/shipped bundle pairing, enforced minimum 14; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
