@@ -139,7 +139,11 @@ for (const renderer of ["Hono", "Kit"] as const) {
         });
         await expect(first).toHaveCount(1);
         const firstUrl = page.url();
-        await Promise.all([page.waitForURL((url) => url.href !== firstUrl), first.press("Enter")]);
+        // Click recovery links; don't Enter them. Enter activates only the
+        // focused element, and a lost activation navigates nowhere, so
+        // waitForURL hangs to the test timeout. Keyboard coverage of the
+        // roster controls lives in RAF-B01; B03/BC01 already click these links.
+        await Promise.all([page.waitForURL((url) => url.href !== firstUrl), first.click()]);
         await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         expect(new URL(page.url()).hash).toBe("#rsvp-roster");
         expect(new URL(page.url()).searchParams.get("roster_status")).toBe("waitlisted");
@@ -149,10 +153,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(page.getByTestId("roster-range")).toContainText(/0\s*[-–]\s*0 of 0/);
         const clear = page.getByRole("link", { name: "Clear roster filters", exact: true });
         const filteredUrl = page.url();
-        await Promise.all([
-          page.waitForURL((url) => url.href !== filteredUrl),
-          clear.press("Enter"),
-        ]);
+        await Promise.all([page.waitForURL((url) => url.href !== filteredUrl), clear.click()]);
         await expect(page.getByTestId("roster-range")).toContainText(/of 420/);
         const url = new URL(page.url());
         expect(url.hash).toBe("#rsvp-roster");
