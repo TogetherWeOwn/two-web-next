@@ -118,7 +118,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(closedHtml).not.toContain("Past navigation gathering");
       expect(cardKeys(closedHtml)).toEqual(cardKeys(openHtml));
       expect(fixture.queries.length - before).toBe(8);
-      expect(closed.headers.get("cache-control")).toMatch(/private.*no-store/);
+      expect(closed.headers.get("cache-control")).toBe("public, max-age=60");
       expect(closed.headers.get("set-cookie")).toBeNull();
     });
   });

@@ -333,7 +333,8 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(await link.count()).toBe(1);
         const destination = await link.getAttribute("href");
         journey.failNext();
-        await link.click();
+        await link.focus();
+        await link.press("Enter");
         await expect.poll(() => page.getByTestId("events-read-retry").isVisible()).toBe(true);
         expect(await snapshot(page)).toEqual(before);
         await usableFocus(page);
