@@ -77,7 +77,10 @@ for (const renderer of ["Hono", "Kit"] as const) {
         const sort = section.getByRole("link", { name: /sort by waitlist position ascending/i });
         await expect(sort).toHaveCount(1);
         await sort.focus();
-        await page.keyboard.press("Enter");
+        await Promise.all([
+          page.waitForURL(/roster_sort=waitlist&roster_order=asc/),
+          page.keyboard.press("Enter"),
+        ]);
         await expect(page).toHaveURL(/roster_sort=waitlist&roster_order=asc/);
         let url = new URL(page.url());
         expect(url.searchParams.get("roster_sort")).toBe("waitlist");
@@ -85,7 +88,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         expect(url.searchParams.has("roster_page")).toBe(false);
         await section.getByRole("searchbox").fill(middleName);
         await section.getByRole("button", { name: "Search", exact: true }).focus();
-        await page.keyboard.press("Enter");
+        await Promise.all([page.waitForURL(/roster_q=/), page.keyboard.press("Enter")]);
         await expect(page).toHaveURL(/roster_q=/);
         url = new URL(page.url());
         expect(url.searchParams.get("roster_q")).toBe(middleName);
@@ -94,7 +97,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         expect(url.searchParams.has("roster_page")).toBe(false);
         const next = section.getByRole("link", { name: "Next", exact: true });
         await next.focus();
-        await page.keyboard.press("Enter");
+        await Promise.all([page.waitForURL(/roster_page=2/), page.keyboard.press("Enter")]);
         await expect(page).toHaveURL(/roster_page=2/);
         url = new URL(page.url());
         expect(url.searchParams.get("roster_q")).toBe(middleName);
