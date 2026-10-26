@@ -117,6 +117,12 @@ const lineup = $derived(
         {#if event.location}
           <span class="event-related-location">{event.location}</span>
         {/if}
+        {#if event.game}
+          <span class="event-related-game">{event.game}</span>
+        {/if}
+        {#if event.availability}
+          <span class="event-related-state">{event.availability}</span>
+        {/if}
       </a>
     {/if}
   {/snippet}
@@ -449,6 +455,12 @@ const lineup = $derived(
                 <time datetime={event.datetime}>{event.whenText}</time>
                 {#if event.location}
                   {" "}<span class="event-related-location">{event.location}</span>
+                {/if}
+                {#if event.game}
+                  {" "}<span class="event-related-game">{event.game}</span>
+                {/if}
+                {#if event.availability}
+                  {" "}<span class="event-related-state">{event.availability}</span>
                 {/if}
               </a>
             </li>
