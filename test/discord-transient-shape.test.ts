@@ -2,10 +2,12 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { document, tag, testId, text } from "./helpers/schedule-search-context-acceptance";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { liveDiscordEventsSource } from "../src/events/discord-transients";
 import { registerEventRoutes } from "../src/events/routes";
+import { EVENT_CARD_TESTID } from "../src/islands/contracts";
 
 const NOW = new Date("2030-01-01T00:00:00Z");
 const env = {
@@ -49,6 +51,16 @@ function mountedCalendar() {
     async () => null,
   );
   return { app, bindings: { ...env, ADMIN_DB: db as unknown as Db } as Env };
+}
+
+// Native heading text of every rendered card, in order. A search match may
+// wrap title segments in <mark>, which breaks the raw-HTML substring a plain
+// title check looks for; the parsed h3 text is the title a reader sees, so
+// searched-card title assertions inspect it instead. Discord-managed cards
+// render the title as span text directly under h3 (no detail-page link),
+// unlike persisted cards whose title is h3 > a.
+function discordCardTitleTexts(html: string): string[] {
+  return testId(document(html), EVENT_CARD_TESTID).map((card) => text(tag(card, "h3")[0]!));
 }
 
 describe("Discord transient payload admission", () => {
@@ -97,7 +109,8 @@ describe("Discord transient payload admission", () => {
     const { app, bindings } = mountedCalendar();
     const response = await app.request("/events?q=raid", undefined, bindings);
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("Healthy raid");
+    const html = await response.text();
+    expect(discordCardTitleTexts(html)).toContain("Healthy raid");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

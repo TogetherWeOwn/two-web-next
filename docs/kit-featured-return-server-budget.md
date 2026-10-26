@@ -7,15 +7,17 @@ ship or approve that feature. The initial proposal changed only
 **333568 → 333824 B**. Main subsequently allocated that ceiling in
 [#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799), then independently
 raised server gzip to 334080 B and client raw to 254976 B through
-[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800). Two conflict
-reconciliations kept **no numeric change relative to main** while the base moved
-only through budgets. The third reconciliation remeasures on a base that moved
-through product sources (#1778, #1808): pristine main now builds 333874 gzip B
-and the true combined tree builds 334473–334474 gzip B, over the inherited
-334080 cap by 393–394 B. This PR therefore allocates two 256 B steps,
-**334080 → 334592 B**, the minimum fitting allocation. All incoming
-history and all three earlier featured-return records are retained; the latest
-remeasurement below confirms the feature fits without any further allowance.
+[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800). The third and
+fourth measurement rounds proposed 334592 B on their then-current sources.
+Main has since independently adopted **335104 B** through
+[#1826](https://github.com/TogetherWeOwn/two-web-next/pull/1826), and product
+sources moved again. The latest reconciliation below rebuilds pristine main
+and the true feature union: **334039–334040 B** and **334652–334653 B** server
+gzip respectively. Both fit main's existing ceiling. This PR now has **no
+numeric or test change relative to main**: retain all incoming limits and tests
+verbatim, preserve both decision histories, and add the remeasurement record.
+Earlier measurements and rejected proposals below are historical, not current
+allocation instructions.
 
 ## Locked inputs and method
 
@@ -326,14 +328,73 @@ remeasured current union needs 334592 B and one step still refuses it.
 UNDO: drop the local merge; main's #1779 history and #1814 tests are
 untouched.
 
+## Latest reconciliation: main's existing allocation covers the union
+
+The conflict reminder still names published head `bce7b43b4`. Recovery found an
+unfinished local merge of main `0fe4dd903`, not a completed push. Current main
+`716154c6b` differs from that merge target only in the Hono island budget;
+its Kit build inputs are identical. Since `4d9ebeee5`, main incorporated
+#1826's independent **335104 B** server gzip allocation, #1812's schedule search
+sources, #1819's agent-event sources and #1827's shipping-test literals. Those
+product moves invalidate the older measurements. Feature #1805 remains at
+`432820f89c4030a94c81622da86a7bed5959899a`.
+
+Archive current main at `716154c6b54f9334e9d8877907750536e7192491` twice:
+once pristine and once with the feature's eight changed build-input blobs
+applied. Main and the feature have **zero overlapping changed paths** since
+feature base `847bf4647`, so this overlay is the true product-source union, not
+an old feature checkout that drops incoming main changes. All overlaid blobs
+are verified byte-for-byte. Root and web lockfile hashes match those recorded
+above; both trees use the same existing locked external installs, Node 24.22.1,
+npm 11.19.1 and zlib `1.3.2.1-motley-285e94b`. Build twice per tree with
+`npm run build --prefix <tree>/web`; measure each with the unchanged
+`node ci/check-kit-perf.mjs --root <tree> --format json`.
+
+| Group | Pristine main raw / gzip B | True feature union raw / gzip B | Files / cap |
+| --- | ---: | ---: | ---: |
+| Worker entry | 2551 / 1219 | 2551 / 1219 | one entry |
+| Server JS | 1179528 / 334039–334040 | 1181587 / 334652–334653 | 115 / 126 |
+| Client JS | 253949 / 102273 | 254365 / 102446 | 54 / 55 |
+| Client CSS | 2833 / 1006 | 2833 / 1006 | 2 / 4 |
+
+All four gate runs pass every inherited limit. Union server gzip margin is
+**451–452 B**, client raw margin **611 B**, CSS gzip margin **18 B**. The second
+build pair attributes +1617 raw / +469 gzip to `chunks/admin.js`, +320 / +108
+to the featured-edit loader and +122 / +44 to the featured-list loader.
+Twenty-three other equal-length files contribute net −9 gzip B from emitted
+build-context differences; total delta is **+2059 raw / +612 gzip B**. No server
+file is added or removed. The repeated-build 1 B variation is disclosed, not
+rounded away.
+
+Six disposable controls on the second union artifact confirm: inherited
+335104 B passes; the former featured-return 334592 B proposal refuses by
+60 B; exact measured server raw/gzip/file limits pass; actual-minus-one gzip,
+raw and file limits each refuse. Controls restore the scratch plan afterward;
+no checked-in checker or test is changed. The checked-in server cap stays
+335104 B, not the 334592 B historical proposal and not the unused 335360 B
+shipping-test allowance. Every other numeric limit also matches main.
+
+Fresh local checks pass: **82/82** combined checker/inventory cases, **12/12**
+Kit selftests, configuration checks **34/34**, lint (2076 files), floor guard,
+strict inventory (**1260/1260 files, 55/55 browser specs**), docs links and
+root/CI/E2E types. The earlier full-check limitation remains unresolved; no
+fresh full `npm run check` or live database verification is claimed. Exact-head
+CI and independent review remain required.
+
+ACT: finish the interrupted conflict resolution with main's numeric limits and
+shipping tests verbatim, retaining main's complete comment history as an exact
+prefix and each unique branch record once. WHY: a fresh true union fits the
+already-reviewed 335104 B ceiling; adding another allowance would double-count
+capacity. UNDO: remove only this branch's appended history and document, never
+main's allocations or tests. This proof is not approval of #1805 and does not
+cover other unmerged feature combinations.
+
 ## Undo and scope
 
-The original pre-main proposal's undo was 333824 → 333568 B, intentionally
-refusing the measured feature. That numeric change now belongs to #1799, not
-this reconciled PR. The first two reconciliations were history-only. This third
-reconciliation adds one numeric step pair, 334080 → 334592 B: reverting this PR
-removes that step and its appended history/note, and must not undo main's own
-allocations. The fourth reconciliation keeps that same step on fresh
-measurements and holds the merge for the test-owner correction. No application, schema, test, dependency,
-workflow, checker, mask, skip or exemption changes are included. No deployment
-or production/staging database test is part of this work.
+The original and intermediate numeric proposals are superseded by main's
+independent allocations. The final diff contains only this document and the
+appended budget history: **zero numeric change and zero test change versus
+main**. Undo removes only those additions, never any main ceiling. No
+application, schema, dependency, workflow, checker, mask, skip or exemption
+change is included. No deployment or production/staging database test is part
+of this work.
