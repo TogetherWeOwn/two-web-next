@@ -122,9 +122,11 @@ export const CalendarHead: FC<{
 /** The form is stable: the binder debounces input and never swaps it. The game
  * facet is a plain select in the same GET form, so keyboard and no-JS
  * filtering work through the submit button like the text search. On the
- * calendar view the committed month scope (view/month/week layout) rides as
- * hidden fields, so a no-JS game filter stays on the same grid instead of
- * dropping to the list; a real search still forces the list server-side. */
+ * calendar view the committed month scope (view/month) rides as hidden
+ * fields, so a no-JS game filter stays on the same grid instead of dropping
+ * to the list; a real search still forces the list server-side. A committed
+ * Sunday layout rides on either view so a native submit never silently drops
+ * it; Monday is the default and stays out of submissions. */
 export const CalendarSearchForm: FC<{
   state: CalendarState;
   searching: boolean;
@@ -136,8 +138,10 @@ export const CalendarSearchForm: FC<{
       <>
         <input type="hidden" name="view" value="calendar" />
         <input type="hidden" name="month" value={state.month} />
-        <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
       </>
+    ) : null}
+    {state.weekStart === "sunday" ? (
+      <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
     ) : null}
     <label class="sr-only" for="events-search-input">
       {EVENTS_SEARCH_LABEL}

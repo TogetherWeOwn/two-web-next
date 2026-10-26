@@ -146,18 +146,16 @@ describe("calendar native search state", () => {
       expect(submission.params.getAll("q")).toEqual([query]);
       // The calendar form carries the committed month scope as hidden fields,
       // so a no-JS game filter stays on the same grid; the list form is bare.
+      // These entries all render the Monday default, which stays out of
+      // submissions — only a committed Sunday layout rides along.
       expect([...submission.params.keys()].sort()).toEqual(
-        [
-          "q",
-          ...(past ? ["past"] : []),
-          ...(view === "calendar" ? ["month", "view", "weekStart"] : []),
-        ].sort(),
+        ["q", ...(past ? ["past"] : []), ...(view === "calendar" ? ["month", "view"] : [])].sort(),
       );
       expect(submission.params.getAll("past")).toEqual(past ? ["1"] : []);
+      expect(submission.params.getAll("weekStart")).toEqual([]);
       if (view === "calendar") {
         expect(submission.params.getAll("view")).toEqual(["calendar"]);
         expect(submission.params.getAll("month")).toEqual([month]);
-        expect(submission.params.getAll("weekStart")).toEqual(["monday"]);
       }
       expect(
         submission.controls.filter((c) => c.name !== "q").every((c) => c.type === "hidden"),

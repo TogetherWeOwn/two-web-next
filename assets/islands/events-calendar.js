@@ -711,6 +711,9 @@
   }
 
   function wireScopeForms() {
+    // Swaps replace the zone children, so every call sees fresh nodes: drop
+    // the previously wired (now detached) forms instead of retaining them.
+    wiredScopeForms.length = 0;
     SCOPE_FORMS.forEach(function (entry) {
       var formEl = root.querySelector(entry[0]);
       if (!formEl || wiredScopeForms.indexOf(formEl) !== -1) return;

@@ -81,10 +81,10 @@ export const MonthGrid: FC<{
         {CALENDAR_THIS_MONTH_COPY}
       </a>
     </p>
-    {/* Native GET jump: view, game, the committed week layout and the
+    {/* Native GET jump: view, game, a committed Sunday layout and the
         committed past state ride as hidden fields, so the no-JS submit lands
         on the same URL the binder fetches. A jump is month-scoped — the
-        search query never rides along. */}
+        search query never rides along — and Monday stays out as the default. */}
     <form data-testid={CALENDAR_MONTH_JUMP_TESTID} method="get" action="/events">
       <label for={CALENDAR_MONTH_JUMP_INPUT_ID}>{CALENDAR_MONTH_JUMP_LABEL}</label>{" "}
       <input
@@ -97,7 +97,9 @@ export const MonthGrid: FC<{
       />{" "}
       <input type="hidden" name="view" value="calendar" />
       {state.game?.trim() ? <input type="hidden" name="game" value={state.game.trim()} /> : null}
-      <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
+      {state.weekStart === "sunday" ? (
+        <input type="hidden" name={CALENDAR_WEEK_START_PARAM} value={state.weekStart} />
+      ) : null}
       {state.past ? <input type="hidden" name="past" value="1" /> : null}{" "}
       <button class="btn" type="submit" data-testid={CALENDAR_MONTH_JUMP_SUBMIT_TESTID}>
         {CALENDAR_MONTH_JUMP_SUBMIT_COPY}
