@@ -98,8 +98,10 @@ function expectRefusedEditNotice(html: string) {
   // Where the roster would be: after the edit form, not buried in the
   // error summary at the top of the form.
   expect(notice!.index).toBeGreaterThan(html.indexOf("</form>"));
-  // The roster itself stays out of the refused-save body.
+  // The roster itself stays out of the refused-save body, including any
+  // roster-derived count (the GET renders it as "RSVPs (2)").
   for (const leaked of [...ROSTER_NAMES, ...ROSTER_ANSWERED]) expect(html).not.toContain(leaked);
+  expect(html).not.toMatch(/RSVPs \(\d+\)/);
   // The refusal is still a refusal: field errors remain on the page.
   expect(html).toContain('data-testid="form-errors"');
   return notice!;
