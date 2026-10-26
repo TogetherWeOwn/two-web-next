@@ -3,10 +3,11 @@
 // node --test on a bare checkout.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import * as pins from "./check-security-pins.mjs";
 import { checkInlineAllowlist, runDynamic } from "./check-security-pins.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -158,7 +159,35 @@ test("CLI --static-only prints one pure-JSON summary with version 1", () => {
   assert.equal(report.check, "security-pins");
   assert.equal(report.version, 1);
   assert.equal(report.ok, true);
-  assert.equal(report.static.checks.length, 4);
+  assert.equal(report.static.checks.length, 5);
+});
+
+test("static pins verify both generated bundles fail-closed", () => {
+  const { exit, stdout } = runGate(["--static-only"]);
+  assert.equal(exit, 0);
+  const report = JSON.parse(stdout);
+  const byId = new Map(report.static.checks.map((check) => [check.id, check.status]));
+  // One lifecycle pin per bundle: the full leaf bundle (shared sources plus
+  // the leaf-only seam) and the homepage bundle (shared sources only).
+  assert.equal(byId.get("leaf-lifecycle-static"), "pass");
+  assert.equal(byId.get("home-lifecycle-static"), "pass");
+});
+
+test("the homepage lifecycle checker passes on real files and fails on drift", () => {
+  assert.equal(
+    typeof pins.checkHomeLifecycleStatic,
+    "function",
+    "checkHomeLifecycleStatic must be exported",
+  );
+  assert.equal(pins.checkHomeLifecycleStatic().status, "pass");
+  const homeModule = join(ROOT, "src/home-critical-css.ts");
+  assert.ok(existsSync(homeModule), "src/home-critical-css.ts must exist");
+  const moduleSource = readFileSync(homeModule, "utf8");
+  assert.equal(pins.checkHomeLifecycleStatic(["drifted source"], moduleSource).status, "fail");
+  assert.equal(
+    pins.checkHomeLifecycleStatic(["x"], "// GENERATED from other.css\nrest").status,
+    "fail",
+  );
 });
 
 test("CLI usage errors are JSON with a fixed code and next_action", () => {

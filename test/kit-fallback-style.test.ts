@@ -18,6 +18,7 @@ import {
   securityHeadersFor,
   withKitFallbackStyleCsp,
 } from "../src/headers";
+import { HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
 import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { dispatchHookRequest, ROUTE_MANIFEST, type HookEventLike } from "../src/route-ownership";
 
@@ -95,6 +96,16 @@ describe("catastrophic fallback style allowlist", () => {
     expect(base).toContain(`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
     const widened = withKitFallbackStyleCsp(base);
     expect(widened).toContain(`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+    expect(widened).toContain(`'sha256-${KIT_FALLBACK_STYLE_SHA256}'`);
+  });
+
+  it('composes with the homepage hash on "/", never the leaf hash', () => {
+    const base = cspOf(securityHeadersFor({ path: "/", method: "GET" }));
+    expect(base).toContain(`'sha256-${HOME_CRITICAL_CSS_SHA256}'`);
+    expect(base).not.toContain(`sha256-${LEAF_CRITICAL_CSS_SHA256}`);
+    const widened = withKitFallbackStyleCsp(base);
+    expect(widened).toContain(`'sha256-${HOME_CRITICAL_CSS_SHA256}'`);
+    expect(widened).not.toContain(`sha256-${LEAF_CRITICAL_CSS_SHA256}`);
     expect(widened).toContain(`'sha256-${KIT_FALLBACK_STYLE_SHA256}'`);
   });
 

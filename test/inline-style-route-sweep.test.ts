@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import rawApp from "../src/index";
 import type { Env } from "../src/env";
+import { HOME_CRITICAL_CSS, HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
 import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 
 const env: Env = {
@@ -40,7 +41,14 @@ const INLINE_CRITICAL_PATHS: ReadonlySet<string> = new Set([
   "/rules",
   "/privacy",
 ]);
-const EXPECTED_BLOCK = `<style>${LEAF_CRITICAL_CSS}</style>`;
+// Per-path bundles: "/" inlines the homepage bundle (the three shared
+// sources only); the four leaves inline the full leaf bundle (shared sources
+// plus the leaf-only seam). Each path's CSP allowlists exactly its own hash.
+const EXPECTED_LEAF_BLOCK = `<style>${LEAF_CRITICAL_CSS}</style>`;
+const expectedBlockFor = (path: string): string =>
+  path === "/" ? `<style>${HOME_CRITICAL_CSS}</style>` : EXPECTED_LEAF_BLOCK;
+const expectedHashFor = (path: string): string =>
+  path === "/" ? HOME_CRITICAL_CSS_SHA256 : LEAF_CRITICAL_CSS_SHA256;
 const INLINE_STYLE_OPEN = /<style[\s>]/i;
 
 type SweepOutcome =
@@ -60,7 +68,11 @@ function cspDirective(csp: string, name: string): string | null {
 async function classifyResponse(
   path: string,
   res: Response,
-  ctx: { allowlist: ReadonlySet<string>; expectedBlock: string; leafHash: string },
+  ctx: {
+    allowlist: ReadonlySet<string>;
+    expectedBlockFor: (path: string) => string;
+    expectedHashFor: (path: string) => string;
+  },
 ): Promise<SweepOutcome> {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
@@ -86,7 +98,8 @@ async function classifyResponse(
     return { kind: "violation", path, detail: "CSP contains unsafe-inline" };
   }
   if (ctx.allowlist.has(path)) {
-    if (!body.includes(ctx.expectedBlock)) {
+    const expectedBlock = ctx.expectedBlockFor(path);
+    if (!body.includes(expectedBlock)) {
       return {
         kind: "violation",
         path,
@@ -94,7 +107,7 @@ async function classifyResponse(
       };
     }
     const styleSrc = cspDirective(csp, "style-src");
-    if (styleSrc !== `'self' 'sha256-${ctx.leafHash}'`) {
+    if (styleSrc !== `'self' 'sha256-${ctx.expectedHashFor(path)}'`) {
       return {
         kind: "violation",
         path,
@@ -104,7 +117,7 @@ async function classifyResponse(
     // Presence is not exactness: an extra block beside the expected one is
     // not covered by the recorded hash, so strip the expected block and fail
     // if any further inline <style> emission remains.
-    if (INLINE_STYLE_OPEN.test(body.replace(ctx.expectedBlock, ""))) {
+    if (INLINE_STYLE_OPEN.test(body.replace(expectedBlock, ""))) {
       return {
         kind: "violation",
         path,
@@ -153,8 +166,8 @@ function concretePaths(): string[] {
 
 const SWEEP_CTX = {
   allowlist: INLINE_CRITICAL_PATHS,
-  expectedBlock: EXPECTED_BLOCK,
-  leafHash: LEAF_CRITICAL_CSS_SHA256,
+  expectedBlockFor,
+  expectedHashFor,
 };
 
 async function sweepAll(): Promise<SweepOutcome[]> {
@@ -192,13 +205,25 @@ function canaryFixture() {
       "<!doctype html><html><head><style>p{color:blue}</style></head><body>wrong bytes</body></html>",
     );
   });
+  fixture.get("/", (c) => {
+    // The cross-bundle canary: the homepage path serving the LEAF block
+    // under the LEAF hash. Per-path expectations must flag it — "/" may only
+    // ever inline the homepage bundle under the homepage hash.
+    c.header(
+      "Content-Security-Policy",
+      `default-src 'self'; style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`,
+    );
+    return c.html(
+      `<!doctype html><html><head>${EXPECTED_LEAF_BLOCK}</head><body>leaf bytes on the homepage</body></html>`,
+    );
+  });
   fixture.get("/extra-block", (c) => {
     c.header(
       "Content-Security-Policy",
       `default-src 'self'; style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`,
     );
     return c.html(
-      `<!doctype html><html><head>${EXPECTED_BLOCK}<style>p{color:red}</style></head><body>extra block</body></html>`,
+      `<!doctype html><html><head>${EXPECTED_LEAF_BLOCK}<style>p{color:red}</style></head><body>extra block</body></html>`,
     );
   });
   fixture.get("/skipped-wide", (c) => {
@@ -234,6 +259,15 @@ describe("inline-style route sweep", () => {
     expect(
       await classifyResponse("/wrong-block", await fixture.request("/wrong-block"), ctx),
     ).toMatchObject({
+      kind: "violation",
+      detail: "allowlisted path is missing the exact inlined block",
+    });
+  });
+
+  it("canary: the homepage serving the leaf block under the leaf hash is flagged", async () => {
+    const fixture = canaryFixture();
+    const ctx = { ...SWEEP_CTX, allowlist: new Set(["/"]) };
+    expect(await classifyResponse("/", await fixture.request("/"), ctx)).toMatchObject({
       kind: "violation",
       detail: "allowlisted path is missing the exact inlined block",
     });
@@ -304,9 +338,14 @@ export type LeafVerification =
   | { ok: true }
   | { ok: false; code: "leaf_hash_mismatch"; next_action: string };
 
+export type HomeVerification =
+  | { ok: true }
+  | { ok: false; code: "home_hash_mismatch"; next_action: string };
+
 // The regeneration check: recompute the bundle hash and compare it to the
 // recorded constant. Bytes that changed without the recorded hash fail;
-// bytes with their matching hash pass. Pure and read-only.
+// bytes with their matching hash pass. Pure and read-only. One verifier per
+// bundle so a drifted module names its own regeneration target.
 export function verifyLeafBundle(bytes: string, recordedHash: string): LeafVerification {
   const actual = createHash("sha256").update(bytes, "utf8").digest("base64");
   if (actual !== recordedHash) {
@@ -315,6 +354,19 @@ export function verifyLeafBundle(bytes: string, recordedHash: string): LeafVerif
       code: "leaf_hash_mismatch",
       next_action:
         "Run node ci/build-leaf-css.mjs to regenerate src/leaf-critical-css.ts, then re-run this suite.",
+    };
+  }
+  return { ok: true };
+}
+
+export function verifyHomeBundle(bytes: string, recordedHash: string): HomeVerification {
+  const actual = createHash("sha256").update(bytes, "utf8").digest("base64");
+  if (actual !== recordedHash) {
+    return {
+      ok: false,
+      code: "home_hash_mismatch",
+      next_action:
+        "Run node ci/build-leaf-css.mjs to regenerate src/home-critical-css.ts, then re-run this suite.",
     };
   }
   return { ok: true };
@@ -344,5 +396,25 @@ describe("leaf-bundle hash lifecycle", () => {
     const mutated = `${LEAF_CRITICAL_CSS}\n/* regenerated with its hash */\n`;
     const recomputed = createHash("sha256").update(mutated, "utf8").digest("base64");
     expect(verifyLeafBundle(mutated, recomputed)).toEqual({ ok: true });
+  });
+
+  it("accepts the recorded homepage bytes under the recorded homepage hash", () => {
+    expect(verifyHomeBundle(HOME_CRITICAL_CSS, HOME_CRITICAL_CSS_SHA256)).toEqual({ ok: true });
+  });
+
+  it("rejects a homepage mutate-copy whose bytes changed without the recorded hash", () => {
+    const mutated = `${HOME_CRITICAL_CSS}\n/* regenerated without updating the hash */\n`;
+    expect(verifyHomeBundle(mutated, HOME_CRITICAL_CSS_SHA256)).toEqual({
+      ok: false,
+      code: "home_hash_mismatch",
+      next_action:
+        "Run node ci/build-leaf-css.mjs to regenerate src/home-critical-css.ts, then re-run this suite.",
+    });
+  });
+
+  it("never lets one bundle verify under the other's hash", () => {
+    expect(verifyHomeBundle(HOME_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256).ok).toBe(false);
+    expect(verifyLeafBundle(LEAF_CRITICAL_CSS, HOME_CRITICAL_CSS_SHA256).ok).toBe(false);
+    expect(HOME_CRITICAL_CSS_SHA256).not.toBe(LEAF_CRITICAL_CSS_SHA256);
   });
 });

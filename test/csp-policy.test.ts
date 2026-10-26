@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
 import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
 
@@ -62,6 +63,23 @@ describe("route CSP (local fixtures, no DB)", () => {
     expect(directives(res)["frame-src"]).toBe("'none'");
     if (method === "GET") expect(await res.text()).not.toContain("<iframe");
   });
+
+  it.each(["GET", "HEAD"])(
+    "%s homepage allowlists only the homepage style hash, never the leaf hash",
+    async (method) => {
+      const res = await app.request("/", { method }, env);
+      expect(res.status).toBe(200);
+      const csp = directives(res);
+      // Per-path allowlist: "/" inlines the homepage bundle (shared sources
+      // only); the leaf bundle's hash must not widen the homepage policy.
+      expect(csp["style-src"]).toBe(`'self' 'sha256-${HOME_CRITICAL_CSS_SHA256}'`);
+      expect(res.headers.get("Content-Security-Policy")).not.toContain(
+        `sha256-${LEAF_CRITICAL_CSS_SHA256}`,
+      );
+      expect(res.headers.get("Content-Security-Policy")).not.toContain("unsafe-inline");
+      if (method === "GET") expect(await res.text()).toContain("<style>");
+    },
+  );
 
   it.each([
     "/about",

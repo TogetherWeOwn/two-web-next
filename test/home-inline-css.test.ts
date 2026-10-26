@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
+import { HOME_CRITICAL_CSS, HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
+import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { Layout } from "../src/pages";
 import { pageShellFixture } from "./helpers/page-shells";
 
-// Homepage paint path: "/" reuses the leaf critical-CSS bundle inline while
-// retaining the Display-700 preload for an early font fetch; the
-// Arial-metric 'Display Fallback' limits layout changes during delayed swaps.
+// Homepage paint path: "/" inlines the homepage critical-CSS bundle (the three
+// shared sources only — leaf-only rules ride the separate leaf bundle, so
+// they can never grow "/" against its byte caps) while retaining the
+// Display-700 preload for an early font fetch; the Arial-metric
+// 'Display Fallback' limits layout changes during delayed swaps.
 // Recovery/error shells keep theme="home" without the flag and stay external.
 describe("homepage inlined critical CSS", () => {
   it("inlines critical CSS and retains the font preload on the flagged home shell", () => {
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
-    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    expect(html).toContain(`<style>${HOME_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
   });
@@ -26,11 +29,12 @@ describe("homepage inlined critical CSS", () => {
     const response = await pageShellFixture().request("/");
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    expect(html).toContain(`<style>${HOME_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     const csp = response.headers.get("content-security-policy") ?? "";
-    expect(csp).toContain(`style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+    expect(csp).toContain(`style-src 'self' 'sha256-${HOME_CRITICAL_CSS_SHA256}'`);
+    expect(csp).not.toContain(`sha256-${LEAF_CRITICAL_CSS_SHA256}`);
     expect(csp).not.toContain("unsafe-inline");
   });
 
@@ -41,14 +45,14 @@ describe("homepage inlined critical CSS", () => {
     // (at the 77% size-adjust) plus margin, so the fallback hero paints at
     // least as large as the swapped-in text and the swap is not a larger
     // repaint that re-times LCP after FCP.
-    expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
-    expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
-    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 77%");
-    expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 123%");
-    expect(LEAF_CRITICAL_CSS).toContain("descent-override: 46%");
-    expect(LEAF_CRITICAL_CSS).toContain("line-gap-override: 0%");
-    expect(LEAF_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
-    expect(LEAF_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
+    expect(HOME_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
+    expect(HOME_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
+    expect(HOME_CRITICAL_CSS).toContain("size-adjust: 77%");
+    expect(HOME_CRITICAL_CSS).toContain("ascent-override: 123%");
+    expect(HOME_CRITICAL_CSS).toContain("descent-override: 46%");
+    expect(HOME_CRITICAL_CSS).toContain("line-gap-override: 0%");
+    expect(HOME_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
+    expect(HOME_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
     expect(html).toContain("'Display Fallback'");
   });

@@ -3,13 +3,21 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "../src/pages";
+import { HOME_CRITICAL_CSS, HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
 import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
 import app from "./app";
 
 const cssPath = (entry: string) =>
   readFileSync(new URL(`../public/${entry}`, import.meta.url), "utf8");
-const SOURCES = ["styles.css", "theme-tokens.css", "theme.css"];
+// Shared sources feed both bundles; the leaf-only seam source (outside
+// public/, never served) feeds the full leaf bundle only. The homepage bundle
+// is exactly the three shared sources, so leaf-only rules can never grow "/"
+// against its byte caps. Both modules regenerate with
+// `node ci/build-leaf-css.mjs`; the full split contract lives in
+// test/leaf-css-delivery-acceptance.test.ts.
+const SHARED_SOURCES = ["styles.css", "theme-tokens.css", "theme.css"];
+const leafOnlyCss = readFileSync(new URL("../assets/leaf-only.css", import.meta.url), "utf8");
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -36,8 +44,8 @@ afterEach(() => {
 });
 
 describe("content-leaf inlined CSS", () => {
-  it("matches the three concatenated stylesheets byte for byte", () => {
-    const concatenated = SOURCES.map(cssPath).join("\n");
+  it("matches the shared sources plus the leaf-only seam byte for byte", () => {
+    const concatenated = [...SHARED_SOURCES.map(cssPath), leafOnlyCss].join("\n");
     expect(LEAF_CRITICAL_CSS).toBe(concatenated);
   });
 
@@ -49,6 +57,15 @@ describe("content-leaf inlined CSS", () => {
 
   it("cannot break out of its style element", () => {
     expect(LEAF_CRITICAL_CSS).not.toMatch(/<\/style/i);
+  });
+
+  it("keeps the homepage bundle on the shared sources only", () => {
+    expect(HOME_CRITICAL_CSS).toBe(SHARED_SOURCES.map(cssPath).join("\n"));
+    expect(HOME_CRITICAL_CSS_SHA256).toBe(
+      createHash("sha256").update(HOME_CRITICAL_CSS, "utf8").digest("base64"),
+    );
+    expect(HOME_CRITICAL_CSS_SHA256).not.toBe(LEAF_CRITICAL_CSS_SHA256);
+    expect(HOME_CRITICAL_CSS).not.toMatch(/<\/style/i);
   });
 
   it("renders in the content shell instead of render-blocking links", () => {

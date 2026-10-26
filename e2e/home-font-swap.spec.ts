@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test, expect, localOrigin } from "./fixtures";
 import type { Page } from "@playwright/test";
+import { HOME_CRITICAL_CSS_SHA256 } from "../src/home-critical-css";
 import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { pageShellFixture } from "../test/helpers/page-shells";
 
@@ -119,7 +120,9 @@ async function homepageFixture() {
   expect(response.status).toBe(200);
   const html = await response.text();
   const csp = response.headers.get("content-security-policy") ?? "";
-  expect(csp).toContain(`style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+  // "/" inlines the homepage bundle only; the leaf hash never widens it.
+  expect(csp).toContain(`style-src 'self' 'sha256-${HOME_CRITICAL_CSS_SHA256}'`);
+  expect(csp).not.toContain(`sha256-${LEAF_CRITICAL_CSS_SHA256}`);
   expect(csp).not.toContain("unsafe-inline");
   return { html, csp };
 }
@@ -160,7 +163,7 @@ test("font-swap acceptance detects a deliberately incorrect fallback metric", as
   expect(brokenCss).toContain("size-adjust: 100%");
   const brokenHash = createHash("sha256").update(brokenCss).digest("base64");
   const brokenHtml = html.replace(style![0], `<style>${brokenCss}</style>`);
-  const brokenCsp = csp.replace(LEAF_CRITICAL_CSS_SHA256, brokenHash);
+  const brokenCsp = csp.replace(HOME_CRITICAL_CSS_SHA256, brokenHash);
 
   const sensitiveWidthMetrics = [];
   for (const width of [340, 360]) {
