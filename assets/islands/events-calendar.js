@@ -515,12 +515,15 @@
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
     var current = new URL(window.location.href).searchParams;
-    if (current.get("past") === "1") {
-      url.searchParams.set("past", "1");
-    }
+    // Param order matches calendarUrl() exactly (q, game, past): the URL this
+    // commits to history and the schedule-view share value are one model, so a
+    // copied view must byte-match the address of the view it was copied from.
     var game = gameField ? gameField.value : current.get("game");
     if (game !== null && game !== undefined && String(game).trim() !== "") {
       url.searchParams.set("game", String(game).trim());
+    }
+    if (current.get("past") === "1") {
+      url.searchParams.set("past", "1");
     }
     return url;
   }

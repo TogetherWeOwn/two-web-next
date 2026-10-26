@@ -32,6 +32,7 @@ import {
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
+import { canonicalUrl } from "../seo";
 import { feedUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 
@@ -79,44 +80,82 @@ export const CalendarLiveRegions: FC<{
   </>
 );
 
-/** The `head` zone: list/calendar toggle plus the archive, subscribe and feed links. The subscribe/download/help targets carry the committed game scope; unfiltered schedules keep the exact all-events URLs. */
+/** The `head` zone: list/calendar toggle plus the archive, subscribe and feed links. The subscribe/download/help targets carry the committed game scope; unfiltered schedules keep the exact all-events URLs. The share block rides in the same swapped zone, so only an admitted snapshot can refresh the copied view: pending, failed or superseded turns keep the last committed URL, and an unsent search draft never enters it. */
 export const CalendarHead: FC<{
   state: CalendarState;
   appUrl: string;
   gameFilter?: string | null;
-}> = ({ state, appUrl, gameFilter = null }) => (
-  <>
-    <div data-cal-zone="head">
-      <div class="schedule-views" role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
-        <a
-          href={calendarUrl({ ...state, view: "list" })}
-          aria-current={state.view === "list" ? "page" : undefined}
-          data-testid={EVENTS_VIEW_LIST_TESTID}
-        >
-          List
-        </a>{" "}
-        <a
-          href={calendarUrl({ ...state, view: "calendar" })}
-          aria-current={state.view === "calendar" ? "page" : undefined}
-          data-testid={EVENTS_VIEW_CALENDAR_TESTID}
-        >
-          Calendar
-        </a>
+}> = ({ state, appUrl, gameFilter = null }) => {
+  // Absolute share value: the configured public origin (canonicalUrl strips
+  // any trailing slashes) plus the one normalized calendar URL model. No
+  // request host, tracking input or session detail can enter the value.
+  const shareUrl = canonicalUrl(appUrl, calendarUrl(state));
+  return (
+    <>
+      <div data-cal-zone="head">
+        <div class="schedule-views" role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
+          <a
+            href={calendarUrl({ ...state, view: "list" })}
+            aria-current={state.view === "list" ? "page" : undefined}
+            data-testid={EVENTS_VIEW_LIST_TESTID}
+          >
+            List
+          </a>{" "}
+          <a
+            href={calendarUrl({ ...state, view: "calendar" })}
+            aria-current={state.view === "calendar" ? "page" : undefined}
+            data-testid={EVENTS_VIEW_CALENDAR_TESTID}
+          >
+            Calendar
+          </a>
+        </div>
+        <p>
+          <a href={pastEventsUrl(1, state.q)} data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
+            {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
+          </a>{" "}
+          <a href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+            {EVENTS_EMPTY_COPY.subscribe}
+          </a>{" "}
+          <a href="/events.rss">RSS feed</a>{" "}
+          <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>
+        </p>
+        <div class="schedule-share">
+          <label for="schedule-view-url">Schedule view URL</label>
+          <div class="subscription-copy">
+            <input
+              id="schedule-view-url"
+              data-testid="schedule-view-url"
+              type="text"
+              value={shareUrl}
+              readonly
+            />
+            <button
+              class="btn"
+              type="button"
+              data-testid="schedule-view-copy-button"
+              data-copy-link={shareUrl}
+              data-copy-view
+              hidden
+            >
+              Copy this schedule view
+            </button>
+          </div>
+          <p>
+            Send this view to share the schedule exactly as filtered here. To follow new events in a
+            calendar app, subscribe to the calendar feed below instead.
+          </p>
+          <p
+            role="status"
+            aria-atomic="true"
+            data-copy-toast
+            data-testid="schedule-view-copy-status"
+          ></p>
+        </div>
       </div>
-      <p>
-        <a href={pastEventsUrl(1, state.q)} data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
-          {state.q ? "Continue search in past events" : EVENTS_EMPTY_COPY.pastArchive}
-        </a>{" "}
-        <a href={webcalUrl(appUrl, gameFilter)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
-          {EVENTS_EMPTY_COPY.subscribe}
-        </a>{" "}
-        <a href="/events.rss">RSS feed</a>{" "}
-        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>
-      </p>
-    </div>
-    {subscriptionHelp(appUrl, gameFilter, true)}
-  </>
-);
+      {subscriptionHelp(appUrl, gameFilter, true)}
+    </>
+  );
+};
 
 /** The form is stable: the binder debounces input and never swaps it. The game
  * facet is a plain select in the same GET form, so keyboard and no-JS
