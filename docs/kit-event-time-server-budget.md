@@ -102,7 +102,8 @@ feature acceptance-test change ships with this decision.
 
 ## Minimality and unchanged enforcement (initial decision)
 
-Run the unchanged canonical checker against the retained combined artifacts
+Run the unchanged canonical checker against the retained combined build 2
+artifacts (334188; combined build 1 measured 334189)
 with isolated budget copies (never edit the checker or the feature
 artifacts):
 
@@ -256,6 +257,8 @@ exits 0 on all four under main's unmodified budget:
 
 | Group | Pristine build 1 / build 2 | Combined build 1 / build 2 |
 | --- | ---: | ---: |
+| Server JS files | 115 / 115 | 115 / 115 |
+| Client JS files | 54 / 54 | 54 / 54 |
 | Server JS raw | 1179526 / 1179526 | 1180585 / 1180587 |
 | Server JS gzip | 334043 / 334040 | 334351 / 334351 |
 | Client JS raw | 253949 / 253949 | 254142 / 254142 |
