@@ -65,7 +65,7 @@ dry-run builds byte-identical output, so one ceiling covers both):
 | `dist/worker.js` | 2486680 / 499001 | 3108352 / 623872 |
 
 Ceilings are measured size x1.25 rounded up (raw to 512 B, gzip to 256 B),
-the repository x1.25 rule from `ci/bundle-budget.json`. Never relax a
+the repository x1.25 rule in `ci/budgets/README.md`. Never relax a
 ceiling to turn a build green; a raise needs its own reviewed decision
 explaining what grew and why.
 
@@ -80,8 +80,8 @@ are checked in so every test executes exactly what ships. Edit
 the source, then regenerate and commit the output.
 Top-level theme stylesheets (`public/theme.css`, `public/*-theme.css`) are
 authored in place with no `assets/` source, so they are budgeted but never
-minified. A new authored stylesheet needs two edits: a ceiling in
-`ci/bundle-budget.json` and an entry in `AUTHORED_CSS` in
+minified. A new authored stylesheet needs two edits: a ceiling fragment in
+`ci/budgets/bundle/` and an entry in `AUTHORED_CSS` in
 `ci/minify-assets.mjs`. A budgeted stylesheet with no `assets/` source and no
 `AUTHORED_CSS` entry fails `build:assets:check` with an explicit "add to
 AUTHORED_CSS or create assets/<name>" message:
@@ -184,7 +184,7 @@ executed gates. For screenshot/spec discovery, see the
 | Stable check / group ID | Read-only command | Input / machine-readable result |
 | --- | --- | --- |
 | `worker.bundle`, `worker.bundle.dist/worker.js` | `node ci/check-worker-bundle.mjs --dry-run --format json` | Existing `dist/worker.js` plus `ci/worker-bundle-budget.json`; versioned JSON with measured bytes, `ok`, `exitCode`, and `error.code` / `error.next_action` on refusal |
-| `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus `ci/kit-perf-budget.json`; the same versioned budget-report shape |
+| `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
 | Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
 
 The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
@@ -546,7 +546,7 @@ Historical minification measurements: the table below records the follow-up's
 `esbuild --minify` output of `assets/` using esbuild `0.28.1`, with later dated
 updates noted below. These are historical evidence, not current dependency
 pins or a fresh measurement of HEAD. Current served-asset ceilings live in
-[`ci/bundle-budget.json`](../ci/bundle-budget.json); use `npm run budget` to
+the [`ci/budgets/bundle/`](../ci/budgets/bundle) fragments; use `npm run budget` to
 measure the checked-out bytes. The recorded ceilings used measured ×1.25,
 rounded up to 512 B raw / 256 B gzip:
 
