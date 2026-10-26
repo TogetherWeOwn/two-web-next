@@ -4,7 +4,7 @@
 // Server-rendered, no script. Rows never link to profiles from here.
 import type { FC } from "hono/jsx";
 import type { Session } from "../env";
-import { utcPeriodShortcuts } from "../hotzones/season";
+import { adjacentSeasonLabels, parseSeasonParam, utcPeriodShortcuts } from "../hotzones/season";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import type { BoardRow, MemberScope } from "./members";
@@ -31,6 +31,11 @@ export const MemberLeaderboardPage: FC<{
   const path = boardPath(query);
   const label = query.activity === null ? "every game" : query.activity;
   const periods = utcPeriodShortcuts();
+  // The route refuses invalid seasons before rendering, so the fallback only
+  // guards a hand-built query: all-time renders no adjacent-period links.
+  const neighbors = adjacentSeasonLabels(
+    parseSeasonParam(query.season) ?? { kind: "all" as const, label: "all" },
+  );
   return (
     <Layout
       title="Member leaderboard — Together We Own"
@@ -87,6 +92,20 @@ export const MemberLeaderboardPage: FC<{
             All time
           </a>
         </nav>
+        {neighbors.previous === null && neighbors.next === null ? null : (
+          <nav class="schedule-views board-periods" aria-label="Adjacent board periods">
+            {neighbors.previous === null ? null : (
+              <a href={boardPath({ ...query, season: neighbors.previous })}>
+                Previous period: {neighbors.previous}
+              </a>
+            )}
+            {neighbors.next === null ? null : (
+              <a href={boardPath({ ...query, season: neighbors.next })}>
+                Next period: {neighbors.next}
+              </a>
+            )}
+          </nav>
+        )}
         <form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
           {query.scope === "overall" ? null : (
             <input type="hidden" name="scope" value={query.scope} />

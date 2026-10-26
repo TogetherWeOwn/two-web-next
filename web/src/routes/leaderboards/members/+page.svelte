@@ -5,7 +5,8 @@ import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
+const { season, scope, activity, rows, viewerUsername, available, appUrl, neighbors } =
+  $derived(data);
 const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string, nextSeason = season) => {
@@ -51,6 +52,12 @@ const destination = (nextScope: string, nextSeason = season) => {
     <a href={destination(scope, periods.quarter)} aria-current={season === periods.quarter ? "page" : undefined}>This quarter</a>
     <a href={destination(scope, "all")} aria-current={season === "all" ? "page" : undefined}>All time</a>
   </nav>
+  {#if neighbors.previous !== null || neighbors.next !== null}
+  <nav class="schedule-views board-periods" aria-label="Adjacent board periods">
+    {#if neighbors.previous !== null}<a href={destination(scope, neighbors.previous)}>Previous period: {neighbors.previous}</a>{/if}
+    {#if neighbors.next !== null}<a href={destination(scope, neighbors.next)}>Next period: {neighbors.next}</a>{/if}
+  </nav>
+  {/if}
   <form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
     {#if scope !== "overall"}<input type="hidden" name="scope" value={scope} />{/if}
     <p>

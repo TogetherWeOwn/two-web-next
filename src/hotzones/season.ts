@@ -88,6 +88,48 @@ export function utcPeriodShortcuts(now: Date = new Date()): {
   };
 }
 
+export type AdjacentSeasonLabels = { previous: string | null; next: string | null };
+
+// Labels of the periods adjacent to a selected season, for Previous/Next
+// browsing on the member board and hot-zone pickers. Pure string arithmetic
+// on the window label: no Date construction, no local-time getters, no
+// mutation of the input. December/January and Q4/Q1 roll across years; the
+// 0000/9999 grammar edges yield `null` on the missing side, and all-time has
+// no neighbors at all. A label outside the grammar yields no neighbors.
+export function adjacentSeasonLabels(window: SeasonWindow): AdjacentSeasonLabels {
+  const none = { previous: null, next: null };
+  if (window.kind === "all") return none;
+  const year4 = (year: number) => String(year).padStart(4, "0");
+  let m = YEAR_RE.exec(window.label);
+  if (m) {
+    const year = Number(m[1]);
+    return {
+      previous: year > 0 ? year4(year - 1) : null,
+      next: year < 9999 ? year4(year + 1) : null,
+    };
+  }
+  m = MONTH_RE.exec(window.label);
+  if (m) {
+    const total = Number(m[1]) * 12 + (Number(m[2]) - 1);
+    const label = (t: number) =>
+      `${year4(Math.floor(t / 12))}-${String((t % 12) + 1).padStart(2, "0")}`;
+    return {
+      previous: total > 0 ? label(total - 1) : null,
+      next: total < 10000 * 12 - 1 ? label(total + 1) : null,
+    };
+  }
+  m = QUARTER_RE.exec(window.label);
+  if (m) {
+    const total = Number(m[1]) * 4 + (Number(m[2]) - 1);
+    const label = (t: number) => `${year4(Math.floor(t / 4))}-Q${(t % 4) + 1}`;
+    return {
+      previous: total > 0 ? label(total - 1) : null,
+      next: total < 10000 * 4 - 1 ? label(total + 1) : null,
+    };
+  }
+  return none;
+}
+
 /**
  * Clamp a season-window bound to something Postgres can bind. Postgres has
  * no year 0, so a literal `0000-..` ISO bound fails with 22008 — and
