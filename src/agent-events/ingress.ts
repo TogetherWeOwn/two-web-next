@@ -14,7 +14,7 @@ import {
   storedEventKey,
   ulid,
 } from "./payload";
-import { audit } from "./audit";
+import { audit, auditOperationBusy } from "./audit";
 import { ingressDenial } from "./envelope";
 import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
@@ -332,8 +332,10 @@ async function processAgentEvent(
       if (limited.status === 503 && limited.body.reason === "operation_busy") {
         // Inner-budget lock contention: retryable load refusal, never a rate
         // denial. Audited once as error/operation_busy with the response
-        // request_id; the aborted verdict inserted no budget hits.
-        await audit(sql, grant, op, null, idem, dig, requestId, "error", "operation_busy");
+        // request_id; the aborted verdict inserted no budget hits. The audit
+        // runs in its own short deadline-bound transaction after admission
+        // settled; an expected audit timeout keeps this same 503.
+        await auditOperationBusy(sql, cfg.lockWaitMs, grant, op, null, idem, dig, requestId);
         return {
           status: limited.status,
           body: { ...limited.body, request_id: requestId },
