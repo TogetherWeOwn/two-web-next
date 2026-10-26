@@ -421,20 +421,45 @@ describe("EventsCalendar review regressions", () => {
         okSource([transient("display", new Date(Date.UTC(2030, 0, 12)))]),
       ).request("/events?past=1")
     ).text();
-    expect(html).toContain('href="/e/up-link"');
-    expect(html).toContain('href="/e/past-link"');
+    const links = [...html.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*>/g)].map(
+      (match) => new NodeURL(match[1]!.replaceAll("&amp;", "&"), APP_URL),
+    );
+    for (const key of ["up-link", "past-link"]) {
+      const detail = links.filter((url) => url.pathname === `/e/${key}`);
+      expect(detail).toHaveLength(1);
+      expect(detail[0]!.origin).toBe(APP_URL);
+      expect(detail[0]!.hash).toBe("");
+      expect([...detail[0]!.searchParams].sort()).toEqual([
+        ["schedulePage", "1"],
+        ["schedulePast", "1"],
+      ]);
+    }
     expect(html).not.toContain('href="/e/discord-display"');
+    expect(links.some((url) => url.pathname === "/e/discord-display")).toBe(false);
   });
 
   it("gives grid links a real SSR list destination retaining the drawer and card fragment", async () => {
     const e = eventRow({ eventKey: "grid-link", startsAt: new Date(Date.UTC(2030, 0, 15, 20)) });
     const src = calendar([e], [], okSource());
     const grid = await (await src.request("/events?view=calendar&month=2030-01&past=1")).text();
-    expect(grid).toContain(
-      'href="/events?event=grid-link&amp;past=1#event-grid-link" data-cal-jump',
-    );
-    const list = await (await src.request("/events?past=1")).text();
+    const jumps = [...grid.matchAll(/<a\b[^>]*\bhref="([^"]+)"[^>]*\bdata-cal-jump[^>]*>/g)];
+    expect(jumps).toHaveLength(1);
+    const jump = new NodeURL(jumps[0]![1]!.replaceAll("&amp;", "&"), APP_URL);
+    expect(jump.origin).toBe(APP_URL);
+    expect(jump.pathname).toBe("/events");
+    expect([...jump.searchParams].sort()).toEqual([
+      ["event", "grid-link"],
+      ["past", "1"],
+      ["scheduleMonth", "2030-01"],
+      ["schedulePage", "1"],
+      ["schedulePast", "1"],
+      ["scheduleView", "calendar"],
+    ]);
+    expect(jump.hash).toBe("#event-grid-link");
+    const list = await (await src.request(jump.pathname + jump.search)).text();
     expect(list).toContain('id="event-grid-link"');
+    expect(list).toContain('data-view="list"');
+    expect(list).toContain('data-past="1"');
   });
 
   it.each(["list", "calendar"])(
