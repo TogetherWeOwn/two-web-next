@@ -271,6 +271,11 @@ jobs:
         run: |
           npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
+      - name: Schedule search match context (Hono and Kit, real Chromium fixtures)
+        run: |
+          npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/schedule-search-context.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/schedule-search-context.json "Hono schedule committed match context in Chromium" 5
+          node ci/a11y-require-executed.mjs artifacts/a11y/schedule-search-context.json "Kit schedule committed match context in Chromium" 5
       - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
