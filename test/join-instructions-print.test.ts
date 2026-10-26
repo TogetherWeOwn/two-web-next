@@ -2,6 +2,11 @@
 // retaining ordinary guidance unchanged.
 import { describe, expect, it } from "vitest";
 import { isPrintableJoinDestination, printableJoinInstructions } from "../src/events/feeds";
+import {
+  SAFE_JOIN_INSTRUCTIONS,
+  UNICODE_JOIN_DESTINATIONS,
+  admittedPrintJoining,
+} from "./helpers/event-print-joining-fixtures";
 
 describe("additional credential path forms", () => {
   it.each([
@@ -16,6 +21,29 @@ describe("additional credential path forms", () => {
 });
 
 describe("printableJoinInstructions", () => {
+  // Catches a URL matcher that treats Unicode whitespace inside an admitted
+  // destination as the end of that destination, retaining its unsafe suffix.
+  it.each(UNICODE_JOIN_DESTINATIONS)(
+    "omits the complete admitted Unicode destination line: $name",
+    ({ destination }) => {
+      const parsed = admittedPrintJoining(destination);
+      expect(parsed.join_url, "CONTROL: real form validation admits the complete URL").toBe(
+        destination,
+      );
+      expect(parsed.join_instructions).toBe(`Use headphones.\nOpen ${destination}\nBring a board.`);
+      expect(isPrintableJoinDestination(parsed.join_url!), "CONTROL: whole URL is unsafe").toBe(
+        false,
+      );
+      expect(printableJoinInstructions(parsed.join_instructions!)).toBe(
+        "Use headphones.\nBring a board.",
+      );
+    },
+  );
+
+  it("CONTROL: keeps ordinary ASCII-space prose after a harmless URL", () => {
+    expect(printableJoinInstructions(SAFE_JOIN_INSTRUCTIONS)).toBe(SAFE_JOIN_INSTRUCTIONS);
+  });
+
   it.each([
     "Use headphones.",
     "Use headphones.\nBring a board.",
