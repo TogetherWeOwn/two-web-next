@@ -161,3 +161,15 @@
 @media (prefers-reduced-motion: no-preference) {
   .base-theme .btn { transition: background-color .15s ease, color .15s ease, transform .15s ease; }
 }
+/* Print: paper copy of the rules/FAQ leaves only; scope via list test ids. */
+@media print{
+.base-theme:has([data-testid='rules-list']),.base-theme:has([data-testid='faq-list']){--color-page:white;--color-text:rgb(26,26,26);--color-muted:rgb(68,68,68);--color-accent:rgb(154,52,18);--color-surface:white;--color-border:rgb(138,138,138);min-height:auto;background:white;color:rgb(26,26,26)}
+.base-theme:has([data-testid='rules-list']) .site-header,.base-theme:has([data-testid='faq-list']) .site-header,.base-theme:has([data-testid='rules-list']) .content-nav,.base-theme:has([data-testid='faq-list']) .content-nav,.base-theme:has([data-testid='rules-list']) footer,.base-theme:has([data-testid='faq-list']) footer,.base-theme:has([data-testid='rules-list']) .skip-link,.base-theme:has([data-testid='faq-list']) .skip-link,.base-theme:has([data-testid='rules-list']) .content-page>p:last-child,.base-theme:has([data-testid='faq-list']) .content-page>p:last-child,[data-testid='rules-join'],[data-testid='faq-join'],[data-testid='rules-jump'],.rule-permalink{display:none}
+.base-theme:has([data-testid='rules-list']) .content-layout,.base-theme:has([data-testid='faq-list']) .content-layout{display:block;padding-top:0}
+.base-theme [data-testid='faq-list'] section{display:block}
+[data-testid='faq-list']>section{content-visibility:visible;contain-intrinsic-size:none}
+[data-testid='rules-list'] li.card,[data-testid='faq-list'] .card{break-inside:avoid}
+[data-testid='rules-list'] h2,[data-testid='faq-list'] h2,[data-testid='faq-list'] h3{break-after:avoid}
+.content-page [data-testid='rules-list'] li::marker{color:rgb(154,52,18)}
+[data-testid='rules-list'] a[href^='https:']::after,[data-testid='rules-list'] a[href^='http:']::after,[data-testid='faq-list'] a[href^='https:']::after,[data-testid='faq-list'] a[href^='http:']::after{content:' (' attr(href) ')';overflow-wrap:anywhere}
+}
