@@ -89,11 +89,27 @@ function skipInventory(source, file) {
     if (isCall(node)) return isTest(node.callee);
     return false;
   };
+  // Walk one member-access chain for a skip segment, never through a call
+  // result: each registration call in a builder chain (it.skip.each) is
+  // visited on its own, so descending into call objects would double count.
+  // Any-object, like the legacy .skip() call coverage; alias and ternary
+  // routes add their own test-root check via isSkipMember.
+  const chainSkip = (node) => {
+    let current = unwrap(node);
+    let gated = null;
+    while (isMember(current)) {
+      const name = key(current.property, current.computed);
+      if (SKIP_NAMES.has(name)) return { conditional: false, anchor: current.property };
+      if (!gated && GATED_NAMES.has(name)) gated = current.property;
+      current = unwrap(current.object);
+    }
+    return gated ? { conditional: true, anchor: gated } : null;
+  };
   const isSkipMember = (node) => {
     node = unwrap(node);
-    return (
-      isMember(node) && isTest(node.object) && SKIP_NAMES.has(key(node.property, node.computed))
-    );
+    if (!isMember(node) || !isTest(node.object)) return null;
+    const found = chainSkip(node);
+    return found && !found.conditional ? found.anchor : null;
   };
   const hasSkipOption = (node) => {
     node = unwrap(node);
@@ -112,9 +128,8 @@ function skipInventory(source, file) {
     if (isCall(node)) {
       const callee = unwrap(node.callee);
       if (isMember(callee)) {
-        const name = key(callee.property, callee.computed);
-        if (SKIP_NAMES.has(name)) record(callee, false, callee.property);
-        else if (GATED_NAMES.has(name)) record(callee, true, callee.property);
+        const segment = chainSkip(callee);
+        if (segment) record(callee, segment.conditional, segment.anchor);
       } else if (callee?.type === "Identifier" && /^(xit|xdescribe)$/.test(callee.name)) {
         record(callee, false);
       }
@@ -125,12 +140,14 @@ function skipInventory(source, file) {
         if (option) record(option, true);
       }
     } else if (node.type === "ConditionalExpression") {
-      const target = isSkipMember(node.consequent)
-        ? node.consequent
-        : isSkipMember(node.alternate)
-          ? node.alternate
-          : null;
-      if (target) record(node, true, unwrap(target).property);
+      const anchor = isSkipMember(node.consequent) ?? isSkipMember(node.alternate);
+      if (anchor) record(node, true, anchor);
+    } else if (node.type === "TaggedTemplateExpression") {
+      const tag = unwrap(node.tag);
+      if (isMember(tag)) {
+        const segment = chainSkip(tag);
+        if (segment) record(tag, segment.conditional, segment.anchor);
+      }
     } else {
       const value =
         node.type === "VariableDeclarator"
@@ -140,7 +157,8 @@ function skipInventory(source, file) {
             : node.type === "AssignmentExpression"
               ? node.right
               : null;
-      if (isSkipMember(value)) record(unwrap(value), false, unwrap(value).property);
+      const anchor = isSkipMember(value);
+      if (anchor) record(unwrap(value), false, anchor);
     }
     for (const [name, value] of Object.entries(node)) {
       if (name === "comments" || name.endsWith("Comments")) continue;

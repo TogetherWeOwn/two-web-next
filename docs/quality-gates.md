@@ -90,7 +90,7 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
   `Floor-waiver:` line before matching; path-based waiver parsing removes
   wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:386-405, 407-433`).
+  (`ci/floor-guard.mjs:404-423, 425-451`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -103,7 +103,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   in its place still fails. JavaScript/TypeScript skips are counted as syntax
   constructs in complete merge-base and working-tree sources using the existing
   Babel parser, without executing them or evaluating conditions. Wrapped
-  expressions and multiple gates on one line keep the same count; comments,
+  expressions and multiple gates on one line keep the same count; a skip in
+  any builder-chain segment (`it.skip.each`, including tagged-template
+  builders) counts once per registration; comments,
   strings, fixture data and callback-local objects supply no replacement credit.
   `skip:` keys count only in test-call options (including literal spreads), not
   arbitrary nested objects. Other languages keep the legacy call spellings.

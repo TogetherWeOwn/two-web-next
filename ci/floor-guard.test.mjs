@@ -344,6 +344,7 @@ describe("floor-guard", () => {
     const prop = "sk" + "ip";
     for (const source of [
       `test("x", { ...{ concurrency: false }, ${prop}: true }, () => {});`,
+      `test("x", { ...{ ${prop}: true } }, () => {});`,
       `test("x", { metadata: { tags: [] }, "${prop}": true }, () => {});`,
       `test("x", () => {}, { ${prop}: true });`,
     ]) {
@@ -358,6 +359,7 @@ describe("floor-guard", () => {
     const call = gated("example");
     for (const source of [
       `const coverage = {\n  "/health": {\n    ${prop}: true,\n    reason: "JSON, not a document",\n  },\n};`,
+      `test("x", { ...{ concurrency: false } }, () => {});`,
       `test("x", () => { const fixture = { ${prop}: true }; });`,
       `test("x", { metadata: { ${prop}: true } }, () => {});`,
       `test(${JSON.stringify(call)}, () => {});`,
@@ -392,6 +394,48 @@ describe("floor-guard", () => {
     assert.deepEqual(skipChanges("", `const fixture = { todo: true };`), []);
     assert.deepEqual(skipChanges("", `const example = "${member}";`), []);
     assert.equal(skipChanges(gated("old"), `const suite = ${member};`).length, 1);
+  });
+
+  it("detects skip and todo in intermediate builder-chain segments", () => {
+    const skip = "sk" + "ip";
+    const todo = "to" + "do";
+    for (const source of [
+      `it.${skip}.each([1])("x", () => {});`,
+      `it.${skip}.for([[1]])("x", () => {});`,
+      `it.${skip}.concurrent("x", () => {});`,
+      `it.${todo}.each([1])("x", () => {});`,
+      `it.concurrent.${skip}.each([1])("x", () => {});`,
+      `describe.${skip}.each([1])("x", () => {});`,
+      "it." + skip + ".each`a ${1}`;",
+      `const suite = db ? it.${skip}.each : it;`,
+      `const suite = db ? it : it.${skip}.each;`,
+      `const each = it.${skip}.each;`,
+    ]) {
+      assert.deepEqual(skipChanges("", source), [
+        { rule: "test-made-easier", file: "test/a.test.ts", text: source },
+      ]);
+    }
+    for (const source of [
+      `it.each([1])("x", () => {});`,
+      `it.concurrent.each([1])("x", () => {});`,
+      "it.each`a ${1}`;",
+      `const each = it.each;`,
+    ]) {
+      assert.deepEqual(skipChanges("", source), [], source);
+    }
+  });
+
+  it("pins assignment aliases and non-JS comment exclusion", () => {
+    const member = `describe.${"sk" + "ip"}`;
+    assert.deepEqual(skipChanges("", `suite = ${member};`), [
+      { rule: "test-made-easier", file: "test/a.test.ts", text: `suite = ${member};` },
+    ]);
+    assert.deepEqual(skipChanges("", "suite = describe;"), []);
+    const comment = `# pytest.mark.${"sk" + "ip"}${"if"}(cond)`;
+    const gate = `foo.${"sk" + "ip"}${"if"}(True)`;
+    assert.deepEqual(skipChanges(comment, gate, "ci/test_example.py"), [
+      { rule: "test-made-easier", file: "ci/test_example.py", text: gate },
+    ]);
   });
 
   it("uses unchanged call context in the CLI for options and wrapped members", () => {
@@ -431,6 +475,34 @@ describe("floor-guard", () => {
         encoding: "utf8",
       });
       assert.equal(missing.status, 2, "invalid base must fail closed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("flags builder-chain skips end to end in the CLI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-builder-"));
+    try {
+      const git = (args) => {
+        const result = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout.trim();
+      };
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      const path = join(dir, "a.test.mjs");
+      writeFileSync(path, 'it.each([1])("y", () => {});\n');
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      writeFileSync(path, `it.${"sk" + "ip"}.each([1])("y", () => {});\n`);
+      const result = spawnSync("node", [guard, "--base", "HEAD"], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /\[test-made-easier\] a\.test\.mjs:/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
