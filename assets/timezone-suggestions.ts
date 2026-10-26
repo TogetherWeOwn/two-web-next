@@ -27,7 +27,9 @@ export function suggestTimezones(input: HTMLInputElement | null): void {
         new Intl.DateTimeFormat("en", { timeZone: zone });
         seen.add(zone);
         list.appendChild(new Option(zone));
-      } catch {}
+      } catch {
+        // Skip just this zone; the rest of the list still populates.
+      }
     }
   }
   step();
