@@ -557,6 +557,7 @@ export const ProfilePage: FC<{
                 <input
                   id={PROFILE_FIELD_IDS.timezone}
                   name="timezone"
+                  list="profile-timezone-suggestions"
                   value={form.timezone}
                   placeholder="Europe/London"
                   aria-invalid={errors?.timezone ? "true" : undefined}
@@ -572,6 +573,7 @@ export const ProfilePage: FC<{
                   {errors.timezone}
                 </p>
               ) : null}
+              <datalist id="profile-timezone-suggestions"></datalist>
               <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">
                 {PROFILE_COPY.timezoneHelp}
               </p>

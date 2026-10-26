@@ -439,6 +439,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <input
               id={PROFILE_FIELD_IDS.timezone}
               name="timezone"
+              list="profile-timezone-suggestions"
               value={form.timezone}
               placeholder="Europe/London"
               aria-invalid={errors?.timezone ? "true" : undefined}
@@ -450,6 +451,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           {#if errors?.timezone}
             <p id={PROFILE_ERROR_IDS.timezone} class="error">{errors.timezone}</p>
           {/if}
+          <datalist id="profile-timezone-suggestions"></datalist>
           <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">{PROFILE_COPY.timezoneHelp}</p>
           <div data-device-timezone hidden>
             <button

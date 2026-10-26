@@ -529,7 +529,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           "Europe/London",
         );
         expect(await button(fixture.page).count()).toBe(0);
-        expect(await fixture.page.getByRole("textbox", { name: /timezone/i }).isEditable()).toBe(
+        expect(await fixture.page.getByRole("combobox", { name: /timezone/i }).isEditable()).toBe(
           true,
         );
         expect(await fixture.page.locator('[name="timezone"]').inputValue()).toBe("Europe/London");
