@@ -134,8 +134,10 @@ export const fixtureRows = [
 
 // Bundle the actual Kit loads and Svelte pages together with their own real
 // member-read boundary. Only framework bindings/db injection are substituted;
-// imported production query and view functions are not replaced.
-export async function compileSeriesKit() {
+// imported production query and view functions are not replaced. The optional
+// appUrl only changes the fixture APP_URL binding the loads already read
+// (seed/demo key admission), never auth, routing or data semantics.
+export async function compileSeriesKit({ appUrl = env.APP_URL } = {}) {
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "exact-series-kit-"),
   );
@@ -147,7 +149,7 @@ export async function compileSeriesKit() {
       "@sveltejs/kit",
       "export function error(status,message){throw Object.assign(new Error(message),{status})}",
     ],
-    ["cloudflare:workers", `export const env={APP_URL:${JSON.stringify(env.APP_URL)}};`],
+    ["cloudflare:workers", `export const env={APP_URL:${JSON.stringify(appUrl)}};`],
     [
       "fixture-db",
       "let db; export function setDb(value){db=value} export async function dbFor(){return db}",
@@ -242,13 +244,24 @@ export async function compileSeriesKit() {
   }
 }
 
-export async function createSeriesFixture({ clock = Date.now } = {}) {
+// Optional seams keep every existing default: appUrl only overrides the
+// fixture APP_URL binding (and the rejected-draft Origin that must match it),
+// and extraRows are inserted parent-first after the canonical fixture rows.
+export async function createSeriesFixture({
+  clock = Date.now,
+  appUrl = env.APP_URL,
+  extraRows = [],
+} = {}) {
   // No skip/fallback: CI supplies its disposable database; local commands supply
   // the README-approved run-owned URL. The shared guard runs before connecting.
   const fixture = await createMemberDataFixture(process.env.DATABASE_URL);
   try {
     await fixture.db.insert(events).values(fixtureRows.slice(0, 1));
     await fixture.db.insert(events).values(fixtureRows.slice(1));
+    if (extraRows.length > 0) {
+      await fixture.db.insert(events).values(extraRows.slice(0, 1));
+      if (extraRows.length > 1) await fixture.db.insert(events).values(extraRows.slice(1));
+    }
     const queries = [];
     const db = drizzle(fixture.client, {
       schema: { ...schema, ...adminSchema },
@@ -274,7 +287,7 @@ export async function createSeriesFixture({ clock = Date.now } = {}) {
             method: "POST",
             headers: {
               cookie: moderator,
-              origin: env.APP_URL,
+              origin: appUrl,
               "content-type": "application/x-www-form-urlencoded",
               accept: "text/html",
             },
@@ -291,7 +304,7 @@ export async function createSeriesFixture({ clock = Date.now } = {}) {
               series_event: key(200),
             }),
           },
-          { ...env, ADMIN_DB: db },
+          { ...env, APP_URL: appUrl, ADMIN_DB: db },
         );
         moderator = mergeCookies(moderator, response);
         return {
@@ -312,7 +325,7 @@ export async function createSeriesFixture({ clock = Date.now } = {}) {
           {
             headers: actor === "guest" ? {} : { cookie: actor === "member" ? member : moderator },
           },
-          { ...env, ADMIN_DB: overrideDb },
+          { ...env, APP_URL: appUrl, ADMIN_DB: overrideDb },
         );
         // Keep the emitted session/status pair before flattening Set-Cookie.
         // Each actor owns a separate jar; a denial must not acquire mod auth.

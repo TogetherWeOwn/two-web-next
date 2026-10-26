@@ -46,7 +46,7 @@ export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
   const query = parseEventListQuery(raw);
   let fetched;
   try {
-    fetched = await listSeriesEvents(db, raw);
+    fetched = await listSeriesEvents(db, raw, env.APP_URL);
   } catch (err) {
     if (isDatabaseUnavailable(err)) error(503, "Admin temporarily unavailable");
     alertRequestError(err, { method: "GET", route: "/admin/events" });

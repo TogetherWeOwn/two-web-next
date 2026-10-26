@@ -25,7 +25,7 @@ import {
 } from "./event-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
-import { canonicalEventKey } from "../events/keys";
+import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { nonSensitiveRead } from "../member-reads";
 import { events, rsvps } from "../db/admin-schema";
 import type { EventRow } from "./store-event-writes";
@@ -55,12 +55,16 @@ export type EventListScope =
 export async function listSeriesEvents(
   db: Db,
   params: EventListParams,
+  appUrl = "",
 ): Promise<{ rows: EventListRow[]; scope: EventListScope | null }> {
   const opts = parseEventListQuery(params);
   const requested = opts.series_event;
-  // Canonicalize before touching the database: a malformed scope refuses
-  // without a read, and stays a recovery rather than an unscoped list.
-  const lookupKey = requested === null ? null : canonicalEventKey(requested);
+  // Match editor admission before touching the database, including demo keys
+  // only on staging/local bindings. The default keeps seed scopes refused.
+  const lookupKey =
+    requested !== null && eventKeyAllowed(requested, appUrl)
+      ? (canonicalEventKey(requested) ?? requested)
+      : null;
   if (requested !== null && lookupKey === null) {
     return { rows: [], scope: { status: "invalid" } };
   }

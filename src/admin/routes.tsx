@@ -380,7 +380,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const params = c.req.query();
     const query = parseEventListQuery(params);
-    const { rows: fetched, scope } = await listSeriesEvents(db, params);
+    const { rows: fetched, scope } = await listSeriesEvents(db, params, c.env.APP_URL);
     const rows = fetched.slice(0, EVENT_PAGE_SIZE);
     return bufferedMemberHtml(
       c,
