@@ -63,8 +63,11 @@ event loads a fresh comparison.
 Required evidence: desktop 1280×800 and mobile 390×844 before/default,
 converted and unavailable states in Hono and Kit, for Starts
 ([evidence](./evidence/event-device-timezone/README.md)) and Ends
-([evidence](./evidence/event-device-timezone-ends/README.md)). Hono
-a11y/Lighthouse/visual gates do not exercise the Kit route; Kit needs its own
+([evidence](./evidence/event-device-timezone-ends/README.md)). The Ends bundle
+currently omits the required unavailable-state images at both widths in both
+renderers; its browser tests cover the behavior, not that visual evidence.
+Those captures remain outstanding. Hono a11y/Lighthouse/visual gates do not
+exercise the Kit route; Kit needs its own
 real-browser fixture proof and release-build budget check. Visual baseline
 updates require reviewed CI failure artifacts; no wider masks or threshold
 changes are part of this feature.

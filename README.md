@@ -560,6 +560,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight
