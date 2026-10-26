@@ -280,6 +280,7 @@ to execute the same Chromium proof.
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
+| `test/calendar-accessibility-browser-acceptance.test.ts` | `CALENDAR_A11Y_BROWSER_TESTS` | `CALENDAR_A11Y_BROWSER_TESTS=true npx vitest run test/calendar-accessibility-browser-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |

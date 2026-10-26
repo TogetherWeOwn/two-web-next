@@ -21,6 +21,7 @@ import {
   SCHEDULE_AVAILABILITY_TESTID,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
+  calendarDayLongLabel,
   calendarJumpUrl,
   calendarMonthLabel,
   calendarUrl,
@@ -119,6 +120,7 @@ export const MonthGrid: FC<{
                   data-outside={day.inMonth ? undefined : "true"}
                 >
                   <span>{day.day}</span>
+                  <span class="sr-only">{calendarDayLongLabel(day.iso)}</span>
                   <ul>
                     {day.events.map((e) => {
                       const entryZone = rowZone(e, zone);

@@ -271,6 +271,12 @@ jobs:
         run: |
           npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
+      - name: Calendar accessibility dates and loading (real Chromium)
+        env:
+          CALENDAR_A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-accessibility-browser-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-accessibility.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-accessibility.json "calendar accessible dates and owned loading in Chromium" 6
       - name: Schedule search match context (Hono and Kit, real Chromium fixtures)
         run: |
           npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/schedule-search-context.json

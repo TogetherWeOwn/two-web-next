@@ -26,6 +26,12 @@
   var live = LIVE_TESTIDS.map(function (t) {
     return root.querySelector('[data-testid="' + t + '"]');
   });
+  // Owned loading announcement host: the sr-only month-status line carries
+  // "Loading events…" during member-started skeleton reads, outside the busy
+  // content so it is announced. Saved once per pending turn; success replaces
+  // it from SSR, failure restores the last-good month.
+  var monthStatus = live[3];
+  var monthStatusSaved = null;
   // Failed-read recovery host (optional: pages and harnesses without it keep
   // the pre-recovery behavior). Testids mirror EVENTS_READ_*_TESTID in
   // src/islands/contracts-calendar.ts.
@@ -304,6 +310,13 @@
     if (trackFocus) document.addEventListener("focusin", trackFocus, { signal: controller.signal });
     activeIsSearch = !!opts.search;
     setLoading(!!opts.skeleton);
+    // Member-started skeleton reads announce loading in the sr-only month
+    // host; settled searches stay untargeted. Saved once per pending turn so
+    // a superseding read keeps the original month for its own restore.
+    if (opts.skeleton && monthStatus) {
+      if (monthStatusSaved === null) monthStatusSaved = monthStatus.textContent;
+      monthStatus.textContent = skeleton.textContent;
+    }
     // The owned deadline covers the whole read: headers plus body. On expiry
     // this request no longer owns the zones: release active first so its late
     // abort/completion stays silent, then restore the last good view.
@@ -316,6 +329,12 @@
     function failRead(cooldownMs) {
       feedback.textContent = root.dataset.loadError;
       setLoading(false);
+      // Current failure restores the last-good month; superseded reads never
+      // reach here (active guard or AbortError), so they stay silent.
+      if (monthStatusSaved !== null && monthStatus) {
+        monthStatus.textContent = monthStatusSaved;
+        monthStatusSaved = null;
+      }
       if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
         window.location.assign(window.location.href);
       } else {
@@ -451,6 +470,12 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
+      // Success replaces loading from SSR; when the fragment carries no live
+      // source (harnesses), restore the saved month so no loading lingers.
+      if (monthStatusSaved !== null && monthStatus) {
+        if (/loading/i.test(monthStatus.textContent)) monthStatus.textContent = monthStatusSaved;
+        monthStatusSaved = null;
+      }
       var sourceGame = page.querySelector('select[name="game"]');
       // The admitted page owns this scope even when newer drafts keep the select.
       renderedGame = sourceGame ? sourceGame.value : "";
