@@ -173,9 +173,7 @@ async function runCoreChain(t, chain, failExact) {
   const bin = join(fixture, "bin");
   await mkdir(bin, { recursive: true });
   const log = join(fixture, "invocations.log");
-  const words = [
-    ...new Set(chain.split("&&").map((stage) => stage.trim().split(/\s+/, 1)[0])),
-  ];
+  const words = [...new Set(chain.split("&&").map((stage) => stage.trim().split(/\s+/, 1)[0]))];
   for (const word of words) {
     await writeFile(
       join(bin, word),
@@ -225,7 +223,10 @@ test("the resolved core chain fails fast: a nonzero status stops later commands"
 }, async (t) => {
   const entry = requireSharedCoreEntry();
   const chain = manifest.scripts[entry];
-  const stages = chain.split("&&").map((stage) => stage.trim()).filter(Boolean);
+  const stages = chain
+    .split("&&")
+    .map((stage) => stage.trim())
+    .filter(Boolean);
   assert.ok(stages.length >= 3, `shared core entry must be a multi-command chain, got: ${chain}`);
   assert.doesNotMatch(chain, /;/, "shared core stages must join with &&, never ;");
   for (const stage of stages) {
@@ -234,13 +235,13 @@ test("the resolved core chain fails fast: a nonzero status stops later commands"
       /^(npm|node) /,
       `shared core stage must be an npm/node invocation, got: ${stage}`,
     );
-    assert.doesNotMatch(stage, /\|\|/, `shared core stage must not swallow failure with ||: ${stage}`);
+    assert.doesNotMatch(
+      stage,
+      /\|\|/,
+      `shared core stage must not swallow failure with ||: ${stage}`,
+    );
   }
-  assert.equal(
-    new Set(stages).size,
-    stages.length,
-    "shared core chain must not repeat a command",
-  );
+  assert.equal(new Set(stages).size, stages.length, "shared core chain must not repeat a command");
   const norm = stages.map((stage) => stage.replace(/\s+/g, " "));
   const middle = Math.floor(stages.length / 2);
   const ok = await runCoreChain(t, chain, null);
@@ -256,8 +257,7 @@ test("the resolved core chain fails fast: a nonzero status stops later commands"
 
 test("removing a selected command from the shared definition fails acceptance", () => {
   const victims = [`vitest ${args.join(" ")}`, "ci/visual-accept.test.mjs"];
-  const synthetic =
-    `(vitest ${args.join(" ")}) && npm run e2e:safety && node --test ${CORE_SUITES.join(" ")}`;
+  const synthetic = `(vitest ${args.join(" ")}) && npm run e2e:safety && node --test ${CORE_SUITES.join(" ")}`;
   // Pre-extraction this proves the predicate against a synthetic chain so
   // the check cannot pass vacuously once the shared entry lands.
   assert.deepEqual(missingCoreMembers(synthetic), []);
@@ -345,7 +345,11 @@ test("the local root check keeps its local-only surrounding checks", () => {
 
 test("the offline lane stays deliberately partial and never substitutes for the full lane", async () => {
   const offline = await readFile(new URL("./offline-check.mjs", import.meta.url), "utf8");
-  assert.match(offline, /Fixture-only check/, "offline lane must keep its limited-evidence disclaimer");
+  assert.match(
+    offline,
+    /Fixture-only check/,
+    "offline lane must keep its limited-evidence disclaimer",
+  );
   assert.ok(
     offline.includes('["npm", ["run", "test"]]'),
     "offline lane keeps the ordinary non-coverage test run",
@@ -365,9 +369,7 @@ test("required jobs, the CI gate wiring and security steps stay intact", () => {
     "Dependency audit (lockfile, including dev dependencies)",
     "Security-pin contracts (Host admission + CSP inline styles)",
   ]) {
-    const entry = check
-      .split(/\n      - /)
-      .find((item) => item.startsWith(`name: ${name}\n`));
+    const entry = check.split(/\n      - /).find((item) => item.startsWith(`name: ${name}\n`));
     assert(entry, `check job must keep the "${name}" step`);
     assert.doesNotMatch(entry, /continue-on-error:/);
     const guards = entry.match(/^        if:.*$/gm) ?? [];
