@@ -209,7 +209,8 @@ export function getOpenApiDocument(appUrl: string) {
               in: "path",
               required: true,
               schema: { type: "string" },
-              description: "Stored uppercase ULID event key.",
+              description:
+                "ULID event key; letter case is canonicalized to the stored uppercase form, which responses always carry.",
             },
           ],
           responses: {

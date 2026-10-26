@@ -12,10 +12,10 @@ describe("public data contract", () => {
     expect(PUBLIC_DATA_BOUNDS).toEqual({ defaultPageSize: 20, maxPageSize: 100 });
   });
 
-  it("defines the only public event status and accepts canonical ULID keys", () => {
+  it("defines the only public event status and canonicalizes case-variant ULID keys", () => {
     expect(PUBLIC_EVENT_STATUS).toBe("published");
     expect(parsePublicEventId("01J00000000000000000000001")).toBe("01J00000000000000000000001");
-    expect(parsePublicEventId("01j00000000000000000000001")).toBeNull();
+    expect(parsePublicEventId("01j00000000000000000000001")).toBe("01J00000000000000000000001");
     expect(parsePublicEventId("Y1J00000000000000000000001")).toBeNull();
     expect(parsePublicEventId("987654321")).toBeNull();
   });

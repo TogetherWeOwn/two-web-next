@@ -9,7 +9,6 @@
 // /events.json contract is untouched.
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { containsControlCharacters } from "../admin/validation-shared";
 import { alertRequestError } from "../alerts";
 import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -24,10 +23,10 @@ import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
   API_PUBLIC_BOUNDS,
-  PUBLIC_API_GAME_MAX_LENGTH,
   PUBLIC_DATA_ERROR_NEXT,
   PUBLIC_DATA_INTERNAL_MESSAGE,
   PUBLIC_EVENT_STATUS,
+  parsePublicApiGame,
   parsePublicEventId,
   type CommunitySnapshotDto,
   type JoinHandoffDto,
@@ -357,28 +356,18 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get("/api/public/events", async (c) => {
     const refused = await admitted(c);
     if (refused) return refused;
-    // Optional `game` facet: absent reads unfiltered (byte-identical CONTROL);
-    // present trims and bounds here, matches case-insensitively exact in the
-    // reader as a bound parameter. Present-but-blank, oversized and unknown
-    // degrade to the empty page, never a 422 and never unfiltered. The raw
-    // value is never reflected in a body, message or header.
-    const rawGame = c.req.query("game");
-    let game: string | null = null;
-    let gameKey: string | null = null;
-    if (rawGame !== undefined) {
-      const trimmed = rawGame.trim();
-      if (
-        trimmed === "" ||
-        [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
-        containsControlCharacters(trimmed)
-      ) {
-        return emptyEventCollection(c);
-      }
-      game = trimmed;
-      // Cache by the lowercased form so `Chess` and `chess` share one entry;
-      // the reader lowercases again for the SQL binding.
-      gameKey = trimmed.toLowerCase();
-    }
+    // Optional `game` facet, parsed by the one rule shared with MCP
+    // (contracts.ts): absent reads unfiltered (byte-identical CONTROL);
+    // present matches case-insensitively exact in the reader as a bound
+    // parameter. Present-but-blank, oversized and unknown degrade to the
+    // empty page, never a 422 and never unfiltered. The raw value is never
+    // reflected in a body, message or header.
+    const parsedGame = parsePublicApiGame(c.req.query("game"));
+    if (parsedGame.kind === "empty") return emptyEventCollection(c);
+    // Cache by the lowercased form so `Chess` and `chess` share one entry;
+    // the reader lowercases again for the SQL binding.
+    const game = parsedGame.kind === "filter" ? parsedGame.game : null;
+    const gameKey = parsedGame.kind === "filter" ? parsedGame.gameKey : null;
     const limit = parseLimit(c.req.query("per_page") ?? c.req.query("limit") ?? "");
     const page = parsePage(c.req.query("page") ?? "1");
     const canonicalQuery = gameKey
@@ -457,10 +446,13 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const refused = await admitted(c);
     if (refused) return refused;
     const raw = c.req.param("key");
-    // Static message: the rejected key is never reflected.
-    if (!parsePublicEventId(raw))
-      return apiError(c, "invalid_request", "That event key is not valid.", 422);
-    const key = apiPublicCacheKey("GET", c.req.path, "");
+    // Static message: the rejected key is never reflected. A case-variant
+    // ULID canonicalizes to the stored uppercase form; lookup and the cache
+    // key both use that canonical form, so variants share one entry and a
+    // retirement frees the pair whatever case warmed first.
+    const eventId = parsePublicEventId(raw);
+    if (!eventId) return apiError(c, "invalid_request", "That event key is not valid.", 422);
+    const key = apiPublicCacheKey("GET", `/api/public/events/${eventId}`, "");
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
     // Fence: same as the collection route — a retire that lands mid-read
@@ -472,7 +464,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
     try {
-      const row = await getPublicApiEvent(db, raw);
+      const row = await getPublicApiEvent(db, eventId);
       if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
       const [dto] = [serializeEvent(row)];
       try {

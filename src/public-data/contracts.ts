@@ -1,3 +1,6 @@
+import { containsControlCharacters } from "../admin/validation-shared";
+import { canonicalEventKey } from "../events/keys";
+
 /** Shared, intentionally allowlisted contract for public data reads. */
 export const PUBLIC_EVENT_STATUS = "published" as const;
 
@@ -30,6 +33,34 @@ export const API_PUBLIC_BOUNDS = {
  * degrade to the empty page, never a 422.
  */
 export const PUBLIC_API_GAME_MAX_LENGTH = 100;
+
+export type ParsedPublicApiGame =
+  | { kind: "absent" }
+  | { kind: "empty" }
+  | { kind: "filter"; game: string; gameKey: string };
+
+/**
+ * The one `game` facet parse rule, shared by REST and MCP so the machine
+ * surfaces cannot drift. Absent reads unfiltered; present trims first, then
+ * the length bound applies to the trimmed value. Present-but-blank,
+ * oversized and control-character values answer the canonical empty
+ * collection, never an error and never the unfiltered list; for those
+ * `kind: "empty"` lets the caller refuse before any database read. A valid
+ * value carries its trimmed form for the reader and its lowercased form so
+ * cache keys share one entry across letter cases.
+ */
+export function parsePublicApiGame(raw: string | undefined): ParsedPublicApiGame {
+  if (raw === undefined) return { kind: "absent" };
+  const trimmed = raw.trim();
+  if (
+    trimmed === "" ||
+    [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+    containsControlCharacters(trimmed)
+  ) {
+    return { kind: "empty" };
+  }
+  return { kind: "filter", game: trimmed, gameKey: trimmed.toLowerCase() };
+}
 
 /** One published event as the public API serves it. `going_count` is null — never 0 — when the RSVP aggregate cannot be read. */
 export interface PublicApiEventDto extends Omit<PublicEventDto, "going_count" | "going_occupancy"> {
@@ -113,9 +144,19 @@ export type PublicEventId = string & { readonly __brand: "PublicEventId" };
 
 const PUBLIC_EVENT_ID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
-/** Public event IDs use the stored uppercase ULID, never the database row ID. */
+/**
+ * Public event IDs carry the stored uppercase ULID, never the database row
+ * ID. Input in any letter case canonicalizes through the human URLs' one
+ * `canonicalEventKey` rule, then must still satisfy this surface's stricter
+ * stored form — the first-character (0-7) bound and the Crockford alphabet —
+ * so case folding widens case only. Callers look up and cache by the
+ * returned canonical key, so case variants share one entry.
+ */
 export function parsePublicEventId(value: string): PublicEventId | null {
-  return PUBLIC_EVENT_ID.test(value) ? (value as PublicEventId) : null;
+  const canonical = canonicalEventKey(value);
+  return canonical !== null && PUBLIC_EVENT_ID.test(canonical)
+    ? (canonical as PublicEventId)
+    : null;
 }
 
 export interface PublicEventDto {
