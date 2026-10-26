@@ -7,9 +7,16 @@ separate capacity PR. This PR changes no application, dependency, asset, checker
 file-count allowance or startup bound. It preserves the complete existing budget
 history, appending one dated decision.
 
-| Budget field | Incoming ceiling | Proposed ceiling | Increase | Margin above combined build |
+The original proposal also included a server gzip step (334080 → 334848).
+Before this PR merged, main raised that ceiling further for an independent
+composition (#1826: 334080 → 335104), and a fresh re-measurement on the final
+base (below) shows the feature composition already fits it. The server step
+is therefore **not taken**: taking 334848 would lower the reviewed ceiling.
+The final change raises only the two client ceilings.
+
+| Budget field | Incoming ceiling | Proposed ceiling | Increase | Margin above fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 334080 | 334848 | 768 | 86 |
+| `server.js.maxGzipBytes` | 335104 (landed by #1826) | 335104 — no change | 0 | 180 above worst 334924 |
 | `client.js.maxRawBytes` | 254976 | 256000 | 1024 | 302 |
 | `client.js.maxGzipBytes` | 102912 | 103168 | 256 | 134 |
 
@@ -19,12 +26,14 @@ or capacity for future work. All other limits remain incoming main, including
 server raw 1203200, server files 126, client JS files 55, Worker 3584/1536,
 client CSS 3072/1024 and four files, and startup 60000ms.
 
-ACT: allocate only these three byte steps through independent review.
-WHY: main fits, while the exact feature composition breaches these three limits;
-ordinary shared-component extraction does not recover enough capacity.
-UNDO: reviewed revert of these steps and the appended decision, retaining every
-prior record. Coordinate any revert with the dependent feature so it cannot ship
-against an insufficient budget.
+ACT: allocate only these two client byte steps through independent review.
+WHY: main fits, while the exact feature composition breaches these two client
+limits on every repeated build; ordinary shared-component extraction does not
+recover enough capacity. The server breach measured originally is already
+covered by the independently reviewed 335104 ceiling on main.
+UNDO: reviewed revert of these two steps and the appended decision, retaining
+every prior record. Coordinate any revert with the dependent feature so it
+cannot ship against an insufficient budget.
 
 ## Pinned source and method
 
@@ -37,10 +46,23 @@ against an insufficient budget.
 - Reconciled onto main `4d9ebeee5b311dd5bedb606a57ea91183625c3c7`
   (`test(kit): support current and justified server-gzip allowances`),
   which restructured only the shipping test (one-file diff, no numeric
-  or build-input change). This decision adopts the tier structure and
-  adds the measured 334848 tier; pinned values are unchanged.
-- Feature: `7d390f4b8c54e30b0da703c2085530d1876c78f4`.
-- Clean three-way merged source tree: `a51b15238a8a28880fc4e87c7f432e9143fcf81f`.
+  or build-input change). At that point this decision adopted the tier
+  structure and added a measured 334848 tier; pinned values were unchanged.
+- Reconciled onto main `0fe4dd90396dc17d7985ae6e5df24ebad46c226e` after
+  #1826 raised server gzip to 335104, #1812 and #1819 changed server
+  build inputs (`src/events/*`, `src/agent-events/*`), and #1827 added
+  the 335360 shipping-test tier. Build inputs moved, so the `91b66a68d`
+  numbers below no longer decide anything on their own: both trees were
+  re-measured on this final base (fresh table further down). The 334848
+  test tier is dropped again; main's supported tiers
+  (334080/335104/335360) are kept byte-identical.
+- Feature: `7d390f4b8c54e30b0da703c2085530d1876c78f4` (unchanged across
+  every reconcile).
+- Clean three-way merged source tree (original pins):
+  `a51b15238a8a28880fc4e87c7f432e9143fcf81f`.
+- Clean three-way merged source tree (final base):
+  `d8fd764d71e1ccfac62843cdc8d24da236009328`
+  (`git merge-tree --write-tree 0fe4dd903 7d390f4b8`, exit 0).
 - Runtime: Node 24.22.1, npm 11.19.1.
 
 Use `git merge-tree --write-tree <main> <feature>` to produce the combined tree,
@@ -87,6 +109,36 @@ Server raw varies by two bytes between repeated builds, and combined server gzip
 by one byte. The proposal covers the larger observation, not a selected lower
 result. Startup latency was not measured; the existing bound is unchanged.
 
+## Re-measurement on final main (`0fe4dd903`)
+
+Same method as above: pristine `0fe4dd903` and the clean combined tree
+`d8fd764d`, identical locked dependencies (root/web manifests, lockfiles and
+the checker are byte-identical across both trees), two builds per tree, all
+four builds exit 0. Pristine main passes its own budget twice; the combined
+source fails twice on **client JS only** — server JS now fits main's 335104
+ceiling, which is why the server step is dropped.
+
+| Measurement | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Server JS files | 115 / 115 | 115 / 115 |
+| Server JS raw | 1179526 / 1179528 | 1183170 / 1183172 |
+| Server JS gzip | 334041 / 334040 | 334923 / 334924 |
+| Client JS files | 54 / 54 | 55 / 55 |
+| Client JS raw | 253949 / 253949 | 255698 / 255698 |
+| Client JS gzip | 102273 / 102273 | 103034 / 103034 |
+| Worker raw / gzip | 2551 / 1219 both builds | 2551 / 1219 both builds |
+| Client CSS files | 2 / 2 | 2 / 2 |
+| Client CSS raw / gzip | 2833 / 1006 both builds | 2833 / 1006 both builds |
+
+Feature delta against final main: server +3644 raw / +882..884 gzip, client
++1749 raw / +761 gzip and one file — the client numbers are identical to the
+original measurement (no client build input changed on main). Combined
+server gzip worst 334924 fits 335104 with 180 bytes to spare; combined
+client breaches 254976/102912 by 722/122 bytes on both builds. On the same
+built combined output with no rebuild: the proposed 256000/103168 client
+limits pass (checker exit 0); client raw at 255488 rejects (exit 1); client
+gzip at 102912 rejects (exit 1); restored main limits reject (exit 1).
+
 ## Rejected source-sharing experiment
 
 In the isolated combined source only, extract the three repeated datalist/hint
@@ -121,35 +173,36 @@ never change the checker, artifacts or other limits:
 | Proposed limits, client raw one step lower (255488) | 1 | client JS |
 | Proposed limits, client gzip one step lower (102912) | 1 | client JS |
 
-The resolved shipping-boundary suite against the original caps produces
-78 passes and six expected failures: its client rows pin the proposed
-256000/103168 ceilings (interval, exact and diagnostic-ceiling assertions),
-while the server rows select the still-supported 334080 allocation tier and
-pass. (The inventory file contributes 51 budget-independent passes.) These are
-stale-cap failures, not flaky runs; no rerun, skip or checker change can
+Against current main caps the resolved shipping-boundary suite produces
+27 passes and six expected failures in this file (78 passes across the
+shipping + inventory files; the inventory file contributes 51
+budget-independent passes): its client rows pin the proposed 256000/103168
+ceilings (interval, exact and diagnostic-ceiling assertions), while the
+server rows select main's supported 335104 allocation tier and pass. These
+are stale-cap failures, not flaky runs; no rerun, skip or checker change can
 substitute for the proposed limits.
 
 The [independently authored acceptance correction](https://github.com/TogetherWeOwn/two-web-next/commit/0f76d9f0387ea1913e00ef3bb6903e182e64daa5)
 (test-file SHA256 `cd3314aec99bb7c255ba132d99ce692ab80995201acd48bd7ea90182b6129716`
-at incorporation) is preserved, then adapted to main's explicit-allocation
-structure without changing its pinned values: the 334848 tier carries the
-measured game-suggestion interval 334762 with exact 334848 and over 334849
-rows, and the client rows are unchanged. The checker, fixture helpers and
-every unrelated boundary are unchanged. A sibling capacity change justifies
-the same 334848 server tier with its own interval (334683); the first merger
-sets the test literal and the second reconciles rows while prose cites both
-measurements. Resolved test-file SHA256:
-`80bd867c662a848ff0dec33127b961e2f578d5c4897089b0edde84f24a7fb9df`.
+at incorporation) is preserved. In the final resolved file its client rows
+(measured intervals 255698/103034, exact ceilings, one-byte-over cases) are
+the **only** diff against current main: the earlier 334848 server-tier
+adaptation is reverted because #1826 landed the independently justified
+335104 ceiling first (its record covers a 334994 combined worst, above this
+composition's fresh 334924 worst). Main's allocation mapping
+(334080/335104/335360), the checker, fixture helpers and every unrelated
+boundary are unchanged. Resolved test-file SHA256:
+`11ee01e10aac2e92b63a9ae7f0d598854299334d83c8b53be4dcf162c9fcc0f3`.
 
 Local red/green verification of those exact resolved bytes (copied budgets,
 unchanged checker and test file):
 
-- Original main caps: 27/33 pass, six intended client failures, no skips.
-- Proposed caps: file 33/33; the complete Kit gate step passes 163/163,
-  no skips.
-- Server cap one rounding step lower (334592), one byte lower (334847) or one
-  byte higher (334849): 29/33 pass; the allocation control plus all three
-  server rows reject the unsupported ceiling.
+- Current main caps (335104 server, 254976/102912 client): 27/33 pass, six
+  intended client failures, no skips.
+- Proposed final caps: file 33/33; the complete Kit gate step passes
+  163/163, no skips; checker selftest 12/12.
+- Server cap at the dropped 334848 step: 29/33 pass; the allocation control
+  plus all three server rows reject the unsupported ceiling.
 - Client raw one step lower (255488): 30/33 with three row failures; one byte
   lower (255999): 31/33 with exact plus diagnostic-ceiling failures; one byte
   higher (256001): 32/33 with the diagnostic-ceiling failure only.
