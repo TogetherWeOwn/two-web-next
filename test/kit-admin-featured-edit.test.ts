@@ -13,6 +13,7 @@
 // Svelte SSR so the shared presentation can move without requiring inline markup.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { describe, expect, it, vi } from "vitest";
 import { featuredStatus } from "../src/featured-status";
 import { parseRecordId } from "../src/admin/record-id";
@@ -77,15 +78,27 @@ describe("Kit featured-edit page contract", () => {
     // and grows no contextual Back link. The contextual destination itself is
     // pinned end-to-end by the inventory-return acceptance suites.
     const html = await renderSavedKit(savedFeatured());
-    const anchors = [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)].map(
-      ([, href, label]) => ({
-        href: href!.replaceAll("&amp;", "&"),
-        label: label!
-          .replace(/<[^>]*>/g, "")
-          .trim()
-          .replace(/\s+/g, " "),
-      }),
-    );
+    // Anchor destinations via the HTML parser, never tag-stripping regexes: the
+    // parser decodes entities and nested markup, so Cancel and Back labels match
+    // exactly what a moderator's browser links.
+    type AnchorNode = DefaultTreeAdapterMap["node"];
+    type AnchorElement = DefaultTreeAdapterMap["element"];
+    const collectAnchors = (node: AnchorNode, out: AnchorElement[]): void => {
+      if ("tagName" in node && node.tagName === "a") out.push(node);
+      if ("childNodes" in node) for (const child of node.childNodes) collectAnchors(child, out);
+    };
+    const anchorText = (node: AnchorNode): string => {
+      if ("value" in node) return node.value;
+      return "childNodes" in node ? node.childNodes.map(anchorText).join("") : "";
+    };
+    const elements: AnchorElement[] = [];
+    collectAnchors(parse(html), elements);
+    const anchors = elements
+      .filter((element) => element.attrs.some((attr) => attr.name === "href"))
+      .map((element) => ({
+        href: element.attrs.find((attr) => attr.name === "href")!.value,
+        label: anchorText(element).trim().replace(/\s+/g, " "),
+      }));
     const cancel = anchors.filter((a) => a.label === "Cancel");
     expect(cancel).toHaveLength(1);
     const destination = new URL(cancel[0]!.href, APP_URL);

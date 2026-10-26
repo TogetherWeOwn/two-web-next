@@ -378,6 +378,15 @@ function saveFormAction(source: string): string {
   if (plain) return plain;
   const templated = matchLive(source, /<form method="post" action=\{`([^`]+)`\}/)?.[1];
   if (templated) return templated;
+  // Accepted inventory-return transport: POST consumes the action query, so the
+  // Kit edit save form posts to the load-computed saveHref with the bare keyed
+  // destination as its fallback. The fallback template is the assertion target;
+  // the plain-POST, no-onsubmit and id-exactly-once pins below still apply to it.
+  const coalesced = matchLive(
+    source,
+    /<form method="post" action=\{data\.saveHref \?\? `([^`]+)`\}/,
+  )?.[1];
+  if (coalesced) return coalesced;
   throw new Error("Kit featured page has no plain-POST save form action");
 }
 

@@ -451,7 +451,27 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const list = await app().request("/featured", { headers: { cookie } }, liveEnv());
     expect(list.status).toBe(200);
     const listHtml = await list.text();
-    expect(listHtml).toContain(`href="/admin/featured/${id}">${fields.title}</a>`);
+    // Executed destination, not source spelling: the row link is the same-origin
+    // keyed edit destination carrying the normalized inventory query. This
+    // unfiltered render carries the normalized defaults under five distinct
+    // structured names, never an open return URL.
+    const href = listHtml.match(
+      new RegExp(`<a\\b[^>]*\\bhref="([^"]+)"[^>]*>${fields.title}</a>`),
+    )?.[1];
+    expect(href, "inventory row link must render the slot title").toBeDefined();
+    const destination = new URL(href!.replaceAll("&amp;", "&"), APP_URL);
+    expect(destination.origin).toBe(new URL(APP_URL).origin);
+    expect(destination.pathname).toBe(`/admin/featured/${id}`);
+    expect(destination.searchParams.get("inventory_q")).toBe("");
+    expect(destination.searchParams.get("inventory_published")).toBe("");
+    expect(destination.searchParams.get("inventory_sort")).toBe("position");
+    expect(destination.searchParams.get("inventory_order")).toBe("asc");
+    expect(destination.searchParams.get("inventory_page")).toBe("1");
+    expect(
+      [...destination.searchParams.values()].some(
+        (v) => v.includes("/admin/") || /^https?:/.test(v),
+      ),
+    ).toBe(false);
     expect(listHtml).toContain(
       `data-testid="featured-status-${id}"><span class="featured-status featured-status-scheduled" data-status="scheduled">scheduled</span></td>`,
     );
