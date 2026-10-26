@@ -6,6 +6,7 @@ import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { cloneElement, isValidElement } from "hono/jsx";
 import { SkipLink } from "../../pages";
+import { rsvpPauseReviewCopy } from "../rsvp-review";
 import type { EventRow } from "../store";
 import { INVENTORY_RETURN_PARAM } from "../event-list";
 import type { SortOrder } from "../table-list";
@@ -39,6 +40,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title} — TWO admin</title>
         <link rel="stylesheet" href="/styles.css" />
+        <link rel="stylesheet" href="/admin-rsvp-review.css" />
       </head>
       <body>
         <SkipLink />
@@ -84,14 +86,36 @@ export const ErrorPage: FC<{ heading: string; detail?: string; origin?: string |
 
 export const RsvpAction: FC<{ row: EventRow; origin?: string | null }> = ({ row, origin }) => {
   if (row.status !== "published" || row.endsAt <= new Date()) return null;
-  const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
+  if (!row.rsvpOpen) {
+    return (
+      <form method="post" action={`/admin/events/${row.eventKey}/rsvp-reopen`}>
+        {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}
+        <button type="submit" class="link" data-testid="rsvp-reopen">
+          Reopen RSVPs
+        </button>
+      </form>
+    );
+  }
+  // Pause passes a native server-rendered review: opening or closing the
+  // disclosure makes no request, and only the final submit uses the existing
+  // POST endpoint. Reopen stays one-click.
+  const copy = rsvpPauseReviewCopy;
   return (
-    <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
-      {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}
-      <button type="submit" class="link" data-testid={action}>
-        {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
-      </button>
-    </form>
+    <details class="rsvp-review" data-testid="rsvp-pause-review">
+      <summary aria-label={`${copy.summary}: ${row.title}`}>{copy.summary}</summary>
+      <p>
+        {copy.target}: <strong>{row.title}</strong>
+      </p>
+      <p class="rsvp-review-id">ID: {row.eventKey}</p>
+      <p>{copy.consequence}</p>
+      <p>{copy.keep}</p>
+      <form method="post" action={`/admin/events/${row.eventKey}/rsvp-pause`}>
+        {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}
+        <button type="submit" class="btn" data-testid="rsvp-pause">
+          {copy.final}
+        </button>
+      </form>
+    </details>
   );
 };
 

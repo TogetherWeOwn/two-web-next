@@ -153,6 +153,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     game: null,
     description: null,
     shareDescription: "Squad night",
+    accessibilityNotes: null,
     location: null,
     status: "published",
     isDraft: false,

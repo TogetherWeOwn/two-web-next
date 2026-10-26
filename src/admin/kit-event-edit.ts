@@ -46,6 +46,7 @@ import {
   type SortOrder,
 } from "./table-list";
 import { utcToWall } from "./validation-wall-time";
+import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -132,6 +133,10 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
+   * the page injects it via {@html} so the client bundle carries no review
+   * strings or disclosure markup (client gzip ceiling). */
+  pauseReviewHtml: string | null;
 };
 
 export type KitEventEditOutcome =
@@ -239,17 +244,24 @@ export async function resolveKitEventEdit(
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
+  const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
+    row.status === "published" && row.endsAt > now
+      ? row.rsvpOpen
+        ? "rsvp-pause"
+        : "rsvp-reopen"
+      : null;
   const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
+  // Pure inventory-origin read: no extra query or audit, exactly like the
+  // Hono edit handler's queryOrigin. The load already collapsed duplicate
+  // carriers first-wins into rawQuery.
+  const origin = parseInventoryOrigin(rawQuery[INVENTORY_RETURN_PARAM]);
   return {
     kind: "ok",
     view: {
       key: row.eventKey,
       title: row.title,
       status: row.status,
-      // Pure inventory-origin read: no extra query or audit, exactly like the
-      // Hono edit handler's queryOrigin. The load already collapsed duplicate
-      // carriers first-wins into rawQuery.
-      origin: parseInventoryOrigin(rawQuery[INVENTORY_RETURN_PARAM]),
+      origin,
       originParam: INVENTORY_RETURN_PARAM,
       values: {
         title: row.title,
@@ -268,12 +280,7 @@ export async function resolveKitEventEdit(
       isDraft: false,
       showPublish: row.status === "draft",
       showCancel: row.status === "draft" || row.status === "published",
-      rsvpAction:
-        row.status === "published" && row.endsAt > now
-          ? row.rsvpOpen
-            ? "rsvp-pause"
-            : "rsvp-reopen"
-          : null,
+      rsvpAction,
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
@@ -309,6 +316,14 @@ export async function resolveKitEventEdit(
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
+      pauseReviewHtml:
+        rsvpAction === "rsvp-pause"
+          ? renderRsvpPauseReviewHtml(
+              row.title,
+              row.eventKey,
+              origin ? { name: INVENTORY_RETURN_PARAM, value: origin } : null,
+            )
+          : null,
     },
   };
 }

@@ -13,7 +13,7 @@ export const EventStatusSection: FC<{ row: EventRow; origin?: string | null }> =
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
-      <div class="actions">
+      <div class="actions rsvp-actions">
         {row.status === "draft" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
             {origin ? <input type="hidden" name={INVENTORY_RETURN_PARAM} value={origin} /> : null}

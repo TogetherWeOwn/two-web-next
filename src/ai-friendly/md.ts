@@ -12,7 +12,7 @@ import { POLICY_MARKDOWN } from "../privacy-content";
 import { PREVIOUS_PUBLISHED_POLICIES } from "../privacy-history";
 import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
-import { RULES } from "../rules-content";
+import { RULES, RULES_INTRO } from "../rules-content";
 
 export const MARKDOWN_MIME = "text/markdown; charset=utf-8";
 
@@ -39,6 +39,9 @@ export interface MdEvent {
   goingOccupancy: number | null;
   /** Published or past: drafts/cancelled never reach the detail builder. */
   status: "published" | "past";
+  /** Optional accessibility notes; the detail section renders only when set
+   * (trimmed, non-blank). Collection rows omit it. */
+  accessibilityNotes?: string | null;
   /** Public host + joining details, when the row carries them (same column
    * names as the public event row so the route mapper's spread carries them).
    * Optional for older row fixtures; builders treat absent/blank as "render
@@ -179,14 +182,7 @@ export function mdFaq(appUrl: string): string {
 }
 
 export function mdRules(appUrl: string, stamp: { iso: string; label: string } | null): string {
-  const out = [
-    "# House rules",
-    "",
-    sourceLine(appUrl, "/rules"),
-    "",
-    "Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in Discord before you assume.",
-    "",
-  ];
+  const out = ["# House rules", "", sourceLine(appUrl, "/rules"), "", RULES_INTRO, ""];
   if (stamp) out.push(`Last updated ${stamp.label} (${stamp.iso}).`, "");
   RULES.forEach(([name, body], i) => {
     out.push(`## ${i + 1}. ${mdText(name)}`, "", mdText(body), "");
@@ -288,6 +284,7 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
   const lineup = lineupLine(e);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   const host = hostLine(e);
   // The HTML detail gates "How to join" to published/draft rows; past events
   // show no joining section, so neither does their Markdown alternate. The
@@ -307,6 +304,7 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     ...(join ? [join] : []),
     ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
+    ...(accessibilityNotes ? ["", "## Accessibility", "", mdText(accessibilityNotes)] : []),
     "",
     `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,
     "",

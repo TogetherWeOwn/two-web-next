@@ -25,7 +25,7 @@ const ERROR = {
   reason: "payload_too_large",
   message: "Reduce the size of your request and try again.",
 };
-const GUEST_401 = { error: "Unauthorized", recovery: "/auth/recover?next=%2Fprofile" };
+const GUEST_401 = { error: "unauthenticated", recovery: "/auth/recover?next=%2Fprofile" };
 
 // The two profile write shapes and the media type each one carries.
 const profileWrites = [
@@ -285,7 +285,8 @@ describe("controls: at/under-cap profile writes keep the current behavior", () =
       expect(response.status).toBe(422);
       if (method === "PATCH")
         expect(await response.json()).toEqual({
-          errors: { bio: "Keep your bio to 1000 characters or fewer." },
+          error: "invalid",
+          fields: { bio: "Keep your bio to 1000 characters or fewer." },
         });
       expect(throttle).toHaveBeenCalledOnce();
       expect(store.save).not.toHaveBeenCalled();
