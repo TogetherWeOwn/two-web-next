@@ -81,12 +81,14 @@ export function savedNightRow(
 }
 
 /**
- * The Title `<td>` for one row: the cell holding the title link. Fails when
- * the row link is missing, so suppressing the row cannot satisfy a pin.
+ * The Title `<td>` for one row: the cell holding the title link. The link
+ * may carry an inventory return query (`?return_to=...`) after the event
+ * key; no other suffix matches. Fails when the row link is missing, so
+ * suppressing the row cannot satisfy a pin.
  */
 export function titleCellFor(html: string, eventKey: string): string {
   const cell = html.match(
-    new RegExp(`<td>\\s*<a href="/admin/events/${eventKey}">[\\s\\S]*?</td>`),
+    new RegExp(`<td>\\s*<a href="/admin/events/${eventKey}(?:\\?[^"]*)?">[\\s\\S]*?</td>`),
   );
   if (!cell) throw new Error(`No Title cell found for ${eventKey}`);
   return cell[0];
