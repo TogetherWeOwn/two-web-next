@@ -11,6 +11,14 @@
 // exist so a Kit divergence fails loudly instead of silently dropping a fix.
 import { describe, expect, it, vi } from "vitest";
 import { loadEventsPage } from "../src/kit-events";
+import {
+  fixtureState,
+  renderedElements,
+  sharedSearch,
+  sharingData,
+  sharingHtml,
+  viewLabel,
+} from "./schedule-sharing.fixtures";
 import { renderEventsHtml } from "../src/kit-events-html";
 import { resolveCalendarInput } from "../src/events/page-models.server";
 import {
@@ -430,5 +438,122 @@ describe("Kit calendar fragment auth lineage", () => {
         input: expect.objectContaining({ view: "calendar", month: "2026-10", page: 2 }),
       }),
     );
+  });
+});
+
+// Catches sharing location.href, the feed URL, or an unnormalized model instead
+// of the committed public schedule. The literals are independent URL oracles.
+describe.each(["hono", "kit"] as const)("%s committed schedule sharing SSR", (target) => {
+  it.each([
+    { path: "/events", want: "/events" },
+    { path: "/events?q=+++&game=+++", want: "/events" },
+    { path: sharedSearch, want: sharedSearch },
+    {
+      path: "/events?game=Catan+%26+Co&past=1&view=calendar&month=2030-12&page=3",
+      want: "/events?game=Catan+%26+Co&past=1&view=calendar&month=2030-12",
+    },
+  ])(
+    "offers the normalized view $want and an associated readonly native fallback",
+    async ({ path, want }) => {
+      const body = await sharingHtml(
+        target,
+        fixtureState(new URL(path, "https://untrusted.example.test")),
+        "https://public.example.test///",
+      );
+      const nodes = renderedElements(body);
+      const action = nodes.filter((n) => ["a", "button"].includes(n.tag) && n.text === viewLabel);
+      expect(
+        action,
+        "one labelled schedule-copy action, not the existing feed button",
+      ).toHaveLength(1);
+      expect(action[0]?.attrs["data-copy-link"]).toBe("https://public.example.test" + want);
+      const fields = nodes.filter(
+        (n) =>
+          ["input", "textarea"].includes(n.tag) &&
+          (n.attrs.value ?? n.text) === "https://public.example.test" + want,
+      );
+      expect(
+        fields,
+        "the committed value remains natively selectable without JavaScript",
+      ).toHaveLength(1);
+      const field = fields[0]!;
+      expect(field.attrs).toHaveProperty("readonly");
+      expect(field.attrs).not.toHaveProperty("disabled");
+      expect(field.attrs).not.toHaveProperty("hidden");
+      expect(field.attrs["aria-hidden"]).not.toBe("true");
+      expect(
+        nodes.some(
+          (n) =>
+            n.tag === "label" && n.attrs.for === field.attrs.id && /schedule|view/i.test(n.text),
+        ),
+      ).toBe(true);
+      expect(
+        nodes.filter((n) => n.tag === "script" && n.attrs.src === "/islands/copy-link.js"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("CONTROL: retains canonical, scoped subscription, export and feed bytes", async () => {
+    const nodes = renderedElements(
+      await sharingHtml(
+        target,
+        fixtureState(new URL(sharedSearch, "https://public.example.test")),
+        "https://public.example.test",
+      ),
+    );
+    expect(nodes.find((n) => n.tag === "link" && n.attrs.rel === "canonical")?.attrs.href).toBe(
+      "https://public.example.test/events",
+    );
+    expect(
+      nodes.find((n) => n.attrs["data-copy-feed"] !== undefined)?.attrs["data-copy-link"],
+    ).toBe("https://public.example.test/events.ics?game=Catan+%26+Co");
+    expect(
+      nodes.find((n) => n.tag === "a" && n.text === "Download calendar (.ics)")?.attrs.href,
+    ).toBe("https://public.example.test/events.ics?game=Catan+%26+Co");
+    expect(
+      nodes.some(
+        (n) =>
+          n.tag === "a" &&
+          n.attrs.href === "webcal://public.example.test/events.ics?game=Catan+%26+Co",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("schedule sharing request isolation", () => {
+  it("ignores request host, tracking, token, member and hash input without another model read", async () => {
+    const state = {
+      view: "list" as const,
+      month: "2030-11",
+      q: "",
+      game: "Catan",
+      past: true,
+      page: 2,
+    };
+    const modelForFn = vi.fn(async () => sharingData(state, "https://public.example.test"));
+    const dbForFn = vi.fn(async () => ({}) as never);
+    const requestUrl =
+      "https://untrusted.example.test/events?game=Catan&past=1&page=2&utm_source=tracking&token=not-a-secret&member=private-context#unsent";
+    const data = await loadEventsPage({
+      env: { APP_URL: "https://public.example.test///" } as never,
+      url: new URL(requestUrl),
+      request: new Request(requestUrl),
+      method: "GET",
+      island: false,
+      setHeaders: vi.fn(),
+      deleteJoinCookie: vi.fn(),
+      dbForFn,
+      sessionForFn: async () => null,
+      journeyForFn: async () => null,
+      modelForFn,
+      discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }) as never,
+    });
+    const nodes = renderedElements((await renderEventsHtml(data, {})).body);
+    const action = nodes.find((n) => ["button", "a"].includes(n.tag) && n.text === viewLabel);
+    expect(action?.attrs["data-copy-link"]).toBe(
+      "https://public.example.test/events?game=Catan&past=1&page=2",
+    );
+    expect(dbForFn).toHaveBeenCalledTimes(1);
+    expect(modelForFn).toHaveBeenCalledTimes(1);
   });
 });
