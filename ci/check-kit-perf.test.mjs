@@ -394,19 +394,45 @@ for (const { name, group, axis, bytes, ceiling, breach = false } of [
     ceiling: 254976,
     breach: true,
   },
+  // Historical server-gzip intervals stay admitted interior coverage: the
+  // prior 333639-byte interval plus the superseded 334080-byte exact ceiling
+  // and its 334081-byte one-byte-over case. The measured featured-save
+  // composition peaks at 334560 bytes, so the proposed 334592-byte ceiling
+  // (first fitting 256-byte increment, 32-byte worst margin) pins a new
+  // 334560-byte interval, a literal 334592-byte exact ceiling and a literal
+  // 334593-byte refusal. All six literals are independent of the loaded
+  // policy above.
   {
-    name: "server gzip newly allowed interval",
+    name: "server gzip historical allowed interval",
     group: "kit.server.js",
     axis: "gzip",
     bytes: 333639,
   },
-  { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 334080 },
+  {
+    name: "server gzip historical exact ceiling now allowed",
+    group: "kit.server.js",
+    axis: "gzip",
+    bytes: 334080,
+  },
+  {
+    name: "server gzip historical one byte over now allowed",
+    group: "kit.server.js",
+    axis: "gzip",
+    bytes: 334081,
+  },
+  {
+    name: "server gzip newly allowed interval",
+    group: "kit.server.js",
+    axis: "gzip",
+    bytes: 334560,
+  },
+  { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 334592 },
   {
     name: "server gzip one byte over",
     group: "kit.server.js",
     axis: "gzip",
-    bytes: 334081,
-    ceiling: 334080,
+    bytes: 334593,
+    ceiling: 334592,
     breach: true,
   },
   { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
