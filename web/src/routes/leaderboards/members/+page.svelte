@@ -5,8 +5,12 @@ import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, scope, activity, rows, viewerUsername, available, appUrl, neighbors } =
-  $derived(data);
+const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
+// The load always provides neighbors; the fallback only guards a hand-built
+// render, which shows no adjacent-period links like the all-time view.
+const neighbors = $derived(
+  data.neighbors ?? { previous: null, next: null },
+);
 const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string, nextSeason = season) => {
