@@ -11,7 +11,7 @@ export const FeaturedContentItem: FC<{
   return (
     <article class="card" data-testid="featured-item">
       <h3>{row.url ? <a href={row.url}>{row.title}</a> : row.title}</h3>
-      {row.body ? <p class="featured-body">{row.body}</p> : null}
+      {row.body ? <p>{row.body}</p> : null}
       {src ? (
         <img
           class="featured-image"
