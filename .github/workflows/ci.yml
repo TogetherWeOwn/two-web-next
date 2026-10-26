@@ -187,7 +187,7 @@ jobs:
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
         run: |
           mkdir -p artifacts/a11y
-          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap ci/rsvp-focus-browser.test.mjs
+          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap --test-reporter=spec --test-reporter-destination=stdout ci/rsvp-focus-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/rsvp-focus.tap "RSVP outcome focus in Chromium" 16
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
@@ -265,6 +265,12 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
+      - name: Calendar game subscription follows the committed schedule (intercepted fixtures, no network or DB)
+        env:
+          CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-game-subscription-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-subscription-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-subscription-acceptance.json "game subscription follows the committed schedule" 16
       - name: Event start device timezone (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -277,22 +283,42 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Event chosen timezone range (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/event-chosen-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-chosen-timezone.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/event-chosen-timezone.json "event chosen timezone browser acceptance" 30
       - name: Kit member auth (real Chromium, local HTTPS fixtures)
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
+      - name: Native event share (real Chromium, Hono and Kit fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
           node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
+          node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "admin failed-read retry: native keyboard/no-JS recovery" 12
       - name: Calendar subscription guidance (four SSR surfaces, intercepted clipboard)
         run: |
           npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-subscription.json
           for surface in hono-calendar hono-archive kit-calendar kit-archive; do
             node ci/a11y-require-executed.mjs artifacts/a11y/calendar-subscription.json "$surface real-browser subscription acceptance" 10
+          done
+      - name: Calendar game recovery (Hono and Kit, source and shipped bytes)
+        run: |
+          npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-game-recovery.json
+          for surface in Hono Kit; do
+            for bundle in source shipped; do
+              node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
+            done
           done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
@@ -300,6 +326,18 @@ jobs:
         run: |
           npx vitest run test/profile-device-timezone.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-device-timezone.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-device-timezone.json "profile device timezone in Chromium" 49
+      - name: Profile local time comparison (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-local-time-comparison-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-comparison-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-comparison-acceptance.json "profile local time comparison in Chromium" 72
+      - name: Profile local time after save (Hono and Kit, local fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-local-time-save.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-local-time-save.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-local-time-save.json "profile local time after save in Chromium" 40
       - name: Admin editor expiry departure (intercepted fixtures, no network or DB)
         env:
           ADMIN_EDITOR_EXPIRY_BROWSER_TESTS: "true"
@@ -391,6 +429,12 @@ jobs:
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
+      - name: Kit public payload enumeration and checker selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads:selftest && node ci/check-kit-payloads.mjs --static-only
+      - name: Security-pin contracts selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins:selftest && node ci/check-security-pins.mjs --static-only
       - name: Dependency audit selftest (local fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit:selftest
@@ -399,6 +443,14 @@ jobs:
         run: npm run deps:audit
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      # The toolchain suite pins the declared browser-helper peer metadata;
+      # this pins the installed half: the root proxy-agent pin must exist and
+      # be the copy that resolves from the helper's context (the LHCI-nested
+      # 6.x copy is outside that path and never satisfies it). Bare
+      # `npm ls --all` exits 0 on an unmet optional peer, so it cannot gate this.
+      - name: Proxy-peer installed resolution (browsers context)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/check-proxy-peer.mjs --selftest && node ci/check-proxy-peer.mjs
       - name: Migration runtime-rights guard
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run migration:rights && npm run migration:rights:selftest
@@ -453,6 +505,12 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Kit public payload contract (hostile fixtures, no network or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:kit-payloads
+      - name: Security-pin contracts (Host admission + CSP inline styles)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:security-pins
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
@@ -484,7 +542,8 @@ jobs:
       # config) because every test/** file runs inside the blocking coverage
       # step above.
       - name: Tier-0 check (validators + authz + EXPLAIN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        # Do not invoke installed tools after an audit/install failure skipped npm ci.
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -505,7 +564,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
+        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
@@ -538,6 +597,22 @@ jobs:
       - name: Kit adapter build
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run build --prefix web
+      - name: Kit admin contrast (built runtime, intercepted fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_ADMIN_CONTRAST_EVIDENCE_DIR: artifacts/kit-admin-contrast
+        run: |
+          mkdir -p artifacts/kit-admin-contrast
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
+      - name: Kit admin contrast evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-admin-contrast
+          path: artifacts/kit-admin-contrast/
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit performance budgets (worker + generated assets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-kit-perf.mjs
@@ -574,10 +649,11 @@ jobs:
           CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
-      # report fails the step (fail closed). Docs-only and draft PRs skip via
-      # the scope guard in `if:`, never a file-presence check.
+      # report after successful coverage fails the step (fail closed). Earlier
+      # failures keep their own verdict without a secondary missing-input error.
+      # Docs-only and draft PRs skip via scope, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
       # literals. The planted-finding selftest and strict scan both fail closed.
@@ -713,7 +789,9 @@ jobs:
         run: node --test ci/check-production-triggers.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lighthouse:origin:selftest
+        run: |
+          npm run lighthouse:origin:selftest
+          npm run lighthouse:evidence:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --outdir dist
@@ -853,7 +931,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.

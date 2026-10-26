@@ -6,7 +6,12 @@ import { FAQS } from "../faq-content";
 // Re-exported so existing importers (the Markdown alternate) keep working.
 export { FAQS };
 
-export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
+// The stamp carries both the machine date and the human label: crawlers read
+// datetime, members read words. Mirrors the /rules stamp treatment.
+export const Faq: FC<{ appUrl: string; lastReviewed: { iso: string; label: string } | null }> = ({
+  appUrl,
+  lastReviewed,
+}) => (
   <Leaf
     title="FAQ — Together We Own"
     canonical={canonicalUrl(appUrl, "/faq")}
@@ -18,15 +23,28 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a
       moderator.
     </p>
+    {lastReviewed ? (
+      <p data-testid="faq-last-reviewed" class="strap">
+        Last reviewed <time datetime={lastReviewed.iso}>{lastReviewed.label}</time>
+      </p>
+    ) : null}
     <div data-testid="faq-list">
       {FAQS.map((group) => (
         <section aria-labelledby={group.sectionId} key={group.sectionId}>
           <h2 id={group.sectionId}>{group.section}</h2>
           <div>
-            {group.items.map(([q, a]) => (
+            {group.items.map(([q, a, link]) => (
               <div class="card" key={q}>
                 <h3>{q}</h3>
-                <p>{a}</p>
+                <p>
+                  {a}
+                  {link ? (
+                    <>
+                      {" "}
+                      <a href={link.href}>{link.label}</a>
+                    </>
+                  ) : null}
+                </p>
               </div>
             ))}
           </div>

@@ -12,7 +12,9 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
+import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
+import { searchContext, type SearchSegment } from "./events/search-context";
 import { matchQuery } from "./events/search-log";
 import { publicReadGuard } from "./events/routes-shared";
 
@@ -213,4 +215,58 @@ export async function loadPastArchivePage<Row>({
   } catch (err) {
     reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
+}
+
+/**
+ * The anonymous-safe slice of a past-archive row: the fields the archive
+ * card renders (key/title/time/zone/location/game/host/counts/capacity) plus
+ * the occupancy aggregate and the public-by-design Discord event id. Kit
+ * serializes load data into `__data.json` for anonymous clients even with
+ * `csr=false`, so the past load returns this projection, never the full
+ * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
+ * for retention), full descriptions and sync internals never leave the
+ * server on this logged-out, indexed page. The organizer display name rides
+ * along because the card renders it — the same public name the detail page
+ * shows, never an id or a member link. Search-only fields are present only
+ * for a nonblank query: the bounded description passage (`passage`, at most
+ * 320 code points, only when the row has a description) and the full-title
+ * literal segments (`titleSpans`) rendered with semantic marks. Both derive
+ * from the already public title or a bounded excerpt, never member data,
+ * and keep segment authority server-side so the client ships no search code.
+ * Mirrors the join precedent (`toPublicWidgetSnapshot`) and the home teaser
+ * (`HomeEvent`).
+ */
+export type PastArchiveEvent = Pick<
+  PublicEvent,
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "organizer_name"
+  | "goingCount"
+  | "goingOccupancy"
+  | "capacity"
+  | "discordEventId"
+> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[] };
+
+/** Project a past-archive row to its anonymous-safe slice. */
+export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
+  const projected: PastArchiveEvent = {
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+    game: row.game,
+    organizer_name: row.organizer_name,
+    goingCount: row.goingCount,
+    goingOccupancy: row.goingOccupancy,
+    capacity: row.capacity,
+    discordEventId: row.discordEventId,
+  };
+  if (q && row.description) projected.passage = searchContext(row.description, q, true);
+  if (q) projected.titleSpans = searchContext(row.title, q);
+  return projected;
 }

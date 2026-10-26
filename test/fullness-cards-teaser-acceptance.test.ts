@@ -111,6 +111,17 @@ function calendarFixture(upcoming: EventRow[], past: EventRow[], counts: Map<num
       .map(([id, c]) => [id, pick(c)]),
   });
   const db = drizzle(async (sql: string, params: unknown[]) => {
+    if (sql.startsWith("select distinct")) {
+      const games = [
+        ...new Set(
+          [...upcoming, ...past]
+            .filter((row) => row.status === "published")
+            .map((row) => row.game?.trim())
+            .filter((game): game is string => !!game),
+        ),
+      ];
+      return { rows: games.slice(0, Number(params.at(-1))).map((game) => [game]) };
+    }
     if (sql.includes('from "rsvps"')) {
       if (!sql.includes("count(*)")) return { rows: [] };
       // The attributable aggregate joins users; the occupancy aggregate reads
@@ -322,6 +333,7 @@ describe("F3 fullness acceptance: calendar cards", () => {
     const html = await (await src.request("/events?past=1")).text();
     const card = calendarCard(html, fullPast.eventKey);
     expect(card).toContain(fullPast.title);
+    expect(card).toContain("Ended");
     expect(card).not.toContain("event-spots-left");
     expect(card).not.toContain("Full");
   });

@@ -4,6 +4,7 @@
 // Server-rendered, no script. Rows never link to profiles from here.
 import type { FC } from "hono/jsx";
 import type { Session } from "../env";
+import { utcPeriodShortcuts } from "../hotzones/season";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import { boardCaption } from "./captions";
@@ -30,6 +31,7 @@ export const MemberLeaderboardPage: FC<{
 }> = ({ appUrl, session, query, rows, available }) => {
   const path = boardPath(query);
   const label = query.activity === null ? "every game" : query.activity;
+  const periods = utcPeriodShortcuts();
   return (
     <Layout
       title="Member leaderboard — Together We Own"
@@ -65,6 +67,26 @@ export const MemberLeaderboardPage: FC<{
               </a>
             </li>
           </ul>
+        </nav>
+        <nav class="schedule-views board-periods" aria-label="Board period">
+          <a
+            href={boardPath({ ...query, season: periods.month })}
+            aria-current={query.season === periods.month ? "page" : undefined}
+          >
+            This month
+          </a>
+          <a
+            href={boardPath({ ...query, season: periods.quarter })}
+            aria-current={query.season === periods.quarter ? "page" : undefined}
+          >
+            This quarter
+          </a>
+          <a
+            href={boardPath({ ...query, season: "all" })}
+            aria-current={query.season === "all" ? "page" : undefined}
+          >
+            All time
+          </a>
         </nav>
         <form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
           {query.scope === "overall" ? null : (

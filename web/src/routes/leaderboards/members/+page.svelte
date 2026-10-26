@@ -2,14 +2,20 @@
 import Shell from "#lib/Shell.svelte";
 import { boardCaption } from "../../../../../src/leaderboards/captions";
 import { canonicalUrl } from "../../../../../src/seo";
+import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
+const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
-const destination = (nextScope: string, nextActivity: string | null = activity) => {
+const destination = (
+  nextScope: string,
+  nextSeason = season,
+  nextActivity: string | null = activity,
+) => {
   const params = new URLSearchParams();
-  if (season !== "all") params.set("season", season);
+  if (nextSeason !== "all") params.set("season", nextSeason);
   if (nextScope !== "overall") params.set("scope", nextScope);
   if (nextActivity !== null) params.set("activity", nextActivity);
   const query = params.toString();
@@ -45,6 +51,11 @@ const destination = (nextScope: string, nextActivity: string | null = activity) 
       <li><a href={destination("relative")} aria-current={scope === "relative" ? "page" : undefined}>Around you</a></li>
     </ul>
   </nav>
+  <nav class="schedule-views board-periods" aria-label="Board period">
+    <a href={destination(scope, periods.month)} aria-current={season === periods.month ? "page" : undefined}>This month</a>
+    <a href={destination(scope, periods.quarter)} aria-current={season === periods.quarter ? "page" : undefined}>This quarter</a>
+    <a href={destination(scope, "all")} aria-current={season === "all" ? "page" : undefined}>All time</a>
+  </nav>
   <form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">
     {#if scope !== "overall"}<input type="hidden" name="scope" value={scope} />{/if}
     <p>
@@ -65,7 +76,7 @@ const destination = (nextScope: string, nextActivity: string | null = activity) 
     {:else if activity === null}
       <p role="status">Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked.</p>
     {:else}
-      <p role="status">Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked, or <a href={destination("overall", null)}>show every game</a>.</p>
+      <p role="status">Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked, or <a href={destination("overall", season, null)}>show every game</a>.</p>
     {/if}
   {:else}
     <table class="member-board-table">
