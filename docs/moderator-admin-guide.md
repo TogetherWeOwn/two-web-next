@@ -243,6 +243,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/featured` | **Create** a slot. |
 | GET | `/admin/featured/:id` | Edit a slot. |
 | POST | `/admin/featured/:id` | **Save** slot settings. |
+| POST | `/admin/featured/:id/unpublish` | **Unpublish** a slot without revalidating its other saved fields. |
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics, filters and pagination. |
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
@@ -556,6 +557,14 @@ while retaining filters and return to page 1. Use **Previous**/**Next** for
 25-row pages, which keep filters and sort; the bar shows the current page
 number. There is no drag-and-drop ordering.
 
+Published rows offer **Unpublish** below the title, including scheduled and expired
+slots. It immediately turns off publication and returns to the list, without
+changing or revalidating any other saved field. Use it to withdraw a slot even
+when an old image URL would fail the current edit-form rules. Unpublished rows
+have no action; repeating the same withdrawal succeeds without another change
+or activity-log entry. Changed withdrawals are audited and retire the guest
+homepage cache. There is no list action to republish a slot.
+
 ### Field rules
 
 | Field | Rule |
@@ -599,7 +608,9 @@ Follow one coherent workflow per approved change:
    the submitted values stay in the form.
 3. On success the page reloads: inspect the refreshed preview and status badge.
 4. Verify the homepage as a guest before claiming the change is live.
-5. To withdraw a slot without removing its record, uncheck **Published** and save.
+5. To withdraw a slot without removing its record, use **Unpublish** on the list.
+   Unchecking **Published** in the editor and saving also works when all fields
+   pass current validation.
 
 Leaving the page with unsaved changes triggers a browser warning; the
 rejected-save redisplay is guarded the same way. There is no autosave: an
