@@ -29,6 +29,11 @@ against an insufficient budget.
 ## Pinned source and method
 
 - Main: `91b66a68d2d37bd2c717f3a75299300d3617b811`.
+- Reconciled onto main `0141158a01b32d7d6e16901f49a26558583da9c7`,
+  which changed only the history line (one-file diff, numerics
+  byte-identical, zero build-input change). The measurements below were
+  taken against the `91b66a68d`-based trees and stand; the merged tree
+  is rebuilt and re-verified under the proposed caps before merge.
 - Feature: `7d390f4b8c54e30b0da703c2085530d1876c78f4`.
 - Clean three-way merged source tree: `a51b15238a8a28880fc4e87c7f432e9143fcf81f`.
 - Runtime: Node 24.22.1, npm 11.19.1.
