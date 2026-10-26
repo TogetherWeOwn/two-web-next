@@ -1,6 +1,88 @@
-# Admin clarity: combined client and server allocation
+# Admin clarity: measured cost and shipping-budget coverage
 
-## Decision
+## Current integration outcome
+
+The conflict-resolution base is `2f9e60791d27378d4b07f0cfd615c8af86f04f76`.
+While this proposal was in review, independent decisions
+[#1785](https://github.com/TogetherWeOwn/two-web-next/pull/1785),
+[#1799](https://github.com/TogetherWeOwn/two-web-next/pull/1799) and
+[#1800](https://github.com/TogetherWeOwn/two-web-next/pull/1800) landed. Main now
+already supplies client raw **254976** and server gzip **334080**. This integration
+preserves that complete budget byte-for-byte, including all 605430 characters of
+its historical comment (full-file SHA256
+`13e6ffd97bb226cd92eaed1a7ec215539a3501005bcdbd84cfd7255a6978cc66`).
+**No additional numeric allowance ships relative to this base.** Do not lower
+main's reviewed server cap to recover the earlier 333824 boundary, and do not
+reserve another allocation for this feature.
+
+The only changes on main since the original measurement base are the budget and
+two decision notes; no application, checker, manifest or lockfile changed. The
+historical proposal and regression results below remain pinned evidence, not the
+current shipping plan. Feature and release approval still require the actual
+integrated head's exact-head CI and independent review. No gate is bypassed.
+
+### Repeated proof on the conflict-resolution base
+
+Rebuilt pristine main and the actual combined source twice each with the same
+locked external dependency roots, Node 24.22.1 and the unchanged canonical
+checker. The feature pin remains `ae7ad4acb0229bfc88d90b5a4641bc08a48c0b80`;
+its scratch merge with the base has only a budget conflict, resolved to exact main
+budget bytes for measurement. The resulting combined tree is
+`e1a0f65fc6485571b6b5bfe914ba5d666cd144cd`. No feature branch was modified.
+Manifests, lockfiles and checker are byte-identical across both measured trees.
+
+| Group | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Client JS files | 54 / 54 | 54 / 54 |
+| Client JS raw | 253949 / 253949 | 254769 / 254769 |
+| Client JS gzip | 102273 / 102273 | 102569 / 102569 |
+| Server JS files | 115 / 115 | 115 / 115 |
+| Server JS raw | 1176056 / 1176054 | 1178100 / 1178100 |
+| Server JS gzip | 333150 / 333150 | 333637 / 333636 |
+
+All four production builds and canonical checks pass without changing any main
+ceiling. The tightest target margins are 207 client raw bytes and 443 server gzip
+bytes. Worker entry remains 2551/1219 raw/gzip; CSS remains two files at
+2833/1006. Client paths, sizes and SHA256 hashes match within each rebuild pair.
+Startup timing was not measured; its bound remains 60000ms.
+
+### Shipping regressions after base integration
+
+The current shipping test file is incorporated unchanged from the independent
+[boundary correction](https://github.com/TogetherWeOwn/two-web-next/commit/bb570b18de167d105e1d13ac88e70e2d37da0433),
+SHA256 `211c6bad14002b67f44268e661ff1f35b45599551ac4e7b61e9a05bc3ae19786`.
+Only three server-boundary literals differ from the earlier authored file: exact
+334080, upper fixture 334081 and its diagnostic ceiling 334080. All helpers,
+existing assertions and 17 shipping cases remain intact. The fixed 333639 server
+feature-interval admission and client 254769/254976/254977 cases are unchanged.
+The unchanged CI step already collects the file.
+
+On the merged budget, the old file produces 80 passes and one expected stale
+server-upper-bound failure. The corrected file passes 81/81 checker/inventory
+cases with no skips. Independently repeated scratch controls use the real checker
+and alter only one copied shipping field:
+
+| Control | Passed / failed | Observed protection |
+| --- | ---: | --- |
+| Server gzip 334080 to 333568 | 78 / 3 | Fixed feature-interval and exact admissions reject |
+| Server gzip 334080 to 333824 | 79 / 2 | Current exact admission rejects |
+| Server gzip 334080 to 334081 | 80 / 1 | Fixed upper-bound refusal incorrectly admits |
+| Client raw 254976 to 254464 | 78 / 3 | Fixed interval and exact admissions reject |
+| Client raw 254976 to 254977 | 80 / 1 | Fixed upper-bound refusal incorrectly admits |
+| Restored byte-identical main budget | 81 / 0 | Every regression passes, no skips |
+
+The complete existing collected checker step passes 160/160. The Builder consumed
+the authored bytes unchanged; no budget or production checker was changed to make
+the tests pass. These results exercise checker behavior on synthetic complete
+fixtures, not a substitute measurement of feature artifacts or a whole-app verdict.
+
+Current ACT: preserve main's budget and add independently authored shipping-limit
+coverage plus composition evidence. WHY: the original requested allowance has
+already been supplied by reviewed base decisions. UNDO: remove only this note
+and the added regressions through normal review if superseded; never revert
+unrelated base allocations or historical records.
+
+## Historical allocation proposal
 
 Allocate only the measured combined cost of [admin clarity](https://github.com/TogetherWeOwn/two-web-next/pull/1587)
 in this separate budget decision. Move client JavaScript raw bytes from **254464 to
@@ -118,7 +200,7 @@ standalone decision tree (main plus this budget and note, without the feature)
 also passes: client 253949/102273, server 1176054/333152. No feature source or
 feature acceptance-test changes ship on the decision branch.
 
-## Executable shipping-allocation regressions
+## Historical shipping-regression proof (head `6209d6981`)
 
 `ci/check-kit-perf.test.mjs` adds 17 independently authored cases, incorporated
 unchanged from [the test-only handoff](https://github.com/TogetherWeOwn/two-web-next/commit/883b5f7bbe76cbb00c31c26bcf36a0928a8dd620).
@@ -161,7 +243,7 @@ Neither shipping ceiling, existing assertion nor enforcement code was edited in
 this review-fix round. A later intentional budget decision must deliberately
 update the corresponding fixed regression boundary with its own evidence.
 
-ACT: make a separate, independently reviewed two-ceiling allocation. WHY: repeated
+Historical ACT: propose a separate, independently reviewed two-ceiling allocation. WHY: repeated
 same-dependency measurements attribute a real combined cost that pristine main does
 not incur. UNDO: revert only this allocation and note if the feature is abandoned;
 do not revert unrelated budget history or its independently reviewed ceilings.
