@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../src/admin/db";
 import { parseEventListQuery } from "../../../../../src/admin/event-list";
 import { buildEventListView } from "../../../../../src/admin/kit-events";
-import { listEvents } from "../../../../../src/admin/store-event-reads";
+import { listSeriesEvents } from "../../../../../src/admin/store-event-reads";
 import { isDatabaseUnavailable } from "../../../../../src/db/errors";
 import { alertRequestError } from "../../../../../src/alerts";
 import type { PageServerLoad } from "./$types";
@@ -13,7 +13,7 @@ import type { PageServerLoad } from "./$types";
 // that the CSP (script-src 'self') would block.
 //
 // Same reads and failure posture as the Hono events list
-// (src/admin/routes.tsx, admin.events.index): the shared bounded listEvents
+// (src/admin/routes.tsx, admin.events.index): the shared bounded listSeriesEvents
 // helper (EVENT_PAGE_SIZE + 1 rows, no count query, Going-only seat counts),
 // raw query params in (the helper re-parses them, exactly like the Hono
 // handler passing c.req.query()), and the normalized query out for the
@@ -46,12 +46,12 @@ export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
   const query = parseEventListQuery(raw);
   let fetched;
   try {
-    fetched = await listEvents(db, raw);
+    fetched = await listSeriesEvents(db, raw);
   } catch (err) {
     if (isDatabaseUnavailable(err)) error(503, "Admin temporarily unavailable");
     alertRequestError(err, { method: "GET", route: "/admin/events" });
     throw err;
   }
   setHeaders({ "cache-control": "private, no-store" });
-  return buildEventListView(query, fetched);
+  return buildEventListView(query, fetched.rows, fetched.scope);
 };

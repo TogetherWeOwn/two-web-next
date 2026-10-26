@@ -63,8 +63,8 @@ import {
   getEvent,
   getFeatured,
   getFeaturedIdByLegacyId,
-  listEvents,
   listFeatured,
+  listSeriesEvents,
   NotFoundError,
   setRsvpOpen,
   transitionEvent,
@@ -380,11 +380,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const params = c.req.query();
     const query = parseEventListQuery(params);
-    const fetched = await listEvents(db, params);
+    const { rows: fetched, scope } = await listSeriesEvents(db, params);
     const rows = fetched.slice(0, EVENT_PAGE_SIZE);
     return bufferedMemberHtml(
       c,
-      <EventsPage rows={rows} query={query} hasNext={fetched.length > EVENT_PAGE_SIZE} />,
+      <EventsPage
+        rows={rows}
+        query={query}
+        scope={scope}
+        hasNext={fetched.length > EVENT_PAGE_SIZE}
+      />,
     );
   });
 

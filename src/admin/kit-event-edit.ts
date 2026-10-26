@@ -124,6 +124,8 @@ export type KitEventEditView = {
   rsvpAction: "rsvp-pause" | "rsvp-reopen" | null;
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
+  /** Saved-series inventory link for parents and children; null for one-offs. */
+  seriesReviewHref: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
@@ -153,6 +155,8 @@ export type KitEventEditRow = {
   status: string;
   rsvpOpen: boolean;
   recurrenceFrequency: string | null;
+  /** Stored parent link; absent on older fixture rows, which read as standalone. */
+  parentEventId?: number | null;
 };
 
 export type KitEventEditRosterRow = {
@@ -271,6 +275,13 @@ export async function resolveKitEventEdit(
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
+      // Saved identity only: the row's own stored key resolves its persisted
+      // recurrence, whether it is the parent or a child. Standalones and the
+      // create form (which never reaches this resolver) get no action.
+      seriesReviewHref:
+        row.parentEventId != null || row.recurrenceFrequency
+          ? `/admin/events?series_event=${row.eventKey}`
+          : null,
       endsAt: row.endsAt.toISOString(),
       roster: {
         total: roster.total,

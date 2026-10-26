@@ -29,6 +29,6 @@ export {
   updateEvent,
 } from "./store-event-writes";
 export type { EventRow, PatchBase, WriteBack } from "./store-event-writes";
-export { getEvent, listEvents } from "./store-event-reads";
-export type { EventListRow } from "./store-event-reads";
+export { getEvent, listEvents, listSeriesEvents } from "./store-event-reads";
+export type { EventListRow, EventListScope } from "./store-event-reads";
 export { ensureAccessLogGin, recordAccess } from "./store-access";

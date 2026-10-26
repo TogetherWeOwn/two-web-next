@@ -23,7 +23,16 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
+const {
+  query,
+  rows,
+  hasNext,
+  emptyText,
+  scope,
+  scopeHeadingHtml,
+  scopeRecoveryText,
+  pauseReviews,
+} = $derived(data);
 const now = new Date();
 </script>
 
@@ -54,10 +63,21 @@ const now = new Date();
 
 <AdminShell title="Events">
 <section aria-labelledby="events-heading">
-  <h1 id="events-heading">Events</h1>
+  <h1 id="events-heading">{#if scopeHeadingHtml}{@html scopeHeadingHtml}{:else}Events{/if}</h1>
+  {#if scope}
+    <p>
+      <a href="/admin/events">All events</a>
+    </p>
+  {/if}
+  {#if scopeRecoveryText}
+    <p class="hint" data-testid="series-scope-recovery">{scopeRecoveryText}</p>
+  {/if}
   <form method="get" action="/admin/events" class="filters">
     <input type="hidden" name="sort" value={query.sort} />
     <input type="hidden" name="order" value={query.order} />
+    {#if query.series_event !== null}
+      <input type="hidden" name="series_event" value={query.series_event} />
+    {/if}
     <div class="field">
       <label for="q">Search titles and games</label>
       <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />

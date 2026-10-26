@@ -35,6 +35,10 @@ const virtualModules = new Map([
     `export async function listEvents(...args) {
       globalThis.__kitAdminEventsListCalls.push(args);
       return globalThis.__kitAdminEventsListImpl(...args);
+    }
+    export async function listSeriesEvents(...args) {
+      globalThis.__kitAdminEventsListCalls.push(args);
+      return { rows: await globalThis.__kitAdminEventsListImpl(...args), scope: null };
     }`,
   ],
 ]);

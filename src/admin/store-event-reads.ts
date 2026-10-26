@@ -17,9 +17,15 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
-import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  parseEventListQuery,
+  type EventListParams,
+  type EventScopeRecovery,
+} from "./event-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
+import { canonicalEventKey } from "../events/keys";
 import { nonSensitiveRead } from "../member-reads";
 import { events, rsvps } from "../db/admin-schema";
 import type { EventRow } from "./store-event-writes";
@@ -29,17 +35,79 @@ import { boundInventoryRead } from "./store-shared";
 export type EventListRow = EventRow & { goingCount: number };
 
 /**
+ * Exact-series scope for one inventory read. `ok` names the persisted
+ * recurrence (parent key + title for the heading); any other status leaves
+ * the page empty with an explicit recovery, never an unscoped list.
+ */
+export type EventListScope =
+  | { status: "ok"; parentKey: string; parentTitle: string }
+  | { status: EventScopeRecovery };
+
+/**
  * Fetch one extra row so pagination needs no separate count query.
  *
- * Both inventory statements run in one transaction behind the shared
+ * All inventory statements run in one transaction behind the shared
  * transaction-local lock/statement bound, so a stalled table cancels
  * server-side and the caller refuses only after the transaction settles.
+ * The exact-series scope resolves from stored recurrence/parent IDs and the
+ * stable event key only — never title/game similarity or submitted fields.
  */
-export async function listEvents(db: Db, params: EventListParams): Promise<EventListRow[]> {
+export async function listSeriesEvents(
+  db: Db,
+  params: EventListParams,
+): Promise<{ rows: EventListRow[]; scope: EventListScope | null }> {
   const opts = parseEventListQuery(params);
+  const requested = opts.series_event;
+  // Canonicalize before touching the database: a malformed scope refuses
+  // without a read, and stays a recovery rather than an unscoped list.
+  const lookupKey = requested === null ? null : canonicalEventKey(requested);
+  if (requested !== null && lookupKey === null) {
+    return { rows: [], scope: { status: "invalid" } };
+  }
   return db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    let scope: EventListScope | null = null;
     const conds: (SQL | undefined)[] = [];
+    if (lookupKey !== null) {
+      const [found] = await nonSensitiveRead("events", () =>
+        tx
+          .select({
+            id: events.id,
+            eventKey: events.eventKey,
+            title: events.title,
+            parentEventId: events.parentEventId,
+            recurrenceFrequency: events.recurrenceFrequency,
+          })
+          .from(events)
+          .where(eq(events.eventKey, lookupKey))
+          .limit(1),
+      );
+      if (!found) return { rows: [], scope: { status: "not-found" } };
+      // A standalone event is not a series: resolving it to All events would
+      // mislead, so it recovers explicitly like any other unusable scope.
+      if (found.parentEventId === null && found.recurrenceFrequency === null) {
+        return { rows: [], scope: { status: "not-in-series" } };
+      }
+      const parentId = found.parentEventId ?? found.id;
+      let parentKey = found.eventKey;
+      let parentTitle = found.title;
+      if (found.parentEventId !== null) {
+        const [parent] = await nonSensitiveRead("events", () =>
+          tx
+            .select({ eventKey: events.eventKey, title: events.title })
+            .from(events)
+            .where(eq(events.id, parentId))
+            .limit(1),
+        );
+        if (!parent) return { rows: [], scope: { status: "not-found" } };
+        parentKey = parent.eventKey;
+        parentTitle = parent.title;
+      }
+      scope = { status: "ok", parentKey, parentTitle };
+      // Parent plus every child across stored statuses: drafts and cancelled
+      // siblings stay visible here even though public history omits them.
+      conds.push(or(eq(events.id, parentId), eq(events.parentEventId, parentId)));
+    }
     if (opts.q) {
       // One literal case-insensitive match against title OR the stored game,
       // composed inside the same ANDed predicates as before. Null games never
@@ -85,7 +153,7 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
         .limit(EVENT_PAGE_SIZE + 1)
         .offset((opts.page - 1) * EVENT_PAGE_SIZE),
     );
-    if (rows.length === 0) return [];
+    if (rows.length === 0) return { rows: [], scope };
     // Going-only seat counts for the rendered Fill column (same rule as the
     // fill filter: Maybe/Waitlist/Not going never occupy a seat). One
     // classified aggregate read, like the public withGoing helper — a second
@@ -106,8 +174,13 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
         .groupBy(rsvps.eventId),
     );
     const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
-    return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
+    return { rows: rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 })), scope };
   });
+}
+
+/** Rows-only inventory read; the scoped twin carries the series metadata. */
+export async function listEvents(db: Db, params: EventListParams): Promise<EventListRow[]> {
+  return (await listSeriesEvents(db, params)).rows;
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
