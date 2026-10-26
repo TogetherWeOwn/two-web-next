@@ -3,19 +3,20 @@
 ## Allocation proposal
 
 Move Kit server JavaScript gzip bytes from **334080 to 334336** (one 256-byte
-step) for the event-time composition on current main. Every other numeric
-ceiling, file cap, startup bound, checker, inventory, workflow, runtime, test,
-manifest, lock and constraint stays unchanged. The budget's complete `$comment`
-history is preserved byte-for-byte (621575 characters). The three fixed server
-gzip shipping-regression literals move with the ceiling: exact admission 334336,
-upper fixture 334337 and its diagnostic ceiling 334336.
+step) for the event-time composition. Every other numeric ceiling, file cap,
+startup bound, checker, inventory, workflow, runtime, manifest, lock and
+constraint stays unchanged. The budget's complete incoming `$comment` history
+is preserved byte-for-byte (622700 characters on reconciliation main
+`4d9ebeee5`). The original branch aligned three fixed server-gzip boundary
+literals; the reconciliation below incorporates the independent test author's
+explicit allocation mapping instead.
 
 This allocation is neither feature approval nor release approval. The feature
 owner must incorporate the reviewed decision, remeasure the actual integrated
 head, and pass exact-head CI and independent review. No audit or gate is
 skipped or disabled.
 
-## Pinned inputs and method
+## Pinned inputs and method (initial decision)
 
 - Main: `2fa2ef0885c5eb39d795f7412943bcfed7abe4b3` (tree
   `9aa557cb545ba05e6073a62c1a55a2194c8dc52c`).
@@ -61,7 +62,7 @@ another compressor.
 Worker entry stays 2551/1219 raw/gzip; client CSS stays 2 files at
 2833/1006. The startup limit stays 60000ms; startup latency was not
 measured. This reproduces the earlier `732a9582a` evidence (pristine
-333873, combined 334190) within 1 byte on the current base; both agree the
+333873, combined 334190) within 2 bytes on the initial measurement base; both agree the
 composition breaches the 334080 ceiling by about 109 bytes with a feature
 increment of about 315 bytes.
 
@@ -93,7 +94,7 @@ broaden this slice. Accept the attributed feature cost rather than introduce
 that behavior risk or speculative optimization. No application edit and no
 feature acceptance-test change ships with this decision.
 
-## Minimality and unchanged enforcement
+## Minimality and unchanged enforcement (initial decision)
 
 Run the unchanged canonical checker against the retained combined artifacts
 with isolated budget copies (never edit the checker or the feature
@@ -120,7 +121,7 @@ checker: client 253949/102273, server 1178762/333874 raw/gzip, exit 0. No
 feature source or feature acceptance-test changes ship on the decision
 branch.
 
-## Shipping-regression proof
+## Shipping-regression proof (initial branch; superseded below)
 
 `ci/check-kit-perf.test.mjs` moves only the three server gzip boundary
 literals to the new ceiling, as the suite's own history requires of an
@@ -145,12 +146,84 @@ ceiling and leave the checker unchanged:
 These results exercise checker behavior on synthetic complete fixtures, not
 a substitute measurement of feature artifacts or a whole-app verdict.
 
-ACT: allocate one 256-byte server-gzip composition step with its measurement
-record and regression alignment. WHY: repeated same-dependency measurements
-attribute a real +315-byte combined cost that pristine main does not incur
-and cannot fit. UNDO: revert only this allocation, note and alignment if
-the feature is abandoned; do not revert unrelated budget history or its
-independently reviewed ceilings.
+## Conflict reconciliation on main `4d9ebeee5`
+
+Main `4d9ebeee5b311dd5bedb606a57ea91183625c3c7` adds decision history and
+independent shipping tests ([#1779](https://github.com/TogetherWeOwn/two-web-next/pull/1779),
+[#1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814)), plus
+verification documentation. Application source, assets, manifests, both
+lockfiles and the canonical checker are byte-identical to the initial
+measurement base. Preserve all 622700 incoming history characters and every
+incoming enforcement value except the proposed server gzip 334336. The live
+feature head remains `6d810e08c7cc7b275b54f6b403d1326f00009a82`.
+
+Repeat the same method above on **this main**, in separate pristine and
+combined scratch worktrees sharing fresh locked dependency installs outside
+the source trees. Verify the frozen patch's SHA256 before applying it; no
+feature or test changes enter the decision tree. Node remains 24.22.1 and
+npm 11.19.1. All four builds exit 0:
+
+| Group | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Server JS raw | 1178764 / 1178762 | 1179825 / 1179823 |
+| Server JS gzip | 333874 / 333873 | 334190 / 334190 |
+| Client JS raw | 253949 / 253949 | 254142 / 254142 |
+| Client JS gzip | 102273 / 102273 | 102323 / 102323 |
+| Canonical checker exit under 334080 | 0 / 0 | 1 / 1 (server gzip only) |
+
+Counts stay 115 server JS, 54 client JS and 2 CSS files. Worker entry remains
+2551/1219 raw/gzip and CSS remains 2833/1006. Exact feature-chunk deltas are
+still `chunks/events.js` +543/+130 raw/gzip and `chunks/site-shell.js`
++518/+180. Residual server chunks add 0/+6 on pair 1 and 0/+7 on pair 2,
+so total feature growth is +1061/+316 and +1061/+317. These are fresh
+measurements, not a relabelling of the initial results; the one-byte gzip
+variation does not justify a larger step.
+
+On the retained combined build 2, isolated scratch-budget controls observe
+334080 and 334189 fail (exit 1), and 334190 and 334336 pass (exit 0). The
+proposed one-step allocation therefore still suffices, leaving **146 bytes**
+over the maximum now observed. No other ceiling needs an increase. The
+standalone reconciled decision tree also builds and passes the canonical
+checker: server 1178762/333874 and client 253949/102273 raw/gzip, exit 0.
+
+Main's new shipping tests explicitly support 334080 and 335104 but omit
+this independently measured, smaller 334336 allocation. Taking main's test
+file byte-verbatim reproduces four failures: the explicit-allocation control
+and the three server-gzip cases (157/161 in the eight-file Kit gate, no skips).
+The independent test author's [correction](https://github.com/TogetherWeOwn/two-web-next/commit/bb98fbbb43d394c027b3872e2609ebc6453e540f)
+is incorporated byte-verbatim for `ci/check-kit-perf.test.mjs` (SHA256
+`6b095ee20f9454d8d333fda98ec54109e56e890353f16feca3ded74c533c96d9`). It adds
+fixed 334189/334336/334337 interval/exact/over witnesses and explicit mapping
+and diagnostics; existing 334080 and 335104 cases and unrelated assertions
+remain intact. Increasing the budget to 335104 just to satisfy the test would
+be unjustified. This replaces the original three-literal edit without
+replacing main's test structure.
+
+On the actual reconciled tree, the two-file checker/inventory suite passes
+82/82 and the eight-file collected Kit gate passes 161/161, with zero skips.
+Independent scratch-budget controls run the corrected shipping suite 31/31
+at each supported ceiling (334080, 334336 and 335104). Unsupported 334335,
+334337 and 334592 each fail exactly four allocation/server cases (27 pass,
+4 fail), so arbitrary adjacent or larger ceilings cannot pass. These are
+synthetic boundary controls in addition to, not instead of, the real-artifact
+measurements above.
+
+`npm run typecheck`, `npm run lint`, `node ci/check-doc-links.mjs`,
+`npm run floor-guard`, `npm run test:inventory -- --strict` (1254/1254 test
+files, 55/55 Playwright specs), and `npm run budget` pass on the local
+reconciliation. `context-pack --base origin/main` still exits at startup
+with `RuntimeError: MCP server exited`; manual caller coverage is the
+unchanged canonical checker, its shipping suite and the collected Kit gate.
+Full `npm run check`, database tests, browser/a11y/Lighthouse and deployment
+checks were not run for this budget-only reconciliation.
+
+ACT: retain one 256-byte server-gzip composition step and current main's
+history and independent test structure. WHY: repeated same-dependency
+measurements attribute a real roughly 315-byte combined cost that pristine
+main does not incur and cannot fit. UNDO: revert only this allocation,
+note and its independent test entry if the feature is abandoned; do not
+revert unrelated budget history, supported test allocations or independently
+reviewed ceilings.
 
 These measurements establish build-size behavior only. They do not establish
 browser behavior, accessibility, startup timing or deployment health. No
