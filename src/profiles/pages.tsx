@@ -27,7 +27,8 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
-import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
+import type { MemberStats } from "./stats";
+import { MEMBER_MILESTONES_CAP } from "./stats-limits";
 import {
   PROFILE_BIO_COUNT_ID,
   PROFILE_BIO_HINT_COPY,

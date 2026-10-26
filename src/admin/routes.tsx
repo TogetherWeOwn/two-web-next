@@ -632,14 +632,23 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseFeaturedListQuery(c.req.query());
+    // One evaluation instant for selection and badges: the rows keep the
+    // verdict of this read even if the clock moves while it is awaited.
+    const now = new Date();
     const fetched = await listFeatured(db, {
       ...query,
       published: query.published ? query.published === "1" : undefined,
+      now,
     });
     const rows = fetched.slice(0, FEATURED_PAGE_SIZE);
     return bufferedMemberHtml(
       c,
-      <FeaturedPage rows={rows} query={query} hasNext={fetched.length > FEATURED_PAGE_SIZE} />,
+      <FeaturedPage
+        rows={rows}
+        query={query}
+        hasNext={fetched.length > FEATURED_PAGE_SIZE}
+        now={now}
+      />,
     );
   });
 

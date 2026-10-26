@@ -4,9 +4,10 @@
 // web/src/routes/admin/featured/+page.server.ts: it parses the bounded
 // filter/pagination query with the shared parseFeaturedListQuery, maps it
 // onto the shared listFeatured read exactly as the Hono handler does, and
-// serializes rows (ISO datetimes, shared featuredStatus) for the Svelte
-// view. Publication logic is shared, never copied: every status assertion
-// below derives from featuredStatus itself.
+// serializes rows (ISO datetimes, exact saved text for undecodable bounds,
+// shared guarded admin eligibility) for the Svelte view. Publication logic
+// is shared, never copied: every status assertion below derives from
+// featuredStatus itself, which the guarded verdict matches for finite rows.
 import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -123,9 +124,11 @@ describe("resolveKitFeaturedList", () => {
     expect(d.list).toHaveBeenCalledWith(d.db, {
       published: true,
       q: "night",
+      state: "",
       sort: "updated_at",
       order: "desc",
       page: 2,
+      now: expect.any(Date),
     });
     expect(outcome).toMatchObject({ kind: "ok", rows: [], hasNext: false });
     if (outcome.kind !== "ok") throw new Error("expected ok");
@@ -138,9 +141,11 @@ describe("resolveKitFeaturedList", () => {
     expect(d.list).toHaveBeenCalledWith(d.db, {
       published: undefined,
       q: "",
+      state: "",
       sort: "position",
       order: "asc",
       page: 1,
+      now: expect.any(Date),
     });
   });
 
@@ -159,7 +164,9 @@ describe("resolveKitFeaturedList", () => {
       "status",
       "position",
       "startsAt",
+      "startsAtText",
       "endsAt",
+      "endsAtText",
       "updatedAt",
     ]);
   });

@@ -1,6 +1,6 @@
 // These exceptions return event/content records or fixed aggregates, never
 // arbitrary raw queries. A classification still permits exactly one statement.
-import { Column, getTableName, is } from "drizzle-orm";
+import { Column, SQL, getTableName, is } from "drizzle-orm";
 import { refuseMemberRead, type NonSensitiveRead } from "../member-reads";
 
 export type SelectedField = { path: string[]; field: unknown };
@@ -45,6 +45,19 @@ const fillCount =
 // The edit form needs PostgreSQL timestamp text, not lossy JS Dates. Only this
 // complete bound-ID query permits its computed projections, never arbitrary SQL.
 const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at", CASE WHEN isfinite("starts_at") THEN to_char("starts_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "starts_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "starts_at"::text END, CASE WHEN isfinite("ends_at") THEN to_char("ends_at" AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || CASE WHEN EXTRACT(YEAR FROM "ends_at" AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END ELSE "ends_at"::text END from "featured_contents" where "featured_contents"."id" = $1`;
+// The list read projects the same reviewed selection
+// (src/admin/store-featured.ts featuredEditSelection); only its
+// filter/sort/page suffix varies. Pin the projection text exactly: Drizzle
+// renders the selected fields into the statement, so matching text proves the
+// computed pair is the reviewed one — the executed SQL is the ground truth,
+// never the field nodes. Anything else still fails closed.
+const featuredListProjection = featuredEditRead.slice(
+  0,
+  featuredEditRead.indexOf(' from "featured_contents" where '),
+);
+const featuredListFrom = `${featuredListProjection} from "featured_contents"`;
+const hasReviewedFeaturedProjection = (query: string): boolean =>
+  query === featuredListFrom || query.startsWith(`${featuredListFrom} `);
 
 // The series reader bounds public text before transport. Admit only this complete
 // projection and bound-root query, never arbitrary computed event expressions.
@@ -89,9 +102,19 @@ export function validateNonSensitiveRead(
   // The viewer never renders the dirty before/after map: refuse any statement
   // that selects it, so a future projection cannot leak raw properties JSON.
   if (classification === "activity-log" && /\bproperties\b/i.test(query)) refuseMemberRead();
+  // The reviewed list projection admits computed fields: its pinned text is
+  // the executed ground truth for the bound-text pair. Every other featured
+  // read keeps the Column-only rule, and the member-table check below still
+  // runs for the list's varying filter suffix.
+  const reviewedListProjection =
+    classification === "featured" && hasReviewedFeaturedProjection(query);
   if (
     !fields?.length ||
-    fields.some(({ field }) => !is(field, Column) || getTableName(field.table) !== table)
+    fields.some(
+      ({ field }) =>
+        !(is(field, Column) && getTableName(field.table) === table) &&
+        !(reviewedListProjection && is(field, SQL)),
+    )
   )
     refuseMemberRead();
   // Event fill filters have one reviewed correlated aggregate. Nothing else

@@ -4,8 +4,21 @@
 // re-exports every name below, so all existing importers keep working
 // untouched.
 
-import { and, asc, desc, eq, getTableColumns, ilike, sql, type SQL } from "drizzle-orm";
-import { FEATURED_PAGE_SIZE, parseFeaturedListQuery } from "./table-list";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  ilike,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
+import { FEATURED_PAGE_SIZE, parseFeaturedListQuery, type FeaturedState } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
@@ -26,11 +39,21 @@ export type FeaturedEditRow = FeaturedRow & {
   startsAtText: string | null;
   endsAtText: string | null;
 };
+/**
+ * Inventory rows for the list page: the list projection always carries the
+ * exact bound text, while direct page renders may omit it for finite windows.
+ */
+export type FeaturedListRow = FeaturedRow & {
+  startsAtText?: string | null;
+  endsAtText?: string | null;
+};
 
 // Date decoding loses imported microseconds and cannot represent infinity.
 // Pin formatting to UTC independently of the connection's TimeZone/DateStyle.
 // Keep BC visible so validation cannot mistake an unsupported era for AD.
-const featuredEditSelection = {
+// Exported for the read-classifier unit contract: the list read projects
+// these same reviewed fragments, never arbitrary computed SQL.
+export const featuredEditSelection = {
   ...getTableColumns(featuredContents),
   startsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.startsAt})
     THEN to_char(${featuredContents.startsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
@@ -182,33 +205,104 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
   await retireHomeGuestCache();
 }
 
+// Latest instant a JavaScript Date represents (+8.64e15 ms). Postgres stores
+// finite timestamps past it (up to year 294276) that the driver decodes as
+// Invalid Date; a published bound there is unavailable, never live. No lower
+// bound: the earliest finite timestamptz Postgres stores (4713 BC) is
+// millennia inside the earliest instant Date represents (-271821).
+const MAX_JS_INSTANT = sql`'275760-09-13 00:00:00+00'::timestamptz`;
+
+type FeaturedBoundColumn = typeof featuredContents.startsAt | typeof featuredContents.endsAt;
+
+/** No bound, or a bound the driver decodes to a finite Date. */
+function decodableBound(column: FeaturedBoundColumn): SQL {
+  return or(isNull(column), and(sql`isfinite(${column})`, lte(column, MAX_JS_INSTANT)))!;
+}
+
+/** A saved bound present but undecodable: infinite or past the Date range. */
+function undecodableBound(column: FeaturedBoundColumn): SQL {
+  return or(sql`NOT isfinite(${column})`, gt(column, MAX_JS_INSTANT))!;
+}
+
+/**
+ * Effective-state predicate at saved database precision: start inclusive,
+ * end exclusive, unpublished precedence, scheduled before expired — the same
+ * verdict the guarded admin eligibility check reaches in
+ * src/featured-eligibility.ts for every fixture class it shares (open,
+ * finite, infinite and out-of-range bounds). Residual exotic rows the SQL
+ * reads as decodable but V8 cannot parse still render safely: the shared
+ * eligibility/bound-display backstop withholds the verdict and shows the
+ * exact saved text.
+ */
+function featuredStateCondition(state: FeaturedState, now: Date): SQL | undefined {
+  const { isPublished, startsAt, endsAt } = featuredContents;
+  const publishedDecodable = [
+    eq(isPublished, true),
+    decodableBound(startsAt),
+    decodableBound(endsAt),
+  ];
+  switch (state) {
+    case "":
+      return undefined;
+    case "unpublished":
+      return eq(isPublished, false);
+    case "unavailable":
+      return and(eq(isPublished, true), or(undecodableBound(startsAt), undecodableBound(endsAt)));
+    case "scheduled":
+      return and(...publishedDecodable, gt(startsAt, now));
+    case "expired":
+      return and(...publishedDecodable, lte(endsAt, now), or(isNull(startsAt), lte(startsAt, now)));
+    case "live":
+      return and(
+        ...publishedDecodable,
+        or(isNull(startsAt), lte(startsAt, now)),
+        or(isNull(endsAt), gt(endsAt, now)),
+      );
+  }
+}
+
 /**
  * Featured inventory: one transaction behind the shared transaction-local
  * lock/statement bound, so a stalled table cancels server-side and the
- * caller refuses only after the transaction settles.
+ * caller refuses only after the transaction settles. The state facet is an
+ * orthogonal SQL predicate applied before the 25+1 lookahead, evaluated at
+ * the caller's instant so badges render the same verdict selection used.
  */
 export async function listFeatured(
   db: Db,
-  opts: { published?: boolean; q?: string; sort?: string; order?: string; page?: string | number },
-): Promise<FeaturedRow[]> {
+  opts: {
+    published?: boolean;
+    q?: string;
+    sort?: string;
+    order?: string;
+    page?: string | number;
+    state?: string;
+    now?: Date;
+  },
+): Promise<FeaturedEditRow[]> {
   const query = parseFeaturedListQuery({
     q: opts.q,
     sort: opts.sort,
     order: opts.order,
     page: opts.page === undefined ? undefined : String(opts.page),
+    state: opts.state,
   });
+  const now = opts.now ?? new Date();
   return db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
     const conds: SQL[] = [];
     if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
     if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
+    const stateCond = featuredStateCondition(query.state, now);
+    if (stateCond) conds.push(stateCond);
     const column =
       query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
     const order = query.order === "desc" ? desc(column) : asc(column);
-    // Fetch one extra row so pagination needs no separate count query.
+    // Fetch one extra row so pagination needs no separate count query. The
+    // exact saved bound text rides along so undecodable rows stay inspectable.
     return nonSensitiveRead("featured", () =>
       tx
-        .select()
+        .select(featuredEditSelection)
         .from(featuredContents)
         .where(and(...conds))
         .orderBy(order, asc(featuredContents.id))

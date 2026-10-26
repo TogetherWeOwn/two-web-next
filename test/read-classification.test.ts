@@ -10,6 +10,7 @@
 // functions, so no database connection is needed.
 
 import { describe, expect, it } from "vitest";
+import { featuredEditSelection } from "../src/admin/store-featured";
 import { events, featuredContents } from "../src/db/admin-schema";
 import {
   normalizedStatement,
@@ -138,6 +139,48 @@ describe("validateNonSensitiveRead accepts each intended shape", () => {
 
   it("featured accepts the edit-form timestamp-text read", () => {
     allows("featured", FEATURED_EDIT_READ, featuredFields("id", "title"));
+  });
+
+  it("featured accepts the list read with the reviewed bound-text projections", () => {
+    // The list projects the same reviewed fragments as the edit read; only
+    // the filter/sort/page suffix varies, so reuse the pinned projection.
+    const projection = FEATURED_EDIT_READ.split(' from "featured_contents"')[0];
+    const listRead = `${projection} from "featured_contents" where ("featured_contents"."is_published" = $1) order by "position" asc, "id" asc limit $2 offset $3`;
+    const fields: SelectedField[] = [
+      ...(Object.keys(featuredContents) as Array<keyof typeof featuredContents>)
+        .filter((name) => name !== "enableRLS")
+        .map((name) => ({ path: [name], field: featuredContents[name] })),
+      { path: ["startsAtText"], field: featuredEditSelection.startsAtText },
+      { path: ["endsAtText"], field: featuredEditSelection.endsAtText },
+    ];
+    allows("featured", listRead, fields);
+  });
+
+  it("featured refuses computed projections outside the reviewed projection", () => {
+    const projection = FEATURED_EDIT_READ.split(' from "featured_contents"')[0];
+    const listRead = `${projection} from "featured_contents" order by "position" asc, "id" asc limit $1 offset $2`;
+    const fields: SelectedField[] = [
+      ...featuredFields("id", "title"),
+      { path: ["startsAtText"], field: featuredEditSelection.startsAtText },
+      { path: ["endsAtText"], field: featuredEditSelection.endsAtText },
+    ];
+    // The executed statement text is the ground truth: an unreviewed
+    // expression in the projection misses the pin and fails closed, even
+    // with the reviewed field nodes beside it.
+    refuses(
+      "featured",
+      listRead.replace(
+        'CASE WHEN isfinite("starts_at")',
+        'md5("title"), CASE WHEN isfinite("starts_at")',
+      ),
+      fields,
+    );
+    // A same-shaped fragment over another table's column is not the pin.
+    refuses("featured", listRead.replaceAll('"starts_at"', '"events"."starts_at"'), fields);
+    // A non-SQL computed field earns no admission even under the pin.
+    refuses("featured", listRead, [...fields, { path: ["digest"], field: "md5(title)" }]);
+    // The reviewed projection earns no admission under another classification.
+    refuses("events", 'select "id" from "events"', fields);
   });
 });
 

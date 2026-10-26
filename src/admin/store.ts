@@ -14,7 +14,7 @@ export {
   listFeatured,
   updateFeatured,
 } from "./store-featured";
-export type { FeaturedEditRow, FeaturedRow } from "./store-featured";
+export type { FeaturedEditRow, FeaturedListRow, FeaturedRow } from "./store-featured";
 export { type Actor, NotFoundError } from "./store-shared";
 export {
   createEvent,

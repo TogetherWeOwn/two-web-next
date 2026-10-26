@@ -1,6 +1,7 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import {
+  FEATURED_STATES,
   featuredListUrl,
   featuredListHasFilters,
   featuredListClearUrl,
@@ -12,10 +13,11 @@ import type { PageProps } from "./$types";
 // last-changed headers, the row testids, the UTC window bounds, the
 // scroll-hint region and the prev/next pagination are shared, so the
 // existing admin E2E selectors still apply when this route owns traffic.
-// Rows arrive from the load with datetimes pre-rendered as ISO strings and
-// the publish/window status resolved through the shared featuredStatus(),
-// exactly as the Hono page emits them. No JavaScript: the search form is a
-// plain GET and every sort/page change is a link.
+// Rows arrive from the load with datetimes pre-rendered as ISO strings,
+// undecodable bounds as exact saved text, and the publish/window status
+// resolved through the shared guarded admin eligibility verdict, exactly as
+// the Hono page emits them. No JavaScript: the search form is a plain GET
+// and every sort/page change is a link.
 let { data }: PageProps = $props();
 </script>
 
@@ -47,6 +49,14 @@ let { data }: PageProps = $props();
       </select>
     </div>
     <div class="field">
+      <label for="state">Effective state</label>
+      <select id="state" name="state">
+        {#each FEATURED_STATES as s}
+          <option value={s.value} selected={data.query.state === s.value}>{s.label}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
     {#if featuredListHasFilters(data.query)}
@@ -55,6 +65,10 @@ let { data }: PageProps = $props();
       </div>
     {/if}
   </form>
+  <p>
+    Statuses are a point-in-time eligibility verdict, not proof of guest homepage
+    delivery — verify the homepage as a guest.
+  </p>
   <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: keyboard-scrollable
     region per the Hono contract (src/admin/pages/featured-list.tsx) — the
@@ -90,10 +104,10 @@ let { data }: PageProps = $props();
             <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
             <td>
               <span class="featured-window-bound">
-                {#if r.startsAt}<time datetime={r.startsAt}>{r.startsAt}</time>{:else}—{/if}
+                {#if r.startsAt}<time datetime={r.startsAt}>{r.startsAt}</time>{:else if r.startsAtText}{r.startsAtText}{:else}—{/if}
               </span>
               <span class="featured-window-bound">
-                → {#if r.endsAt}<time datetime={r.endsAt}>{r.endsAt}</time>{:else}—{/if}
+                → {#if r.endsAt}<time datetime={r.endsAt}>{r.endsAt}</time>{:else if r.endsAtText}{r.endsAtText}{:else}—{/if}
               </span>
             </td>
             <td><time datetime={r.updatedAt}>{r.updatedAt}</time></td>

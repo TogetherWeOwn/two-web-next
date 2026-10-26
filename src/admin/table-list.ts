@@ -4,9 +4,12 @@ export type ListParams = Record<string, string | undefined>;
 export type SortOrder = "asc" | "desc";
 export {
   type FeaturedSort,
+  type FeaturedState,
   type FeaturedListQuery,
   FEATURED_PAGE_SIZE,
+  FEATURED_STATES,
   parseFeaturedListQuery,
+  parseFeaturedState,
   featuredListUrl,
   featuredEmptyText,
 } from "./featured-list-query";

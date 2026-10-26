@@ -1,9 +1,10 @@
 // Admin featured-list screen (split from pages.tsx; zero behavior change).
 
 import type { FC } from "hono/jsx";
-import { FeaturedStatusBadge } from "../../featured-status";
-import type { FeaturedRow } from "../store";
+import { featuredBoundDisplay, featuredInventoryStatus } from "../../featured-eligibility";
+import type { FeaturedListRow } from "../store";
 import {
+  FEATURED_STATES,
   featuredEmptyText,
   featuredListUrl,
   featuredListHasFilters,
@@ -13,7 +14,7 @@ import {
 import { Shell, TableSortHeader } from "./shell";
 
 export const FeaturedPage: FC<{
-  rows: FeaturedRow[];
+  rows: FeaturedListRow[];
   query: FeaturedListQuery;
   hasNext?: boolean;
   now?: Date;
@@ -48,6 +49,16 @@ export const FeaturedPage: FC<{
           </select>
         </div>
         <div class="field">
+          <label for="state">Effective state</label>
+          <select id="state" name="state">
+            {FEATURED_STATES.map((s) => (
+              <option value={s.value} selected={query.state === s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
           <button type="submit" class="btn">
             Filter
           </button>
@@ -58,6 +69,10 @@ export const FeaturedPage: FC<{
           </div>
         ) : null}
       </form>
+      <p>
+        Statuses are a point-in-time eligibility verdict, not proof of guest homepage delivery —
+        verify the homepage as a guest.
+      </p>
       <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div
         class="featured-table-scroll"
@@ -95,37 +110,54 @@ export const FeaturedPage: FC<{
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <a href={`/admin/featured/${r.id}`}>{r.title}</a>
-                  </td>
-                  <td data-testid={`featured-status-${r.id}`}>
-                    <FeaturedStatusBadge row={r} now={now} />
-                  </td>
-                  <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
-                  <td>
-                    <span class="featured-window-bound">
-                      {r.startsAt ? (
-                        <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
-                      ) : (
-                        "—"
-                      )}
-                    </span>
-                    <span class="featured-window-bound">
-                      →{" "}
-                      {r.endsAt ? (
-                        <time datetime={r.endsAt.toISOString()}>{r.endsAt.toISOString()}</time>
-                      ) : (
-                        "—"
-                      )}
-                    </span>
-                  </td>
-                  <td>
-                    <time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time>
-                  </td>
-                </tr>
-              ))
+              rows.map((r) => {
+                // Guarded admin eligibility/bound-display semantics, shared
+                // with the Kit list and the edit panel: an undecodable window
+                // withholds the verdict and shows its exact saved text.
+                const status = featuredInventoryStatus(r, now);
+                const startsAt = featuredBoundDisplay(r.startsAt, r.startsAtText);
+                const endsAt = featuredBoundDisplay(r.endsAt, r.endsAtText);
+                return (
+                  <tr key={r.id}>
+                    <td>
+                      <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+                    </td>
+                    <td data-testid={`featured-status-${r.id}`}>
+                      <span
+                        class={`featured-status featured-status-${status}`}
+                        data-status={status}
+                      >
+                        {status}
+                      </span>
+                    </td>
+                    <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
+                    <td>
+                      <span class="featured-window-bound">
+                        {startsAt.kind === "instant" ? (
+                          <time datetime={startsAt.iso}>{startsAt.iso}</time>
+                        ) : startsAt.kind === "text" ? (
+                          startsAt.text
+                        ) : (
+                          "—"
+                        )}
+                      </span>
+                      <span class="featured-window-bound">
+                        →{" "}
+                        {endsAt.kind === "instant" ? (
+                          <time datetime={endsAt.iso}>{endsAt.iso}</time>
+                        ) : endsAt.kind === "text" ? (
+                          endsAt.text
+                        ) : (
+                          "—"
+                        )}
+                      </span>
+                    </td>
+                    <td>
+                      <time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
