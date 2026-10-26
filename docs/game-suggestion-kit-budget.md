@@ -163,7 +163,10 @@ capacity decision.
 ## Canonical boundary proof
 
 On the same restored combined output, change only the copied budget under test;
-never change the checker, artifacts or other limits:
+never change the checker, artifacts or other limits. (This table is the
+original `91b66a68d`-based tree under the original three-limit proposal,
+retained as history; the fresh-base boundary results are in the
+re-measurement section above.)
 
 | Copied budget | Checker exit | Failed group |
 | --- | ---: | --- |
@@ -212,7 +215,7 @@ unchanged checker and test file):
 
 The over-row failures show the loaded (wrong) ceiling in the checker
 diagnostic, for example `over 254976B` where the test pins `over 256000B`.
-All ten controls reject as listed. This synthetic evidence complements, but
+All eight rejecting controls behave as listed. This synthetic evidence complements, but
 does not replace, the exact application build measurements above.
 
 ## Scope of the evidence
