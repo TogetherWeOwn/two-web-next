@@ -67,7 +67,8 @@
       clearTimeout(timer);
       toast.textContent = "";
       const text = link.getAttribute("data-copy-link");
-      const owns = () => mine === latest && link.isConnected !== false && toast.isConnected !== false;
+      const owns = () =>
+        mine === latest && link.isConnected !== false && toast.isConnected !== false;
       // Showing feedback mints a fresh token: the attempt that produced it
       // can no longer settle over it, and only this token may clear it.
       const show = (text) => {
@@ -112,11 +113,7 @@
 
     // Modified or already-cancelled activations keep native behavior.
     const blocked = (event) =>
-      event.defaultPrevented ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey;
+      event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey;
     // Event controls stay links: plain activation copies, modified clicks and
     // keys keep native navigation. Feed/view controls use native button activation.
     function onClick(event) {
