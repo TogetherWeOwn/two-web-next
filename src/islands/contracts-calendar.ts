@@ -397,12 +397,17 @@ export const GRID_CANCELLED_COPY = "Cancelled";
  * then the day. Long titles keep the truncated visible form first so axe
  * label-content-name-mismatch passes, then the full title; short titles are
  * not duplicated. Cancelled entries lead with the same visible words plus
- * the badge, retaining the full title and day. */
+ * the badge, retaining the full title and day. The optional availability
+ * suffix ("2 seats left", "RSVPs paused", …) sits inside the visible
+ * prefix — right after the title words, before the restored full title and
+ * day — so the visible label stays a contiguous prefix of the name.
+ * Cancelled entries never carry availability: the badge is the verdict. */
 export function gridAccessibleName(
   title: string,
   startsAt: Date,
   zone: string,
   cancelled = false,
+  availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
   const time = wallTimeHm(startsAt, zone);
@@ -413,18 +418,23 @@ export function gridAccessibleName(
     const fullTitle = truncated === title ? "" : `, ${title}`;
     return `${time} ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
   }
-  return truncated === title ? `${time} ${title}, ${day}` : `${time} ${truncated} ${title}, ${day}`;
+  const suffix = availability ? ` ${availability}` : "";
+  return truncated === title
+    ? `${time} ${title}${suffix}, ${day}`
+    : `${time} ${truncated}${suffix} ${title}, ${day}`;
 }
 
 /** Continuation link name starts with the visible "Continues title" (WCAG
  * 2.5.3), then the displayed day — never the original start. Long titles keep
  * the truncated visible form first so axe label-content-name-mismatch passes,
  * then the full title; short titles are not duplicated. Cancelled entries
- * add the badge after the visible words. */
+ * add the badge after the visible words. The optional availability suffix
+ * sits inside the visible prefix, like {@link gridAccessibleName}. */
 export function gridContinuationAccessibleName(
   title: string,
   dayIso: string,
   cancelled = false,
+  availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
   const day = calendarDayLongLabel(dayIso);
@@ -435,9 +445,10 @@ export function gridContinuationAccessibleName(
     const fullTitle = truncated === title ? "" : `, ${title}`;
     return `Continues ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
   }
+  const suffix = availability ? ` ${availability}` : "";
   return truncated === title
-    ? `Continues ${title}, ${day}`
-    : `Continues ${truncated} ${title}, ${day}`;
+    ? `Continues ${title}${suffix}, ${day}`
+    : `Continues ${truncated}${suffix} ${title}, ${day}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the
