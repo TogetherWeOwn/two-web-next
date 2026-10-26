@@ -451,12 +451,14 @@ for (const { name, group, axis, bytes, ceiling, breach = false } of [
     ceiling: 3072,
     breach: true,
   },
+  { name: "CSS gzip newly allowed interval", group: "kit.client.css", axis: "gzip", bytes: 1029 },
+  { name: "CSS gzip exact ceiling", group: "kit.client.css", axis: "gzip", bytes: 1280 },
   {
     name: "CSS gzip one byte over",
     group: "kit.client.css",
     axis: "gzip",
-    bytes: 1025,
-    ceiling: 1024,
+    bytes: 1281,
+    ceiling: 1280,
     breach: true,
   },
   {
