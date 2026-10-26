@@ -85,7 +85,10 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Use the server's RSVP verdict for elapsed published rows too: status
+    // reconciliation can lag behind the event's end. Draft previews keep
+    // their spots line; the browser clock never decides closure.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled" && closed !== "past",
     announcement: null,
   }),
 );
@@ -237,6 +240,24 @@ const lineup = $derived(
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
     </div>
+    <div hidden>
+      <dt>Compare in another timezone</dt>
+      <dd class="event-device-timezone" data-event-chosen-timezone>
+        <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+        <input
+          type="text"
+          id="chosen-timezone-input"
+          data-testid="event-chosen-timezone-input"
+          maxlength="64"
+          hidden
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+        <button type="button" hidden data-testid="event-chosen-timezone-button">Compare times</button>
+        <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+      </dd>
+    </div>
   </dl>
   <div class="event-rsvp">
     <section
@@ -313,6 +334,16 @@ const lineup = $derived(
         <section class="event-description" aria-labelledby="event-description-heading">
           <h2 id="event-description-heading">About this event</h2>
           <p>{model.description}</p>
+        </section>
+      {/if}
+      {#if model.accessibilityNotes}
+        <section
+          class="event-description"
+          data-testid="event-accessibility"
+          aria-labelledby="event-accessibility-heading"
+        >
+          <h2 id="event-accessibility-heading">Accessibility</h2>
+          <p>{model.accessibilityNotes}</p>
         </section>
       {/if}
       {#if model.showJoinPitch}

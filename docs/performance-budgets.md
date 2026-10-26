@@ -42,8 +42,19 @@ dry-run builds in CI (`ci.yml` `check` job) with no size assertion.
 `ci/check-worker-bundle.mjs` gates the dry-run output `dist/worker.js`
 (raw and default-level gzip) against `ci/worker-bundle-budget.json`.
 It exits **0** when the bundle fits, **1** on breach, **2** when it cannot
-enforce (missing bundle or budget). Every failure prints a remediation
+enforce (invalid plan or missing evidence). Every failure prints a remediation
 pointer to the budget file's `$comment`. The checker never deploys.
+
+The canonical required measurement inventory is exactly `dist/worker.js`,
+defined once in `ci/bundle-inventory.mjs` and validated before the bundle is
+read. A plan that is empty, missing the canonical entry, misspelled,
+substituted, extended, or noncanonical is an invalid plan (exit 2); identity
+is fixed while numeric ceilings stay configurable in
+`ci/worker-bundle-budget.json`. `--root <dir>` selects the measurement root,
+`--format json` emits a versioned report (stable `worker.bundle` group and
+`worker.bundle.dist/worker.js` check IDs, measured bytes, fixed `error.code`
+with `next_action`), `--dry-run` is the same read-only measurement, and
+unknown flags exit 2 before any subprocess or write.
 
 Measured 2026-10-18 with wrangler 4.149.0
 (`npx wrangler deploy --dry-run --outdir dist`; the `--env production`
@@ -54,7 +65,7 @@ dry-run builds byte-identical output, so one ceiling covers both):
 | `dist/worker.js` | 2486680 / 499001 | 3108352 / 623872 |
 
 Ceilings are measured size x1.25 rounded up (raw to 512 B, gzip to 256 B),
-the repository x1.25 rule from `ci/bundle-budget.json`. Never relax a
+the repository x1.25 rule in `ci/budgets/README.md`. Never relax a
 ceiling to turn a build green; a raise needs its own reviewed decision
 explaining what grew and why.
 
@@ -62,13 +73,15 @@ explaining what grew and why.
 
 `assets/islands/*.js` and `assets/styles.css` are the reviewed sources.
 `public/islands/*.js` and `public/styles.css` are the deterministic
-`esbuild --minify` (pinned `0.28.1`) build output that Workers serves; the
-served bytes are checked in so every test executes exactly what ships. Edit
+`esbuild --minify` build output that Workers serves; the root `esbuild` pin in
+[`package.json`](../package.json) and its resolved entry in
+[`package-lock.json`](../package-lock.json) are authoritative. The served bytes
+are checked in so every test executes exactly what ships. Edit
 the source, then regenerate and commit the output.
 Top-level theme stylesheets (`public/theme.css`, `public/*-theme.css`) are
 authored in place with no `assets/` source, so they are budgeted but never
-minified. A new authored stylesheet needs two edits: a ceiling in
-`ci/bundle-budget.json` and an entry in `AUTHORED_CSS` in
+minified. A new authored stylesheet needs two edits: a ceiling fragment in
+`ci/budgets/bundle/` and an entry in `AUTHORED_CSS` in
 `ci/minify-assets.mjs`. A budgeted stylesheet with no `assets/` source and no
 `AUTHORED_CSS` entry fails `build:assets:check` with an explicit "add to
 AUTHORED_CSS or create assets/<name>" message:
@@ -85,6 +98,13 @@ check`, so the deployed bytes are the reviewed bytes.
 
 ## Local verification
 
+Use Node **22.23.0+ on the 22.x line, or 24+**, as declared by
+[`package.json` `engines.node`](../package.json). The primary CI line is Node
+24; [`ci.yml`](../.github/workflows/ci.yml) also checks the exact 22.23.0 floor
+in `node22-compat`. If the runtime is unsupported, stop before installing or
+running checks and select a supported runtime through the normal workspace
+setup; a dependency's lower minimum does not establish repository support.
+
 ```sh
 npm ci --include=dev
 npm run build:assets:selftest
@@ -98,15 +118,14 @@ npm run worker-budget
 CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 ```
 
-The lockfile keeps `@lhci/cli` at **0.15.1** and Lighthouse at **12.6.1**.
-Overrides scoped to LHCI use `tmp` **0.2.7** and `@puppeteer/browsers` **3.2.3**
-to remove high-severity temporary-file and ZIP-extraction advisories. A global
-`basic-ftp` **6.2.1** override fixes GHSA-c475-qrg2-pj4r; only LHCI's proxy chain
-pulls `basic-ftp` in, and npm 10 does not apply a scoped override to the hoisted
-copy. The `basic-ftp` client API used by `get-uri` is unchanged between 5.3.1 and
-6.2.1. There are no new audit exceptions. The browser helper is ESM-only and requires Node
-**22.12.0 or later**; CI remains on Node **24**. The performance regression suite
-checks LHCI's temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
+Use [`package.json`](../package.json) for the LHCI pin and security overrides
+(`tmp`, `@puppeteer/browsers`, global `basic-ftp` and Lighthouse's
+`puppeteer-core`), and [`package-lock.json`](../package-lock.json) for the
+resolved dependency versions. Override declarations and hoisted resolutions
+are not interchangeable. The browser helper's own Node minimum is not the
+repository floor above. The performance regression suite
+([`test/performance-ci.test.ts`](../test/performance-ci.test.ts)) checks LHCI's
+temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
 
@@ -154,6 +173,31 @@ latency, Discord widget availability, authenticated/member/admin coverage or an
 RSVP mutation test. It never tests production or staging databases. A session
 cookie minter is unnecessary for these guest pages; do not interpret that as
 coverage of the legacy authenticated performance surfaces.
+
+## Read-only evidence lookup
+
+Use these existing modes to inspect evidence without collecting a page, building,
+starting a worker, contacting a database or deploying. They do not replace the
+executed gates. For screenshot/spec discovery, see the
+[visual evidence lookup](visual-regression.md#evidence-lookup).
+
+| Stable check / group ID | Read-only command | Input / machine-readable result |
+| --- | --- | --- |
+| `worker.bundle`, `worker.bundle.dist/worker.js` | `node ci/check-worker-bundle.mjs --dry-run --format json` | Existing `dist/worker.js` plus `ci/worker-bundle-budget.json`; versioned JSON with measured bytes, `ok`, `exitCode`, and `error.code` / `error.next_action` on refusal |
+| `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
+| Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
+
+The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
+is impossible. `--dry-run` reads the same existing bytes as normal measurement;
+it does not create missing evidence or prove that a build belongs to HEAD. If
+outputs are missing or stale, build the checked-out revision using the existing
+[Hono bundle command](#local-verification) or
+[Kit build procedure](kit-parity-gates.md),
+then measure again; never report a fit from an absent or unrelated build.
+`npm run worker-budget:selftest` and `npm run kit-perf:selftest` exercise local
+synthetic fixtures when no build evidence is available. A selftest PASS proves
+the checker, not the application's bundle size. Live origin artifacts and their
+limits remain in [staging quality and journey gates](#staging-quality-and-journey-gates).
 
 ## Threshold policy
 
@@ -336,7 +380,7 @@ The staging checks run after deployment and serve different purposes:
 |---|---|---|
 | `staging-journeys` | Authenticated critical journeys against the deployed Worker; a journey ledger fails the job if every journey skips. | Post-deploy evidence, not a PR merge check. Docs-only and test-only deploys may skip it. Automatic production candidate resolution requires a successful `staging-journeys` result. |
 | `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
-| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. |
+| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. Anchors are parsed as HTML (quoted/unquoted attributes and character references, not comment/script text), resolve with browser URL semantics (including same-origin network-path references), and only count as served when a registered route or an admitted regular public file backs them. Analysis is bounded: a response body over 1 MiB, or a document over 10,000 elements, 256 levels deep or 1,000 attribute tokens on one tag (counted by the pinned parser tokenizer before duplicate-name lookup, including duplicates and end tags), becomes a route-named `HTML_TOO_LARGE`/`HTML_TOO_COMPLEX` failure (never a truncated success), and link parsing shares the route's 15 s settlement budget (`LINKS_TIMEOUT`). | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. For local debugging, `node ci/web-standards.mjs --dry-run` inventories the audited routes without starting the fixture worker, and `--format json` prints a versioned report with stable check IDs. |
 
 The staging origin runs use GET-only requests with no sign-in or writes, but
 they are not database-free: both Lighthouse runs measure `/events`, and the
@@ -460,7 +504,8 @@ top-level `lhr-*.json` files are read; nested attempt archives never fill
 quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
-2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
+2026-09-30 sizes documented in the `ci/budgets/bundle/` fragments (then
+`ci/bundle-budget.json`), with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced
@@ -498,11 +543,13 @@ islands), which took it from 1013 / 485 to 2843 / 1189, not from this PR:
 The raise covers that one island only; a further increase on it needs a new
 decision. Lighthouse thresholds are untouched.
 
-The minification follow-up landed here: `public/` now holds the deterministic
-`esbuild --minify` output of `assets/`, and the ceilings below measure those
-minified bytes (measured ×1.25, rounded up to 512 B raw / 256 B gzip). Served
-behavior is unchanged: the binder and stylesheet suites execute the minified
-bytes. Measured on this tree with esbuild `0.28.1`:
+Historical minification measurements: the table below records the follow-up's
+`esbuild --minify` output of `assets/` using esbuild `0.28.1`, with later dated
+updates noted below. These are historical evidence, not current dependency
+pins or a fresh measurement of HEAD. Current served-asset ceilings live in
+the [`ci/budgets/bundle/`](../ci/budgets/bundle) fragments; use `npm run budget` to
+measure the checked-out bytes. The recorded ceilings used measured ×1.25,
+rounded up to 512 B raw / 256 B gzip:
 
 | Asset | Raw / gzip bytes | Ceiling |
 |---|---:|---:|

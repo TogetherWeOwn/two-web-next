@@ -105,8 +105,8 @@ const attemptColumns = {
 
 /**
  * Viewer over the write-once trail, newest first, inside the retention
- * window. `q` is an EXACT match on discord_id or request_id (the bot-log
- * cross-reference) — never a substring scan over member ids.
+ * window. `q` is an EXACT match on discord_id or request_id (the web
+ * request-log correlation ID) — never a substring scan over member ids.
  */
 export async function listJoinAttempts(
   db: Db,

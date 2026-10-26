@@ -263,11 +263,18 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
   (`test-results-kit-visual/`, `test-results-kit-parity/`,
   `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
-  artifact. The Kit visual config has its own Playwright output directory so
-  the later parity run cannot clear visual actuals before artifact upload.
-  When an actual and its stale committed baseline share a destination, the
-  reviewed actual wins; distinct actuals still refuse. Inspect every expected,
-  actual and diff image in the failed run's artifact before running
+  artifact. Use `node ci/kit-visual-accept.mjs [--dry-run] [--format json]
+  <artifact-root>` for Kit-only acceptance. Actual replacement authority comes
+  only from the existing exact `test-results-kit-visual` or
+  `test-results-kit-parity` segments inside the artifact; baseline copies
+  retain the existing `e2e/visual/__screenshots-kit__` path. Hono and
+  unrelated/lookalike screenshots have no Kit replacement authority. The
+  extraction folder's name is not a suite marker. The Kit visual config has
+  its own Playwright output directory so the later parity run cannot clear
+  visual actuals before artifact upload. When an actual and its stale
+  committed baseline share a destination, the reviewed actual wins; distinct
+  actuals still refuse. Inspect every expected, actual and diff image in the
+  failed run's artifact before running
   `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>` (add `--dry-run` to
   preview the plan, `--format json` for a versioned verdict; unknown flags exit
   2 before any read, see `docs/visual-regression.md`). Suite ownership uses
@@ -277,35 +284,69 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   (no rewrite), but cannot replace a differing checkout baseline without a
   reviewed actual. Such a stale-copy conflict names the target and refuses
   the whole plan. Use a current artifact or review the matching actual, never
-  delete the newer checkout baseline to force acceptance. All source bytes
-  and existing targets are preflighted before writes, including sources later
-  superseded by actuals; unreadable files refuse without partial application.
-  Apply-time disk failures are not rolled back. Commit only the intentional
-  changes in the same PR and explain each one; never regenerate the tree.
-  `ci/visual-accept.mjs`
-  ignores actuals from both `test-results-kit-visual/` and
-  `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
-  An intentional redesign is a reviewed artifact
-  committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. Kit baselines pin the events index, member board,
-  and archive. `e2e/kit-parity/events-index.visual.spec.ts` captures the populated
-  `/events` state at desktop and mobile widths against the built Kit Worker as a
-  guest. It runs before mutable journeys and asserts exactly the three seeded
-  upcoming event rows plus the zero-RSVP count, so fixture leftovers cannot
-  silently become the reference image. `e2e/kit-parity/parity.spec.ts` captures
-  member-board default, relative, season and activity views at desktop and mobile
-  widths, reusing the journey's single shared QA login. The archive visual case
-  captures populated and out-of-range `/events/past` at desktop and mobile widths
-  against the built Kit Worker as a guest on the deterministic seeded past row;
-  its DOM/state parity runs in the same spec.
-- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
-  masked, animations disabled, caret hidden. Raising the threshold or masking
-  more needs its own PR with justification.
+  delete the newer checkout baseline to force acceptance. Dry-run is read-only
+  and validates the same authority as apply. Reject source symlinks (including
+  root/ancestor links, descendants and cycles) and linked destination
+  files/ancestors before directory creation or writes. The walk permits only
+  regular files and directories, and existing baseline targets must be regular
+  files: pipes, sockets and devices refuse with `IO_ERROR` before any read.
+  Count the artifact root as directory level 1; exceeding 64 directory levels
+  or 4096 visited entries (including ignored files and directories) refuses
+  with `ARTIFACT_LIMIT`. Human and JSON reports sanitize filenames and stay
+  within 16 KiB of UTF-8, with JSON `truncated` counts covering omitted entries.
+  Display names are bounded diagnostics, not authoritative filesystem paths.
+  Confine the resolved plan to the intended artifact and Kit destination roots. Preflight the entire
+  plan and cache source bytes, preserving actual-over-stale-copy precedence,
+  collision/stale-copy refusal, additions and identical no-ops. Refusal must
+  not change destination or outside bytes. Do not delete newer baselines to
+  bypass a stale-copy conflict. All source bytes and existing targets are
+  preflighted before writes, including sources later superseded by actuals;
+  unreadable files refuse without partial application. These checks do not
+  promise safety against a concurrent hostile filesystem writer or rollback
+  after an apply-time disk failure. Commit only the intentional changes in the
+  same PR and explain each one; never regenerate the tree.
+  `ci/visual-accept.mjs` ignores actuals from foreign suites and both
+  `test-results-kit-visual/` and `test-results-kit-parity/`, as well as
+  baselines under `__screenshots-kit__/`. An intentional redesign is a reviewed
+  artifact committed in the same PR — reviewers treat a baseline change like
+  code — never a silent regeneration. The
+  [visual evidence lookup](visual-regression.md#evidence-lookup) maps each
+  entrypoint to its command and attempt-specific artifact directories.
+- [`playwright.kit-visual.config.ts`](../playwright.kit-visual.config.ts)
+  selects only
+  [`events-index.visual.spec.ts`](../e2e/kit-parity/events-index.visual.spec.ts),
+  whose first-line `import "./member-board-viewer.visual"` also registers
+  [`member-board-viewer.visual.ts`](../e2e/kit-parity/member-board-viewer.visual.ts).
+  The entrypoint captures populated guest `/events` against the built Kit
+  Worker at desktop (1280×800) and mobile (390×844), before mutable journeys:
+  exactly three seeded upcoming rows and the zero-RSVP count must be present.
+  The imported viewer suite uses offline Hono/Kit SSR fixtures with served CSS,
+  aborts every browser request, and needs no live login or DB. Its 16 cases
+  cross Hono/Kit × overall/relative × both widths × forced colors none/active.
+  `member-board-viewer-<twin>-<scope>-<viewport>-<forcedColors>.png` is a
+  viewport-only capture after scrolling, not a full-page capture. Assertions
+  cover a visible viewer marker (a distinct outline/border in forced colors),
+  readable sticky headers, opaque headers in normal colors, viewer visibility
+  and no document overflow. These are fixture visual proofs, not authenticated
+  deployed-board acceptance.
+- Separately, [`parity.spec.ts`](../e2e/kit-parity/parity.spec.ts) captures
+  full-page `member-board-<view>-<viewport>.png` images against the built Kit
+  Worker for default/relative (populated QA member) and season/activity (empty)
+  views at both widths. It reuses the journey's single shared QA login. The
+  same spec captures the guest archive's populated and out-of-range states at
+  both widths. The populated state uses the deterministic seeded past row.
+  It checks DOM/state parity for both states. These screenshots land in the Kit
+  baseline directory too, but their actuals are in
+  `test-results-kit-parity/`, not `test-results-kit-visual/`.
+- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), animations
+  disabled, caret hidden; the full-page event, board and archive captures mask
+  `<time>`. Raising the threshold or masking more needs its own PR with
+  justification.
 
-## Performance gates (`ci/check-kit-perf.mjs`, `ci/kit-perf-budget.json`)
+## Performance gates (`ci/check-kit-perf.mjs`, `ci/budgets/kit/`)
 
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
-to 256B — the repository rule from `ci/bundle-budget.json`):
+to 256B — the repository rule in `ci/budgets/README.md`):
 
 - Worker entry `_worker.js` (read from the built
   `web/.svelte-kit/cloudflare/` output): exact raw/gzip ceilings.
@@ -323,6 +364,17 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
   becomes ready fails the run before any journey executes. The parity spec
   additionally records warm first-200 latency as a report annotation under a
   10s liveness bound.
+- The canonical required measurement inventory is exactly the four groups
+  above (worker `_worker.js`, server JS, client JS, client CSS), defined once
+  in `ci/bundle-inventory.mjs` and validated before any artifact is read. An
+  empty, missing, misspelled, substituted, extended, or noncanonical plan is
+  an invalid plan (exit 2); the missing canonical `_worker.js` file is
+  missing evidence (exit 2), not a breach. `--root <dir>` selects the
+  measurement root, `--format json` emits a versioned report (stable
+  `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` group IDs,
+  measured bytes, fixed `error.code` with `next_action`), `--dry-run` is the
+  same read-only measurement, and unknown flags exit 2 before any subprocess
+  or write.
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 

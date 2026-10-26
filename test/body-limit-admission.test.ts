@@ -66,10 +66,14 @@ const FEATURED_WRITE_CAP_FIRST = new Set([
   "POST /admin/featured/:id/delete",
 ]);
 
-// Logout and QA login refuse oversized bodies before the shared throttle:
-// cap-first, not throttle-first. The QA identity/token gate still runs before
-// the cap.
-const AUTH_CAP_FIRST = new Set(["POST /logout", "POST /auth/qa/:identity"]);
+// Logout (both single and everywhere) and QA login refuse oversized bodies
+// before the shared throttle: cap-first, not throttle-first. The QA
+// identity/token gate still runs before the cap.
+const AUTH_CAP_FIRST = new Set([
+  "POST /logout",
+  "POST /logout/everywhere",
+  "POST /auth/qa/:identity",
+]);
 
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
@@ -276,7 +280,11 @@ describe("global gates reject before admission or buffering", () => {
         if (gate === "missing-origin") request.headers.delete("origin");
         const response = await app.request(request, undefined, env);
         expect(response.status).toBe(gate === "host" ? 404 : 403);
-        if (gate !== "host") expect(await response.json()).toEqual({ error: "cross_origin" });
+        if (gate !== "host")
+          expect(await response.json()).toEqual({
+            error: "cross_origin",
+            request_id: expect.any(String),
+          });
         expect(pull).not.toHaveBeenCalled();
         expect(sql).not.toHaveBeenCalled();
         await request.body?.cancel().catch(() => {});

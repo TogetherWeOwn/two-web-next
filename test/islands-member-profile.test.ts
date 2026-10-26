@@ -171,7 +171,7 @@ describe("member-profile session recovery", () => {
     expect(rejected.status).toBe(401);
     expect(rejected.headers.get("location")).toBeNull();
     expect(await rejected.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile",
     });
     expect(store.rows.get(ALICE)).toMatchObject({ bio: null, games: [], timezone: null });
@@ -214,7 +214,7 @@ describe("member-profile session recovery", () => {
       expect(json.status).toBe(401);
       expect(json.headers.get("location")).toBeNull();
       expect(await json.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: "/auth/recover?next=%2Fprofile",
       });
       const form = await app.request(
@@ -451,7 +451,7 @@ describe("member-profile spam trap", () => {
       formOpenedAt: Date.now(),
     });
     expect(r.status).toBe(422);
-    expect((await r.json()) as { errors: object }).toHaveProperty("errors.bio");
+    expect((await r.json()) as { fields: object }).toHaveProperty("fields.bio");
     expect(store.rows.get(ALICE)!.bio).toBeNull();
   });
 });
