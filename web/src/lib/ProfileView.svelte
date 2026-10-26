@@ -115,6 +115,10 @@ const saved: ProfileFormValues = $derived({
   leaderboard_opt_out: member.leaderboardOptOut ?? false,
 });
 const gamesError = $derived(errors?.games ?? errors?.games_text);
+// Refusal re-render (422/503): the controls' HTML defaults are the rejected
+// draft, so Cancel cannot be a native reset there — it would restore the
+// draft itself for a member without JavaScript. Same contract as Hono.
+const refused = $derived(!!errors && Object.keys(errors).length > 0);
 // Exact-match set over the load's computed shared names: the match itself
 // (trim + case-insensitive) lives in findSharedGames, shared with the Hono
 // twin, so the view never re-derives it.
@@ -474,9 +478,22 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
               {PROFILE_COPY.save}
             </button>
-            <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
-              {PROFILE_COPY.cancel}
-            </button>
+            {#if refused}
+              <!-- A safe GET back to the saved profile discards the draft
+                without JavaScript; the island intercepts plain clicks and
+                resets in place instead. Same styling as the reset. -->
+              <a
+                class="btn profile-secondary"
+                href={`/members/${member.id}`}
+                data-testid={PROFILE_CANCEL_TESTID}
+              >
+                {PROFILE_COPY.cancel}
+              </a>
+            {:else}
+              <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
+                {PROFILE_COPY.cancel}
+              </button>
+            {/if}
           </div>
         </form>
         {@html editorIsland}

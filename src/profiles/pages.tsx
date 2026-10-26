@@ -273,6 +273,10 @@ export const ProfilePage: FC<{
   // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
   // twin, so the view never re-derives it.
   const shared = new Set(sharedGames ?? []);
+  // Refusal re-render (422/503): the controls' HTML defaults are the
+  // rejected draft, so Cancel cannot be a native reset there — it would
+  // restore the draft itself for a member without JavaScript.
+  const refused = !!errors && Object.keys(errors).length > 0;
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -598,13 +602,26 @@ export const ProfilePage: FC<{
                 <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
                   {PROFILE_COPY.save}
                 </button>
-                <button
-                  class="btn profile-secondary"
-                  type="reset"
-                  data-testid={PROFILE_CANCEL_TESTID}
-                >
-                  {PROFILE_COPY.cancel}
-                </button>
+                {refused ? (
+                  // A safe GET back to the saved profile discards the draft
+                  // without JavaScript; the island intercepts plain clicks
+                  // and resets in place instead. Same styling as the reset.
+                  <a
+                    class="btn profile-secondary"
+                    href={`/members/${member.id}`}
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </a>
+                ) : (
+                  <button
+                    class="btn profile-secondary"
+                    type="reset"
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </button>
+                )}
               </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>
