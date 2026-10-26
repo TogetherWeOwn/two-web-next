@@ -433,15 +433,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            async (errors, v) =>
-              c.html(
-                <EventFormPage
-                  mode="new"
-                  values={v}
-                  errors={errors}
-                  games={await loadGameSuggestions(db)}
-                />,
-              ),
+            (errors, v) => c.html(<EventFormPage mode="new" values={v} errors={errors} />),
             values,
           );
         }
@@ -511,16 +503,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            async (errors, v) =>
-              c.html(
-                <EventFormPage
-                  mode="edit"
-                  row={existing}
-                  values={v}
-                  errors={errors}
-                  games={await loadGameSuggestions(db)}
-                />,
-              ),
+            (errors, v) =>
+              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
             values,
           );
         }
@@ -542,16 +526,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            async (errors, v) =>
-              c.html(
-                <EventFormPage
-                  mode="edit"
-                  row={existing}
-                  values={v}
-                  errors={errors}
-                  games={await loadGameSuggestions(db)}
-                />,
-              ),
+            (errors, v) =>
+              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
             values,
           );
         }
@@ -598,16 +574,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               return formError(
                 c,
                 err,
-                async (errors, v) =>
-                  c.html(
-                    <EventFormPage
-                      mode="edit"
-                      row={row}
-                      values={v}
-                      errors={errors}
-                      games={await loadGameSuggestions(db)}
-                    />,
-                  ),
+                (errors, v) =>
+                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
                 eventValues(row),
               );
             }
@@ -652,16 +620,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           return formError(
             c,
             err,
-            async (errors, v) =>
-              c.html(
-                <EventFormPage
-                  mode="edit"
-                  row={row}
-                  values={v}
-                  errors={errors}
-                  games={await loadGameSuggestions(db)}
-                />,
-              ),
+            (errors, v) =>
+              c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
             eventValues(row),
           );
         }
