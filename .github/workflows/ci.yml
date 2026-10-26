@@ -117,6 +117,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # The parity-citations gate resolves cited implementation files against
+      # the checkout, and parity.md cites the git-ignored critical-CSS
+      # bundles. This job installs with --ignore-scripts, so generate them
+      # explicitly. Needs only Node, no dependencies.
+      - name: Generate critical-CSS bundles
+        run: node ci/build-leaf-css.mjs
       - run: npm run docs:links
       # Parse the Vitest sources on every change, including ledger-only edits.
       # No install hooks or browser/database fixtures are needed by this gate.
