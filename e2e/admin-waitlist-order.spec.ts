@@ -34,7 +34,7 @@ async function mount(context: BrowserContext, renderer: "Hono" | "Kit") {
       try {
         return route.fulfill({
           status: 200,
-          contentType: "text/html",
+          contentType: "text/html; charset=utf-8",
           body: await renderWaitlist(renderer, kit, {
             raw: Object.fromEntries(url.searchParams),
             total: 207,
@@ -78,6 +78,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(sort).toHaveCount(1);
         await sort.focus();
         await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/roster_sort=waitlist&roster_order=asc/);
         let url = new URL(page.url());
         expect(url.searchParams.get("roster_sort")).toBe("waitlist");
         expect(url.searchParams.get("roster_status")).toBe("waitlisted");
