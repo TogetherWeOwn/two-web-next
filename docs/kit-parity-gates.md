@@ -333,9 +333,10 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   full-page `member-board-<view>-<viewport>.png` images against the built Kit
   Worker for default/relative (populated QA member) and season/activity (empty)
   views at both widths. It reuses the journey's single shared QA login. The
-  same spec captures guest archive populated/out-of-range states at both widths
-  on the deterministic seeded past row and checks DOM/state parity. These
-  screenshots land in the Kit baseline directory too, but their actuals are in
+  same spec captures the guest archive's populated and out-of-range states at
+  both widths. The populated state uses the deterministic seeded past row.
+  It checks DOM/state parity for both states. These screenshots land in the Kit
+  baseline directory too, but their actuals are in
   `test-results-kit-parity/`, not `test-results-kit-visual/`.
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), animations
   disabled, caret hidden; the full-page event, board and archive captures mask
