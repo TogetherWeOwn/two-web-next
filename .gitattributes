@@ -1,0 +1,7 @@
+# Append-only ledger and log docs: concurrent appends (e.g. two PRs adding
+# rows at the end of the same table) auto-merge instead of conflicting.
+# Review still happens: PR review plus the tests pinning these docs
+# (test/retention-ledger.test.ts, test/w15-ledger-citations.test.ts,
+# test/runbook-log-lines.test.ts) validate every merged result.
+docs/runbook-logs.md merge=union
+docs/*-ledger.md merge=union
