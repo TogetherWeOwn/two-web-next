@@ -770,9 +770,10 @@ function releasedEventDetailRenewsSession(
   return locals?.status === "authenticated";
 }
 
-// Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
-// admin-guard slide (src/admin/guard.ts renews the 120-minute window on a
-// current bearer only). Only a released successful-or-missing HTML GET document
+// Rotating renewal for Kit-served admin reads: the post-release twin of Hono's
+// admin-guard re-stamp (src/admin/guard.ts mints a fresh bearer with a fresh
+// 120-minute window on a current bearer only). Only a released
+// successful-or-missing HTML GET document
 // with an authenticated moderator bridge decision renews: the manifest owns the
 // route choice (any enabled admin family entry), so a future admin path renews with
 // zero renewal-code changes. 404s renew like Hono (the guard attaches on 404s
@@ -993,12 +994,12 @@ export async function dispatchHookRequest(
       });
     }
   }
-  // Sliding renewal for released Kit admin documents, at the same post-response
-  // position as the event-detail renewal above. A renewal that loses its race
-  // resolves to no cookie (the next read retries with a live bearer); a renewal
-  // store failure warns and likewise renews nothing — the already-rendered
-  // admin page still stands, and the old row stays live because renew only
-  // extends a live row.
+  // Rotating renewal for released Kit admin documents, at the same post-response
+  // position as the event-detail renewal above. A rotation that loses its race
+  // resolves to no cookie (nothing was minted; the next read re-decides); a rotation
+  // store failure warns and likewise rotates nothing — the already-rendered
+  // admin page still stands, and the old row stays live because rotation is
+  // one atomic statement.
   if (deps.adminRenewalFor && releasedAdminRenewsSession(route, event, response)) {
     try {
       const cookie = await deps.adminRenewalFor(event);

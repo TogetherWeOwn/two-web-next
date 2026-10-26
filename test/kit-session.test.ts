@@ -35,6 +35,7 @@ import {
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import {
   createRequestSessionCache,
+  kitAdminRenewalFor,
   kitAuthStatusCookieFor,
   kitSessionBridge,
   readReturnJourney,
@@ -894,5 +895,67 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
       vi.spyOn(store, "statusHash").mockResolvedValueOnce(bad);
       expect(await writeCookie(event)).toBeNull();
     }
+  });
+});
+
+describe("kitAdminRenewalFor (the live row, not locals, authorizes rotation)", () => {
+  const adminEvent = async (
+    token: string,
+    session: KitLocals["session"],
+  ): Promise<HookEventLike> => {
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    return {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session,
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+  };
+  const renewalFor = (store: SessionStore) =>
+    kitAdminRenewalFor({ SESSION_SECRET: SECRET, SESSION_STORE: store } as unknown as Env);
+
+  it("refuses forged moderator locals behind a valid non-moderator bearer", async () => {
+    const store = createMemorySessionStore();
+    const { token, row } = await seedSession(store, { moderator: false });
+    const rotate = vi.spyOn(store, "rotate");
+    const event = await adminEvent(token, {
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: true,
+    });
+    expect(await renewalFor(store)(event)).toBeNull();
+    expect(rotate).not.toHaveBeenCalled();
+    expect(await store.get(row.tokenHash)).toMatchObject({ moderator: false });
+  });
+
+  it("carries the row's identity bits into the successor, not stale locals bits", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true, username: "Rick" });
+    const event = await adminEvent(token, {
+      userId: "999",
+      username: "Mutated",
+      avatar: "mutated-avatar",
+      member: false,
+      moderator: true,
+    });
+    const setCookie = await renewalFor(store)(event);
+    expect(setCookie).not.toBeNull();
+    const replacement = (await parseSigned(setCookie!, SECRET))[SESSION_COOKIE];
+    expect(typeof replacement).toBe("string");
+    expect(await store.get(await hashToken(replacement as string))).toMatchObject({
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: true,
+    });
   });
 });
