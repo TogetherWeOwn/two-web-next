@@ -150,7 +150,7 @@ export const MonthGrid: FC<{
                               id={anchor}
                               href={withScheduleContext(
                                 calendarJumpUrl(state.past, key, state.game),
-                                state,
+                                cancelled || isTransient(e) ? null : state,
                               )}
                               data-cal-jump
                               data-cancelled={cancelled ? "true" : undefined}
