@@ -44,7 +44,9 @@ export const load: PageServerLoad = async ({ parent, params, url, setHeaders }) 
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Featured content not found");
   setHeaders({ "cache-control": "private, no-store" });
-  const inventory = featuredReturnQuery(url.searchParams);
+  // The framework always supplies url; a missing value (minimal fixtures)
+  // means no inventory context, keeping the direct-bookmark fallback.
+  const inventory = featuredReturnQuery(url ? url.searchParams : new URLSearchParams());
   return {
     view: outcome.view,
     returnHref: inventory ? featuredReturnUrl(inventory) : null,
