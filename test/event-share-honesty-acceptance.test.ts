@@ -88,10 +88,12 @@ for (const view of SHARE_VIEWS) {
       for (const node of scripts.filter((node) => attr(node, "src") === undefined)) {
         expect(attr(node, "type")).toBe("application/ld+json");
       }
-      const islands = nodes.flatMap((node) => attr(node, "data-island") ?? []);
-      expect(
-        islands.filter((name) => !["going-count", "rsvp-button", "attendees-live"].includes(name)),
-      ).toEqual([]);
+      const islands = nodes.flatMap((node) => attr(node, "data-island") ?? []).sort();
+      expect(islands).toEqual(
+        options.viewer === "guest"
+          ? ["going-count", "rsvp-button"]
+          : ["attendees-live", "going-count", "rsvp-button"],
+      );
       expect(nodes.flatMap((node) => node.attrs.filter((a) => /^on/i.test(a.name)))).toEqual([]);
     });
   });
