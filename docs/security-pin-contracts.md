@@ -45,7 +45,9 @@ human-readable line, and `npm run check:security-pins:selftest` also emits
 | `check_error` | The gate itself threw. | The gate failure message. |
 
 Every code is non-retryable: rerunning cannot fix a pin, a suite or an
-argument. Regenerate a drifted bundle with `node ci/build-leaf-css.mjs`.
+argument. Regenerate a drifted bundle with `npm run build:leaf-css` (runs
+automatically on every `npm ci` via postinstall; the bundle is git-ignored
+build output, never committed).
 
 ## Properties
 

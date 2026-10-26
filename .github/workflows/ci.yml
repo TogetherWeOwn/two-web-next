@@ -431,6 +431,13 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             web/package-lock.json
+      # The critical-CSS bundles are git-ignored build output (postinstall
+      # regenerates them), but the static gates below run before `npm ci`,
+      # and the security-pin gate reads the generated module's bytes. Needs
+      # only Node, no dependencies.
+      - name: Generate critical-CSS bundles
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/build-leaf-css.mjs
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
