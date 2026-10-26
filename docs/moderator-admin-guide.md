@@ -249,7 +249,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 | GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 20 canonical routes in `src/admin/routes.tsx` (10 GET, 10 POST).
+These are the 21 canonical routes in `src/admin/routes.tsx` (10 GET, 11 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -260,7 +260,7 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
+All 26 routes (15 GET, 11 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Pausing RSVPs opens a native review first: open **Review pause**, check the
@@ -272,7 +272,7 @@ editor's separate browser warning for unsaved changes is not action approval.
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
 Each of the 10 admin GET routes above also ships a Kit shell. The
-mixed-mode truth: the migration is GET-only; all 10 POST form actions stay
+mixed-mode truth: the migration is GET-only; all 11 POST form actions stay
 Hono with no manifest entries of their own. Most shell entries in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
 Hono serves those pages; the join-attempts list and detail entries read
