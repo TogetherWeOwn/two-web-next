@@ -24,14 +24,17 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
 // plus the one raise that landed on main during the split review and was
 // ported into its fragment: client.js.maxRawBytes 254976 -> 256000 (see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md).
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), plus
+// the separately evidenced 256-byte gzip increments: client.js 102912 ->
+// 103168 and server.js 335104 -> 335360 (see
+// ci/budgets/decisions/kit-perf/2026-10-26-restored-write-gzip.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
+    js: { maxRawBytes: 256000, maxGzipBytes: 103168, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },

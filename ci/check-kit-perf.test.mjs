@@ -389,6 +389,7 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), and the independently justified 335360
 // ceiling (combined worst 335338, margin 22; lower 335104 rejects by 234).
+// The restored-write measurement 335156 is dominated by that 335338 worst.
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -558,6 +559,12 @@ function shippingServerGzipCases() {
 }
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
   { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 254769 },
+  {
+    name: "client raw restored-write measured interval",
+    group: "kit.client.js",
+    axis: "raw",
+    bytes: 255735,
+  },
   { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
   {
     name: "client raw one byte over",
@@ -568,13 +575,19 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
     breach: true,
   },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
+  {
+    name: "client gzip restored-write measured interval",
+    group: "kit.client.js",
+    axis: "gzip",
+    bytes: 102950,
+  },
+  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
   {
     name: "client gzip one byte over",
     group: "kit.client.js",
     axis: "gzip",
-    bytes: 102913,
-    ceiling: 102912,
+    bytes: 103169,
+    ceiling: 103168,
     breach: true,
   },
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
