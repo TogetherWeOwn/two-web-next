@@ -38,3 +38,12 @@
 .admin-table .rsvp-review {
   min-width: 16rem;
 }
+
+/* Unavailable featured-inventory verdict (admin only): the brand color
+   signals "inspect the saved bounds". Lives here, not in styles.css, for
+   the same reason as the rules above — only the admin inventory renders
+   this badge, and the homepage LCP ratchets forbid regrowing the shared
+   inlined bytes. */
+.featured-status-unavailable {
+  color: var(--brand);
+}
