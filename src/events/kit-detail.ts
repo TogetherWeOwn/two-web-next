@@ -39,9 +39,9 @@ import { formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
+import { eventLinkAvailability } from "./link-availability";
 import {
   ATTENDEE_PAGE_SIZE,
-  eventLinkAvailability,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,

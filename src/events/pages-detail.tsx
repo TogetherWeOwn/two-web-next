@@ -8,14 +8,14 @@ import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
-import {
-  eventLinkAvailability,
-  type EventAttendee,
-  type EventLink,
-  type EventNeighbors,
-  type EventSeriesContext,
-  type PublicEvent,
-  type ViewerRsvp,
+import { eventLinkAvailability } from "./link-availability";
+import type {
+  EventAttendee,
+  EventLink,
+  EventNeighbors,
+  EventSeriesContext,
+  PublicEvent,
+  ViewerRsvp,
 } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
