@@ -21,14 +21,17 @@ import { run as runKit } from "./check-kit-perf.mjs";
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
 // The exact ceilings shipped in the monolith files before the split
-// (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit).
+// (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
+// plus the one raise that landed on main during the split review and was
+// ported into its fragment: client.js.maxRawBytes 254976 -> 256000 (see
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 254976, maxGzipBytes: 102912, maxFiles: 55 },
+    js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
