@@ -1,39 +1,64 @@
 # Published game suggestions: measured Kit capacity
 
-## Decision
+## Current decision
 
-Admit only the measured cost of the published-game suggestion feature in a
-separate capacity PR. This PR changes no application, dependency, asset, checker,
-file-count allowance or startup bound. It preserves the complete existing budget
-history, appending one dated decision.
-
-The original proposal also included a server gzip step (334080 → 334848).
-Before this PR merged, main raised that ceiling further for an independent
-composition (#1826: 334080 → 335104), and a fresh re-measurement on the final
-base (below) shows the feature composition already fits it. The server step
-is therefore **not taken**: taking 334848 would lower the reviewed ceiling.
-The final change raises only the two client ceilings.
+Raise **only client JS gzip 102912 → 103168 B** in
+[`client-js.json`](../ci/budgets/kit/client-js.json). Main already supplies
+server gzip 335104 (#1826) and client raw 256000 (#1798); neither is raised
+or lowered here. The original three-limit proposal is historical, not the
+current allocation.
 
 | Budget field | Incoming ceiling | Proposed ceiling | Increase | Margin above fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 335104 (landed by #1826) | 335104 — no change | 0 | 180 above worst 334924 |
-| `client.js.maxRawBytes` | 254976 | 256000 | 1024 | 302 |
+| `server.js.maxGzipBytes` | 335104 | 335104 — no change | 0 | 181 above worst 334923 |
+| `client.js.maxRawBytes` | 256000 | 256000 — no change | 0 | 302 |
 | `client.js.maxGzipBytes` | 102912 | 103168 | 256 | 134 |
 
-These are the smallest 256-byte gzip and 512-byte raw boundary steps that cover
-the observed composition. They are **not** a new measured-size ×1.25 allocation
-or capacity for future work. All other limits remain incoming main, including
-server raw 1203200, server files 126, client JS files 55, Worker 3584/1536,
-client CSS 3072/1024 and four files, and startup 60000ms.
+This is the smallest 256-byte-aligned gzip step covering the measured output,
+not a fresh measured-size ×1.25 allocation or speculative headroom. No
+application, dependency, asset, checker, loader, file-count or startup limit
+changes relative to current main. All other fragments and the frozen legacy
+history remain byte-identical. The fragment migration from #1858 is consumed,
+not replaced by a second budget authority. The new
+[decision record](../ci/budgets/decisions/kit-perf/2026-10-26-game-suggestion-client-gzip.md)
+preserves this branch's prior monolith-history suffix verbatim.
 
-ACT: allocate only these two client byte steps through independent review.
-WHY: main fits, while the exact feature composition breaches these two client
-limits on every repeated build; ordinary shared-component extraction does not
-recover enough capacity. The server breach measured originally is already
-covered by the independently reviewed 335104 ceiling on main.
-UNDO: reviewed revert of these two steps and the appended decision, retaining
-every prior record. Coordinate any revert with the dependent feature so it
-cannot ship against an insufficient budget.
+ACT: allocate only this one client-gzip step through independent review.
+WHY: current main fits; the exact feature composition fails only client gzip
+by 122 B on both repeated builds. Existing raw/server allowances now cover
+those axes without any new allocation here.
+UNDO: reviewed revert of this gzip step and its matching acceptance delta,
+retaining all earlier decisions and coordinating with the dependent feature.
+
+## Current remeasurement after repair and fragment migration
+
+- Main: `0f8fdd17f21abe7d0f7c015001b9415b180efe99`.
+- Feature remains `7d390f4b8c54e30b0da703c2085530d1876c78f4`.
+- Clean combined tree: `f7830a2a6042c197ed17696041bf86096998e73d`;
+  `git merge-tree --write-tree <main> <feature>` exits 0.
+- Node 24.22.1, npm 11.19.1; identical locked dependencies and canonical
+  checker, inventory and loader bytes across the two measured trees.
+- Calendar repair #1841 is inherited unchanged; it is not authored here.
+
+| Measurement | Pristine build 1 / build 2 | Combined build 1 / build 2 |
+| --- | ---: | ---: |
+| Server JS files | 115 / 115 | 115 / 115 |
+| Server JS raw | 1179526 / 1179528 | 1183170 / 1183170 |
+| Server JS gzip | 334041 / 334041 | 334922 / 334923 |
+| Client JS files | 54 / 54 | 55 / 55 |
+| Client JS raw | 253949 / 253949 | 255698 / 255698 |
+| Client JS gzip | 102273 / 102273 | 103034 / 103034 |
+| Worker raw / gzip | 2551 / 1219 both | 2551 / 1219 both |
+| CSS files; raw / gzip | 2; 2833 / 1006 both | 2; 2833 / 1006 both |
+
+All four production builds succeed. Both pristine measurements pass incoming
+main limits; both combined measurements fail only client gzip. On the same
+combined output without rebuilding, the proposed fragment passes; the prior
+102912 and one-byte-below-measured 103033 gzip limits reject. Startup is not
+measured. The historical sections below retain earlier source-specific
+numbers and test counts; they are not current-head results.
+
+## Historical measurements and reconciliations
 
 ## Pinned source and method
 

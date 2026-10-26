@@ -24,6 +24,12 @@ export const KIT_WORKER_PATH = "web/.svelte-kit/cloudflare/_worker.js";
 export const KIT_SERVER_DIR = "web/.svelte-kit/output/server";
 export const KIT_CLIENT_DIR = "web/.svelte-kit/output/client/_app";
 
+// The only top-level sections a Kit budget plan may define (besides $
+// metadata). Shared by validateKitPlan below and the fragment loader
+// (ci/budget-fragments.mjs), which must reject unknown sections before
+// aggregation can drop them on the floor.
+export const KIT_BUDGET_SECTIONS = ["worker", "server", "client", "startup"];
+
 export const KIT_GROUP_IDS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 export const KIT_CHECK_IDS = [
   "kit.worker._worker.js",
@@ -82,13 +88,7 @@ function checkGroupShape(group) {
 export function validateKitPlan(budget) {
   if (!isObject(budget)) return "budget must be an object";
   for (const key of Object.keys(budget)) {
-    if (
-      key !== "worker" &&
-      key !== "server" &&
-      key !== "client" &&
-      key !== "startup" &&
-      !isMetadataKey(key)
-    ) {
+    if (!KIT_BUDGET_SECTIONS.includes(key) && !isMetadataKey(key)) {
       return `unsupported budget section: ${shortKey(key)}`;
     }
   }
