@@ -259,6 +259,73 @@ inherited cap by 394 B and one step still refuses it. UNDO: revert only this
 allocations. The 118 B server and 18 B CSS gzip margins remain thin; the
 feature's exact integrated head must still remeasure and pass all normal gates.
 
+## Fourth reconciliation: feature sources moved, ceiling stands
+
+Main `4d9ebeee5` adds #1779 (client budget history) and #1814 (shipping
+tests now support server gzip 334080 and 335104 through an explicit
+two-entry fixed-literal mapping; any other ceiling fails the allocation
+control and the three server cases). Since the round-three base
+`732a9582a`, main moved only through `ci/` and `docs/`: no product
+source, lockfile or checker changed. The feature, however, moved past
+the frozen ref: `de2487c4` edits the Kit build input
+`web/src/routes/admin/featured/[id]/+page.server.ts` (+3/−1) and
+`432820f89` adds tests. Because a build input moved, both trees were
+rebuilt on the post-merge head.
+
+The combined tree is a clean scratch merge of current main `4d9ebeee5`
+with feature head `432820f89` (no conflicts; the four Kit inputs are
+byte-identical to the feature versions and main never touched them),
+overlaid with the resolved budget only. Two locked builds per tree
+(Node 24.22.1, npm 11.19.1, zlib `1.3.2.1-motley-285e94b`, root and web
+lockfiles byte-identical at both refs):
+
+| Group | Pristine main raw / gzip B | Combined raw / gzip B | Files / cap |
+| --- | ---: | ---: | ---: |
+| Worker entry | 2551 / 1219 | 2551 / 1219 | one entry |
+| Server JS | 1178762–1178764 / 333874–333876 | 1180821–1180823 / 334487 | 115 / 126 |
+| Client JS | 253949 / 102273 | 254365 / 102446 | 54 / 55 |
+| Client CSS | 2833 / 1006 | 2833 / 1006 | 2 / 4 |
+
+Pristine repeats the round-three totals within 2 B and passes the
+inherited 334080 B cap; combined fails it by 407 B (exit 1, both
+builds). Per-chunk attribution on the second build pair shows the same
+feature code plus the fix: `chunks/admin.js` +1617 / +470, the
+`[id]` loader +320 / +108 (the fix adds +24 / +13 over round three),
+the featured-list loader +122 / +44, with 23 raw-identical files
+contributing only gzip-context noise (net +2057 / +613).
+
+Disposable budget controls on the retained second combined artifact,
+using the unchanged exported checker:
+
+- Inherited 334080 B cap: exit 1, 407 B over.
+- One-step 334336 B cap: exit 1, 151 B over.
+- Proposed 334592 B cap: exit 0 across all asset groups.
+- Exact actual server raw/gzip/file caps: exit 0.
+- Actual server gzip minus one byte: exit 1.
+- Actual server raw minus one byte, with the proposed gzip cap: exit 1.
+- Actual server file count minus one, with the proposed gzip cap: exit 1.
+
+**334080 → 334592 B remains the minimum fitting allocation** (105 B
+margin, down from 118 B). The #1814 allowance of 335104 B (worst
+334994) is not adopted: it is not reproducible from these locked
+inputs, whose worst is 334487 B on both builds — 507 B lower,
+deterministic, on the same locked toolchain that reproduces every
+prior round. Adopting it would swallow 507 B of unexplained growth.
+
+This merge takes main's restructured shipping tests verbatim; the
+earlier test-owner literals for this ceiling predate that structure and
+no longer apply. The merged tree therefore fails exactly the new
+allocation control plus the three server cases: fail-closed by design,
+never green for the wrong reason. A test-owner correction adding the
+measured 334592 allocation (interval witness 334487, exact 334592,
+one-over 334593) is pending; this PR holds unpushed until it lands.
+
+ACT: resolve the history conflict, keep the measured two-step server
+gzip increase, and hold the merge for the test correction. WHY: the
+remeasured current union needs 334592 B and one step still refuses it.
+UNDO: drop the local merge; main's #1779 history and #1814 tests are
+untouched.
+
 ## Undo and scope
 
 The original pre-main proposal's undo was 333824 → 333568 B, intentionally
@@ -266,6 +333,7 @@ refusing the measured feature. That numeric change now belongs to #1799, not
 this reconciled PR. The first two reconciliations were history-only. This third
 reconciliation adds one numeric step pair, 334080 → 334592 B: reverting this PR
 removes that step and its appended history/note, and must not undo main's own
-allocations. No application, schema, test, dependency,
+allocations. The fourth reconciliation keeps that same step on fresh
+measurements and holds the merge for the test-owner correction. No application, schema, test, dependency,
 workflow, checker, mask, skip or exemption changes are included. No deployment
 or production/staging database test is part of this work.
