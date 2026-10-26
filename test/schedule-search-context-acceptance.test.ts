@@ -78,7 +78,7 @@ describe("upcoming schedule literal match explanations", () => {
       q: "%",
       title: "100% casual",
       description: "100% casual, not 100X casual",
-      marks: ["%", "%"],
+      marks: ["%"],
     },
     { q: "_", title: "co_op", description: "co_op, not co-op", marks: ["_"] },
     { q: "\\", title: "path\\night", description: "path\\night, not path/night", marks: ["\\"] },
