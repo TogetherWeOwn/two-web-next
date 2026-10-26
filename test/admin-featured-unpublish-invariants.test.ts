@@ -1,5 +1,6 @@
 // Independent regression pins: real committed writes, isolate-local cache,
 // complete persisted rows, and real Hono/Kit list rendering.
+// route-inventory: POST /admin/featured/:id/unpublish
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
