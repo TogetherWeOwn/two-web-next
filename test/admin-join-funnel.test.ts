@@ -260,7 +260,9 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
       }
       const html = await (await request).text();
       expect(statusAtDeadline).toBe(200);
-      expect(transaction).toHaveBeenCalledTimes(2);
+      // Three optional widgets share the dashboard deadline: funnel,
+      // zero-searches, and the draft-existence signal — one transaction each.
+      expect(transaction).toHaveBeenCalledTimes(3);
       expect(html.includes('data-testid="join-funnel"')).toBe(pending === "search");
       expect(html.includes('data-testid="top-zero-searches"')).toBe(pending === "funnel");
     },

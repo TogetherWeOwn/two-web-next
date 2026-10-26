@@ -76,6 +76,7 @@ import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
 import { safeRequestId } from "../request-log";
+import { hasDraftsAwaitingReview } from "./draft-review";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
@@ -268,24 +269,27 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbFor(c);
     // Match dbFor's precedence: an injected ADMIN_DB overrides either URL.
     const identity = (c.env as EnvWithAdminDb).ADMIN_DB || databaseUrl(c.env) || db;
-    // Start both optional analytics reads together with the same budget, rather
+    // Start the three optional reads together with the same budget, rather
     // than stacking their deadlines; they still share one pooled connection, so
-    // the budget covers both transactions. Failed/blocked widgets are omitted;
-    // authorization and the guard's critical access-log write stay fail-closed.
+    // the budget covers all three transactions. Failed/blocked widgets are
+    // omitted; authorization and the guard's critical access-log write stay
+    // fail-closed.
     let funnel: Awaited<ReturnType<typeof dashboardJoinFunnel>>;
     let zeroSearches: Awaited<ReturnType<typeof topZeroResultSearches>>;
+    let draftsAwaitingReview: Awaited<ReturnType<typeof hasDraftsAwaitingReview>>;
     if (db) {
-      const [funnelResult, zeroSearchesResult] = await Promise.allSettled([
+      const [funnelResult, zeroSearchesResult, draftsResult] = await Promise.allSettled([
         dashboardJoinFunnel(db, identity),
         topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
+        hasDraftsAwaitingReview(db),
       ]);
-      for (const result of [funnelResult, zeroSearchesResult]) {
+      for (const result of [funnelResult, zeroSearchesResult, draftsResult]) {
         if (result.status === "rejected" && !isDatabaseQueryCancellation(result.reason)) {
           throw result.reason;
         }
       }
       // One correlated line per degraded widget: with a db present, a settled
-      // value of undefined is exactly the degraded signal for both helpers
+      // value of undefined is exactly the degraded signal for all three helpers
       // (they resolve undefined on cancellations, ordinary failures and
       // deadline timeouts), so the log distinguishes degraded from healthy.
       // Outages threw above; rejected cancellations fall through to the same
@@ -300,16 +304,26 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           request_id: requestId,
         });
       }
+      if (draftsResult.status !== "fulfilled" || draftsResult.value === undefined) {
+        console.warn("dashboard widget degraded", { widget: "drafts", request_id: requestId });
+      }
       funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
       zeroSearches =
         zeroSearchesResult.status === "fulfilled" ? zeroSearchesResult.value : undefined;
+      draftsAwaitingReview = draftsResult.status === "fulfilled" ? draftsResult.value : undefined;
     } else {
       funnel = undefined;
       zeroSearches = undefined;
+      draftsAwaitingReview = undefined;
     }
     return bufferedMemberHtml(
       c,
-      <AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />,
+      <AdminDashboard
+        actor={c.get("adminActor")}
+        funnel={funnel}
+        zeroSearches={zeroSearches}
+        draftsAwaitingReview={draftsAwaitingReview}
+      />,
     );
   });
 

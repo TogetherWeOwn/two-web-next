@@ -33,6 +33,7 @@ export type NonSensitiveRead =
   | "going-counts"
   | "roster-count"
   | "search-widget"
+  | "draft-widget"
   | "timeouts";
 type ReadPermit = { capture: Capture; queries: number; classification?: NonSensitiveRead };
 const captures = new AsyncLocalStorage<Capture>();

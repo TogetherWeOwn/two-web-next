@@ -691,10 +691,15 @@ cards plus these diagnostic sections when their data is available:
   Discord events may be missing is skipped, because a partial read cannot prove a
   genuine no-match. A query absent from this list may still have been tried during
   a Discord outage, so never read a missing row as proof nobody searched for it.
+- **Draft review:** an existence signal, not a count. It says whether any draft
+  event awaits review, with links to the draft-filtered inventory
+  (`/admin/events?status=draft`) and the create-draft form (`/admin/events/new`).
+  **No drafts await review** appears only after a successful empty read; a
+  missing section means the read failed or timed out, never zero drafts.
 
-A missing section is not proof of zero incidents: failing/slow optional funnel
-or missed-search reads can omit their section while the dashboard remains
-available. Both reads start together with a 1.5 s budget; that optional
+A missing section is not proof of zero incidents: failing/slow optional widget
+reads can omit their section while the dashboard remains
+available. All three reads start together with a 1.5 s budget; that optional
 widget behavior does not relax authorization or access-log enforcement.
 Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request
@@ -765,7 +770,7 @@ through the approved private support process.
 | **We will be right back** (503) | Use the invite offered by the page or `/discord`; copy the Support reference into the incident report and escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
 | 403 on a moderator/admin surface | Expect it for a signed-in non-moderator, a stale role cache, or a form-action path opened directly by a signed-in non-moderator. Verify the role in-server, then re-check after a fresh sign-in and role sync ([sign-in check](#get-into-the-panel)); non-moderators get 403 and failed lookups fail closed ([probe expectations](#auth-wall-probe-staging-only)). If a current moderator hits it, escalate the path and time. |
-| Dashboard card or section missing on `/admin` (Join funnel, Top searches with no results) | Do not read absence as zero: a failing or slow optional read omits its section inside the 1.5 s budget while the dashboard stays available. Stop and escalate the path and time with timezone. A signed-session 503 or missing database configuration is different: the panel itself is unavailable, so report it the same way. |
+| Dashboard card or section missing on `/admin` (Join funnel, Top searches with no results, Draft review) | Do not read absence as zero: a failing or slow optional read omits its section inside the 1.5 s budget while the dashboard stays available. Stop and escalate the path and time with timezone. A signed-session 503 or missing database configuration is different: the panel itself is unavailable, so report it the same way. |
 | Event page says cancelled | Explain that the event is not happening; check `/events` for an approved replacement. |
 
 `/discord` is the database-, session- and bot-free invite fallback. It cannot

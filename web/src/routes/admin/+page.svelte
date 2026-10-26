@@ -8,7 +8,7 @@ import type { PageProps } from "./$types";
 // still apply when this route owns traffic. Dates arrive pre-rendered as
 // ISO strings from the load, exactly as the Hono page emits them.
 let { data }: PageProps = $props();
-const { actor, funnel, zeroSearches, retentionDays } = $derived(data);
+const { actor, funnel, zeroSearches, draftsAwaitingReview, retentionDays } = $derived(data);
 const outcomes = $derived(funnel ? Object.entries(funnel) : []);
 </script>
 
@@ -36,6 +36,17 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       <p>Every join try, outcome and refusal. Read-only.</p>
     </li>
   </ul>
+  {#if draftsAwaitingReview !== undefined}
+    <section data-testid="drafts-awaiting-review" aria-labelledby="drafts-awaiting-review-heading">
+      <h2 id="drafts-awaiting-review-heading">Draft review</h2>
+      {#if draftsAwaitingReview}
+        <p>Drafts await review.</p>
+      {:else}
+        <p>No drafts await review.</p>
+      {/if}
+      <p><a href="/admin/events?status=draft">Review drafts</a> · <a href="/admin/events/new">New draft</a></p>
+    </section>
+  {/if}
   {#if funnel}
     <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">
       <h2 id="join-funnel-heading">Join funnel, last {retentionDays} days</h2>

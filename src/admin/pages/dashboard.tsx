@@ -10,7 +10,8 @@ export const AdminDashboard: FC<{
   actor: Actor;
   funnel?: Record<string, number>;
   zeroSearches?: ZeroResultSearch[];
-}> = ({ actor, funnel, zeroSearches }) => (
+  draftsAwaitingReview?: boolean;
+}> = ({ actor, funnel, zeroSearches, draftsAwaitingReview }) => (
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
@@ -43,6 +44,19 @@ export const AdminDashboard: FC<{
           <p>Every join try, outcome and refusal. Read-only.</p>
         </li>
       </ul>
+      {draftsAwaitingReview !== undefined ? (
+        <section
+          data-testid="drafts-awaiting-review"
+          aria-labelledby="drafts-awaiting-review-heading"
+        >
+          <h2 id="drafts-awaiting-review-heading">Draft review</h2>
+          {draftsAwaitingReview ? <p>Drafts await review.</p> : <p>No drafts await review.</p>}
+          <p>
+            <a href="/admin/events?status=draft">Review drafts</a> ·{" "}
+            <a href="/admin/events/new">New draft</a>
+          </p>
+        </section>
+      ) : null}
       {funnel ? (
         <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">
           <h2 id="join-funnel-heading">Join funnel, last {JOIN_RETENTION_DAYS} days</h2>

@@ -103,7 +103,9 @@ describe("Kit admin dashboard load: outage wiring", () => {
       }
       outage = true;
       await expect(load({ parent }, {})).rejects.toMatchObject({ status: 503 });
-      expect(fakeDb.transaction).toHaveBeenCalledTimes(warm ? 3 : 2);
+      // Three optional widgets share the load: funnel (cached when warm),
+      // zero-searches, and the draft-existence signal — one transaction each.
+      expect(fakeDb.transaction).toHaveBeenCalledTimes(warm ? 5 : 3);
     },
   );
 

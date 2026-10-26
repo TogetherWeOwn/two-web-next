@@ -11,6 +11,7 @@ const fixedStatements = {
     'select "outcome", count(*) from "join_attempts" where "join_attempts"."created_at" >= $1 group by "join_attempts"."outcome"',
   "search-widget":
     'select "normalized_query", count(*), max("occurred_at") from "event_search_logs" where "event_search_logs"."result_count" = $1 group by "event_search_logs"."normalized_query" order by count(*) desc, "event_search_logs"."normalized_query" asc limit $2',
+  "draft-widget": 'select 1 from "events" where "events"."status" = \'draft\' limit 1',
   timeouts:
     "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
 };
