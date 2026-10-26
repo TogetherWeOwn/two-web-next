@@ -895,6 +895,86 @@ describe("Kit detail presentation", () => {
     expect(pastMemberHtml).toContain('data-testid="rsvp-closed"');
   });
 
+  // The host/join fields are independently optional, so each one renders on
+  // its own: Hosted-by never waits on a joining link, and How-to-join opens
+  // for instructions alone. Rendering all three together (the acceptance
+  // fixtures) cannot catch a gate narrowed to a single field.
+  it("renders Hosted by for an organizer with no joining details", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({ organizer_name: "Solo host", join_url: null, join_instructions: null }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBe("Solo host");
+    expect(outcome.model.joinUrl).toBeNull();
+    expect(outcome.model.joinInstructions).toBeNull();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-organizer">Solo host');
+    expect(html).not.toContain('data-testid="event-join-details"');
+  });
+
+  it("renders How to join for instructions with no joining link or organizer", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            organizer_name: null,
+            join_url: null,
+            join_instructions: "Ask at the desk for the room key.",
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBeNull();
+    expect(outcome.model.joinUrl).toBeNull();
+    expect(outcome.model.joinInstructions).toBe("Ask at the desk for the room key.");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-join-details"');
+    expect(html).toContain(
+      'data-testid="event-join-instructions">Ask at the desk for the room key.',
+    );
+    expect(html).not.toContain('data-testid="event-public-join-link"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+  });
+
+  it("renders How to join for a joining link with no instructions or organizer", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            organizer_name: null,
+            join_url: "https://meet.example.test/solo-room",
+            join_instructions: null,
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBeNull();
+    expect(outcome.model.joinUrl).toBe("https://meet.example.test/solo-room");
+    expect(outcome.model.joinInstructions).toBeNull();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-join-details"');
+    expect(html).toContain(
+      '<a href="https://meet.example.test/solo-room" data-testid="event-public-join-link">',
+    );
+    expect(html).not.toContain('data-testid="event-join-instructions"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+  });
+
   it("keeps a hostile title inside the data block on both renderers", async () => {
     const hostile = '</script><script>alert("xss")</script>';
     const { outcome } = await resolve(
