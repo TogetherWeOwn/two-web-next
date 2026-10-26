@@ -6,6 +6,7 @@
 // names, so existing importers keep working untouched.
 import type { Context } from "hono";
 import postgres from "postgres";
+import { warnAdmissionStoreFailure } from "../admission-diagnostics";
 import { rateLimitExceeded } from "../errors";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
@@ -79,11 +80,9 @@ export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 // A throwing store degrades to allow — the same verdict as throttleGuard
 // ("a missed count beats a 500") — unless the throw is a classified database
 // outage, which stays fail-closed: the global handler renders the branded 503
-// the outage matrix pins for both join routes. This throw-path catch stays
-// silent by scope carve-out: only the throttleGuard path warns (see the
-// `Throttle store failed` row in docs/runbook-logs.md), while the null-store
-// allow warns inside checkJoinThrottle. A class-only line here would comply
-// with the no-echo pin, but that widening is a follow-up, not this leg.
+// the outage matrix pins for both join routes. Only this generic throw-to-allow
+// leg warns here; the null-store allow already warns inside checkJoinThrottle.
+// Neither warning changes the admission policy.
 export async function throttled(c: Ctx): Promise<Response | null> {
   const verdict = await joinStore(c)
     .then((sql) =>
@@ -91,6 +90,7 @@ export async function throttled(c: Ctx): Promise<Response | null> {
     )
     .catch((err: unknown) => {
       if (isDatabaseUnavailable(err)) throw err;
+      warnAdmissionStoreFailure(c, "join", err);
       return { limited: false } as const;
     });
   if (!verdict.limited) return null;
