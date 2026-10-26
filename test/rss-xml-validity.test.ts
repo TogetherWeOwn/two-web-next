@@ -222,6 +222,8 @@ describe("RSS XML character validity", () => {
       "METHOD:PUBLISH",
       "X-WR-CALNAME:Together We Own Events",
       "X-WR-CALDESC:Upcoming events from Together We Own",
+      "REFRESH-INTERVAL;VALUE=DURATION:PT5M",
+      "X-PUBLISHED-TTL:PT5M",
       "BEGIN:VEVENT",
       `UID:${row.eventKey}@next.example.test`,
       "SEQUENCE:82907200",

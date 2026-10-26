@@ -119,7 +119,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       const ics = eventIcs(row, scheduleOrigin);
       // Freeze the existing export bytes, not just a reconstructed endpoint.
       expect(createHash("sha256").update(ics).digest("hex")).toBe(
-        "71efca07ddea119bfda5b7a2b528d18648b6fe91179985f315b5f6a8e0aacce6",
+        "5a0c107925576b7c1ed3017745766a864a1e3ebfaa5436b210456af081d2c4ca",
       );
       expect(createHash("sha256").update(googleCalendarUrl(row)).digest("hex")).toBe(
         "5697f2a377b1c92d00a4697e17729746f3a0a7078554058761e8b5d00103c940",

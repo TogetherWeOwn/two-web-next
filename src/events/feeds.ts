@@ -9,11 +9,15 @@ type EventRow = typeof events.$inferSelect;
 
 export const SITE_NAME = "Together We Own";
 
+/** Subscriber refresh hints and HTTP cache lifetime share the same cadence. */
+export const FEED_REFRESH_SECONDS = 300;
+const feedRefreshDuration = `PT${FEED_REFRESH_SECONDS / 60}M`;
+
 /** Feed `?game=` scope bound: 100 Unicode code points, like stored-game validation. */
 export const FEED_GAME_SCOPE_MAX_LENGTH = 100;
 
 /**
- * Parse the optional `/events.ics?game=` scope. Blank (missing/empty/whitespace)
+ * Parse the optional collection feed `?game=` scope. Blank (missing/empty/whitespace)
  * means the unfiltered collection; a trimmed valid game filters to exactly that
  * game. Overlong values, CR/LF property-injection input and control/invisible
  * characters refuse with undefined so the route answers 400 without a read.
@@ -177,6 +181,7 @@ function vevent(e: EventRow, appUrl: string): string[] {
   ];
   if (e.description) lines.push(`DESCRIPTION:${text(e.description)}`);
   if (e.location) lines.push(`LOCATION:${text(e.location)}`);
+  if (e.game?.trim()) lines.push(`CATEGORIES:${text(e.game)}`);
   const organizer = feedHost(e);
   if (organizer) lines.push(`ORGANIZER;CN="${cnParam(organizer)}":${ICS_ORGANIZER_PLACEHOLDER}`);
   lines.push(
@@ -200,6 +205,8 @@ function calendar(inner: string[], game: string | null = null): string {
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${text(name)}`,
     `X-WR-CALDESC:${text(`Upcoming events from ${SITE_NAME}`)}`,
+    `REFRESH-INTERVAL;VALUE=DURATION:${feedRefreshDuration}`,
+    `X-PUBLISHED-TTL:${feedRefreshDuration}`,
     ...inner,
     "END:VCALENDAR",
   ];
@@ -268,7 +275,12 @@ export function latestWireUpdatedAt(rows: EventRow[]): Date {
 export const RSS_CANCELLED_TITLE_PREFIX = "Cancelled: ";
 export const RSS_CANCELLED_NOTE = "This event has been cancelled.";
 
-export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
+export function eventsRss(
+  rows: EventRow[],
+  appUrl: string,
+  lastBuild: Date,
+  game: string | null = null,
+): string {
   const base = feedBase(appUrl);
   const renderable = rows.filter((e) => isWireInstant(e.startsAt) && isWireInstant(e.endsAt));
   const skipped = rows.length - renderable.length;
@@ -291,6 +303,7 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
         `<pubDate>${rssDate(e.startsAt)}</pubDate>` +
         (organizer ? `<author>${xml(`${FEED_HOST_PLACEHOLDER} (${organizer})`)}</author>` : "") +
         (description ? `<description>${xml(description)}</description>` : "") +
+        (e.game?.trim() ? `<category>${xml(e.game)}</category>` : "") +
         "</item>"
       );
     })
@@ -298,10 +311,11 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
   return (
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>' +
-    `<title>${xml(`${SITE_NAME} Events`)}</title>` +
+    `<title>${xml(game === null ? `${SITE_NAME} Events` : `${SITE_NAME} Events — ${game}`)}</title>` +
     `<link>${xml(`${base}/events`)}</link>` +
-    `<atom:link href="${xml(`${base}/events.rss`)}" rel="self" type="application/rss+xml" />` +
+    `<atom:link href="${xml(rssUrl(appUrl, game))}" rel="self" type="application/rss+xml" />` +
     `<description>${xml(`Upcoming events from ${SITE_NAME}`)}</description>` +
+    `<ttl>${FEED_REFRESH_SECONDS / 60}</ttl>` +
     `<lastBuildDate>${rssDate(lastBuild)}</lastBuildDate>${items}</channel></rss>`
   );
 }
@@ -311,13 +325,16 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
  * exact unfiltered URL; a game appends the single `game` query value so the
  * subscription carries the committed schedule scope and nothing else.
  */
-export const feedUrl = (appUrl: string, game?: string | null) => {
-  const base = `${feedBase(appUrl)}/events.ics`;
+function collectionFeedUrl(appUrl: string, format: "ics" | "rss", game?: string | null): string {
+  const base = `${feedBase(appUrl)}/events.${format}`;
   const scope = (game ?? "").trim();
   if (scope === "") return base;
   return `${base}?${new URLSearchParams({ game: scope })}`;
-};
-export const rssUrl = (appUrl: string) => `${feedBase(appUrl)}/events.rss`;
+}
+export const feedUrl = (appUrl: string, game?: string | null) =>
+  collectionFeedUrl(appUrl, "ics", game);
+export const rssUrl = (appUrl: string, game?: string | null) =>
+  collectionFeedUrl(appUrl, "rss", game);
 export const webcalUrl = (appUrl: string, game?: string | null) =>
   feedUrl(appUrl, game).replace(/^https?:\/\//, "webcal://");
 

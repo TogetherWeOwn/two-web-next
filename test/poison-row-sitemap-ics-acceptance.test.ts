@@ -254,6 +254,8 @@ describe("positive controls stay byte-identical", () => {
         "METHOD:PUBLISH",
         "X-WR-CALNAME:Together We Own Events",
         "X-WR-CALDESC:Upcoming events from Together We Own",
+        "REFRESH-INTERVAL;VALUE=DURATION:PT5M",
+        "X-PUBLISHED-TTL:PT5M",
         "BEGIN:VEVENT",
         `UID:${KEY_A}@next.example.test`,
         "SEQUENCE:82907200",
@@ -303,6 +305,7 @@ describe("positive controls stay byte-identical", () => {
       `<link>${APP_URL}/events</link>` +
       `<atom:link href="${APP_URL}/events.rss" rel="self" type="application/rss+xml" />` +
       "<description>Upcoming events from Together We Own</description>" +
+      "<ttl>5</ttl>" +
       "<lastBuildDate>Wed, 01 Jul 2026 12:00:00 +0000</lastBuildDate>" +
       `<item><title>Friday night Helldivers</title><link>${APP_URL}/e/${KEY_A}</link>` +
       `<guid isPermaLink="true">${APP_URL}/e/${KEY_A}</guid>` +
