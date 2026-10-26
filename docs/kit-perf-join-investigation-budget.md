@@ -4,7 +4,8 @@ Measured 2026-10-24. This is a separate performance allocation for the compositi
 of [the join investigation change](https://github.com/TogetherWeOwn/two-web-next/pull/1705)
 with already-landed main changes. It does not approve or ship that behavior.
 Only `client.js.maxRawBytes` and `client.js.maxGzipBytes` change in
-[`ci/kit-perf-budget.json`](../ci/kit-perf-budget.json). Existing decision history
+[`ci/budgets/kit/client-js.json`](../ci/budgets/kit/client-js.json)
+(`ci/kit-perf-budget.json` at the time). Existing decision history
 stays byte-for-byte intact; this note records the new decision separately.
 
 ## Inputs and method
