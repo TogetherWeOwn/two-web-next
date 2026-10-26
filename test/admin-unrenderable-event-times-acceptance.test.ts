@@ -145,7 +145,8 @@ for (const renderer of ["Hono", "Kit"] satisfies Renderer[]) {
       );
       expect(badText).not.toMatch(/Invalid Date|NaN|Infinity/);
       for (const time of nodes(badRow, "time")) {
-        expect(Number.isFinite(Date.parse(attribute(time, "datetime") ?? ""))).toBe(true);
+        const remainingFiniteInstants = [startBad ? null : start, endBad ? null : end];
+        expect(remainingFiniteInstants).toContain(attribute(time, "datetime"));
       }
       expect(result.probe.audits).toHaveLength(0);
     });
@@ -234,6 +235,7 @@ describe("Kit edit presentation for a correctable unrenderable event", () => {
       expect(outcome.view.values.starts_at).toBe(startBad ? "" : "2099-11-01 18:00");
       expect(outcome.view.values.ends_at).toBe(endBad ? "" : "2099-11-01 21:00");
       if (endBad) expect(Number.isFinite(Date.parse(outcome.view.endsAt ?? ""))).toBe(false);
+      else expect(outcome.view.endsAt).toBe(end);
       const html = kitForms.renderForm(1, { view: outcome.view });
       expectEditable(input(html, "title"), "Needs date repair");
       expectEditable(input(html, "starts_at"), startBad ? "" : "2099-11-01 18:00");
