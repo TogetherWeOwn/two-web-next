@@ -75,14 +75,14 @@ arithmetic, identical feature-chunk deltas on both rebuild pairs):
 | --- | ---: | ---: |
 | `chunks/events.js` | +543 | +130 |
 | `chunks/site-shell.js` | +518 | +180 |
-| Residual (`manifest.js`, `manifest-full.js`, `nodes/22.js`, `internal.js`, `profiles.js`, `instance.js`) | 0 / -2 | +5 / -2 net |
+| Residual (`manifest.js`, `manifest-full.js`, `nodes/22.js`, `internal.js`, `profiles.js`, `instance.js`) | 0 / -2 | +5 / +4 net |
 
 The two growing chunks carry the feature: one small pure elapsed-duration
 formatter plus its Hono and Kit detail call sites (`events.js`), and the
 Kit duration block plus calendar zone labels (`site-shell.js`). No new file,
-route, import or dependency is added. The residual same-raw chunks shift by
-at most 3 gzip bytes each from embedded client-asset hash substitutions and
-ordinary build variation.
+route, import or dependency is added. The residual chunks shift by at most 3
+gzip bytes each from embedded client-asset hash substitutions and ordinary
+build variation (one chunk varies by 2 raw bytes on the second rebuild).
 
 Client growth is +193 raw / +50 gzip and fits with 834 raw and 589 gzip
 bytes to spare. Pristine server headroom is only 206 bytes, so the minimal
