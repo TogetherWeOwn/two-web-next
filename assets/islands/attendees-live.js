@@ -44,10 +44,12 @@
     root.setAttribute("data-attendees-live-ready", "1");
   }
 
+  function query(selector) {
+    return document.querySelector(selector);
+  }
+
   function pageEventKey() {
-    var mount =
-      document.querySelector('[data-island="rsvp-button"]') ||
-      document.querySelector('[data-island="going-count"]');
+    var mount = query('[data-island="rsvp-button"]') || query('[data-island="going-count"]');
     var key = mount && mount.getAttribute("data-event-key");
     if (key) return key;
     try {
@@ -80,19 +82,29 @@
         page > 1
       )
         result.set("attendees", raw);
-      // Never repair malformed Unicode or collapse duplicate archive fields.
+      // Never repair malformed Unicode or collapse duplicate browse fields.
+      // Reuse the scalar envelope for each origin; the server re-admits it.
       decodeURIComponent(search);
-      var pages = params.getAll("archivePage");
-      var queries = params.getAll("archiveQuery");
-      if (
-        pages.length === 1 &&
-        queries.length <= 1 &&
-        pages[0].length <= 16 &&
-        Array.from(queries[0] || "").length <= 255
-      ) {
-        result.set("archivePage", pages[0]);
-        if (queries.length) result.set("archiveQuery", queries[0]);
-      }
+      ["archive", "schedule"].forEach(function (prefix) {
+        var fields = (
+          prefix === "archive" ? "Page Query" : "Page Query Game Past View Month"
+        ).split(" ");
+        if (
+          (prefix === "archive" || search.length <= 4096) &&
+          params.getAll(prefix + "Page").length === 1 &&
+          fields.every(function (field) {
+            var values = params.getAll(prefix + field);
+            return (
+              values.length <= 1 &&
+              Array.from(values[0] || "").length <= (field === "Page" ? 16 : 255)
+            );
+          })
+        )
+          fields.forEach(function (field) {
+            var name = prefix + field;
+            if (params.has(name)) result.set(name, params.get(name));
+          });
+      });
     } catch (_searchUnreadable) {
       // Keep the independently parsed attendee page; absent archive context
       // returns to All events rather than inventing another search.
@@ -110,7 +122,7 @@
   function clearStale() {
     var stale = null;
     try {
-      stale = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
+      stale = query('[data-testid="' + STALE_TESTID + '"]');
     } catch (_staleLookupIgnored) {
       // Fall through with stale null: no signal to clear, the refresh still
       // completes and the next failure re-renders the signal.
@@ -124,7 +136,7 @@
       if (refocus) {
         // Empty-to-empty recovery has no roster heading to receive focus.
         // <main> is already focusable; never steal focus that moved away.
-        var fallback = document.querySelector("main");
+        var fallback = query("main");
         if (fallback && typeof fallback.focus === "function") fallback.focus();
       }
     } catch (_staleRemoveIgnored) {
@@ -135,7 +147,7 @@
 
   function showStale(key) {
     try {
-      if (document.querySelector('[data-testid="' + STALE_TESTID + '"]')) return;
+      if (query('[data-testid="' + STALE_TESTID + '"]')) return;
     } catch (_guardLookupIgnored) {
       // Fall through and render: a duplicate signal is harmless, a missing
       // one would be the silent contradiction this island must not leave.
@@ -186,7 +198,7 @@
   function mountWhereRosterLives(node) {
     var anchor = null;
     try {
-      anchor = document.querySelector(".event-discovery");
+      anchor = query(".event-discovery");
     } catch (_anchorLookupIgnored) {
       // Fall through with anchor null: the main/body fallbacks below apply.
       anchor = null;
@@ -201,7 +213,7 @@
     }
     var main = null;
     try {
-      main = document.querySelector("main");
+      main = query("main");
     } catch (_mainLookupIgnored) {
       main = null;
     }
@@ -337,7 +349,7 @@
     if (fresh && !old) {
       var staleForFocus = null;
       try {
-        staleForFocus = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
+        staleForFocus = query('[data-testid="' + STALE_TESTID + '"]');
       } catch (_staleFocusLookupIgnored) {
         staleForFocus = null;
       }
@@ -362,7 +374,7 @@
           // <main id="main" tabindex="-1"> in EventDetailShell is already
           // focusable, so no tabindex hint is needed here.
           try {
-            var fallback = document.querySelector("main");
+            var fallback = query("main");
             if (fallback && typeof fallback.focus === "function") fallback.focus();
           } catch (_fallbackFocusIgnored) {
             // Fall through: the roster still matches the server truth; only
@@ -380,7 +392,7 @@
   }
 
   function clearStateTimeout(state) {
-    if (state.tmr !== null && state.tmr !== undefined) {
+    if (state.tmr != null) {
       try {
         clearTimeout(state.tmr);
       } catch (_clearIgnored) {

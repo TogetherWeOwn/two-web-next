@@ -37,6 +37,7 @@ export function registerCalendarRoutes(
       page: c.req.query("page"),
       event: c.req.query("event"),
       month: c.req.query("month"),
+      search: new URL(c.req.url).search,
     });
     if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");
@@ -178,6 +179,7 @@ export function registerCalendarRoutes(
       const response = await c.html(
         <EventsCalendarPage
           state={state}
+          scheduleOrigin={model.scheduleOrigin}
           upcoming={upcoming}
           past={localPast}
           pastMayBeTruncated={pastMayBeTruncated}

@@ -29,6 +29,7 @@ export async function renderEventsHtml(
   ) : (
     <EventsCalendarPage
       state={data.state}
+      scheduleOrigin={data.scheduleOrigin}
       upcoming={data.upcoming}
       past={data.past}
       pastMayBeTruncated={data.pastMayBeTruncated}

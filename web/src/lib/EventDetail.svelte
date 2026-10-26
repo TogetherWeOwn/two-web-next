@@ -156,7 +156,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
+    <a href={model.archiveReturn?.href ?? model.scheduleReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? model.scheduleReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>

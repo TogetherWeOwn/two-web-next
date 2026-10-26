@@ -1,4 +1,5 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
+import type { ScheduleContext } from "./schedule-context";
 import type { FC } from "hono/jsx";
 import type { HeaderSession, Session } from "../env";
 import { canonicalUrl } from "../seo";
@@ -60,6 +61,7 @@ import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
  */
 export const EventsCalendarPage: FC<{
   state: CalendarState;
+  scheduleOrigin?: ScheduleContext | null;
   upcoming: CalRow[];
   past: PublicEvent[];
   pastMayBeTruncated?: boolean;
@@ -90,6 +92,7 @@ export const EventsCalendarPage: FC<{
   markdownAlternate?: string | null;
 }> = ({
   state,
+  scheduleOrigin,
   upcoming,
   past,
   pastMayBeTruncated: pastMayBeTruncatedProp = past.length >= EVENTS_PAST_DRAWER_LIMIT,
@@ -289,12 +292,17 @@ export const EventsCalendarPage: FC<{
           ) : emptyState === "never" ? (
             <EmptyNever inviteUrl={inviteUrl} />
           ) : emptyState === "gap" ? (
-            <EmptyGap past={past} zone={zone} />
+            <EmptyGap
+              past={past}
+              zone={zone}
+              schedule={scheduleOrigin ?? { ...state, game: gameFilter ?? "" }}
+            />
           ) : null}
 
           {emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list" ? (
             <CalendarList
               state={state}
+              schedule={scheduleOrigin ?? { ...state, game: gameFilter ?? "" }}
               upcoming={upcoming}
               past={past}
               zone={zone}
@@ -315,7 +323,12 @@ export const EventsCalendarPage: FC<{
               absence alone opens the grid, exactly like the old unpaged merge
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
-            <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+            <MonthGrid
+              state={{ ...state, game: gameFilter ?? "" }}
+              weeks={weeks}
+              zone={zone}
+              now={now}
+            />
           ) : null}
 
           {monthEmpty ? (

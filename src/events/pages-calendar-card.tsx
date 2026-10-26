@@ -1,4 +1,5 @@
 // Calendar event card: one list row for a persisted event or a Discord transient.
+import { withScheduleContext, type ScheduleContext } from "./schedule-context";
 import type { FC } from "hono/jsx";
 import {
   EVENTS_EMPTY_COPY,
@@ -48,13 +49,14 @@ const DESCRIPTION_LIMIT = 240;
  */
 export const CalCard: FC<{
   e: CalRow;
+  schedule?: ScheduleContext | null;
   zone: string;
   now?: Date;
   isPast: boolean;
   member: boolean;
   inviteUrl: string;
   loginReturnTo: string | null;
-}> = ({ e, zone, now = new Date(), isPast, member, inviteUrl, loginReturnTo }) => {
+}> = ({ e, schedule, zone, now = new Date(), isPast, member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
@@ -86,7 +88,7 @@ export const CalCard: FC<{
             {transient || e.status === "cancelled" ? (
               rowTitle(e)
             ) : (
-              <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>
+              <a href={withScheduleContext(`/e/${e.eventKey}`, schedule)}>{rowTitle(e)}</a>
             )}
           </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}

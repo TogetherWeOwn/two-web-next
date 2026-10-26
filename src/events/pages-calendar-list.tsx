@@ -20,6 +20,7 @@ import {
   upcomingEventsPageStatusCopy,
   type CalendarState,
 } from "../islands/contracts";
+import type { ScheduleContext } from "./schedule-context";
 import type { PublicEvent } from "./reads";
 import { CalCard } from "./pages-calendar-card";
 import type { CalRow } from "./pages-calendar-row";
@@ -39,6 +40,7 @@ const PagerTurn: FC<{ state: CalendarState; page: number; testid: string; copy: 
 /** The list view body; the caller gates it on the empty state and the view. */
 export const CalendarList: FC<{
   state: CalendarState;
+  schedule?: ScheduleContext | null;
   upcoming: CalRow[];
   past: PublicEvent[];
   zone: string;
@@ -51,6 +53,7 @@ export const CalendarList: FC<{
   loginReturnTo: string | null;
 }> = ({
   state,
+  schedule,
   upcoming,
   past,
   zone,
@@ -73,6 +76,7 @@ export const CalendarList: FC<{
       {upcoming.map((e) => (
         <CalCard
           e={e}
+          schedule={schedule}
           zone={zone}
           now={now}
           isPast={false}
@@ -112,6 +116,7 @@ export const CalendarList: FC<{
           {past.map((e) => (
             <CalCard
               e={e}
+              schedule={schedule}
               zone={zone}
               now={now}
               isPast
