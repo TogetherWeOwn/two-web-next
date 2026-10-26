@@ -17,11 +17,13 @@ Keep every other numeric ceiling and the complete inherited `$comment`
 unchanged. In particular, do not add a concurrent allowance to this one.
 If a newer reviewed main allocation admits the remeasured composition,
 retain it and withdraw this obsolete increase. Related concurrent work:
-[#1811](https://github.com/TogetherWeOwn/two-web-next/pull/1811) proposes a
-smaller server allowance for a different composition;
-[#1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814) owns shipping
-fixture compatibility for a different proposed server ceiling. Neither open
-proposal is an inherited main allocation or approval for this composition.
+[#1811](https://github.com/TogetherWeOwn/two-web-next/pull/1811) remains open
+with server gzip 334592 for a different composition (it rejects this 334683
+peak by 91 bytes, so it is not an admitting allocation);
+[#1814](https://github.com/TogetherWeOwn/two-web-next/pull/1814) has merged,
+so its explicit 334080/335104 fixture compatibility is inherited main
+behavior preserved by this branch. Neither is an inherited main allocation
+or approval for this composition.
 
 ## Exact inputs
 
@@ -36,6 +38,7 @@ Installation does not replace the required dependency audit in CI.
 | Pristine main | `2fa2ef0885c5eb39d795f7412943bcfed7abe4b3` |
 | Pristine main tree | `9aa557cb545ba05e6073a62c1a55a2194c8dc52c` |
 | Current main remeasurement | `91b66a68d2d37bd2c717f3a75299300d3617b811` |
+| Merged main | `4d9ebeee5b311dd5bedb606a57ea91183625c3c7` |
 | Frozen feature head | `80a2a9652d57921f1c7b53c494b23e26c8c361c1` |
 | Frozen feature tree | `4ffda07059f4c892f0bed501fa2b0f55734b9bef` |
 | Root lock SHA-256 | `023b560fb97de0f5a91332701e2d0100c24d53e964dbd19863e5d5133d18631d` |
@@ -44,6 +47,7 @@ Installation does not replace the required dependency audit in CI.
 | Acceptance/support overlay SHA-256 | `a721a942e34ae1f852fa84beb1a739f75f51247ad6bf0365748c4effb7506b42` |
 | Original `test/kit-error-request-correlation.test.ts` SHA-256 | `7f90959f02d315a31b348041185bde8885a5547681d7c61e0ae81571e5d6ecb9` |
 | Inherited `$comment` SHA-256 (decoded UTF-8) | `da07d2fd7cdb07d116e1c7f70f27c6eab99a10562f6956bd3ca469546f34fff0` |
+| Merged `$comment` SHA-256 (decoded UTF-8) | `ef68e37820dd17f209b29a70d708bc83f75b86b88e117099d1e0d30624725920` |
 
 Main subsequently advanced to `91b66a68d` through documentation-only #1810.
 Remeasured both pristine and union twice on fresh archives of that exact ref;
@@ -57,6 +61,16 @@ separate support overlay copies its unchanged tests, payload inventory/checker
 support and log documentation into the scratch union only. It changes no
 runtime bytes. Main's shipping checker/tests, budget, canonical inventory,
 constraints, locks and newer budget history remain present in the union.
+
+Main was merged to `4d9ebeee5` for review. That advance touches only
+`ci/check-kit-perf.test.mjs` (the merged #1814 two-entry mapping) and the
+`ci/kit-perf-budget.json` `$comment` (the merged inventory-return history);
+no web-build input changed, so the remeasurement stands. The merge keeps the
+proposed 334848 scalar with main's complete history byte-identical (merged
+`$comment` SHA-256 above), and keeps the three-entry shipping mapping with
+every main-side line preserved (diff against main shows only the five
+intended 334848 additions). Main's active server-gzip allocation is still
+334080; it does not admit the 334683 composition, so this increase stands.
 
 Each build/test subprocess removes **every environment key containing
 `DATABASE_URL`**. No live application, staging/production database, network
@@ -199,6 +213,9 @@ Additional observed checks:
 - Actual budget-only branch builds before and after the owned correction:
   exit 0; unchanged canonical checker exit 0. Server 115 files, 1178764 raw /
   333876 then 333875 gzip. The branch contains no feature.
+- Merged-head branch build: exit 0; canonical checker exit 0 with every
+  `DATABASE_URL` key removed. Server 115 files, 1178762 raw / 333872 gzip,
+  inside the measured ±2-byte band, passing under 334848 with 976 bytes.
 - Kit gate selftests: **12/12**; bundle-inventory acceptance: **51/51**;
   served-asset budget selftests: **34/34**; served-asset budget: pass.
 - `npm run floor-guard -- --base origin/main`, `npm run config:check`,
