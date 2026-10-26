@@ -76,6 +76,7 @@ export const CalendarList: FC<{
           zone={zone}
           now={now}
           isPast={false}
+          q={state.q}
           member={member}
           inviteUrl={inviteUrl}
           loginReturnTo={loginReturnTo}
