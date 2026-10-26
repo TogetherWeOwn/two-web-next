@@ -119,6 +119,26 @@ function gridLinks(html: string): GridLink[] {
 
 const ariaOf = (attrs: string): string | null => /aria-label="([^"]*)"/.exec(attrs)?.[1] ?? null;
 
+function jumpUrl(link: GridLink): URL {
+  return new URL(link.href.replace(/&amp;/g, "&"), APP_URL);
+}
+
+// Catch a lost/wrong grid origin without relaxing the native selected-row target.
+function expectPersistedJump(link: GridLink, eventKey: string, month: string): void {
+  const url = jumpUrl(link);
+  expect(url.origin).toBe(APP_URL);
+  expect(url.pathname).toBe("/events");
+  expect(url.hash).toBe(`#event-${eventKey}`);
+  expect([...url.searchParams].sort()).toEqual(
+    [
+      ["event", eventKey],
+      ["schedulePage", "1"],
+      ["scheduleView", "calendar"],
+      ["scheduleMonth", month],
+    ].sort(),
+  );
+}
+
 // WCAG 2.5.3: speech-input users say the visible words, so the name must start with them.
 function expectNameLeadsWithVisible(name: string, link: GridLink): void {
   // Strip nested markup (the availability suffix node): speech users say the
@@ -187,8 +207,8 @@ describe("month grid accessible names", () => {
       expect(link.visible).toBe(
         `${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)} <span data-testid="event-schedule-availability">No seat limit</span>`,
       );
-      // Link target / jump behavior unchanged.
-      expect(link.href).toBe(calendarJumpUrl(false, rowKey(e)));
+      // Preserve the native jump target while carrying the effective grid origin.
+      expectPersistedJump(link, e.eventKey, "2030-01");
       expect(link.attrs).toContain("data-cal-jump");
     }
   });
@@ -219,10 +239,13 @@ describe("month grid accessible names", () => {
     const links = gridLinks(html);
     expect(links).toHaveLength(3);
     const byHref = new Map(links.map((l) => [l.href, l]));
-    const uniLink = byHref.get(calendarJumpUrl(false, rowKey(uni)))!;
+    const byEvent = new Map(links.map((l) => [jumpUrl(l).searchParams.get("event"), l]));
+    const uniLink = byEvent.get(uni.eventKey)!;
+    expectPersistedJump(uniLink, uni.eventKey, "2030-01");
     expect(ariaOf(uniLink.attrs)).toContain(uni.title);
     expectNameLeadsWithVisible(ariaOf(uniLink.attrs)!, uniLink);
-    const evilLink = byHref.get(calendarJumpUrl(false, rowKey(evil)))!;
+    const evilLink = byEvent.get(evil.eventKey)!;
+    expectPersistedJump(evilLink, evil.eventKey, "2030-01");
     const evilName = ariaOf(evilLink.attrs)!;
     expectNameLeadsWithVisible(evilName, evilLink);
     // Escaped punctuation survives as text (decoded form keeps every character).
@@ -279,9 +302,9 @@ describe("month grid accessible names", () => {
       inviteUrl: "https://discord.gg/fixture",
       appUrl: APP_URL,
     }).toString();
-    for (const [e, html] of [
-      [jan, janHtml],
-      [feb, febHtml],
+    for (const [e, html, month] of [
+      [jan, janHtml, "2030-01"],
+      [feb, febHtml, "2030-02"],
     ] as const) {
       const links = gridLinks(html);
       expect(links).toHaveLength(1);
@@ -289,7 +312,7 @@ describe("month grid accessible names", () => {
       expect(name).toContain(e.title);
       expectNameLeadsWithVisible(name, links[0]!);
       expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
-      expect(links[0]!.href).toBe(calendarJumpUrl(false, rowKey(e)));
+      expectPersistedJump(links[0]!, e.eventKey, month);
       expect(links[0]!.attrs).toContain("data-cal-jump");
     }
     // No-JS behavior and geometry: real anchors into the list, one table grid,
