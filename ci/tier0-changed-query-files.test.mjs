@@ -78,7 +78,17 @@ test("the blocking Check step runs this selftest and the Tier-0 check is require
     entry.startsWith("name: Check (lint + typecheck + coverage gate)\n"),
   );
   assert(checkStep, "the blocking Check step must exist");
-  assert.match(checkStep, /node --test[^\n]*ci\/tier0-changed-query-files\.test\.mjs/);
+  assert.match(checkStep, /^        run: npm run check:core$/m);
+  assert.match(
+    checkStep,
+    /^        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)$/m,
+  );
+  assert.doesNotMatch(checkStep, /^        continue-on-error:/m);
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.match(
+    manifest.scripts["check:core"],
+    /(?:^| && )node --test[^\n]* ci\/tier0-changed-query-files\.test\.mjs(?: |$)/,
+  );
 
   const tier0Step = steps.find((entry) =>
     entry.startsWith("name: Tier-0 check (validators + authz + EXPLAIN)\n"),

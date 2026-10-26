@@ -299,13 +299,18 @@ describe("internal-action-drill CLI", () => {
     expect(r.out).toMatch(/BOT_SHARED_SECRET/);
   });
 
-  it("is wired as drill:internal-action without touching check or CI scripts", () => {
+  it("is wired as drill:internal-action without adding the drill to the shared full check", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
     expect(scripts["drill:internal-action"]).toBe(
       "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     );
-    expect(scripts.check).toBe(
-      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run ledger:timeouts:selftest && npm run ledger:timeouts && npm run check:kit-payloads:selftest && npm run check:kit-payloads && npm run test && node --test ci/a11y-*.test.mjs ci/visual-accept.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
+    expect(scripts.check.split(" && ")[0]).toBe("npm run check:core");
+    const expandedCheck = scripts.check.replace(
+      /^npm run check:core(?= && )/,
+      () => scripts["check:core"],
+    );
+    expect(expandedCheck).toBe(
+      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs && npm run config:check && npm run docs:links && npm run ledger:timeouts:selftest && npm run ledger:timeouts && npm run check:kit-payloads:selftest && npm run check:kit-payloads && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke",
     );
   });
 });

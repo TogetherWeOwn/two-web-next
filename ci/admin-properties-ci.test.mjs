@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const check = workflow.slice(workflow.indexOf("\n  check:\n"));
+const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
 const step = check.match(
   /      - name: Seeded admin properties \(10s budget, local fixtures\)\n([\s\S]*?)(?=      - )/,
 );
@@ -33,7 +33,15 @@ test("the required check runs the identical property suite without npm startup, 
       guards[0].includes("needs.scope.outputs.draft != 'true'"),
     `Step guard must stay scope-gated: ${guards[0]}`,
   );
-  assert.match(check, /node --test ci\/a11y-\*\.test\.mjs ci\/admin-properties-ci\.test\.mjs/);
+  const coreStep = check
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Check (lint + typecheck + coverage gate)\n"));
+  assert(coreStep, "The blocking Check step must exist");
+  assert.match(coreStep, /^        run: npm run check:core$/m);
+  assert.match(
+    manifest.scripts["check:core"],
+    /(?:^| && )node --test ci\/a11y-\*\.test\.mjs ci\/admin-properties-ci\.test\.mjs(?: |$)/,
+  );
 });
 
 // Execute the actual workflow command with a local CLI fixture, not the app or

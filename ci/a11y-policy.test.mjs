@@ -246,6 +246,12 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
   assert(check, "Required check job must exist");
   assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 60\n/);
   assert.match(check, /\n      - run: npm ci --no-audit --no-fund\n/);
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(
+    manifest.scripts["check:core"],
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs",
+    "The shared core must preserve every gate in fail-fast order",
+  );
   const steps = check.split(/\n      - /).slice(1);
   for (const command of [
     "npm run deps:audit:selftest",
@@ -254,7 +260,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npm run test:smoke",
     "npm run db:migrate",
     "npm run config:check",
-    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs",
+    "npm run check:core",
     "npm run test:cutover",
     "bash ci/db-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
