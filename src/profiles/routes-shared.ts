@@ -18,6 +18,8 @@ export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
   stats?: MemberStatsSource;
+  /** Public schedule data; a failed read leaves games as plain text. */
+  publishedGames?: () => Promise<string[]>;
   accessLog?: AccessSink;
   /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;

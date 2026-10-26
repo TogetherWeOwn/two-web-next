@@ -8,6 +8,8 @@ import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { recordAccess } from "../admin/store";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
+import { listPublishedGames } from "../events/reads";
+import { nonSensitiveRead } from "../member-reads";
 import type { Ctx, ProfileDeps } from "./routes-shared";
 import {
   MEMBER_STATS_BUDGET_MS,
@@ -51,7 +53,12 @@ export function profileStores(deps: ProfileDeps) {
     const db = await dbFor(c);
     return db ? (entry) => recordAccess(db, entry) : null;
   };
-  return { storeFor, statsFor, sinkFor };
+  const publishedGamesFor = async (c: { env: Env }): Promise<string[]> => {
+    if (deps.publishedGames) return deps.publishedGames();
+    const db = await dbFor(c);
+    return db ? nonSensitiveRead("events", () => listPublishedGames(db)) : [];
+  };
+  return { storeFor, statsFor, sinkFor, publishedGamesFor };
 }
 
 export type ProfileStores = ReturnType<typeof profileStores>;

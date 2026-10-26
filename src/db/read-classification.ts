@@ -50,6 +50,10 @@ const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "ima
 // projection and bound-root query, never arbitrary computed event expressions.
 const seriesContextRead = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $6 from "events" where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10)) order by "events"."recurrence_index" asc, "events"."id" asc limit $11`;
 
+// The profile's optional schedule links use this public, published-only facet.
+// Its trim projection is computed, so admit only the complete reader statement.
+const publishedGamesRead = `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1`;
+
 export function validateNonSensitiveRead(
   classification: NonSensitiveRead,
   statement: string,
@@ -79,7 +83,12 @@ export function validateNonSensitiveRead(
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
-  if (classification === "events" && fields?.length && query === seriesContextRead) return;
+  if (
+    classification === "events" &&
+    fields?.length &&
+    (query === seriesContextRead || query === publishedGamesRead)
+  )
+    return;
   const table =
     classification === "events"
       ? "events"

@@ -18,9 +18,10 @@ import postgres from "postgres";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
+import { listPublishedGames } from "../events/reads";
 import { safeNext } from "../join/service";
 import type { KitRequestSession } from "../kit-session";
-import { declareMemberResult } from "../member-reads";
+import { declareMemberResult, nonSensitiveRead } from "../member-reads";
 import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE, type JoinResult } from "../return-journey";
 import { SNOWFLAKE } from "./routes-shared";
 import {
@@ -30,7 +31,7 @@ import {
   readOwnedMemberStats,
   type MemberStats,
 } from "./stats";
-import { findSharedGames } from "./shared-games";
+import { findScheduledGames, findSharedGames } from "./shared-games";
 import { createDbProfileStore, type MemberView, type ProfileStore } from "./store";
 
 export const KIT_PROFILE_LOGIN_LOCATION = "/auth/discord";
@@ -50,6 +51,8 @@ export type KitProfileDeps = {
   /** Absent (or resolving null) hides the stats block; a read failure resolves
    * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
+  /** Public schedule data; a failed read leaves games as plain text. */
+  publishedGames?: () => Promise<string[]>;
 };
 
 export type KitProfileOutcome =
@@ -67,6 +70,7 @@ export type KitProfileOutcome =
       /** Member's displayed game strings the viewer also plays, in list order;
        * [] when none, including self reads. */
       sharedGames: string[];
+      scheduledGames: Record<string, string>;
     };
 
 /** Production store/stats wiring for the Kit loads: the Hono resolvers' twin. */
@@ -93,7 +97,11 @@ export function kitProfileDeps(env: Env) {
       });
       return readOwnedMemberStats(drizzle(client), id, signal);
     }, memberId);
-  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET };
+  const publishedGamesFor = async (): Promise<string[]> => {
+    const db = await dbFor({ env });
+    return db ? nonSensitiveRead("events", () => listPublishedGames(db)) : [];
+  };
+  return { storeFor, statsFor, publishedGamesFor, sessionSecret: env.SESSION_SECRET };
 }
 
 export async function resolveKitProfile(
@@ -149,6 +157,15 @@ export async function resolveKitProfile(
   const needsMatch = !isOwner && member.games.length > 0;
   const viewerRow = needsMatch ? await deps.store.find(viewer.userId) : null;
   const sharedGames = needsMatch ? findSharedGames(member.games, viewerRow?.games ?? []) : [];
+  let scheduledGames: Record<string, string> = {};
+  if (member.games.length > 0 && deps.publishedGames) {
+    try {
+      scheduledGames = findScheduledGames(member.games, await deps.publishedGames());
+    } catch {
+      // Schedule availability must not refuse an otherwise readable profile.
+      scheduledGames = {};
+    }
+  }
   return {
     kind: "ok",
     member,
@@ -157,5 +174,6 @@ export async function resolveKitProfile(
     isModerator: viewer.moderator,
     joinResult: req.joinResult,
     sharedGames,
+    scheduledGames,
   };
 }

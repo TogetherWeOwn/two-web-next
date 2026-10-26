@@ -14,7 +14,7 @@ export const csr = false;
 // (src/profiles/routes-reads.tsx): the retrieved member record, member-gated,
 // audited by the hook's member-read boundary before any bytes leave.
 export const load: PageServerLoad = async ({ locals, params, url, cookies, setHeaders }) => {
-  const { storeFor, statsFor, sessionSecret } = kitProfileDeps(env);
+  const { storeFor, statsFor, publishedGamesFor, sessionSecret } = kitProfileDeps(env);
   const outcome = await resolveKitProfile(
     {
       session: { status: locals.status ?? "unknown", session: locals.session ?? null },
@@ -22,7 +22,12 @@ export const load: PageServerLoad = async ({ locals, params, url, cookies, setHe
       joinResult: locals.joinResult ?? null,
       url: url.href,
     },
-    { store: await storeFor(), stats: (id) => statsFor(id), sessionSecret },
+    {
+      store: await storeFor(),
+      stats: (id) => statsFor(id),
+      publishedGames: () => publishedGamesFor(),
+      sessionSecret,
+    },
   );
   // redirect()/error() never return: after these guards the outcome is ok.
   if (outcome.kind === "redirect") {
@@ -52,5 +57,6 @@ export const load: PageServerLoad = async ({ locals, params, url, cookies, setHe
     appUrl: env.APP_URL,
     joinResult: outcome.joinResult,
     sharedGames: outcome.sharedGames,
+    scheduledGames: outcome.scheduledGames,
   };
 };

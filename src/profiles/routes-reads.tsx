@@ -8,9 +8,12 @@ import { readJoinResult } from "../return-journey";
 import { ProfilePage } from "./pages";
 import { type Ctx, type ProfileApp, SNOWFLAKE } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
-import { findSharedGames } from "./shared-games";
+import { findScheduledGames, findSharedGames } from "./shared-games";
 
-export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: ProfileStores) {
+export function registerReadRoutes(
+  app: ProfileApp,
+  { storeFor, statsFor, publishedGamesFor }: ProfileStores,
+) {
   const render = async (c: Ctx, id: string) => {
     // Same per-isolate, DB-source-scoped cached guest snapshot as ordinary
     // 404s and event-detail 404s: one fill per TTL, never one Postgres
@@ -40,6 +43,15 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
     const needsMatch = !isOwner && member.games.length > 0;
     const viewerRow = needsMatch ? await store.find(viewer.id) : null;
     const sharedGames = needsMatch ? findSharedGames(member.games, viewerRow?.games ?? []) : [];
+    let scheduledGames: Record<string, string> = {};
+    if (member.games.length > 0) {
+      try {
+        scheduledGames = findScheduledGames(member.games, await publishedGamesFor(c));
+      } catch {
+        // Schedule availability must not refuse an otherwise readable profile.
+        scheduledGames = {};
+      }
+    }
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
     return bufferedMemberHtml(
@@ -52,6 +64,7 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
         sharedGames={sharedGames}
+        scheduledGames={scheduledGames}
       />,
     );
   };

@@ -15,4 +15,5 @@ let { data }: PageProps = $props();
   appUrl={data.appUrl}
   joinResult={data.joinResult}
   sharedGames={data.sharedGames}
+  scheduledGames={data.scheduledGames}
 />

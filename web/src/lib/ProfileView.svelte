@@ -67,6 +67,7 @@ let {
   errors = null,
   values = null,
   sharedGames = undefined,
+  scheduledGames = undefined,
 }: {
   member: MemberView;
   stats?: MemberStats | null;
@@ -83,6 +84,8 @@ let {
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
   sharedGames?: string[];
+  /** Exact displayed entries mapped to their canonical published spelling. */
+  scheduledGames?: Record<string, string>;
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -234,7 +237,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           <div data-testid="profile-games">
             {#if member.games.length > 0}
               <ul>
-                {#each member.games as g}{#if sharedGameSet.has(g)}<li data-shared-game="true">{g}<span data-testid="profile-shared-marker">Shared</span></li>{:else}<li>{g}</li>{/if}{/each}
+                {#each member.games as g}{@const canonical = scheduledGames && Object.hasOwn(scheduledGames, g) ? scheduledGames[g] : undefined}{#if canonical}<li data-shared-game={sharedGameSet.has(g) ? "true" : undefined}><a href={`/events?game=${encodeURIComponent(canonical)}`} aria-label={`${canonical} — upcoming events`}>{g}</a>{#if sharedGameSet.has(g)}<span data-testid="profile-shared-marker">Shared</span>{/if}</li>{:else if sharedGameSet.has(g)}<li data-shared-game="true">{g}<span data-testid="profile-shared-marker">Shared</span></li>{:else}<li>{g}</li>{/if}{/each}
               </ul>
             {:else}
               <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>

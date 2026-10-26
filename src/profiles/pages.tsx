@@ -233,6 +233,8 @@ export const ProfilePage: FC<{
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
   sharedGames?: string[];
+  /** Exact displayed entries mapped to their canonical published spelling. */
+  scheduledGames?: Record<string, string>;
 }> = ({
   member,
   isOwner,
@@ -244,6 +246,7 @@ export const ProfilePage: FC<{
   values,
   statsDraftWarning,
   sharedGames,
+  scheduledGames,
 }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -386,16 +389,29 @@ export const ProfilePage: FC<{
               <div data-testid="profile-games">
                 {member.games.length > 0 ? (
                   <ul>
-                    {member.games.map((g) =>
-                      shared.has(g) ? (
-                        <li data-shared-game="true">
-                          {g}
-                          <span data-testid="profile-shared-marker">Shared</span>
+                    {member.games.map((g) => {
+                      const canonical =
+                        scheduledGames && Object.hasOwn(scheduledGames, g)
+                          ? scheduledGames[g]
+                          : undefined;
+                      return (
+                        <li data-shared-game={shared.has(g) ? "true" : undefined}>
+                          {canonical ? (
+                            <a
+                              href={`/events?game=${encodeURIComponent(canonical)}`}
+                              aria-label={`${canonical} — upcoming events`}
+                            >
+                              {g}
+                            </a>
+                          ) : (
+                            g
+                          )}
+                          {shared.has(g) ? (
+                            <span data-testid="profile-shared-marker">Shared</span>
+                          ) : null}
                         </li>
-                      ) : (
-                        <li>{g}</li>
-                      ),
-                    )}
+                      );
+                    })}
                   </ul>
                 ) : (
                   <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
