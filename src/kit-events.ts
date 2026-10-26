@@ -64,6 +64,7 @@ function calendarInputOf(url: URL): CalendarPageInput {
     page: url.searchParams.get("page"),
     event: url.searchParams.get("event"),
     month: url.searchParams.get("month"),
+    search: url.search,
   });
 }
 

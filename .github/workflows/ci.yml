@@ -299,6 +299,12 @@ jobs:
           mkdir -p artifacts/a11y
           node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
           node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
+      - name: Schedule detail return (real Chromium, Hono and Kit fixtures)
+        run: |
+          mkdir -p artifacts/a11y
+          npx vitest run ci/schedule-detail-return-browser.test.ts --config ci/schedule-detail-return-browser.vitest.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/schedule-detail-return.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/schedule-detail-return.json "Hono real browser schedule return" 10
+          node ci/a11y-require-executed.mjs artifacts/a11y/schedule-detail-return.json "Kit real browser schedule return" 10
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"

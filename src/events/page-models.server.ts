@@ -1,4 +1,5 @@
 // Framework-neutral, server-only page models for public event pages.
+import { scheduleContext, type ScheduleContext } from "./schedule-context";
 import type { Db } from "../db/index";
 import type { CalendarPhaseRecorder } from "../request-log";
 import {
@@ -47,6 +48,7 @@ export interface CalendarPageInput {
   jumpRequested: boolean;
   month: string | null;
   queryTooLong: boolean;
+  scheduleOrigin?: ScheduleContext | null;
 }
 
 /** Normalize bounded URL state before a framework-specific route loads data. */
@@ -58,6 +60,7 @@ export function resolveCalendarInput(input: {
   page?: string | null;
   event?: string | null;
   month?: string | null;
+  search?: string;
 }): CalendarPageInput {
   const q = input.q ?? "";
   const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
@@ -77,10 +80,14 @@ export function resolveCalendarInput(input: {
     jumpRequested: rawJumpKey !== "",
     month: input.month ?? null,
     queryTooLong,
+    ...(input.search && rawJumpKey && !searching
+      ? { scheduleOrigin: scheduleContext(input.search) }
+      : {}),
   };
 }
 
 export interface CalendarPageModel {
+  scheduleOrigin?: ScheduleContext | null;
   state: CalendarState;
   upcoming: (PublicEvent | DiscordTransient)[];
   past: PublicEvent[];
@@ -236,6 +243,9 @@ export async function loadCalendarPageModel(args: {
 
   return {
     state,
+    ...(input.scheduleOrigin?.view === "calendar"
+      ? { scheduleOrigin: { ...input.scheduleOrigin, game: gameFilter ?? "" } }
+      : {}),
     upcoming,
     past: localPast,
     pastMayBeTruncated: localPast.mayBeTruncated,

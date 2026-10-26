@@ -1,4 +1,5 @@
 // Calendar empty states: never scheduled, gap, read error, and the search miss.
+import { withScheduleContext, type ScheduleContext } from "./schedule-context";
 import type { FC } from "hono/jsx";
 import {
   DISCORD_JOIN_TESTID,
@@ -37,16 +38,24 @@ export const EmptyNever: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
 );
 
 /** Upcoming is empty but the drawer has history: show the last few so the page never reads as dead. */
-export const EmptyGap: FC<{ past: PublicEvent[]; zone: string }> = ({ past, zone }) => (
+export const EmptyGap: FC<{
+  past: PublicEvent[];
+  zone: string;
+  schedule?: ScheduleContext | null;
+}> = ({ past, zone, schedule }) => (
   <div data-testid={EVENTS_EMPTY_GAP_TESTID}>
     <h2>{EVENTS_EMPTY_COPY.gapTitle}</h2>
     <h3>{EVENTS_EMPTY_COPY.gapListHeading}</h3>
     <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
       {past.slice(0, EVENTS_GAP_LIST_LIMIT).map((e) => (
-        <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
+        <li id={`event-${e.eventKey}`} data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
           {/* Same dead-anchor rule as the card title: cancelled detail pages
               answer 410, so the gap list keeps the title as plain text. */}
-          {e.status === "cancelled" ? e.title : <a href={`/e/${e.eventKey}`}>{e.title}</a>}{" "}
+          {e.status === "cancelled" ? (
+            e.title
+          ) : (
+            <a href={withScheduleContext(`/e/${e.eventKey}`, schedule)}>{e.title}</a>
+          )}{" "}
           <time datetime={e.startsAt.toISOString()}>
             {cardTimeLabel(e.startsAt, rowZone(e, zone))}
           </time>

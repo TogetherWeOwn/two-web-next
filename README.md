@@ -49,6 +49,14 @@ the query and page when opening an event, including in another tab; the detail
 page's [archive return link](docs/archive-detail-return.md) takes you back to those
 results without changing the event's canonical or share URLs.
 
+Upcoming schedule links also remember the committed search, game, list page or
+calendar month and past drawer. Open a night in any tab, then choose **Back to
+schedule results** or **Back to calendar** to return to that view and its event
+anchor. Native attendee paging and refresh keep this context without browser
+storage or JavaScript. Direct or invalid context keeps **All events**; archive
+context takes precedence. Canonical, share, calendar and sign-in destinations do
+not carry schedule context.
+
 ## Moderator guides
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
