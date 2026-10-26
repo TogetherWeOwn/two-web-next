@@ -101,7 +101,9 @@ export interface MembersBoardArgs {
    * its pathname+search as the signed return destination. Optional: a legacy
    * call without it resolves the plain branded 302. */
   url?: string;
-  /** Optional correlation id for the queued board view; omitted when the caller has none (see the runbook's Kit-omission caveat). */
+  /** Validated dispatch id: the failure alert and the queued board view
+   * both carry it (the record re-validates and omits it when invalid);
+   * absent in legacy calls. */
   requestId?: string | null;
 }
 
@@ -216,7 +218,11 @@ function reportBoardFailure(err: unknown, args: MembersBoardArgs): never {
     args.setHeaders({ "cache-control": "private, no-store" });
     throw err;
   }
-  alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
+  alertRequestError(err, {
+    method: "GET",
+    route: "/leaderboards/members",
+    requestId: args.requestId ?? undefined,
+  });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw membersBoardUnavailable();
 }

@@ -23,6 +23,7 @@ import {
   withKitFallbackStyleCsp,
 } from "./headers";
 import { STAGING_APP_URL } from "./qa";
+import { newRequestId, safeRequestId } from "./request-log";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
@@ -453,6 +454,14 @@ function viewerOf(locals: unknown): string | null {
   return bridged?.status === "authenticated" ? (bridged.session?.userId ?? null) : null;
 }
 
+// The validated id dispatchHookRequest merged into locals on the Kit branch.
+// Read back defensively: only the string the dispatch set can reach an
+// error.alert line (alertRequestError re-validates at emit).
+function kitRequestId(locals: unknown): string | undefined {
+  const id = (locals as { requestId?: unknown } | undefined)?.requestId;
+  return typeof id === "string" ? id : undefined;
+}
+
 // The Kit catch-all route id that hands the request to the Hono app. Shared
 // here so the hook and its tests agree without importing SvelteKit code.
 export const HONO_FALLBACK_ROUTE_ID = "/[...path]";
@@ -540,29 +549,45 @@ export interface HookDispatchDeps {
   // the capture nor be refused by it. Absent by default.
   afterMemberRead?: (event: HookEventLike, response: Response) => Promise<void>;
   // Native archive guard/cache around Kit SSR. The hook binds env into this
-  // (request, render) => dispatchPastArchiveRequest(request, env, render); the
-  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // (request, render, requestId) => dispatchPastArchiveRequest(...); the core
+  // decides WHEN it runs, so the route-id branch is pinned here instead
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
-  pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  pastArchive?: (
+    request: Request,
+    render: () => Promise<Response>,
+    requestId?: string,
+  ) => Promise<Response>;
   // Native events-list guard/cache around the Kit endpoint render. Same binding shape as the
   // archive; the list entry ships disabled, so production never reaches this
   // branch until the companion card enables it.
-  eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  eventsPage?: (
+    request: Request,
+    render: () => Promise<Response>,
+    requestId?: string,
+  ) => Promise<Response>;
   // Native event-detail throttle around the Kit member-read render. Same
   // binding shape as the archive/list wrappers: the hook binds env into this
-  // (request, render) => dispatchEventDetailRequest(request, env, render); the
-  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // (request, render, requestId) => dispatchEventDetailRequest(...); the core
+  // decides WHEN it runs, so the route-id branch is pinned here instead
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
-  eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  eventDetail?: (
+    request: Request,
+    render: () => Promise<Response>,
+    requestId?: string,
+  ) => Promise<Response>;
   // Native hot-zone read budget around Kit SSR. Same binding shape as the
   // archive/list wrappers: the hook binds env into this
-  // (request, render) => dispatchHotzonesRequest(request, env, render); the
-  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // (request, render, requestId) => dispatchHotzonesRequest(...); the core
+  // decides WHEN it runs, so the route-id branch is pinned here instead
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
-  hotzones?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  hotzones?: (
+    request: Request,
+    render: () => Promise<Response>,
+    requestId?: string,
+  ) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -708,7 +733,11 @@ function renderMemberRead(
   onRelease?: (response: Response) => void,
 ): Promise<Response> {
   return memberReadResponse(
-    { method: event.request.method, route: event.route?.id ?? "unmatched" },
+    {
+      method: event.request.method,
+      route: event.route?.id ?? "unmatched",
+      requestId: kitRequestId(event.locals),
+    },
     () =>
       reads && typeof reads === "object" ? { ...reads, viewer: viewerOf(event.locals) } : undefined,
     async (entry) => {
@@ -833,12 +862,23 @@ export async function dispatchHookRequest(
   if (!route) {
     return deps.honoFetch(event.request);
   }
+  // Kit request correlation (Hono requestLog parity): admit the validated
+  // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.
+  // Merged into locals before resolve so Svelte loads and the error
+  // boundaries read the same id the response header carries; every
+  // Kit-branch return below sets it, while Hono-owned responses stay
+  // untouched (their middleware sets the header in production).
+  const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+  const priorLocals = (event.locals as Record<string, unknown> | undefined) ?? {};
+  event.locals = { ...priorLocals, requestId };
   // Kit same-origin gate (Hono sameOrigin parity): unsafe methods need an
   // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
   if (!isSameOriginAllowed(event.request, deps.appUrl)) {
-    return sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
+    const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
+    refused.headers.set("x-request-id", requestId);
+    return refused;
   }
   // Kit branch only: one read-only session decision merged into locals before
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
@@ -883,10 +923,14 @@ export async function dispatchHookRequest(
     // branch narrowing on route.reads.
     const reads = route.reads;
     if (isEventDetailPage && deps.eventDetail) {
-      response = await deps.eventDetail(event.request, async () => {
-        await bridgeSession();
-        return renderMemberRead(event, reads, deps);
-      });
+      response = await deps.eventDetail(
+        event.request,
+        async () => {
+          await bridgeSession();
+          return renderMemberRead(event, reads, deps);
+        },
+        requestId,
+      );
     } else {
       await bridgeSession();
       response = await renderMemberRead(event, reads, deps, (released) => {
@@ -894,11 +938,11 @@ export async function dispatchHookRequest(
       });
     }
   } else if (isPastArchivePage && deps.pastArchive) {
-    response = await deps.pastArchive(event.request, () => deps.resolve(event));
+    response = await deps.pastArchive(event.request, () => deps.resolve(event), requestId);
   } else if (isEventsListPage && deps.eventsPage) {
-    response = await deps.eventsPage(event.request, () => deps.resolve(event));
+    response = await deps.eventsPage(event.request, () => deps.resolve(event), requestId);
   } else if (isHotzonesPage && deps.hotzones) {
-    response = await deps.hotzones(event.request, () => deps.resolve(event));
+    response = await deps.hotzones(event.request, () => deps.resolve(event), requestId);
   } else if (isContentLeafPath(route.path)) {
     // Content leaves keep #808's zero-stylesheet contract on the served
     // worker: the root layout's Tailwind asset is stripped after resolve and
@@ -1025,6 +1069,12 @@ export async function dispatchHookRequest(
     deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
     response = c.res;
   }
+  // The Hono-fallback return above stays undecorated (Hono answering
+  // through Kit keeps its own header); every other Kit response carries the
+  // id the boundaries render and the error.alert lines log. Guard-built
+  // refusals never reach a boundary, so the wrappers above received this same
+  // id and their 429 pages render it as the Hono support reference.
+  response.headers.set("x-request-id", requestId);
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   await allowlistKitFallbackStyle(response);
   return response;
