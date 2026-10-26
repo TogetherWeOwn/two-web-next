@@ -111,7 +111,7 @@ describe("admin free-text filter length bound (no DB)", () => {
     ).toMatchObject({ q: "", status: "draft", sort: "title", order: "asc", page: 2 });
     expect(
       parseFeaturedListQuery({ q: huge, published: "1", sort: "updated_at", order: "desc" }),
-    ).toEqual({ published: "1", q: "", sort: "updated_at", order: "desc", page: 1 });
+    ).toEqual({ published: "1", q: "", state: "", sort: "updated_at", order: "desc", page: 1 });
   });
 
   it("never reflects overlong text into pagination or sort links", () => {
