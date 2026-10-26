@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import { loadKitBudget } from "./budget-fragments.mjs";
 import { discoverKitAssets, run, runJson } from "./check-kit-perf.mjs";
 
 const scriptPath = fileURLToPath(new URL("./check-kit-perf.mjs", import.meta.url));
@@ -304,7 +305,12 @@ test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) 
   assert.ok(result.errors.some((line) => /client js/i.test(line)));
 });
 
-const shippingBudgetText = readFileSync(new URL("./kit-perf-budget.json", import.meta.url), "utf8");
+// The shipping plan is the aggregation of ci/budgets/kit/*.json (one unit
+// per fragment); serialize it here so fixtures can copy it into a scratch
+// root as a legacy single file, exactly as SHIPPING_BUDGET_BYTES below.
+const shippingBudgetText = JSON.stringify(
+  loadKitBudget(fileURLToPath(new URL("../", import.meta.url))),
+);
 const shippingClientBudget = JSON.parse(shippingBudgetText).client.js;
 
 function makeClientShippingFixture(body) {
@@ -373,7 +379,12 @@ test("shipping budget: client gzip still fails independently of raw", (t) => {
 // Shipping allocations must admit fixed evidence, not fixtures whose budgets
 // grow with their bodies. Reverting any allocation must reject its interval;
 // raising any allocation must incorrectly admit its fixed one-byte-over case.
-const SHIPPING_BUDGET_BYTES = readFileSync(new URL("./kit-perf-budget.json", import.meta.url));
+// The shipping plan is the aggregation of ci/budgets/kit/*.json (one unit
+// per fragment); serialize it once so fixtures can copy it into a scratch
+// root as a legacy single file, byte-for-byte inside the fixture.
+const SHIPPING_BUDGET_BYTES = Buffer.from(
+  JSON.stringify(loadKitBudget(fileURLToPath(new URL("../", import.meta.url)))),
+);
 // Four explicit server-gzip allocations are supported: current 334080, the
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), the independently justified 335360 ceiling
@@ -457,8 +468,9 @@ function makeShippingFixture(t, group, axis, bytes) {
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-perf-shipping-"),
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  // Copy the committed plan byte-for-byte, including every unrelated group.
-  // Never pass it through makeFixture(), groupBudget() or budgetOverrides.
+  // Copy the aggregated shipping plan byte-for-byte, including every
+  // unrelated group. Never pass it through makeFixture(), groupBudget() or
+  // budgetOverrides.
   writeFixtureFile(root, "ci/kit-perf-budget.json", SHIPPING_BUDGET_BYTES);
   const bodies = Object.fromEntries(
     Object.entries(SHIPPING_BASES).map(([id, body]) => [id, [body]]),

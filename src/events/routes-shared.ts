@@ -1,10 +1,11 @@
 // Shared event-route middleware and serializers. Split out of
 // src/events/routes.tsx so each route group registers from its own module;
 // this file holds what at least two groups use. Re-exported from the barrel.
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { Env, Session } from "../env";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
+import { safeRequestId } from "../request-log";
 import { throttleGuard } from "../throttle";
 import {
   PUBLIC_DATA_ERROR_NEXT,
@@ -42,6 +43,38 @@ export async function publicReadGuard(c: Ctx): Promise<Response | null> {
   if (limited) limited.headers.set("cache-control", "no-store, private");
   return limited;
 }
+
+/**
+ * Internal-only seed header carrying the dispatch-minted request id into the
+ * Kit guard apps (kit-past-events.ts, kit-events.ts), whose bare Hono context
+ * otherwise renders 429 pages with no support reference. Never trusted from
+ * the client: seedGuardRequestId overwrites any client-sent value with the
+ * validated dispatch id, or strips it when no id is passed, and the
+ * middleware re-validates the shape before merging it into context.
+ */
+export const GUARD_REQUEST_ID_HEADER = "x-two-guard-request-id";
+
+/**
+ * Clone a request for the guard apps with the dispatch id seeded (or the
+ * header stripped when the id is absent or hostile). Rebuilt from URL +
+ * method + headers: the guard reads no body (client key, path and Accept
+ * only), and cloning a body-bearing request would need a duplex stream the
+ * guard never consumes.
+ */
+export function seedGuardRequestId(request: Request, requestId: unknown): Request {
+  const headers = new Headers(request.headers);
+  const id = safeRequestId(requestId);
+  if (id === undefined) headers.delete(GUARD_REQUEST_ID_HEADER);
+  else headers.set(GUARD_REQUEST_ID_HEADER, id);
+  return new Request(request.url, { method: request.method, headers });
+}
+
+/** Merge the seeded dispatch id into the guard context for 429 pages. */
+export const guardRequestId: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  const id = safeRequestId(c.req.header(GUARD_REQUEST_ID_HEADER));
+  if (id !== undefined) c.set("requestId", id);
+  await next();
+};
 
 /**
  * True only when the caller explicitly lists application/json with q>0 (same
