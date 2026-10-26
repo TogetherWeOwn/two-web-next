@@ -402,6 +402,57 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
       `expected one of 334080, 335104, 335360`,
   );
 });
+// Preserve the existing client-gzip controls while admitting only the measured
+// 103327-byte composition under its separately allocated 103424-byte ceiling.
+const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget.maxGzipBytes;
+const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
+  102912: { exactBytes: 102912, overBytes: 102913 },
+  103424: { intervalBytes: 103327, exactBytes: 103424, overBytes: 103425 },
+};
+
+test("shipping budget: client gzip allocation is explicitly approved", () => {
+  assert.ok(
+    Object.hasOwn(SHIPPING_CLIENT_GZIP_ALLOCATIONS, String(SHIPPING_CLIENT_GZIP_CAP)),
+    `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
+      `expected one of 102912, 103424`,
+  );
+});
+
+function shippingClientGzipCases() {
+  // Unsupported allocations fail approval above and still exercise the fixed
+  // measured controls: a reverted cap rejects the interval, a wider cap admits
+  // the one-byte-over fixture. Never derive fixture bytes from the loaded cap.
+  const allocation =
+    SHIPPING_CLIENT_GZIP_ALLOCATIONS[SHIPPING_CLIENT_GZIP_CAP] ??
+    SHIPPING_CLIENT_GZIP_ALLOCATIONS[103424];
+  return [
+    ...(allocation.intervalBytes === undefined
+      ? []
+      : [
+          {
+            name: "client gzip newly allowed interval",
+            group: "kit.client.js",
+            axis: "gzip",
+            bytes: allocation.intervalBytes,
+          },
+        ]),
+    {
+      name: "client gzip exact ceiling",
+      group: "kit.client.js",
+      axis: "gzip",
+      bytes: allocation.exactBytes,
+    },
+    {
+      name: "client gzip one byte over",
+      group: "kit.client.js",
+      axis: "gzip",
+      bytes: allocation.overBytes,
+      ceiling: allocation.exactBytes,
+      breach: true,
+    },
+  ];
+}
+
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 const SHIPPING_BASES = {
   "kit.worker": WORKER_BODY,
@@ -556,15 +607,7 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
     breach: true,
   },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 102912 },
-  {
-    name: "client gzip one byte over",
-    group: "kit.client.js",
-    axis: "gzip",
-    bytes: 102913,
-    ceiling: 102912,
-    breach: true,
-  },
+  ...shippingClientGzipCases(),
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
   {
     name: "server raw one byte over",
