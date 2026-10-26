@@ -3,8 +3,9 @@
 One vocabulary for covered transport errors: each carries a stable `code`,
 a human `message`, a `request_id` for correlation, and a `next` naming one
 safe action. On REST, feed and MCP surfaces `request_id` matches the
-`x-request-id` response header. Ingress service denials use the audit-row ID
-minted at admission; pre-service route denials use the HTTP/header correlation ID.
+`x-request-id` response header. Ingress service denials use the admission
+request ID; audited denials store it in the audit row. Pre-service route
+denials use the HTTP/header correlation ID.
 
 | Surface | Shape |
 |---|---|

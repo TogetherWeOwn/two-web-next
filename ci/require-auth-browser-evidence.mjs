@@ -43,13 +43,23 @@ function fail(code, detail, extra) {
 function evidenceStat(path) {
   try {
     return statSync(path);
-  } catch {
-    return null;
+  } catch (error) {
+    // Only a missing path means "the suite wrote nothing". Any other stat
+    // failure (EACCES, ELOOP, ...) must surface as unreadable at the call
+    // site so the validator never misreports a permission error as missing.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    throw error;
   }
 }
 
 export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
-  if (!evidenceStat(dir)?.isDirectory())
+  let dirStat;
+  try {
+    dirStat = evidenceStat(dir);
+  } catch {
+    fail("AUTH_BROWSER_DIR_UNREADABLE", `${dir}: auth-browser evidence directory is unreadable`);
+  }
+  if (!dirStat?.isDirectory())
     fail(
       "AUTH_BROWSER_NO_EVIDENCE_DIR",
       `${dir}: no auth-browser evidence directory (the suite wrote nothing)`,
@@ -123,7 +133,12 @@ export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
     );
   for (const shot of report.screenshots) {
     const shotPath = join(dir, shot);
-    const stat = evidenceStat(shotPath);
+    let stat;
+    try {
+      stat = evidenceStat(shotPath);
+    } catch {
+      fail("AUTH_BROWSER_SCREENSHOT_FILE_MISSING", `${dir}: screenshot ${shot} is unreadable`);
+    }
     if (!stat?.isFile() || stat.size === 0)
       fail(
         "AUTH_BROWSER_SCREENSHOT_FILE_MISSING",
