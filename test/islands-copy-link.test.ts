@@ -22,9 +22,10 @@ function browser(
     copied?: boolean;
     throws?: boolean;
     missing?: boolean;
+    feed?: boolean;
   } = {},
 ) {
-  const toast = { textContent: "" };
+  const toast = { textContent: "", isConnected: true };
   const active = { focus: vi.fn() };
   const range = {};
   const selection = {
@@ -43,9 +44,12 @@ function browser(
   };
   const append = vi.fn();
   const attributes = new Map([["data-copy-link", canonical]]);
+  if (opts.feed) attributes.set("data-copy-feed", "true");
   let click: (e: Click) => void = () => {};
   let keydown: (e: Key) => void = () => {};
   const link = {
+    hidden: true,
+    isConnected: true,
     getAttribute: (key: string) => attributes.get(key),
     setAttribute: (key: string, value: string) => attributes.set(key, value),
     addEventListener: (kind: string, fn: typeof click | typeof keydown) => {
@@ -81,6 +85,7 @@ function browser(
     clearTimeout,
   });
   return {
+    link,
     toast,
     active,
     selection,
@@ -201,5 +206,100 @@ describe("Copy-link island DOM double", () => {
     expect(b.attributes.has("role")).toBe(false);
     expect(b.exec).not.toHaveBeenCalled();
     expect(b.setTimeout).not.toHaveBeenCalled();
+  });
+});
+
+// Catches stale clipboard settlement on replaced controls; also preserves the
+// existing feed deadline/manual and native-button behavior during refactoring.
+describe("Copy-link committed-control ownership", () => {
+  it.each(["resolve", "reject"] as const)(
+    "does not touch a detached status after clipboard %s",
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: () => void;
+      const b = browser({
+        feed: true,
+        clipboard: {
+          writeText: () =>
+            new Promise<void>((ok, no) => {
+              resolve = ok;
+              reject = () => no(new Error("Denied"));
+            }),
+        },
+      });
+      await b.click();
+      b.link.isConnected = false;
+      b.toast.isConnected = false;
+      const before = b.toast.textContent;
+      if (outcome === "resolve") resolve();
+      else reject();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(b.toast.textContent, "a detached live region has lost feedback ownership").toBe(
+        before,
+      );
+    },
+  );
+
+  it("CONTROL: keeps feed keyboard activation native and only reveals its button", async () => {
+    const writeText = vi.fn(async () => {});
+    const b = browser({ feed: true, clipboard: { writeText } });
+    expect(b.link.hidden).toBe(false);
+    expect((await b.key("Enter")).preventDefault).not.toHaveBeenCalled();
+    expect((await b.key(" ")).preventDefault).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+    await b.click();
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(canonical);
+    expect(b.toast.textContent).toBe("Calendar feed URL copied.");
+  });
+
+  it.each(["absent", "reject", "throw"])(
+    "CONTROL: gives manual feed guidance on %s without a false copied claim",
+    async (mode) => {
+      const b = browser({
+        feed: true,
+        clipboard:
+          mode === "absent"
+            ? undefined
+            : {
+                writeText: () => {
+                  if (mode === "throw") throw new Error("Unavailable");
+                  return Promise.reject(new Error("Denied"));
+                },
+              },
+      });
+      await b.click();
+      expect(b.toast.textContent).toBe(
+        "Select the feed URL and copy it manually in your calendar app.",
+      );
+      expect(b.exec).not.toHaveBeenCalled();
+      expect(b.field.select).not.toHaveBeenCalled();
+    },
+  );
+
+  it("CONTROL: bounds a hung feed attempt and ignores its late success", async () => {
+    let resolve!: () => void;
+    const b = browser({
+      feed: true,
+      clipboard: {
+        writeText: () =>
+          new Promise<void>((ok) => {
+            resolve = ok;
+          }),
+      },
+    });
+    await b.click();
+    expect(b.toast.textContent).toBe("");
+    const [deadline, milliseconds] = b.setTimeout.mock.calls[0]!;
+    expect(milliseconds).toBeGreaterThan(0);
+    expect(milliseconds).toBeLessThanOrEqual(10000);
+    deadline();
+    expect(b.toast.textContent).toBe(
+      "Select the feed URL and copy it manually in your calendar app.",
+    );
+    resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(b.toast.textContent).not.toContain("copied");
   });
 });
