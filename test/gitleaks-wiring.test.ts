@@ -26,6 +26,21 @@ const step = (name: string): string => {
 };
 
 describe("gitleaks fixture policy", () => {
+  it("keeps the parity fixture exception limited to the exact rule, path and secret", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic unknown-event ULID in the MCP/REST parity"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic unknown-event ULID in the MCP/REST parity acceptance fixture, used only for an in-memory 404 lookup, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/mcp-rest-parity-acceptance\.test\.ts$''']
+regexes = ['''^01BRZ3NDEKTSV4RRFFQ69G5FAV$''']`,
+    ]);
+  });
+
   it("keeps the public Hono event-id exception limited to the exact rule, path and two secrets", () => {
     const entries = policy
       .split(/\r?\n\[\[allowlists\]\]\r?\n/)

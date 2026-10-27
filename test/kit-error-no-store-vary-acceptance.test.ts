@@ -150,8 +150,11 @@ const RELATED: EventLink[] = [
     eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
     title: "Chess finals",
     startsAt: new Date("2030-02-01T19:00:00Z"),
+    endsAt: new Date("2030-02-01T21:00:00Z"),
     timezone: "UTC",
     location: "The lobby",
+    game: null,
+    rsvpOpen: true,
   },
 ];
 
