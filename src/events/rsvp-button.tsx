@@ -158,11 +158,15 @@ export const RsvpButton: FC<{
       )}
       {/* Contextual help stays outside the form the island repaints, so it
           survives state replacement, never submits and never takes focus
-          from the refresh-before-retry recovery action. Closed events have
+          from the refresh-before-retry recovery action. The marker lets the
+          island release outcome-focus ownership when a member tabs onto help
+          mid-write, so settlement never steals focus back. Closed events have
           no reservation decision left to explain. */}
       {closed ? null : (
         <p>
-          <a href={RSVP_HELP_HREF}>{RSVP_HELP_COPY}</a>
+          <a href={RSVP_HELP_HREF} data-rsvp-help>
+            {RSVP_HELP_COPY}
+          </a>
         </p>
       )}
     </section>

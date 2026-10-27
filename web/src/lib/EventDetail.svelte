@@ -313,7 +313,7 @@ const lineup = $derived(
           {/if}
         </form>
       {/if}{#if !closed}
-        <p><a href={RSVP_HELP_HREF}>{RSVP_HELP_COPY}</a></p>
+        <p><a href={RSVP_HELP_HREF} data-rsvp-help>{RSVP_HELP_COPY}</a></p>
       {/if}
     </section>
   </div>

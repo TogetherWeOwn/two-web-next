@@ -214,6 +214,49 @@ describe("RSVP outcome focus in Chromium", {
     assert.equal(await member.focused(), "outside");
   });
 
+  // Held-response regression for the contextual help link (RSVP_HELP_COPY /
+  // RSVP_HELP_HREF in src/islands/contracts-rsvp-button.ts): one Tab from the
+  // pending control stops on help, and settlement must leave focus there
+  // instead of moving it to the outcome notice — focusing help releases
+  // outcome-focus ownership like leaving the widget. Pre-fix all three cases
+  // lose focus to their notice.
+  async function activeLink(page) {
+    return page.evaluate(() => {
+      const el = document.activeElement;
+      return el ? { href: el.getAttribute("href"), text: (el.textContent || "").trim() } : null;
+    });
+  }
+
+  for (const [status, body, noticeTestid] of [
+    [
+      201,
+      JSON.stringify({ data: { status: "going", synced_to_discord_at: null } }),
+      "rsvp-confirmed",
+    ],
+    [500, "", "rsvp-failed"],
+    [401, "", "rsvp-session-expired"],
+  ]) {
+    it(`keeps focus on the contextual help link when a ${status} settles after one Tab`, async (t) => {
+      const member = await openMember();
+      t.after(() => member.context.close());
+      const { page } = member;
+      await page.getByTestId("rsvp-going").focus();
+      await page.keyboard.press("Enter");
+      const route = await member.pending();
+      await page.keyboard.press("Tab");
+      assert.deepEqual(await activeLink(page), {
+        href: "/faq#faq-events",
+        text: "How RSVPs and waitlists work",
+      });
+      await route.fulfill({ status, contentType: "application/json", body });
+      await page.getByTestId(noticeTestid).waitFor();
+      assert.deepEqual(await activeLink(page), {
+        href: "/faq#faq-events",
+        text: "How RSVPs and waitlists work",
+      });
+    });
+  }
+
   it("tabs from the focused 409 full notice to the waitlist button", async (t) => {
     const member = await openMember();
     t.after(() => member.context.close());

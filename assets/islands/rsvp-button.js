@@ -229,7 +229,12 @@
   var focusOwned = false;
 
   function releaseFocusOnOutsideInteraction(ev) {
-    if (focusOwned && ev.target && !root.contains(ev.target)) focusOwned = false;
+    if (!focusOwned || !ev.target) return;
+    // The contextual help link lives inside the widget but outside the
+    // repainted form: landing on it ends outcome ownership like leaving the
+    // widget, so settlement never steals focus from the reader.
+    if (!root.contains(ev.target)) focusOwned = false;
+    else if (ev.target.closest && ev.target.closest("[data-rsvp-help]")) focusOwned = false;
   }
   document.addEventListener("focusin", releaseFocusOnOutsideInteraction, true);
   document.addEventListener("pointerdown", releaseFocusOnOutsideInteraction, true);
