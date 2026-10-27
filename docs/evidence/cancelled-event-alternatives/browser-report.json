@@ -2,8 +2,8 @@
   "sourceBase": "ce1ade0c4",
   "fixture": "compiled real EventGone and EventMissing with built Kit CSS and local public assets; no hydration or full Worker runtime",
   "activeLoaderParity": true,
-  "protectedAcceptanceSha256": "d6fae8bb657d7d0f543b1ebabccead21d67888c32ed7e99399e728d407c47b12",
-  "protectedAcceptanceNote": "consumed at 9be20305 (0a81ca9b...); helper-only regex-to-token-walk edit, assertions unchanged; pin-only Hono 410 re-capture after main 71c0ec4e0 mirror, cases unchanged",
+  "protectedAcceptanceSha256": "9ddea052315bbedabc5e880131dd03316c96f215cbd7bf1dcce105053f118977",
+  "protectedAcceptanceNote": "consumed at 9be20305 (0a81ca9b...); helper-only regex-to-token-walk edit, assertions unchanged; pin-only Hono 410 re-capture after main 71c0ec4e0 mirror, cases unchanged; pin-only Hono 410 re-capture after main 4cd035fd8 (#1709) plus EventLink fixture widening, cases unchanged",
   "reports": [
     {
       "state": "before",
