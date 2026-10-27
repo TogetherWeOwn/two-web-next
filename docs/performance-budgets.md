@@ -129,6 +129,19 @@ temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
 
+Fixture mobile collection survives one transient: `npm run lighthouse` runs
+`ci/lighthouse-mobile-run.mjs`, which reruns the whole `lhci autorun` a single
+time when it fails with fewer LHRs than configured (8 routes x 3 runs = 24),
+counted from collect's per-run `.lighthouseci/lhr-*.json` files (the reports
+dir holds only the median report per route). A full-evidence assert failure
+never retries. Every run writes `.lighthouseci/mobile-collect.log` (full lhci
+output) and, on failure, `.lighthouseci/mobile-collect-diagnosis.md`, which says
+COLLECT FAILURE (short evidence: re-run the step, budgets untouched), BUDGET
+BREACH (full evidence plus an evaluated assertion miss: see
+`.lighthouseci/assertion-results.json` and `.lighthouseci/reports/`), or an
+unclassified step failure (full evidence, no assertion verdict). Both files ship
+in the `lighthouse-<sha>` artifact.
+
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
 Hyperdrive, database, queue, cron, remote service or deployment route. The fixture
