@@ -196,4 +196,22 @@ describe("event time-from-now CI wiring", () => {
       'node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Kit time-from-now browser acceptance" 28',
     );
   });
+
+  it("keeps the step unconditional and its failures fatal", () => {
+    // Any step-level key besides run (continue-on-error, if, shell, timeout-minutes)
+    // can make a failing or skipped suite pass the job without anyone noticing.
+    const stepKeys = step.split("\n").filter((line) => /^ {8}\S/.test(line));
+    expect(stepKeys).toEqual(["        run: |"]);
+    // The suite and both verifiers must run unguarded, one command per line.
+    const commands = step
+      .split("\n")
+      .filter((line) => /^ {10}\S/.test(line))
+      .map((line) => line.trim());
+    expect(commands).toHaveLength(4);
+    for (const command of commands.slice(1)) {
+      expect(command).not.toMatch(/\|\||&&|;|\bset \+e\b|\btrue\b|^#/);
+    }
+    // A job-level override would soften every step in the job, this one included.
+    expect(a11yJob).not.toMatch(/^ {4}continue-on-error:/m);
+  });
 });
