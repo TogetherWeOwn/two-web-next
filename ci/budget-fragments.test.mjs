@@ -123,10 +123,11 @@ function kitFixture(t, fragments) {
 // unsupported); 335872 is the third, independently measured allocation
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
 // fourth, independently measured allocation (combined worst 335901, margin
-// 227; lower 335872 rejects by 29). The 336384 allocation covers truthful
-// RSVP prompts (combined worst 336328, margin 56; lower 336128 rejects by
-// 200). Every other pin stays exact: the oracle rejects any ceiling outside
-// this list, then deep-compares the rest of the plan.
+// 227; lower 335872 rejects by 29; the next 256B step 336384 was
+// unsupported then); 336384 is the fifth, event-share-honesty allocation
+// (combined worst 336168, margin 216; lower 336128 rejects by 40). Every other
+// pin stays exact: the oracle rejects any ceiling outside this list, then
+// deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384];
 
 function assertShippingKitBudget(actual) {
