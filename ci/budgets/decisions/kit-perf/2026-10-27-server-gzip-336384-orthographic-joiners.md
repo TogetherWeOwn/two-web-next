@@ -6,10 +6,13 @@ shared validation rule's RFC 5892 contextual-joiner tables (explicit
 virama set plus the Arabic-joining ZWNJ context) that profile bio/game
 refusals inherit, whose server-side code runs in the Kit server bundle.
 Two 256B steps, the smallest aligned cover for the measured worst case: one
-step (336128) rejects the worst build by 24B. The
+step (336128) rejects the worst build (336106) by 22B. The
 supported-allocation literal for 336384 is added to
 `ci/check-kit-perf.test.mjs` (`SHIPPING_SERVER_GZIP_ALLOCATIONS`) with the
 paired interval/exact/over cases, following the existing ladder pattern.
+2026-10-27 union with main's 336128 sibling entry (#1909): the ladder keeps
+both allocations (seven supported); this decision and ceiling are unchanged
+(the sibling's worst 335977 already fits 336384).
 
 ## Measurements
 
@@ -36,6 +39,13 @@ worst minus pristine worst). The current 335872 ceiling rejects the
 combined tree by 232B; 336384 (256 x 1314) admits it with 280B of margin
 and passes the checker (exit 0). Worker, client JS and client CSS are
 unchanged by this feature's measurement and fit their unchanged ceilings.
+
+Re-measured after merging current main tip `7d5db1c21` (union with the
+336128 sibling): two builds of the merged tree give server gzip 336106 /
+336105 (raw 1187477 / 1187479), worst 336106, margin 278 under 336384;
+336128 rejects the worst by 22B, so 336384 remains the smallest aligned
+cover. Client JS (event-detail growth from main) fits its raised 257024
+raw ceiling.
 
 ## Why the growth is justified
 

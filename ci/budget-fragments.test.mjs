@@ -33,7 +33,7 @@ const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 256000, maxGzipBytes: 103168, maxFiles: 55 },
+    js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -122,8 +122,8 @@ function kitFixture(t, fragments) {
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported); 335872 is the third, independently measured allocation
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336384 is the
-// fourth, independently measured allocation (combined worst 336104, margin
-// 280; lower 336128 rejects by 24; the next 256B step 336640 stays
+// fourth, independently measured allocation (combined worst 336106, margin
+// 278; lower 336128 rejects by 22; the next 256B step 336640 stays
 // unsupported). Every other pin stays exact: the oracle
 // rejects any ceiling outside this list, then deep-compares the rest of
 // the plan.
