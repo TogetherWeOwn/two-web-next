@@ -27,6 +27,8 @@ import type { Env } from "../env";
 
 export const ANON_EVENTS_TTL_MS = 60_000;
 export const ANON_PAST_TTL_MS = 300_000;
+/** Distinct-games facet list: same bound as the calendar card that renders it. */
+export const PUBLISHED_GAMES_TTL_MS = 60_000;
 
 // Junk query values render distinct `?next=` sign-in targets, so `/events`
 // keys stay on the raw URL. The cap (FIFO eviction) is the only bound those
@@ -163,15 +165,54 @@ export function writeAnonCache(
  * Retire every anonymous calendar/archive entry. Called after a committed
  * event or RSVP mutation (never on a refusal or a rollback), so the next
  * guest fetch re-reads the new title and going count. Home has no entry
- * here, so its `private, no-store` posture is untouched.
+ * here, so its `private, no-store` posture is untouched. The games facet
+ * entry retires too: games change only on event writes, and an RSVP-driven
+ * retire is a harmless extra invalidation.
  */
 export function retireAnonEventCaches(): void {
   entries.clear();
+  gamesEntry = null;
   generation++;
 }
 
 /** Hermetic-test reset: same effect as a retire, without a mutation. */
 export function __resetAnonEventCacheForTests(): void {
   entries.clear();
+  gamesEntry = null;
   generation++;
+}
+
+// Distinct-games facet list: one entry per isolate, keyed by sharing scope
+// like the cards above. /events renders it on every miss, but games change
+// only on event writes, so a short TTL plus retire-on-mutation turns the
+// sequential games read into a hit. A source mismatch is a miss that
+// overwrites: hermetic tests with different ADMIN_DB seams never share.
+interface GamesEntry {
+  source: AnonCacheSource;
+  games: string[];
+  expiresAt: number;
+}
+
+let gamesEntry: GamesEntry | null = null;
+
+export function readPublishedGamesCache(
+  source: AnonCacheSource,
+  now: number = Date.now(),
+): string[] | null {
+  if (!gamesEntry) return null;
+  if (now >= gamesEntry.expiresAt) {
+    gamesEntry = null;
+    return null;
+  }
+  if (!sameSource(gamesEntry.source, source)) return null;
+  return [...gamesEntry.games];
+}
+
+export function writePublishedGamesCache(
+  source: AnonCacheSource,
+  games: string[],
+  ttlMs: number = PUBLISHED_GAMES_TTL_MS,
+  now: number = Date.now(),
+): void {
+  gamesEntry = { source, games: [...games], expiresAt: now + ttlMs };
 }

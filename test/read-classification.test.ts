@@ -40,6 +40,10 @@ const GOING_COUNTS_TWO =
 // the roster; the join qualifies "rsvps"."event_id".
 const GOING_COUNTS_NAMED =
   'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1, $2) and "rsvps"."status" = $3 and "users"."username" <> $4) group by "rsvps"."event_id"';
+// Combined going aggregate: one statement returns both the named-only badge
+// count (conditional count over the LEFT JOIN, NULL-safe) and the every-row
+// occupancy count. Exact Drizzle output from withGoing in src/events/reads.ts.
+const GOING_COUNTS_COMBINED = `select "rsvps"."event_id", count(case when "users"."username" <> '' then 1 end), count(*) from "rsvps" left join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1, $2) and "rsvps"."status" = $3) group by "rsvps"."event_id"`;
 const MEMBER_ROW =
   "select member_id, joined_at, tenure_days, rank_key, is_current_member from web_v1.members where member_id = $1 limit 1";
 const MILESTONE_ROW =
@@ -112,6 +116,14 @@ describe("validateNonSensitiveRead accepts each intended shape", () => {
     allows("going-counts", GOING_COUNTS_NAMED);
   });
 
+  it("going-counts accepts the combined named+occupancy aggregate", () => {
+    allows(
+      "going-counts",
+      `select "rsvps"."event_id", count(case when "users"."username" <> '' then 1 end), count(*) from "rsvps" left join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2) group by "rsvps"."event_id"`,
+    );
+    allows("going-counts", GOING_COUNTS_COMBINED);
+  });
+
   it("events accepts an events-table projection with no member tables", () => {
     allows(
       "events",
@@ -158,6 +170,25 @@ describe("PII-bearing reads never classify as public", () => {
     // same join without the non-empty-name filter, both fail closed.
     refuses("going-counts", GOING_COUNTS_NAMED.replace("count(*)", '"users"."username"'));
     refuses("going-counts", GOING_COUNTS_NAMED.replace(' and "users"."username" <> $4', ""));
+    // Near-misses on the combined shape: an identity projection, a dropped
+    // CASE filter, an inner join (which would undercount occupancy), or a
+    // dropped status predicate, all fail closed.
+    refuses(
+      "going-counts",
+      GOING_COUNTS_COMBINED.replace(
+        `count(case when "users"."username" <> '' then 1 end)`,
+        '"users"."username"',
+      ),
+    );
+    refuses(
+      "going-counts",
+      GOING_COUNTS_COMBINED.replace(
+        `count(case when "users"."username" <> '' then 1 end)`,
+        "count(*)",
+      ),
+    );
+    refuses("going-counts", GOING_COUNTS_COMBINED.replace("left join", "inner join"));
+    refuses("going-counts", GOING_COUNTS_COMBINED.replace(' and "rsvps"."status" = $3', ""));
   });
 
   it("events refuses member tables outside the reviewed aggregate", () => {

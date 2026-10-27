@@ -15,17 +15,21 @@ const fixedStatements = {
     "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
 };
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
-// Two pinned shapes: the legacy all-rows occupancy count (admin Fill column
-// and fill filter, matching write-path seat enforcement; `withGoing` reuses
-// this exact shape for its public `goingOccupancy`, which drives full,
-// spots-left and the Going/waitlist CTA) and the public attributable count
-// (`withGoing` joins users and counts only named rows, so the badge label
-// agrees with the roster; the join qualifies "rsvps"."event_id"). Both return
-// a single cardinality, never identities.
+// Three pinned shapes: the legacy all-rows occupancy count (admin Fill column
+// and fill filter, matching write-path seat enforcement), the public
+// attributable count (`withGoing` used to join users and count only named
+// rows, so the badge label agrees with the roster; the join qualifies
+// "rsvps"."event_id"), and the combined aggregate (`withGoing` now returns
+// both counts in one statement: a NULL-safe conditional count over a LEFT
+// JOIN for the badge plus count(*) for occupancy). All return cardinalities,
+// never identities. The `''` in the combined shape is a fixed empty-string
+// literal, never interpolated input.
 const goingCountsLegacy =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
 const goingCountsNamed =
   /^select "rsvps"\."event_id", count\(\*\) from "rsvps" inner join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+ and "users"\."username" <> \$\d+\) group by "rsvps"\."event_id"$/;
+const goingCountsCombined =
+  /^select "rsvps"\."event_id", count\(case when "users"\."username" <> '' then 1 end\), count\(\*\) from "rsvps" left join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
 // Roster totals return a single cardinality, never member identifiers. The
 // username filter and the allowlisted answer facet are bound parameters;
 // only these four join/where shapes may run under the roster-count
@@ -57,7 +61,12 @@ export function validateNonSensitiveRead(
 ): void {
   const query = normalizedStatement(statement);
   if (classification === "going-counts") {
-    if (!goingCountsLegacy.test(query) && !goingCountsNamed.test(query)) refuseMemberRead();
+    if (
+      !goingCountsLegacy.test(query) &&
+      !goingCountsNamed.test(query) &&
+      !goingCountsCombined.test(query)
+    )
+      refuseMemberRead();
     return;
   }
   if (classification === "roster-count") {
