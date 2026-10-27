@@ -152,6 +152,20 @@ function nativeTitleLink(html: string, eventKey: string) {
   return link && { href: attribute(link, "href"), text: text(link) };
 }
 
+// Live search results carry bounded schedule origin scalars on the native link.
+function expectDetailHref(
+  href: string | undefined,
+  eventKey: string,
+  params: [string, string][],
+): void {
+  expect(href?.startsWith("/")).toBe(true);
+  const url = new URL(href!, APP_URL);
+  expect(url.origin).toBe(APP_URL);
+  expect(url.pathname).toBe(`/e/${eventKey}`);
+  expect(url.hash).toBe("");
+  expect([...url.searchParams].sort()).toEqual([...params].sort());
+}
+
 async function cookieFor(store: SessionStore, moderator: boolean): Promise<string> {
   const token = newSessionToken();
   await store.create({
@@ -272,10 +286,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
-    expect(nativeTitleLink(html, "01ARZ3NDEKTSV4RRFFQ69G5FAA")).toEqual({
-      href: "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
-      text: "Friday night Helldivers",
-    });
+    const link = nativeTitleLink(html, "01ARZ3NDEKTSV4RRFFQ69G5FAA");
+    expect(link?.text).toBe("Friday night Helldivers");
+    expectDetailHref(link?.href, "01ARZ3NDEKTSV4RRFFQ69G5FAA", [
+      ["schedulePage", "1"],
+      ["scheduleQuery", " HELLDIV "],
+    ]);
     expect(html).not.toContain("Secret draft");
     const past = await (await req("/events?q=chess")).text();
     expect(past).toContain("Old chess night");
@@ -400,10 +416,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     try {
       const res = await req("/events?q=helldiv");
       expect(res.status).toBe(200);
-      expect(nativeTitleLink(await res.text(), "01ARZ3NDEKTSV4RRFFQ69G5FAA")).toEqual({
-        href: "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
-        text: "Friday night Helldivers",
-      });
+      const link = nativeTitleLink(await res.text(), "01ARZ3NDEKTSV4RRFFQ69G5FAA");
+      expect(link?.text).toBe("Friday night Helldivers");
+      expectDetailHref(link?.href, "01ARZ3NDEKTSV4RRFFQ69G5FAA", [
+        ["schedulePage", "1"],
+        ["scheduleQuery", "helldiv"],
+      ]);
     } finally {
       await db
         .execute(

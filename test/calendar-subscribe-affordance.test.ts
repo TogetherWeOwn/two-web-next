@@ -69,7 +69,21 @@ describe("calendar subscription affordance SSR", () => {
           '<a href="/events/past" data-testid="events-past-archive-link">Past events</a>',
         );
         if (view === "list") {
-          expect(html).toContain(`<a href="/e/${event.eventKey}">Chess &amp; &lt;friends&gt;</a>`);
+          // Escaped title text stays exact; the href is parsed because live
+          // entries carry bounded schedule origin scalars.
+          const titles = [
+            ...html.matchAll(/<a href="([^"]*)">Chess &amp; &lt;friends&gt;<\/a>/g),
+          ].map((match) => match[1]!);
+          expect(titles).toHaveLength(1);
+          expect(titles[0]!.startsWith("/")).toBe(true);
+          const detail = new URL(
+            titles[0]!.replaceAll("&amp;", "&"),
+            "https://calendar.example.test",
+          );
+          expect(detail.origin).toBe("https://calendar.example.test");
+          expect(detail.pathname).toBe(`/e/${event.eventKey}`);
+          expect(detail.hash).toBe("");
+          expect([...detail.searchParams]).toEqual([["schedulePage", "1"]]);
           expect(html).toContain("Bring a board &amp; &lt;snacks&gt;.");
         }
       });
