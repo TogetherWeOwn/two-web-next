@@ -18,7 +18,7 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, isValidZone, wallTimeHm } from "../events/date-format";
 import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -407,7 +407,7 @@ export function gridTitle(title: string): string {
 /** Badge word shared by cancelled list cards and month-grid entries. */
 export const GRID_CANCELLED_COPY = "Cancelled";
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3),
+/** Month-grid link name starts with the visible "HH:mm zone title" (WCAG 2.5.3),
  * then the day. Long titles keep the truncated visible form first so axe
  * label-content-name-mismatch passes, then the full title; short titles are
  * not duplicated. Cancelled entries lead with the same visible words plus
@@ -424,8 +424,9 @@ export function gridAccessibleName(
   availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
-  const time = wallTimeHm(startsAt, zone);
-  const day = cardDayLabel(startsAt, zone);
+  const effectiveZone = isValidZone(zone) ? zone : "UTC";
+  const time = `${wallTimeHm(startsAt, effectiveZone)} ${effectiveZone}`;
+  const day = cardDayLabel(startsAt, effectiveZone);
   if (cancelled) {
     // The badge follows the truncated title, so keep that exact visible prefix
     // before restoring the full title for same-prefix event disambiguation.
