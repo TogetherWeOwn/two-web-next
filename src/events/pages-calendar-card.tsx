@@ -20,6 +20,8 @@ import {
   wallTimeHm,
 } from "../islands/contracts";
 import { ScheduleDate } from "./pages-shared";
+import { searchContext } from "./search-context";
+import { matchQuery } from "./search-query";
 import {
   type CalRow,
   isTransient,
@@ -53,10 +55,12 @@ export const CalCard: FC<{
   zone: string;
   now?: Date;
   isPast: boolean;
+  /** Committed search text; omitted outside upcoming results. */
+  q?: string;
   member: boolean;
   inviteUrl: string;
   loginReturnTo: string | null;
-}> = ({ e, schedule, zone, now = new Date(), isPast, member, inviteUrl, loginReturnTo }) => {
+}> = ({ e, schedule, zone, now = new Date(), isPast, q = "", member, inviteUrl, loginReturnTo }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
@@ -70,6 +74,23 @@ export const CalCard: FC<{
   const startDay = wallDateIso(e.startsAt, tz);
   const endDay = e.endsAt ? wallDateIso(e.endsAt, tz) : null;
   const descriptionPoints = [...(e.description ?? "")];
+  // Presentation only: never re-filter a row admitted by SQL. Segments are
+  // escaped JSX text, with an honest unmarked fallback for unlocatable spans.
+  const query = isPast ? "" : (matchQuery(q) ?? "");
+  const title = query ? (
+    <span>
+      {searchContext(rowTitle(e), query).map((part) =>
+        part.match ? <mark>{part.text}</mark> : part.text,
+      )}
+    </span>
+  ) : (
+    rowTitle(e)
+  );
+  const passage = query
+    ? searchContext(e.description ?? "", query, true).map((part) =>
+        part.match ? <mark>{part.text}</mark> : part.text,
+      )
+    : null;
   return (
     <li>
       <article
@@ -86,9 +107,9 @@ export const CalCard: FC<{
               anchor. Transients have no detail page either. */}
           <h3>
             {transient || e.status === "cancelled" ? (
-              rowTitle(e)
+              title
             ) : (
-              <a href={withScheduleContext(`/e/${e.eventKey}`, schedule)}>{rowTitle(e)}</a>
+              <a href={withScheduleContext(`/e/${e.eventKey}`, schedule)}>{title}</a>
             )}
           </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}
@@ -137,7 +158,7 @@ export const CalCard: FC<{
             <details class="schedule-description">
               <summary>
                 <span class="schedule-excerpt">
-                  {descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…
+                  {passage ?? `${descriptionPoints.slice(0, DESCRIPTION_LIMIT).join("")}…`}
                   <br />
                 </span>
                 Full description
@@ -145,7 +166,7 @@ export const CalCard: FC<{
               <p>{e.description}</p>
             </details>
           ) : e.description ? (
-            <p>{e.description}</p>
+            <p>{passage ?? e.description}</p>
           ) : null}
         </div>
         <div class="schedule-actions">
