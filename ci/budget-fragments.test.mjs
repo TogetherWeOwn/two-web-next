@@ -20,14 +20,25 @@ import { run as runKit } from "./check-kit-perf.mjs";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
+// The exact ceilings shipped in the monolith files before the split
+// (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
+// plus the raise that landed on main during the split review and was
+// ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), the
+// server.js.maxGzipBytes 335104 -> 335360 raise (see
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), and the
+// one new-asset fragment ported from an open branch during its post-split
+// merge: public/islands/event-time-from-now.js 2048/1024 (see
+// ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
+// Aggregation must reproduce them exactly: any drift here is a budget
+// change, which needs its own decision file, never a silent edit.
+//
 // The refreshed game-suggestion composition (main e37975a07 + feature
 // 7d390f4b, merged tree ac0190d1) measures worst server gzip 336694 and
 // client 257381/103610, requiring server 336896, client raw 257536 and
 // client gzip 103680. Measured intervals and independent exact/one-byte-over
 // controls live in check-kit-perf.test.mjs. The capacity owner lands the
-// matching decision file alongside. Aggregation must reproduce these
-// shipping ceilings exactly: any drift here is a budget change, which
-// needs its own decision file, never a silent edit.
+// matching decision file alongside.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 336896, maxFiles: 126 } },
@@ -62,6 +73,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
