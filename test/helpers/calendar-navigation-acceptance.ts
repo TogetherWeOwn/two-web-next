@@ -16,6 +16,7 @@ export const navigationState: CalendarState = {
   game: "Co-op",
   past: false,
   page: 3,
+  weekStart: "monday",
 };
 
 export function navigationData(state: Partial<CalendarState> = {}, totalPages = 7, empty = false) {

@@ -79,7 +79,14 @@ describe("hot-zone grid UTC labelling", () => {
 });
 
 describe("schedule head hot-zones link", () => {
-  const state = { view: "list", month: "2026-10", q: "", past: false, page: 1 } as const;
+  const state = {
+    view: "list",
+    month: "2026-10",
+    q: "",
+    past: false,
+    page: 1,
+    weekStart: "monday",
+  } as const;
 
   it("renders exactly one Hot zones link to /hotzones beside the feed links", () => {
     const html = String(CalendarHead({ state: { ...state }, appUrl: "https://example.test" }));
