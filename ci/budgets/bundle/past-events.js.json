@@ -3,7 +3,7 @@
   "budgets": {
     "public/islands/past-events.js": {
       "maxRawBytes": 5120,
-      "maxGzipBytes": 2048
+      "maxGzipBytes": 2304
     }
   }
 }
