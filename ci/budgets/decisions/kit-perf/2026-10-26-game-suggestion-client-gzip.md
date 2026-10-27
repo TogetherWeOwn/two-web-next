@@ -7,6 +7,67 @@ feature composition on current main:
 
 | Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
+| `server.js.maxGzipBytes` | 336384 | 337152 | 768 | 36 above 337116 |
+| `client.js.maxRawBytes` | 257024 | 258560 | 1536 | 440 above 258120 |
+| `client.js.maxGzipBytes` | 103168 | 103936 | 768 | 179 above 103757 |
+
+Main `4e90a8bcfd70a46564f6bb363e1543304ec271c0` (adds #1866 jobs
+ledger/lock bounds on top of the previously measured `d4d7a9da5`; the diff is
+`src/jobs` plus job tests only, but `src/admin` value-imports `src/jobs` and
+Kit server routes value-import `src/admin`, so #1866 grows the server bundle)
+and feature `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
+`63b9751beea29ec365ae4dec9c470b3fa162c42d`. Node 24.22.1, npm 11.19.1,
+identical locked root/web dependencies, one merged-tree build and four
+composition builds through the canonical
+`npm run build --prefix web && node ci/check-kit-perf.mjs --format json`
+(the merged-tree build runs against the final fragment values; exit 0):
+
+| Measurement | Merged tree | Combined build 1 / 2 / 3 / 4 |
+| --- | ---: | ---: |
+| Server JS raw | 1190240 | 1193886 / 1193886 / 1193886 / 1193884 |
+| Server JS gzip | 336251 | 337114 / 337114 / 337116 / 337114 |
+| Client JS raw | 256371 | 258120 / 258120 / 258120 / 258120 |
+| Client JS gzip | 102994 | 103757 / 103757 / 103757 / 103757 |
+| Server / client JS files | 116 / 54 | 116 / 55 all |
+
+Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
+builds. The merged tree fits (server margin 901 B). The combined output
+breaches main's ceilings (server +732 B, client raw +1096 B, client gzip +589 B)
+and all three previous branch values (336896 rejects the worst output by 220 B;
+257536 by 584 B; 103680 by 77 B). Against the built output without a rebuild,
+the new ceilings pass and each single step lower (336896, 258048, 103680)
+rejects on exactly its axis (client raw takes two 512 B steps because 258048
+still rejects by 72 B). The composition `web/` subtree is byte-identical to the
+previous composition tree `56b0e0bc`; `src/` differs only in main-side `src/jobs`
+(#1866, +211 B server gzip vs the previous main-alone measurement). The
+feature delta is unchanged (about +863 server gzip, +1749 client raw, +763
+client gzip). Steps are the repository's 256 B gzip and 512 B raw grids; the
+36 B server margin covers about 9x the observed ±4 B rebuild jitter and is not
+speculative headroom. Worker, CSS, server raw, file-count and startup limits,
+the checker, loader, application, dependencies and every other fragment are
+unchanged; frozen legacy history is not edited. The matching acceptance tests
+were corrected independently by the Test Author (`153f513c35321b64bf1ec0a3308a0d8fb1f15ab9`,
+based on main `4e90a8bcf`) and incorporated byte-for-byte
+(`ci/check-kit-perf.test.mjs` sha256
+`0c140510df4c689123b994b5f32f041448b66e5c71437a9d8e48ae86173bf4b1`,
+`ci/budget-fragments.test.mjs` sha256
+`9f6a042fdc68563424c72a3421273be2e4f8ff0d32e20d176dc2dff5ba2df16c`).
+
+ACT: allocate these three measured steps through independent review.
+WHY: the exact feature composition exhausts them on current main; the earlier
+shared-component experiment did not recover the capacity.
+UNDO: reviewed revert of these three fragment values and the matching
+acceptance delta, retaining every earlier decision; coordinate with the
+dependent feature. This is not feature, staging, deployment or release
+approval; the feature must reverify its actual integrated head.
+
+## Superseded decision (main 227414575: 336896/257536/103680)
+
+Raise three Kit ceilings to the smallest aligned steps that cover the exact
+feature composition on current main:
+
+| Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
+| --- | ---: | ---: | ---: | ---: |
 | `server.js.maxGzipBytes` | 336128 | 336896 | 768 | 205 above 336691 |
 | `client.js.maxRawBytes` | 257024 | 257536 | 512 | 155 above 257381 |
 | `client.js.maxGzipBytes` | 103168 | 103680 | 512 | 70 above 103610 |
