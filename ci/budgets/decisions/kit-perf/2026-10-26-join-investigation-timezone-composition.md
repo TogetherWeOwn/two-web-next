@@ -1,6 +1,6 @@
 # 2026-10-26 decision: join investigation + chosen-timezone composition
 
-Server JS gzip 336128 -> 336896 (+768, three 256 B steps),
+Server JS gzip 336384 -> 336896 (+512, two 256 B steps),
 client JS raw 257024 -> 257536 (+512, one 512 B step),
 client JS gzip 103168 -> 103680 (+512, two 256 B steps).
 No other ceiling changes. This is the fragment-era allocation for the
@@ -15,6 +15,11 @@ carried forward.
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`
   (join investigation return context, PR #1705).
 - Main at measurement: `227414575dd8fffe8ebe245086442ce5a20ca174`.
+  Main has since moved to `b69eea7d7f8e99096cb497dce71210caf9af0502` (CI, Lighthouse and docs files plus the
+  event-share-honesty server gzip ceiling 336384); `git diff --name-only` between the two
+  shows no `src`, `web`, `assets`, `public`, lockfile or workflow change, so the sizes below
+  hold. Against that newer retained server ceiling (336384) the composition still breaches
+  server gzip by 262 B.
 - Measurement tree: the behavior head merged into that main; the only
   conflict is the modify/delete of the removed monolith
   `ci/kit-perf-budget.json`, resolved by accepting the deletion, so the tree
@@ -38,9 +43,9 @@ all builds, 336646, is used.
 | Main | 116 | 1187398 / 1187400 | 335838 / 335837 | 54 | 255632 | 102846 |
 | Composition | 116 | 1190596 / 1190598 | 336646 / 336644 | 55 | 257337 | 103642 |
 
-Main fits every retained ceiling (server gzip 336128, client raw 257024,
+Main fits every retained ceiling (server gzip 336384, client raw 257024,
 client gzip 103168). Against those retained ceilings the composition breaches
-server gzip by 518 B, client raw by 313 B and client gzip by 474 B (gate
+server gzip by 262 B, client raw by 313 B and client gzip by 474 B (gate
 exit 1 in both builds). Worker (2551 raw / 1219 gzip B) and client CSS
 (2 files, 2861 raw / 1019 gzip B) are identical in every build and still fit.
 

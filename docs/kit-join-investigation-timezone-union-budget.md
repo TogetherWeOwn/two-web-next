@@ -23,7 +23,9 @@ remain unchanged.
 ## Pinned inputs and reproducibility
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`.
-- Main: `227414575dd8fffe8ebe245086442ce5a20ca174`.
+- Main: `227414575dd8fffe8ebe245086442ce5a20ca174`. Main later moved to `b69eea7d7f8e99096cb497dce71210caf9af0502` with no build-input change
+  (CI, Lighthouse and docs files, plus the 336384 server gzip ceiling); sizes were not rebuilt
+  for that head and the composition still exceeds the 336384 retained ceiling by 262 B.
 - Measurement tree: behavior head merged into that main (unrecorded tree id; reproduce with `git merge` and accept the monolith deletion).
 
 Merging the behavior head into main conflicts only on the deleted monolith
@@ -54,7 +56,7 @@ paths. All emitted JS remains counted, including repeated wrappers.
 | Composition | 116 | 1190596 / 1190598 | 336646 / 336644 | 55 | 257337 | 103642 | 1 |
 
 Main fits every ceiling. The composition exceeds the retained server gzip
-336128 B by **518 B**, client raw 257024 B by **313 B** and client gzip
+336384 B by **262 B**, client raw 257024 B by **313 B** and client gzip
 103168 B by **474 B**. Client paths and sizes are identical within
 each tree's repeated builds; server gzip wobbled 1-2 B across each pair and the
 allocation uses the largest observed value (336646 B over all builds; a later
@@ -108,14 +110,14 @@ Use the existing 512 B raw / 256 B gzip steps, not a percentage or reserve:
 
 | Ceiling | Before | Proposed | Increase | Minimum observed remaining margin |
 | --- | ---: | ---: | ---: | ---: |
-| Server JS gzip B | 336128 | 336896 | 768 | 250 |
+| Server JS gzip B | 336384 | 336896 | 512 | 250 |
 | Client JS raw B | 257024 | 257536 | 512 | 199 |
 | Client JS gzip B | 103168 | 103680 | 512 | 38 |
 
 Controls run the unchanged checker on the retained composition output, changing
 **only disposable budget copies**:
 
-- Original limits reject: server gzip +518 B, client raw +313 B and client gzip +474 B.
+- Original limits reject: server gzip +262 B, client raw +313 B and client gzip +474 B.
 - Proposed limits accept the composition: exit 0.
 - One step below proposed rejects on each axis independently: server gzip
   336640 B (short 4 B on the retained 336644 B build, 6 B on the 336646 B build),
@@ -125,7 +127,7 @@ Controls run the unchanged checker on the retained composition output, changing
   336644 B, within the 1-2 B jitter); the exact observed totals accept.
 
 The unchanged checker passes its selftests, and the updated boundary pins pass:
-`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 73/73 together,
+`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 74/74 together,
 including the new 336896 server arm and admission case. Main's tests already
 admit the 257536/103680 client arms, so with the fragments at main's values
 only 1 case fails (the aggregate fragment pin, red-before). No
@@ -143,5 +145,5 @@ QA and independent review.
 ## Undo
 
 Revert only these three numeric changes and this note. This restores the
-336128 B server gzip, 257024 B client raw and 103168 B client gzip limits, intentionally rejecting the
+336384 B server gzip, 257024 B client raw and 103168 B client gzip limits, intentionally rejecting the
 measured composition again. No application state, schema or deployed artifact changes.
