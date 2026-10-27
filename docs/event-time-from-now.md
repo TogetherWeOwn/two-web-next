@@ -38,8 +38,11 @@ below **Ends**. Both twins render it: [Hono detail](../src/events/pages-detail.t
 and [Kit detail](../web/src/lib/EventDetail.svelte), enhanced by
 [the island](../assets/islands/event-time-from-now.js). It reuses the device
 timezone button/status styling and the existing semantic tokens (Open Lobby /
-Logo 1), so there is no new CSS, typography or colour. The row and button are
-`hidden` until the island binds; the status paragraph is an empty
+Logo 1), so there is no new typography or colour. The row and button are
+`hidden` until the island binds; the event stylesheet keeps hidden detail rows
+laid out invisibly so the reveal flips visibility without moving content (no
+layout shift at any script timing; without JavaScript the rows leave blank
+space instead of dead controls). The status paragraph is an empty
 `role="status" aria-live="polite"` region (`event-time-from-now-{button,status}`).
 The start and end instants travel as `data-starts-at` / `data-ends-at` copies of
 the visible `<time datetime>` values. Non-goals: live countdowns, reminders,

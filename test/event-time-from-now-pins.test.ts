@@ -74,6 +74,15 @@ describe("event time-from-now served-markup pins", () => {
     // The whole row is hidden until the island binds, so no-JS shows no dead label.
     expect(html.slice(0, html.indexOf("<dt>Time from now</dt>"))).toMatch(/<div hidden="">$/);
     expect(html).toContain('<script src="/islands/event-time-from-now.js" defer="">');
+    // The reveal must not move content at any script timing: hidden detail
+    // rows keep their laid-out size via visibility reservation in the
+    // render-blocking event stylesheet (a deferred-only reveal loses the
+    // first-paint race and the quality gate records CLS on the event page).
+    const theme = readFileSync("public/event-theme.css", "utf8");
+    expect(theme).toContain(".event-theme .event-meta div[hidden]{display: block;visibility: hidden}");
+    expect(theme).toContain(
+      ".event-theme .event-meta button[hidden],.event-theme .event-meta input[hidden]{display: inline-block;visibility: hidden}",
+    );
   });
   it("does not offer the action on a draft", () => {
     expect(render("draft")).not.toContain("data-event-time-from-now");
