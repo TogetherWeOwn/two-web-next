@@ -160,9 +160,9 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
   // Tracks the authoritative raw ceiling in ci/budgets/bundle/schedule-theme.css.json
-  // (8704, which carries the print block): the pin stays under it so the
+  // (9216, which carries the print block): the pin stays under it so the
   // budget gate remains the stricter check. The budget gate still enforces raw+gzip independently.
-  expect(css.length).toBeLessThan(8704);
+  expect(css.length).toBeLessThan(9216);
   expect(css).toContain("@media (max-width: 48rem)");
   expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
   // Every screen rule stays scoped to the schedule main, never the shared

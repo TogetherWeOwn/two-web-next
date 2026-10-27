@@ -278,7 +278,13 @@ export const EventsCalendarPage: FC<{
               keep it current; the schedule sheet reveals it in print. */}
           {state.view === "list" ? (
             <p data-testid={EVENTS_PRINT_SCOPE_TESTID} hidden>
-              {printScopeCopy("Upcoming events", state.q, gameFilter, state.page, totalPages)}
+              {printScopeCopy(
+                "Upcoming events",
+                state.q.trim(),
+                gameFilter,
+                state.page,
+                totalPages,
+              )}
             </p>
           ) : null}
           {/* Partial source: healthy rows stay useful beside the notice. An
