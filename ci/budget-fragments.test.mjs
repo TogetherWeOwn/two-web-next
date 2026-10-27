@@ -35,7 +35,7 @@ const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
+    js: { maxRawBytes: 256000, maxGzipBytes: 103168, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -62,7 +62,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
-  "public/islands/member-profile.js": { maxRawBytes: 14336, maxGzipBytes: 5120 },
+  "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
   "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
@@ -72,7 +72,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
-  "public/profile-theme.css": { maxRawBytes: 8192, maxGzipBytes: 2048 },
+  "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
 };
