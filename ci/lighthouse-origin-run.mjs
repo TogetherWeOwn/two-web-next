@@ -60,6 +60,38 @@ const DIAGNOSIS_TAIL_LINES = 60;
 const ATTEMPT1_TABLE_MD = "watch-summary.attempt1.md";
 const ATTEMPT1_TABLE_JSON = "watch-summary.attempt1.json";
 const ATTEMPT1_LHR_DIR = "marginal-attempt1";
+export const UP_TIMEOUT_MS = 10_000;
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+// The commit the deployed Worker reports on GET /up, or "unknown". One read-only
+// GET, bounded, never throws: evidence only, so a failure cannot change any
+// verdict. Read immediately before and after each collect so a deploy landing
+// mid-run shows up as a changed revision instead of a silent mixed sample.
+async function readServedRevision(origin, fetchImpl, timeoutMs = UP_TIMEOUT_MS) {
+  try {
+    const response = await fetchImpl(`${origin}/up`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    // A failed or redirected probe is not evidence of the served revision.
+    if (response.status !== 200) return "unknown";
+    const commit = JSON.parse(await response.text())?.revision?.commit;
+    return typeof commit === "string" && FULL_SHA.test(commit) ? commit : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+// Two probes bracket the collect; they cannot prove every navigation in between
+// reached the same revision (a rollout can serve both), so equal reads are only
+// "same at both reads", never "unchanged".
+const SAME_REVISION = "same at both reads";
+const CHANGED_REVISION = "changed during collect";
+
+function revisionVerdict(before, after) {
+  if (before === "unknown" || after === "unknown") return "unknown";
+  return before === after ? SAME_REVISION : CHANGED_REVISION;
+}
 
 // One `lhci autorun` attempt. Streams combined output to the parent's stdout
 // (the CI job log) and returns the exit code plus the captured text for the
@@ -112,6 +144,7 @@ export function buildOriginDiagnosis({
   expected,
   attempts,
   marginalRetry = null,
+  servedRevision = [],
 }) {
   const last = attempts[attempts.length - 1];
   const collected = last.lhrs;
@@ -128,6 +161,10 @@ export function buildOriginDiagnosis({
       return `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs${a.marginal?.marginal ? ` (marginal / LCP breach at ${a.marginal.actual} ms${followed})` : ""}`;
     }),
   ];
+  for (const r of servedRevision) {
+    lines.push(`- served revision, attempt ${r.attempt}: ${r.before} -> ${r.after} (${r.verdict})`);
+  }
+  const revisionChanged = servedRevision.some((r) => r.verdict === CHANGED_REVISION);
   if (marginalRetry) {
     lines.push(
       `- marginal retry: attempt 1 ${marginalRetry.reason}; first table in ${ATTEMPT1_TABLE_MD}, first per-run LHRs in ${ATTEMPT1_LHR_DIR}/`,
@@ -139,7 +176,11 @@ export function buildOriginDiagnosis({
       "BUDGET BREACH: full evidence collected and an assertion vs " +
       "ci/lighthouserc.cjs missed. See watch-summary.md for the route and " +
       "the failing audits. Fix the cause; do not lower the budgets." +
-      (marginalRetry ? " The retry also breached, so this is systematic, not variance." : "");
+      (marginalRetry
+        ? revisionChanged
+          ? " The retry also breached, but the served revision changed during an attempt (see the served-revision lines), so do not treat this as systematic until that is explained."
+          : " The retry also breached, so this is systematic, not variance."
+        : "");
   } else if (last.matrix.complete) {
     verdict =
       "UNCLASSIFIED STEP FAILURE: full evidence collected but process or assertion evidence " +
@@ -171,7 +212,16 @@ function marginalRetryNotice(marginal) {
 
 async function writeSummary(
   dir,
-  { origin, eventPath, found, exitCode, rows, rejectionCounts = {}, marginalRetry = null },
+  {
+    origin,
+    eventPath,
+    found,
+    exitCode,
+    rows,
+    rejectionCounts = {},
+    marginalRetry = null,
+    servedRevision = [],
+  },
 ) {
   const summary = lib.renderSummary({
     origin,
@@ -179,11 +229,12 @@ async function writeSummary(
     eventSource: found.source,
     rows,
     notice: marginalRetry ? marginalRetryNotice(marginalRetry) : undefined,
+    servedRevision,
   });
   await writeFile(join(dir, "watch-summary.md"), summary);
   await writeFile(
     join(dir, "watch-summary.json"),
-    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, ...(marginalRetry ? { marginalRetry } : {}) }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, servedRevision, ...(marginalRetry ? { marginalRetry } : {}) }, null, 2)}\n`,
   );
   return summary;
 }
@@ -196,7 +247,7 @@ async function writeSummary(
 // stay in the uploaded `.lighthouseci/` artifact for the next investigation.
 async function archiveMarginalAttempt(
   dir,
-  { origin, eventPath, found, exitCode, rows, rejectionCounts = {}, marginal },
+  { origin, eventPath, found, exitCode, rows, rejectionCounts = {}, marginal, servedRevision = [] },
 ) {
   const attemptDir = join(dir, ATTEMPT1_LHR_DIR);
   await mkdir(attemptDir, { recursive: true });
@@ -205,6 +256,7 @@ async function archiveMarginalAttempt(
     eventPath,
     eventSource: found.source,
     rows,
+    servedRevision,
   });
   await writeFile(
     join(dir, ATTEMPT1_TABLE_MD),
@@ -212,7 +264,7 @@ async function archiveMarginalAttempt(
   );
   await writeFile(
     join(dir, ATTEMPT1_TABLE_JSON),
-    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, marginal }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 1, origin, eventPath: eventPath ?? null, skipReason: found.reason ?? null, exitCode, rows, rejectionCounts, servedRevision, marginal }, null, 2)}\n`,
   );
   const names = await readdir(dir).catch(() => []);
   for (const name of names) {
@@ -266,6 +318,7 @@ export async function main(
     logFile,
     diagnosisFile,
     discoveryOptions = {},
+    upTimeoutMs = UP_TIMEOUT_MS,
   } = {},
 ) {
   if (argv.length === 0) {
@@ -341,6 +394,7 @@ export async function main(
   // final summary gates on attempt 2 while pointing at both.
   let pendingMarginal = null;
   let firstAttemptMarginal = null;
+  const servedRevision = [];
   for (let n = 1; n <= MAX_ATTEMPTS; n += 1) {
     if (n > 1) {
       // Clean accounting for the retry: attempt 1's per-run LHRs must not
@@ -360,6 +414,7 @@ export async function main(
       }
     }
     log(`Lighthouse mobile collect: attempt ${n}/${MAX_ATTEMPTS} (expecting ${expected} LHRs).`);
+    const revisionBefore = await readServedRevision(origin, fetchImpl, upTimeoutMs);
     const started = Date.now();
     // Sequential by design: attempt 2 runs only when attempt 1 came up short
     // or breached marginally. A spawn failure (missing CLI, process error) is
@@ -373,6 +428,13 @@ export async function main(
       result = { exitCode: 1, output: `lhci autorun failed to start: ${detail}\n` };
     }
     const { exitCode, output } = result;
+    const revisionAfter = await readServedRevision(origin, fetchImpl, upTimeoutMs);
+    servedRevision.push({
+      attempt: n,
+      before: revisionBefore,
+      after: revisionAfter,
+      verdict: revisionVerdict(revisionBefore, revisionAfter),
+    });
     const elapsed = Math.round((Date.now() - started) / 1000);
     await writeFile(
       collectLog,
@@ -424,6 +486,7 @@ export async function main(
         rows,
         rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
+        servedRevision,
       });
       log(summary);
       log(`Collect complete: exit 0 with ${lhrObjects.length}/${expected} LHRs in ${elapsed}s.`);
@@ -445,6 +508,7 @@ export async function main(
           rows,
           rejectionCounts: matrix.rejectionCounts ?? {},
           marginal,
+          servedRevision,
         });
         firstAttemptMarginal = marginal;
         pendingMarginal = marginal;
@@ -466,6 +530,7 @@ export async function main(
         rows,
         rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
+        servedRevision,
       });
       const { text, verdict } = buildOriginDiagnosis({
         origin,
@@ -474,6 +539,7 @@ export async function main(
         expected,
         attempts,
         marginalRetry: firstAttemptMarginal,
+        servedRevision,
       });
       await writeFile(diagnosisPath, text);
       log(summary);
@@ -489,6 +555,7 @@ export async function main(
         rows,
         rejectionCounts: matrix.rejectionCounts ?? {},
         marginalRetry: firstAttemptMarginal,
+        servedRevision,
       });
       const { text, verdict } = buildOriginDiagnosis({
         origin,
@@ -497,6 +564,7 @@ export async function main(
         expected,
         attempts,
         marginalRetry: firstAttemptMarginal,
+        servedRevision,
       });
       await writeFile(diagnosisPath, text);
       log(summary);
