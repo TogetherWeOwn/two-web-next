@@ -437,15 +437,34 @@ accounting reads only its fresh top-level LHRs, never these mobile archives.
 For deployed mobile collection, an informative, unscored `main-document-timing`
 audit reads the same already-collected main resource as `server-response-time`.
 Each archived LHR's `audits["main-document-timing"].details` contains schema
-version 1, UTC request timestamp, validated `requestId` / `cfRay`, protocol,
+version 2, UTC request timestamp, validated `requestId` / `cfRay`, the bounded
+`cfCacheStatus`, `ageSeconds` and `serverTiming` response headers, protocol,
 `edgeColo` from the response ray suffix, `servingRevision`, CDP `timingMs`
 (DNS/connect/TLS/send/receive-header offsets), and `serverWaitMs`
-(`receiveHeadersStart - sendEnd`, matching the native audit). Missing or invalid
-fields are `unknown`. The served revision is currently unknown: a checkout SHA
-is not evidence of the revision that served the response. Existing `fetchTime`
-and requested URL identify each LHR; the new diagnostic fields contain no URL,
-query values, arbitrary headers, credentials, response bodies or raw CDP log.
-No additional navigation or probe is made. The audit has no category weight,
+(`receiveHeadersStart - sendEnd`, matching the native audit). Missing, duplicated
+or invalid fields are `unknown`. The per-navigation `servingRevision` stays
+unknown: a checkout SHA is not evidence of the revision that served the response.
+Existing `fetchTime` and requested URL identify each LHR; the diagnostic fields
+contain no URL, query values, arbitrary headers, credentials, response bodies or
+raw CDP log. The audit itself makes no additional navigation or probe.
+
+`watch-summary.md` and `watch-summary.json` surface that evidence for every
+mobile navigation in a "Serving evidence per navigation" table, so an
+over-budget `/events` sample can be read next to its edge cache disposition,
+age and `Server-Timing` without opening the LHR archive. The runner also issues
+one read-only `GET /up` immediately before and after each mobile collect attempt
+and records `revision.commit` for both ("Served revision" table, JSON
+`servedRevision`): a deploy landing mid-collect shows as `changed during collect`
+instead of a silently mixed sample. Two equal reads are only `same at both reads`:
+they do not prove every navigation in between reached that revision during a
+rollout. `/up` failures (including a read that exceeds its 10-second bound, or only
+one of the two reads failing) record `unknown`; they never change a verdict, retry
+or budget. `origin-collect-diagnosis.md` lists each attempt's revision reads and
+stops calling a twice-breached marginal retry "systematic" when any attempt's
+verdict is `changed during collect` (`unknown` alone does not qualify it). `Server-Timing` is kept only when every
+comma-separated metric is a token with numeric `dur=` and/or token or quoted `desc=`
+params without pipes, markup or backslashes; the summary re-validates every stored
+field and shows `unknown` for anything else, including numeric fields stored as text. The audit has no category weight,
 assertion, or role in sample quotas, budget values or retry decisions.
 
 To investigate, use **all three mobile samples for a route**, not the
